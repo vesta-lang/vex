@@ -7,7 +7,11 @@
 // bloque TLS por-hilo que monta el cargador (PE: IMAGE_TLS_DIRECTORY).
 //
 // Notar el paso de `worker` (una funcion Vesta) como puntero de funcion a una
-// API nativa: `(u64)fp` extrae la direccion de codigo del valor-funcion.
+// API nativa.  El tipo es `cfn`, el puntero de funcion CRUDO de 8 bytes, que es
+// lo que una API del sistema sabe llamar.  Un `fn` es otra cosa -- un lambda de
+// 16 bytes: direccion mas entorno --, y castearlo a un entero perderia el
+// entorno; el compilador lo rechaza diciendolo.  Aqui hubo un `fn` de cuando
+// los dos tipos eran uno solo, y por eso este ejemplo dejo de compilar.
 //
 // Resultado esperado: main t=11, child t=99 -> 11*1000 + 99 = exit 11099
 // (Windows preserva el exit code completo, no lo trunca a 8 bits).
@@ -28,7 +32,7 @@ i64 worker(u64 param) {
 }
 
 i64 main() {
-	fn(u64) -> i64 fp = worker;
+	cfn(u64) -> i64 fp = worker;
 	u64            h  = CreateThread(0, 0, (u64)fp, 0, 0, 0);
 	WaitForSingleObject(h, 4_294_967_295); // INFINITE
 	return t * 1000 + g_child;             // 11 (aislado) * 1000 + 99
