@@ -541,12 +541,19 @@ static void ensure_facts_(const ir::IrModule &mod,
         return;
     }
 
-    /* Lo de antes.  `vigentes` va vacio: los dominios todavia no saben decir de
-     * que dependen, y el formato ya contempla ese caso -- huella cero significa
-     * "no puedo comprobarlo", y entonces se acepta lo que haya, que es lo mismo
-     * que hoy y no peor.  Cuando los dominios sepan decirlo, la cache se vuelve
-     * granular sin tocar esto. */
-    recuperar_hechos_(path, store, fingerprint, {});
+    /* Lo de antes, validado POR DOMINIO con lo que hoy depende cada uno.
+     *
+     * Antes esto iba vacio y la invalidacion era todo-o-nada: una sola huella,
+     * la del modulo, decidia por todos, asi que tocar una linea de una funcion
+     * tiraba tambien los hechos que no dependen del codigo.  El formato ya
+     * contemplaba lo contrario -- guarda una huella por registro --; lo que
+     * faltaba era quien la calculara.
+     *
+     * El dominio que no sepa decirlo no sale de `current_inputs`, y entonces lo
+     * suyo se acepta sin comprobar, que es lo de siempre.  Asi la cache se
+     * vuelve granular de uno en uno, segun cada dominio aprenda a responder. */
+    recuperar_hechos_(path, store, fingerprint,
+                      analysis::asa::current_inputs(mod));
 
     /* Y lo que falte.  `producir` se salta los dominios que la lectura ya
      * marco, asi que esto es exactamente el trabajo que la cache no cubrio. */
@@ -562,6 +569,11 @@ static void ensure_facts_(const ir::IrModule &mod,
         analysis::asa::DomainCost c;
         c.domain = r.domain;
         c.micros = r.micros;
+        /* Y de que dependia al producirlo, que es lo que la proxima
+         * compilacion comparara.  Sin esto se guardaba con huella cero -- "no
+         * se puede comprobar" -- y el registro se aceptaba siempre, incluso
+         * cuando sus entradas habian cambiado. */
+        c.fingerprint = r.fingerprint;
         costs.push_back(c);
     }
     guardar_hechos_(path, store, fingerprint, costs);

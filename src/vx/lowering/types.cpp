@@ -639,10 +639,33 @@ void Lowering::mark_by_ref_params_address_taken(
  */
 void Lowering::check_by_ref_params_written(const std::vector<ByRefParam> &ps,
                                            const ir::IrFunction &fn) {
+    if (ps.empty()) return;
+    /* Se PIDE el hecho de la funcion entera, una vez, en vez de calcularlo por
+     * parametro.
+     *
+     * Antes esto llamaba a `compute_definite_store(fn, p.value)` dentro del
+     * bucle: una funcion con tres `out` recorria su grafo de flujo TRES veces
+     * para responder tres preguntas que el mismo recorrido contesta juntas.  Y
+     * el resultado no lo guardaba nadie, asi que si otro consumidor queria lo
+     * mismo lo volvia a calcular.
+     *
+     * Ahora lo pide al gestor de analisis, que es quien lo cachea por funcion y
+     * lo invalida cuando cambia.  El productor del ASA usa exactamente la misma
+     * funcion, asi que el conocimiento es UNO aunque se pregunte desde dos
+     * sitios -- que es la regla del sistema, no una optimizacion --. */
+    const analysis::DefiniteStoreMap &m =
+        analyses_.get_or_compute_v<analysis::DefiniteStoreAnalysis,
+                                   analysis::DefiniteStoreMap>(
+            fn.name, fn.values.size(),
+            [&fn] { return analysis::compute_definite_stores(fn); });
     for (const ByRefParam &p : ps) {
         if (p.dir != ParamDir::Out) continue;
-        const analysis::DefiniteStoreFacts d =
-            analysis::compute_definite_store(fn, p.value);
+        analysis::DefiniteStoreFacts d;
+        for (const auto &e : m.per_pointer)
+            if (e.first == p.value) {
+                d = e.second;
+                break;
+            }
         if (!d.proven_missing()) continue;
         SourceLoc donde = p.loc;
         // La linea del retorno por el que se sale sin escribir: es donde el

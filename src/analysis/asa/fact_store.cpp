@@ -151,6 +151,35 @@ FactStore::Query FactStore::find(const char *code, const char *function,
     return r;
 }
 
+std::vector<const Fact *> FactStore::find_all(const char *code,
+                                              const char *function,
+                                              const Scope &here) const {
+    std::vector<const Fact *> r;
+    if (code == nullptr) return r;
+    for (size_t i = 0; i < facts_.size(); ++i) {
+        const Fact &f = facts_[i];
+        if (f.what.code == nullptr) continue;
+        if (f.what.code != code && std::strcmp(f.what.code, code) != 0)
+            continue;
+        /* Igual que en `find`: por texto y no por puntero.  Quien pregunta
+         * tiene el nombre a mano, no el literal que guardo el almacen. */
+        if (function != nullptr) {
+            if (f.about.function == nullptr) continue;
+            if (f.about.function != function &&
+                std::strcmp(f.about.function, function) != 0)
+                continue;
+        }
+        /* Lo que no vale AQUI no entra.  No se cuenta aparte como en `find`:
+         * alli el numero distingue "no existe" de "existe y no vale aqui", que
+         * es una respuesta; aqui la respuesta es la lista, y una lista vacia ya
+         * lo dice. */
+        if (!f.scope.holds_in(here)) continue;
+        queried_[i] = 1;
+        r.push_back(&f);
+    }
+    return r;
+}
+
 bool FactStore::has_domain(const char *domain) const {
     if (domain == nullptr) return false;
     /* Por texto y no por puntero: quien pregunta suele tener el literal a mano,

@@ -320,6 +320,60 @@ static void probar_niveles() {
 }
 
 // ===========================================================================
+// 7b. La invalidacion es POR DOMINIO, no todo-o-nada
+//
+// Es lo que hace util reutilizar entre compilaciones.  Con una sola huella --
+// la del modulo -- tocar una linea de una funcion tiraba TODO, incluido lo que
+// no depende del codigo: la alineacion de una seccion no cambia porque alguien
+// renombre una variable.
+//
+// La huella de cada registro se compara con la que HOY tiene ese dominio, y ahi
+// hay tres respuestas y no dos: coincide (vale), no coincide (caduco) y cero
+// (no se puede comprobar, se acepta).  La tercera es la que permite que los
+// dominios aprendan a decirlo de uno en uno sin romper a los demas.
+// ===========================================================================
+static void probar_invalidacion_por_dominio() {
+    FactStore origen;
+    poblar(origen);
+
+    /* Se guarda diciendo de que dependia cada uno al producirlo. */
+    const std::vector<DomainCost> al_guardar = {
+        {kProducerStructure, 100, true, 0xAAAAull},
+        {kProducerRanges, 100, true, 0xBBBBull},
+    };
+    const std::vector<uint8_t> bytes =
+        serialize(origen, 7, CacheLevel::All, al_guardar);
+
+    /* 1. Todo igual: se reutiliza entero. */
+    FactStore igual;
+    read_facts(bytes.data(), bytes.size(), 7, igual, al_guardar);
+    CHECK(igual.size() == origen.size(),
+          "si nada de lo que miraban cambio, se reutiliza todo");
+
+    /* 2. Cambia lo que mira UNO: cae ese y el otro sobrevive.  Es el caso que
+     *    justifica todo el mecanismo. */
+    const std::vector<DomainCost> uno_cambio = {
+        {kProducerStructure, 100, true, 0xAAAAull},
+        {kProducerRanges, 100, true, 0xCCCCull}, // otra cosa mira ahora
+    };
+    FactStore parcial;
+    const ReadResult r =
+        read_facts(bytes.data(), bytes.size(), 7, parcial, uno_cambio);
+    CHECK(r.stale == 1, "solo caduca el dominio cuyas entradas cambiaron");
+    CHECK(parcial.size() > 0 && parcial.size() < origen.size(),
+          "y lo del otro se conserva en vez de rehacerse");
+
+    /* 3. Un dominio que NO sabe decir de que depende no sale en la lista, y
+     *    entonces lo suyo se acepta sin comprobar.  No es lo mismo que decir
+     *    cero: es no haber dicho nada, y tiene que seguir funcionando como
+     *    antes de que existiera este mecanismo. */
+    FactStore sin_saber;
+    read_facts(bytes.data(), bytes.size(), 7, sin_saber, {});
+    CHECK(sin_saber.size() == origen.size(),
+          "quien no sabe decir de que depende no se invalida por sorpresa");
+}
+
+// ===========================================================================
 // 8. Un almacen vacio no escribe fichero (no hay nada que decir)
 // ===========================================================================
 static void probar_vacio() {
@@ -393,6 +447,7 @@ int main() {
     probar_dominio_desconocido();
     probar_truncado();
     probar_niveles();
+    probar_invalidacion_por_dominio();
     probar_vacio();
     probar_granularidad();
     std::printf("%d comprobaciones, %d fallos\n", g_checks, g_fail);

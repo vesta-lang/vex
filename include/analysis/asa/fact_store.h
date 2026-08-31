@@ -188,6 +188,26 @@ class FactStore {
     Query find(const char *code, const char *function, const Scope &here) const;
 
     /**
+     * @brief TODOS los de @p code que valen en @p here, no solo el primero.
+     *
+     * `find` responde "que se sabe de esto", que es una pregunta con UNA
+     * respuesta.  Hay otra distinta -- "cuantas veces pasa esto, y donde" -- y
+     * con `find` no se podia hacer: de tres valores sin usar en la misma
+     * funcion devolvia uno, y quien quisiera los tres acababa recorriendo el
+     * almacen a mano, que es justo lo que estas puertas existen para evitar
+     * (ni filtra por alcance ni deja rastro de la consulta).
+     *
+     * Mismo filtro y misma contabilidad que @ref find; lo unico que cambia es
+     * cuantos devuelve.
+     *
+     * @param code     Codigo estable del hecho.
+     * @param function Nombre de la funcion, o nulo para no filtrar por ella.
+     * @param here     Objetivo desde el que se pregunta.
+     */
+    std::vector<const Fact *> find_all(const char *code, const char *function,
+                                       const Scope &here) const;
+
+    /**
      * @brief Hechos que se PRODUJERON y no consulto nadie.
      *
      * Un hecho que no mira nadie es o bien trabajo tirado, o bien conocimiento

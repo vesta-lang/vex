@@ -128,11 +128,17 @@ int run(int argc, char **argv) {
     register_fingerprint_producer();
 
     analysis::asa::FactStore facts;
-    /* SOLO lo que alguna familia vaya a consultar.  Producirlo todo se iba a
-     * ~544 us por modulo y el 80% eran los rangos, que aqui no los mira nadie.
-     * Ademas la produccion es idempotente y se apoya en la cache en disco, asi
-     * que una segunda pasada sobre el mismo modulo no vuelve a calcularlo. */
-    analysis::asa::produce(mod, facts, {"asa.fingerprint"});
+    /* SOLO lo que las familias ENCENDIDAS vayan a consultar.  Producirlo todo
+     * se iba a ~544 us por modulo y el 80% eran los rangos, que aqui no los
+     * mira nadie.  Ademas la produccion es idempotente y se apoya en la cache
+     * en disco, asi que una segunda pasada sobre el mismo modulo no vuelve a
+     * calcularlo.
+     *
+     * La lista la dicen las FAMILIAS, no esto.  Estaba escrita aqui a mano, y
+     * en cuanto entro una familia que consultaba otro dominio se quedo sin sus
+     * hechos -- y calladamente: una familia sin hechos no falla, no dice nada,
+     * que es indistinguible de "aqui no hay nada que decir" --. */
+    analysis::asa::produce(mod, facts, analyze::lint_required_domains(wanted));
 
     /* El alcance va vacio -- universal -- porque los hallazgos de hoy salen de
      * propiedades del codigo y no del objetivo.  El dia que una familia mire

@@ -34,6 +34,7 @@
 #include "vx/asm/instr_db.h"
 
 #include "analysis/asa/producers.h"
+#include "analysis/facts/asm_bindings.h" // que valor entra por que registro
 #include "ir/ssa_ir.h"
 
 #include <sstream>
@@ -371,6 +372,47 @@ void produce_asm(Production &p) {
                 kProductorAsm,
                 "su IR vino de cache: el elevado no corrio en este proceso "
                 "y no consta que hizo (purga la cache para verlo)");
+
+        /* 4. LAS ATADURAS: por que registro entra y sale cada valor.
+         *
+         * Es lo que hace que el asm no sea una barrera para quien pregunta por
+         * un VALOR.  Sin publicarlo, cualquiera que quiera saber si un
+         * parametro se usa tiene que rendirse en cuanto ve un bloque de asm --
+         * y rendirse ahi es tratar el asm como opaco, que es justo lo que este
+         * compilador no hace --.  El conocimiento ya se calculaba; lo que
+         * faltaba era que llegara al almacen.
+         *
+         * El sujeto es el VALOR y no el bloque, a proposito: la pregunta que
+         * esto contesta es "a este valor lo toca el asm?", y se hace desde el
+         * valor. */
+        const analysis::AsmBindingFacts ligaduras =
+            analysis::compute_asm_bindings(fn);
+        for (const analysis::LigaduraAsm &l : ligaduras.ligaduras) {
+            /* Sin valor resuelto no se afirma que sea ese: mas de una escritura
+             * al hueco significa que depende del camino, y decir uno seria
+             * elegir. */
+            if (l.valor == ir::IR_NO_VALUE) {
+                p.say_unknown({Subject::Kind::Function, f.about.function, 0},
+                              analysis::asa::UnknownReason::ShapeNotRecognized,
+                              "asm.binding_value_unresolved", kProductorAsm,
+                              p.store.intern(l.marcador));
+                continue;
+            }
+            Fact b;
+            b.what.domain = kProductorAsm;
+            b.what.code = "asm.binding";
+            b.what.a = static_cast<int64_t>(l.hueco);
+            b.what.detail = p.store.intern(l.marcador + " " + l.clase);
+            b.about.kind = Subject::Kind::Value;
+            b.about.function = f.about.function;
+            b.about.id = l.valor;
+            b.seal.certainty = Certainty::Proven;
+            b.seal.origin.source = analysis::asa::Source::Static;
+            b.seal.origin.producer = kProductorAsm;
+            b.seal.origin.function = b.about.function;
+            b.proof.rule = "asm.bindings-resolved";
+            p.assert_fact(std::move(b));
+        }
     }
 }
 

@@ -94,6 +94,9 @@ namespace {
 struct RegisteredDomain {
     const char *name;
     Producer producer;
+    /// De que depende, para poder validar lo guardado SIN producir.  Nulo = no
+    /// sabe decirlo, y entonces lo suyo no se puede comprobar.
+    DomainFingerprint fingerprint = nullptr;
 };
 
 /// Vector plano: son unos pocos y se recorren enteros; un mapa aqui seria
@@ -155,7 +158,8 @@ std::string range_text(const ValueRange &r) {
         else
             o << "[" << lo << "," << hi << "]";
     } else {
-        o << "[" << r.lo_c << "," << r.hi_c << "]u"; // `u`: sin signo, y no se traduce
+        o << "[" << r.lo_c << "," << r.hi_c
+          << "]u"; // `u`: sin signo, y no se traduce
     }
     o << " " << (r.t.sin_signo ? "u" : "i") << static_cast<int>(r.t.bits);
     return o.str();
@@ -453,8 +457,7 @@ void produce_asm_flow(Production &p) {
          * diferencia entre "no hay" y "no se miro". */
         if (seen == 0)
             p.say_unknown(function_subject(p, fn), UnknownReason::NothingToSay,
-                          "asm_flow.no_asm", kProducerAsmFlow,
-                          "");
+                          "asm_flow.no_asm", kProducerAsmFlow, "");
     }
 }
 
@@ -477,6 +480,32 @@ void produce_asm_flow(Production &p) {
  * fallo que este conocimiento existe para evitar: prometer una alineacion que
  * la memoria no da.  Y eso no falla ruidosamente -- lee mal.
  */
+/**
+ * @brief De que depende `asa.layout`: SOLO de si hay datos estaticos.
+ *
+ * Es el primer dominio que sabe decirlo, y se ve bien por que importa: lo que
+ * afirma -- con que alineacion reserva el cargador la seccion `.data` -- no
+ * depende ni una pizca del cuerpo de las funciones.  Con la huella del modulo
+ * entero, tocar una linea de codigo tiraba este hecho y habia que rehacerlo;
+ * con esta, sobrevive a cualquier cambio que no anada ni quite datos.
+ *
+ * Y es BARATA a proposito: se llama antes de producir nada, para decidir si lo
+ * guardado vale.  Una huella cara aqui costaria mas que rehacer el dominio.
+ */
+uint64_t layout_inputs(const ir::IrModule &mod) {
+    bool has_data = false;
+    for (size_t i = 0; i < mod.static_data.size(); ++i) {
+        if (mod.static_data.meta_at(i).section_name == ".data") {
+            has_data = true;
+            break;
+        }
+    }
+    /* Dos valores distintos y NINGUNO cero: cero significa "no se decirlo", y
+     * confundir "no hay datos" con "no lo se" haria que lo guardado se aceptara
+     * sin comprobar. */
+    return has_data ? 0x1A70D47Aull : 0x1A70E3C0ull;
+}
+
 void produce_layout(Production &p) {
     /* Un hecho por SECCION, no por dato: la garantia es de la seccion, y el
      * desplazamiento de cada dato dentro de ella ya lo sabe quien pregunta. */
@@ -648,7 +677,10 @@ void register_builtin_producers() {
     register_producer(kProducerBoundary, &produce_boundary);
     register_producer(kProducerMemory, &produce_memory);
     register_producer(kProducerLoops, &produce_loops);
-    register_producer(kProducerLayout, &produce_layout);
+    /* El primero que sabe decir de que depende.  Los demas se registran sin
+     * huella -- "no se decirlo" --, que es lo que habia y no es peor; segun
+     * vayan sabiendolo, la cache se vuelve granular sin tocar el motor. */
+    register_producer(kProducerLayout, &produce_layout, &layout_inputs);
     register_producer(kProducerAsmFlow, &produce_asm_flow);
     /* La forma de un valor vive en otra unidad de traduccion y se da de alta
      * ella misma.  Llevaba SIN registrar: calculaba sus hechos, los sellaba
@@ -672,9 +704,31 @@ void register_builtin_producers() {
 // ===========================================================================
 
 void register_producer(const char *domain, Producer p) {
+    register_producer(domain, p, nullptr);
+}
+
+void register_producer(const char *domain, Producer p, DomainFingerprint fp) {
     for (const RegisteredDomain &d : registry())
         if (std::strcmp(d.name, domain) == 0) return; // ya esta
-    registry().push_back({domain, p});
+    registry().push_back({domain, p, fp});
+}
+
+std::vector<DomainCost> current_inputs(const ir::IrModule &mod) {
+    ensure_registry();
+    std::vector<DomainCost> r;
+    r.reserve(registry().size());
+    for (const RegisteredDomain &d : registry()) {
+        /* Un dominio que no sabe decir de que depende NO sale en la lista, y
+         * eso no es lo mismo que salir con huella cero: la lista dice "esto es
+         * lo que hoy se puede comprobar", y meter en ella a quien no sabe
+         * responder solo sirve para que parezca comprobado. */
+        if (d.fingerprint == nullptr) continue;
+        DomainCost c;
+        c.domain = d.name;
+        c.fingerprint = d.fingerprint(mod);
+        r.push_back(c);
+    }
+    return r;
 }
 
 std::vector<const char *> registered_producers() {
@@ -732,6 +786,10 @@ produce(const ir::IrModule &mod, FactStore &store,
         ProductionSummary &r = summaries.back();
         r.domain = d.name;
         const auto t0 = std::chrono::steady_clock::now();
+        /* De que depende, apuntado ANTES de producir: es lo que se guardara con
+         * sus hechos para que la proxima compilacion pueda validarlos sin
+         * volver a producirlos. */
+        if (d.fingerprint != nullptr) r.fingerprint = d.fingerprint(mod);
         Production p{mod, base, store, r, structure_of};
         d.producer(p);
         r.micros = static_cast<long>(

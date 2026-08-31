@@ -1300,6 +1300,49 @@ es = "una cota declarada mas floja que la demostrada, y propiedades demostrables
 en = "what one boundary costs: how many functions cannot prove their effects because the closure leaves the program there"
 es = "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efectos porque el cierre sale del programa por ahi"
 
+# --- las dos familias que consumen los dominios de valores y de memoria ---
+#
+# Ninguna de las dos cuenta nada por su cuenta: preguntan al ASA.  Es lo que
+# permitio anadirlas sin escribir un analisis, y la prueba de que un hecho
+# producido una vez sirve a mas de uno.
+
+[VXW912]
+en = "a parameter nobody reads"
+es = "un parametro que nadie lee"
+
+[VXW913]
+en = "how much memory a function touches without the compiler knowing where"
+es = "cuanta memoria toca una funcion sin que se sepa donde"
+
+# --- los hallazgos de esas dos familias ---
+#
+# `params.unused` habla de un PARAMETRO y no de cualquier valor sin usar: un
+# valor SSA sin usos es lo normal a mitad de una optimizacion y avisarlo seria
+# ruido, mientras que un parametro lo escribio alguien y se pasa en cada
+# llamada.
+#
+# `memory.not_localizable` NO acusa: que el compilador no sepa a donde apunta
+# algo es legitimo.  Dice donde se pierde conocimiento, que es donde se pierden
+# tambien las optimizaciones que dependen de saber que no se pisa nada.
+
+[VXW006]
+en = "'{0}' is a parameter of '{1}' that nobody reads -- either it is not needed, or it was meant to be used and is not"
+es = "'{0}' es un parametro de '{1}' que nadie lee -- o sobra, o se penso usarlo y no se uso"
+
+[VXW007]
+en = "'{1}' touches memory at {0} place(s) where the compiler cannot tell WHERE -- that is not an error, but every one of them takes with it the optimizations that need to know nothing else is being overwritten"
+es = "'{1}' toca memoria en {0} sitio(s) donde no se puede saber DoNDE -- no es un error, pero cada uno se lleva por delante las optimizaciones que necesitan saber que no se pisa nada"
+
+# --- y lo que la familia NO puede decidir, dicho ---
+#
+# Callarse no es una opcion: quien lee la salida no puede distinguir "aqui esta
+# todo bien" de "aqui no he mirado".  Un analisis que renuncia sin decir por que
+# parece que funciona.
+
+[VXW008]
+en = "cannot tell whether the parameters of '{0}' are read: it has values bound to an asm block, which take them through a register rather than through a use the count can see. The bindings say which register carries which slot; joining that to a parameter needs the store between them, which is another domain's knowledge"
+es = "no se puede decir si los parametros de '{0}' se leen: tiene valores atados a un bloque asm, que los toma por un registro y no por un uso que la cuenta vea.  Las ataduras dicen que registro lleva que hueco; unir eso con un parametro necesita el almacen que hay en medio, que es conocimiento de otro dominio"
+
 # --- el mismo coste, pero por una llamada que no se resuelve (VXW005) ---
 #
 # Se separa de VXW004 porque se arregla de otra forma: alli el destino se sabe

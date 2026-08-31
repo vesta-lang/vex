@@ -281,6 +281,9 @@ const CatEntry kEntries[] = {
     {"VXW003", {"'{0}' provably satisfies {1} and does not declare it -- declaring it turns today's fact into a promise the compiler will enforce", "'{0}' cumple {1} de forma demostrable y no lo declara -- declararlo convierte un hecho de hoy en una promesa que el compilador hara cumplir"}},
     {"VXW004", {"{0} function(s) here cannot prove their effects (@pure, @nothrow, @nopanic, @alloc, @stack) because their call closure leaves the program at '{1}' -- the compiler derives effects from Vesta code, and there is none to read there; a contract would not help, since a contract CHECKS what was derived and never feeds it (first one: '{2}')", "{0} funcion(es) de aqui no pueden demostrar sus efectos (@pure, @nothrow, @nopanic, @alloc, @stack) porque su cierre de llamadas sale del programa por '{1}' -- el compilador deduce los efectos del codigo Vesta, y ahi no hay codigo que leer; un contrato no ayudaria, porque un contrato COMPRUEBA lo deducido y nunca lo alimenta (la primera: '{2}')"}},
     {"VXW005", {"{0} function(s) here cannot prove their effects (@pure, @nothrow, @nopanic, @alloc, @stack) because their call closure reaches a call whose target is not resolved -- unlike a boundary that leaves the program, this one is the analysis falling short: resolve the target and all {0} follow (first one: '{2}')", "{0} funcion(es) de aqui no pueden demostrar sus efectos (@pure, @nothrow, @nopanic, @alloc, @stack) porque su cierre de llamadas llega a una llamada cuyo destino no se resuelve -- a diferencia de una frontera que sale del programa, esta es el analisis quedandose corto: si el destino se resuelve, las {0} salen con el (la primera: '{2}')"}},
+    {"VXW006", {"'{0}' is a parameter of '{1}' that nobody reads -- either it is not needed, or it was meant to be used and is not", "'{0}' es un parametro de '{1}' que nadie lee -- o sobra, o se penso usarlo y no se uso"}},
+    {"VXW007", {"'{1}' touches memory at {0} place(s) where the compiler cannot tell WHERE -- that is not an error, but every one of them takes with it the optimizations that need to know nothing else is being overwritten", "'{1}' toca memoria en {0} sitio(s) donde no se puede saber DoNDE -- no es un error, pero cada uno se lleva por delante las optimizaciones que necesitan saber que no se pisa nada"}},
+    {"VXW008", {"cannot tell whether the parameters of '{0}' are read: it has values bound to an asm block, which take them through a register rather than through a use the count can see. The bindings say which register carries which slot; joining that to a parameter needs the store between them, which is another domain's knowledge", "no se puede decir si los parametros de '{0}' se leen: tiene valores atados a un bloque asm, que los toma por un registro y no por un uso que la cuenta vea.  Las ataduras dicen que registro lleva que hueco; unir eso con un parametro necesita el almacen que hay en medio, que es conocimiento de otro dominio"}},
     {"VXW900", {"cannot open '{0}'", "no se puede abrir '{0}'"}},
     {"VXW901", {"'{0}' produced no IR to look at (check the diagnostics above)", "'{0}' no dejo IR que mirar (revisa los diagnosticos de arriba)"}},
     {"VXW902", {"no findings: the linter only speaks about what it can prove", "sin hallazgos: el linter solo habla de lo que puede demostrar"}},
@@ -288,6 +291,8 @@ const CatEntry kEntries[] = {
     {"VXW904", {"Families:", "Familias:"}},
     {"VXW910", {"a declared bound looser than what was proven, and properties provable but not declared", "una cota declarada mas floja que la demostrada, y propiedades demostrables sin declarar"}},
     {"VXW911", {"what one boundary costs: how many functions cannot prove their effects because the closure leaves the program there", "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efectos porque el cierre sale del programa por ahi"}},
+    {"VXW912", {"a parameter nobody reads", "un parametro que nadie lee"}},
+    {"VXW913", {"how much memory a function touches without the compiler knowing where", "cuanta memoria toca una funcion sin que se sepa donde"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"definite_store.always", {"'{2}' is written on every path that returns", "'{2}' se escribe en todos los caminos que retornan"}},
     {"definite_store.escapes", {"the pointer is handed to something else, so it cannot be told whether it gets written", "el puntero se le pasa a otro, asi que no se puede decir si se escribe"}},
@@ -308,7 +313,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 287;
+const int kEntryCount = 292;
 
 } // namespace
 

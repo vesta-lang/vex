@@ -96,15 +96,42 @@ struct LintFamily {
     /// del subcomando que solo existia en un idioma.
     const char *doc = "";
     void (*run)(const LintInput &, vx::Diagnostics &) = nullptr;
+    /**
+     * @brief Que dominios del ASA consulta.  Terminado en nullptr.
+     *
+     * Lo declara la familia y no lo adivina quien la corre, por una razon que
+     * se vio en cuanto entro la tercera: el linter producia un unico dominio
+     * -- el que necesitaban las dos primeras -- y las nuevas no encontraban
+     * nada.  Callado, ademas: una familia sin sus hechos no falla, simplemente
+     * no dice nada, que es indistinguible de "aqui no hay nada que decir".
+     *
+     * Con esto se produce la UNIoN de lo que pidan las familias encendidas, y
+     * ni un dominio mas: apagar una familia deja de pagar lo suyo.
+     */
+    const char *const *needs = nullptr;
 };
 
 /// Da de alta una familia.  Idempotente por nombre.
 ///
-/// @param name Nombre estable (ingles, no se traduce).
-/// @param doc  Codigo del catalogo con su descripcion.
-/// @param run  Que hace.
+/// @param name  Nombre estable (ingles, no se traduce).
+/// @param doc   Codigo del catalogo con su descripcion.
+/// @param run   Que hace.
+/// @param needs Dominios del ASA que consulta, terminado en nullptr.
 void register_lint_family(const char *name, const char *doc,
-                          void (*run)(const LintInput &, vx::Diagnostics &));
+                          void (*run)(const LintInput &, vx::Diagnostics &),
+                          const char *const *needs = nullptr);
+
+/**
+ * @brief Los dominios del ASA que hacen falta para @p wanted.
+ * @param wanted Familias pedidas; vacio = todas.
+ * @return La union de lo que declaran, sin repetidos.
+ *
+ * Se ofrece aqui para que quien corre el linter no tenga que saber que consulta
+ * cada familia: ese criterio es de la familia, y repartirlo por los
+ * consumidores es como se acaba con uno que produce de menos y calla.
+ */
+std::vector<const char *>
+lint_required_domains(const std::vector<std::string> &wanted);
 
 /// Las familias dadas de alta, en orden de registro.
 std::vector<const LintFamily *> registered_lint_families();

@@ -58,6 +58,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "analysis/manager/analysis_manager.h" // los analisis se PIDEN
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_lift_reason.h" // AsmMotivoOpaco: POR QUE no se pudo elevar
 #include "vx/builtin_names.h" // Builtin: el nombre ya resuelto, no la cadena
@@ -3213,6 +3214,21 @@ class Lowering {
     ast::ModuleNode &mod_;
     const TypeChecker &tc_;
     Diagnostics &diags_;
+    /**
+     * @brief Donde se PIDEN los analisis, en vez de calcularlos aqui.
+     *
+     * El bajado tambien pregunta cosas del IR que acaba de emitir -- si un
+     * parametro de salida se escribe en todos los caminos, por ejemplo -- y las
+     * calculaba a mano, una vez por pregunta: tres `out` en una funcion
+     * recorrian su grafo de flujo tres veces para lo que un recorrido contesta
+     * junto, y el resultado se tiraba.
+     *
+     * Con el gestor, el analisis se calcula si se pregunta, se guarda por
+     * funcion y se invalida cuando la funcion cambia.  Es el mismo mecanismo
+     * que usan el optimizador y el asignador de registros: el conocimiento es
+     * UNO aunque lo pregunten desde sitios distintos.
+     */
+    analysis::AnalysisManager analyses_;
 
   public:
     /// Avisar de cada bloque `asm` que se queda OPACO (no se pudo pasar a IR).

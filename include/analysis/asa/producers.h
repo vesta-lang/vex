@@ -69,6 +69,7 @@ agnosticos respecto al productor, es otra cosa:
 #define ANALYSIS_ASA_PRODUCERS_H
 
 #include "analysis/asa/fact_base.h"
+#include "analysis/asa/fact_file.h" // DomainCost: de que depende cada dominio
 #include "analysis/asa/fact_store.h"
 
 #include <cstdint>
@@ -123,6 +124,20 @@ struct ProductionSummary {
      */
     uint32_t skipped = 0;
     long micros = 0;
+    /**
+     * @brief Huella de LAS ENTRADAS que este dominio mira.  Cero = no sabe.
+     *
+     * Es lo que hace GRANULAR la reutilizacion entre compilaciones.  Hasta
+     * ahora los hechos se validaban con una sola huella, la del modulo, asi
+     * que tocar una linea de una funcion tiraba TODO -- incluido lo que no
+     * depende del codigo, como la alineacion de una seccion --.
+     *
+     * Tiene que salir de las ENTRADAS y no de lo producido, porque hay que
+     * poder calcularla SIN producir: es lo que se compara al leer el fichero
+     * para decidir si lo guardado sigue valiendo.  De eso se encarga la
+     * funcion que cada dominio registra junto a su productor.
+     */
+    uint64_t fingerprint = 0;
     /// Desglose de @c silent por motivo.  Pocos por dominio: vector plano.
     std::vector<UnknownEntry> reasons;
 };
@@ -182,6 +197,39 @@ using Producer = void (*)(Production &);
  * @param p      Funcion que afirma sus hechos.
  */
 void register_producer(const char *domain, Producer p);
+
+/**
+ * @brief Huella de las ENTRADAS de un dominio, sin producir nada.
+ *
+ * Un dominio que sepa decir de que depende registra una de estas junto a su
+ * productor.  Se llama al LEER el fichero de hechos -- cuando todavia no se ha
+ * producido nada -- para decidir si lo guardado sigue valiendo, asi que tiene
+ * que ser barata y no puede mirar lo que el productor produce.
+ *
+ * Devolver cero significa "no se decirlo", y entonces se acepta lo guardado:
+ * es el comportamiento de siempre, ni mejor ni peor.
+ */
+using DomainFingerprint = uint64_t (*)(const ir::IrModule &);
+
+/**
+ * @brief Da de alta un dominio que ademas sabe decir de que depende.
+ * @param domain Nombre estable.
+ * @param p      Funcion que afirma sus hechos.
+ * @param fp     Huella de sus entradas, para validar lo guardado.
+ */
+void register_producer(const char *domain, Producer p, DomainFingerprint fp);
+
+/**
+ * @brief Lo que HOY depende cada dominio, para validar el fichero de hechos.
+ * @param mod El modulo que se esta compilando.
+ * @return Un registro por dominio que sepa decirlo; los demas no salen.
+ *
+ * Es la otra mitad de @ref DomainFingerprint: quien va a leer el fichero
+ * pregunta esto y compara.  Vive aqui y no en el consumidor porque el criterio
+ * de "de que depende un dominio" es del dominio, y repartirlo por los
+ * consumidores es como se acaba con dos que invalidan distinto.
+ */
+std::vector<DomainCost> current_inputs(const ir::IrModule &mod);
 
 /// Los dominios dados de alta, en orden de registro.
 std::vector<const char *> registered_producers();
