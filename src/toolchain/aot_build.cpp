@@ -856,6 +856,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         return EXIT_FAILURE;
     }
 
+    /* Si el gancho de "excepcion sin recoger" lo puso el USUARIO.  Se mira
+     * AQUI, antes de fusionar ningun runtime, que es cuando lo que hay en el
+     * modulo es suyo y no nuestro; luego decide si el driver lo completa o lo
+     * deja en paz. */
+    bool uncaught_hook_es_del_usuario = false;
+    for (const auto &af : aot_mod.functions)
+        if (af.name == "__vx_uncaught") uncaught_hook_es_del_usuario = true;
+
     // ----------------------------------------------------------------
     // Auto-bundle del runtime de excepciones (stdlib/vx/vx_exc.vx).
     // Si el modulo usa try/catch/throw (THROW o CALL __vx_setjmp en el
@@ -1455,27 +1463,33 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     b.instrs = std::move(ni);
                 }
             }
-            /* Y lo mismo antes de contar una excepcion que nadie recogio: ese
-             * camino tambien TERMINA el proceso, asi que sin volcar aqui se
-             * perdia todo lo que el programa hubiera impreso antes de fallar
-             * -- que suele ser justo lo que dice como llego hasta ahi --.
+            /* El gancho de "excepcion que nadie recogio" se COMPLETA aqui.
              *
-             * Se inyecta desde el driver, y no se llama desde `vx_exc.vx`,
-             * para que el runtime de excepciones no pase a depender del de
-             * impresion: aqui ya se sabe que hay uno (este bloque solo corre
-             * cuando se incluyo), y en un binario sin I/O no se inyecta nada y
-             * `__vx_uncaught` sigue valiendo. */
-            for (auto &af : aot_mod.functions) {
-                if (af.name != "__vx_uncaught" || af.blocks.empty()) continue;
-                ir::IrInstr fl{};
-                fl.op = ir::IrOp::CALL;
-                fl.dst = ir::IR_NO_VALUE;
-                fl.func_name = "__vx_flush";
-                if (!af.blocks[0].instrs.empty())
-                    fl.source_line = af.blocks[0].instrs[0].source_line;
-                af.blocks[0].instrs.insert(af.blocks[0].instrs.begin(),
-                                           std::move(fl));
-                break;
+             * `vx_exc.vx` no importa nada a proposito: sin sistema, lo unico
+             * que se puede hacer es parar la maquina, y un objeto freestanding
+             * no debe arrastrar la I/O del sistema solo por usar try/catch.
+             * Cuando SI hay sistema -- y este bloque solo corre entonces --, se
+             * le antepone la llamada que vuelca lo impreso, lo cuenta por la
+             * salida de error y sale con 134.  No vuelve, asi que el cuerpo de
+             * parada de `vx_exc.vx` queda inalcanzable.
+             *
+             * Solo al gancho NUESTRO: si el usuario definio el suyo, el suyo
+             * gano al fusionar y no se le anade nada -- completar una funcion
+             * ajena seria cambiarle el comportamiento a quien la escribio. */
+            if (!uncaught_hook_es_del_usuario) {
+                for (auto &af : aot_mod.functions) {
+                    if (af.name != "__vx_uncaught" || af.blocks.empty())
+                        continue;
+                    ir::IrInstr rp{};
+                    rp.op = ir::IrOp::CALL;
+                    rp.dst = ir::IR_NO_VALUE;
+                    rp.func_name = "__vx_uncaught_report";
+                    if (!af.blocks[0].instrs.empty())
+                        rp.source_line = af.blocks[0].instrs[0].source_line;
+                    af.blocks[0].instrs.insert(af.blocks[0].instrs.begin(),
+                                               std::move(rp));
+                    break;
+                }
             }
             std::cout << "[aot] runtime de I/O (stdlib/vx/vx_io.vx) "
                          "incluido en el objeto.\n";

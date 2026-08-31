@@ -254,6 +254,11 @@ static thread_local std::string g_cc_target_arch; // "x86_64"/"x86"/"arm64"
 /// ejecutan el MISMO .velb y quien decide es un flag de ejecucion, asi que
 /// eso no es una propiedad del codigo emitido y no se puede resolver aqui.
 static thread_local std::string g_cc_target_mode;
+/// Tier del binario nativo (`full`/`embed`/`bare`) y si va SIN libc.  Es lo que
+/// contesta a `@Target("tier:...")`.  Vacio = ruta de bytecode: no hay binario,
+/// asi que ningun tier vale.
+static thread_local std::string g_cc_target_tier;
+static thread_local bool g_cc_target_sin_libc = false;
 
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept {
@@ -267,6 +272,16 @@ void set_aot_condcomp_mode(const std::string &mode) noexcept {
 
 void get_aot_condcomp_mode(std::string &mode) noexcept {
     mode = g_cc_target_mode;
+}
+
+void set_aot_condcomp_tier(const std::string &tier, bool sin_libc) noexcept {
+    g_cc_target_tier = tier;
+    g_cc_target_sin_libc = sin_libc;
+}
+
+void get_aot_condcomp_tier(std::string &tier, bool &sin_libc) noexcept {
+    tier = g_cc_target_tier;
+    sin_libc = g_cc_target_sin_libc;
 }
 
 // Lee el override actual del target de @Target.  Necesario para propagar el
@@ -422,6 +437,21 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
         // .velb corre en los dos y el modo no es propiedad del codigo emitido.
         // `jit-required` exige JIT, que en compile time no se garantiza.
         return false;
+    }
+    if (key == "tier") {
+        /* Cuanto runtime hay debajo del binario.  Los tres nombres son los del
+         * proyecto (@c aot::Tier), no unos inventados aqui.
+         *
+         * En la ruta de BYTECODE no hay binario nativo del que hablar, asi que
+         * ningun `tier:` vale -- y eso es lo correcto: una variante marcada
+         * para un tier no debe colarse donde ese tier no existe. */
+        if (g_cc_target_tier.empty()) return false;
+        /* `sin_libc` es un eje APARTE del tier, aunque se pregunte por la misma
+         * clave: es `--freestanding`, y lo que dice es que reservar memoria y
+         * el panico pasan a exigir ganchos del usuario en vez de resolverse
+         * solos. */
+        if (val == "sin_libc") return g_cc_target_sin_libc;
+        return val == g_cc_target_tier;
     }
     return false;
 }
@@ -926,9 +956,9 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             collect_template_export_(mod.get(), decl.get(), decl_start_off);
             /* Donde ACABA esta decl.  Al volver de parsearla el token actual ya
              * es el siguiente, asi que su offset marca el final -- arrastrando
-             * como mucho los espacios y comentarios de en medio, que no estorban
-             * a nadie.  Deducirlo despues, desde el texto, cortaba funciones por
-             * la mitad. */
+             * como mucho los espacios y comentarios de en medio, que no
+             * estorban a nadie.  Deducirlo despues, desde el texto, cortaba
+             * funciones por la mitad. */
             /* Solo si el tramo tiene sentido.  Al final del fichero, o tras
              * recuperarse de un error, el token actual puede quedar ANTES del
              * inicio; anotarlo daria un tramo de longitud negativa. */
@@ -2860,8 +2890,8 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
 /**
  * @copydoc vx::Parser::parse_param_list
  */
-void Parser::parse_param_list(
-    std::vector<std::unique_ptr<ast::ParamDecl>> &out, const char *what) {
+void Parser::parse_param_list(std::vector<std::unique_ptr<ast::ParamDecl>> &out,
+                              const char *what) {
     while (current_.kind != TokenKind::RPAREN &&
            current_.kind != TokenKind::END_OF_FILE) {
         auto p = parse_param();
@@ -3549,7 +3579,8 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         if (abstracto) {
             std::string sin_nombre;
             std::unique_ptr<ast::TypeNode> fp;
-            if (try_parse_c_func_ptr_(base, sin_nombre, fp)) base = std::move(fp);
+            if (try_parse_c_func_ptr_(base, sin_nombre, fp))
+                base = std::move(fp);
         }
     }
     if (base) base->is_nonnull = nonnull;

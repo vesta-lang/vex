@@ -81,6 +81,33 @@ void set_aot_condcomp_mode(const std::string &mode) noexcept;
 /// compile paralelo, igual que os/arch).
 void get_aot_condcomp_mode(std::string &mode) noexcept;
 
+/// Fija el TIER del binario nativo, contra el que se evalua `@Target("tier:")`.
+///
+/// Son los tres del proyecto (@c aot::Tier) -- los mismos nombres que toma
+/// `--target` -- y dicen QUE hay debajo del binario:
+///   - `full`  el runtime completo (libvesta_rt): planificador, async,
+///             distribucion, reflexion.
+///   - `embed` NINGUN runtime: solo la stdlib escrita en Vesta que el propio
+///             AOT fusiona en el objeto (cadenas, excepciones, monitores,
+///             I/O, reserva de memoria).
+///   - `bare`  solo codigo nativo.  Nucleos, drivers, empotrados.
+///
+/// El GC no entra en esta escala: en nativo es SIEMPRE opcional y se pide
+/// enlazando su libreria, en cualquiera de los tres.  Lo de serie es RAII y el
+/// ownership del lenguaje.
+///
+/// `sin_libc` es OTRA cosa y por eso va aparte, aunque se pregunte con la misma
+/// clave: es `--freestanding`, y lo que dice es que reservar memoria y el
+/// panico pasan a exigir ganchos del usuario (@c \@AllocatorOverride,
+/// @c \@PanicHandler) en vez de resolverse solos.  Se consulta como
+/// `tier:sin_libc`.
+///
+/// Vacio => ruta de bytecode; ahi ningun `tier:` vale, porque no hay binario.
+void set_aot_condcomp_tier(const std::string &tier, bool sin_libc) noexcept;
+/// Lee el tier activo (para propagarlo a los workers del compile paralelo,
+/// igual que os/arch/mode).
+void get_aot_condcomp_tier(std::string &tier, bool &sin_libc) noexcept;
+
 /// Evalua una expresion de @c @Target (os/arch/cpu/mode/compiler/vm con
 /// &&/||/! y parentesis) contra el target activo.
 ///

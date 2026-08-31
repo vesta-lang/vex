@@ -626,16 +626,24 @@ def wsl_run_elf(elf_path, timeout=120):
     return rc, salida
 
 
-def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None, env=None):
+def aot_build(ctx, src_abs, out, label, cwd=None, fmt=None, env=None,
+              extra=None):
     """Compila un .vx (ruta absoluta) a ejecutable nativo y devuelve su ruta.
 
     El emisor PE escribe el fichero SIN extension .exe; el .sh probaba ambos
     nombres (`[ -f "$exe.exe" ] && exe="$exe.exe"`).  Aqui se replica y ademas
     se renombra a .exe en Windows para poder ejecutarlo.
+
+    `extra` son flags que se anaden a la linea de compilacion (p.ej.
+    `--target embed`), para los casos que comprueban justamente que el binario
+    cambia segun con que se pida.
     """
-    _, log = ctx.run([VM_EXE, "-m", "aot", "--vesta", src_abs,
-                      "--format", fmt or AOT_FMT, "--emit", "exe",
-                      "-o", ctx.path(out)], cwd=cwd, env=env)
+    args = [VM_EXE, "-m", "aot", "--vesta", src_abs,
+            "--format", fmt or AOT_FMT, "--emit", "exe",
+            "-o", ctx.path(out)]
+    if extra:
+        args += [str(a) for a in extra]
+    _, log = ctx.run(args, cwd=cwd, env=env)
     # Se guarda el log de la construccion para poder adjuntarlo si luego el
     # binario diverge: sin el, un "aot exit == N" no dice NADA de por que.
     ctx.last_aot_log = log
@@ -4283,6 +4291,38 @@ fault3_case("fallo_division_cero",
             "369_fallo_division_cero.vx", "VX7002", 136)
 fault3_case("fallo_panic", "panic sin capturar",
             "370_fallo_panic.vx", "VX7011", 134)
+
+
+@case("target_tier")
+def _(ctx):
+    """El eje `tier:` de @Target elige UNA variante, y la que toca.
+
+    Cada variante devuelve un numero distinto a proposito: asi el resultado no
+    solo dice que compilo, dice CUAL se eligio.  Y se comprueban los dos lados
+    del eje -- el binario nativo y la ruta de bytecode --, porque lo que hay
+    que fijar es justamente que en bytecode NINGUN tier vale: alli no hay
+    binario del que hablar, y una variante marcada para un tier no debe colarse
+    donde ese tier no existe.
+    """
+    src = "520_target_tier.vx"
+    ctx.compile_vx(ctx.src(src), "ttier")
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("ttier", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 4:
+            ctx.fail("tier (-m %s): R00 == %s, se esperaba 4 (sin tier)"
+                     % (modo, got), log)
+        ctx.ok("tier (-m %s) -> 4: en bytecode ningun tier vale" % modo)
+    # `bare` es el valor por defecto de --target; `embed` se pide.
+    for destino, quiere in (("bare", 3), ("embed", 2)):
+        exe = aot_build(ctx, ctx.src(src), "ttier_" + destino,
+                        "tier (-m aot --target %s)" % destino,
+                        extra=["--target", destino])
+        rc, log = ctx.run([exe])
+        if exit_code(rc) != quiere:
+            ctx.fail("tier (-m aot --target %s): sale %d, se esperaba %d"
+                     % (destino, exit_code(rc), quiere), log)
+        ctx.ok("tier (-m aot --target %s) -> %d" % (destino, quiere))
 
 
 @case("excepcion_sin_capturar")

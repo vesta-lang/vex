@@ -28,7 +28,14 @@ import std.types only ssize_t;
 
 // Terminar el proceso SI es igual en los dos sistemas, asi que no lleva
 // @Target: std.os ya elige por dentro con que llamada se hace.
-import std.os only exit;
+// `Stream` para nombrar la salida de ERROR (ver __vx_uncaught_report); lo demas
+// de aqui sale por la estandar y bufferizada.
+//
+// El `write` portable NO se importa: en Linux este modulo ya trae el crudo del
+// sistema con ese mismo nombre (`std.syscall.linux`), y traer los dos hace que
+// escribir `write` deje de significar una sola cosa -- el compilador lo dice y
+// no compila.  Se llama cualificado donde hace falta.
+import std.os only exit, Stream;
 
 // --- FFI a la I/O de bajo nivel del SO (resuelta por IAT/GOT) ---------------
 // @Target no aplica a bloques `extern`; declaramos los de AMBAS plataformas sin
@@ -236,6 +243,34 @@ void __vx_panic_null() {
 	// salia cortado y sin el salto de linea.
 	__vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)",
 		"unwrap de un valor null (Optional/nonnull vacio)".bytes());
+	exit(134);
+}
+
+/// Lo que se hace con una excepcion que nadie recogio, CUANDO HAY SISTEMA.
+///
+/// El gancho es `__vx_uncaught`, y vive en el runtime de excepciones
+/// (`vx_exc.vx`), que no importa nada: sin sistema lo unico que se puede hacer
+/// es parar la maquina.  Aqui esta lo otro -- contarlo --, en el modulo que
+/// sabe escribir; el driver antepone esta llamada al gancho cuando incluye
+/// este runtime.  Asi los dos se enlazan por separado y un objeto freestanding
+/// no arrastra la I/O del sistema por usar try/catch.
+///
+/// Se vuelca ANTES de decir nada: la salida va por bloques, y sin esto se
+/// perdia todo lo que el programa llevara impreso -- que suele ser justo lo que
+/// dice como llego hasta ahi.
+///
+/// Sale con 134, el mismo codigo que el interprete y el JIT ante lo mismo.  No
+/// vuelve.
+void __vx_uncaught_report() {
+	__vx_flush();
+	// Por la salida de ERROR: es un fallo, y quien encadene la salida del
+	// programa con otra cosa no debe tragarselo mezclado con los datos.
+	//
+	// No se nombra la clase porque aqui no se sabe: en nativo una excepcion es
+	// un valor y un identificador de tipo, no un objeto con metadatos.  El
+	// interprete y el JIT si la nombran.
+	std.os.write(Stream.stderr, "uncaught exception\n",
+		"uncaught exception\n".bytes());
 	exit(134);
 }
 

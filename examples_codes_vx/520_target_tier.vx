@@ -1,0 +1,50 @@
+namespace ejemplos.target_tier;
+
+// El eje `tier:` de `@Target`: que hay DEBAJO del binario.
+//
+// Son los mismos nombres que toma `--target`, porque son la misma pregunta:
+//
+//   tier:full       el runtime completo -- planificador, async, distribucion,
+//                   reflexion.
+//   tier:embed      ningun runtime: solo la stdlib escrita en Vesta que el
+//                   propio AOT fusiona en el objeto.
+//   tier:bare       solo codigo nativo.  Es el valor por defecto.
+//   tier:sin_libc   `--freestanding`: reservar memoria y el panico pasan a
+//                   exigir ganchos del usuario.  Es un eje APARTE del tier,
+//                   aunque se pregunte con la misma clave.
+//
+// El recolector de basura no esta en esta escala: en nativo es SIEMPRE
+// opcional y se pide enlazando su libreria, valga el tier que valga.
+//
+// En la ruta de BYTECODE ningun `tier:` vale, y eso es lo que se quiere: no
+// hay binario nativo del que hablar, asi que una variante marcada para un tier
+// no debe colarse donde ese tier no existe.  Por eso la ultima variante lleva
+// la negacion de todos: es la del interprete.
+//
+// Este ejemplo comprueba justo eso -- que se elige UNA y la que toca --, y por
+// eso cada variante devuelve un numero distinto.
+
+@Target("tier:full")
+i64 debajo() {
+	return 1_i64;
+}
+
+@Target("tier:embed")
+i64 debajo() {
+	return 2_i64;
+}
+
+@Target("tier:bare")
+i64 debajo() {
+	return 3_i64;
+}
+
+@Target("!tier:full && !tier:embed && !tier:bare")
+i64 debajo() {
+	return 4_i64;
+}
+
+i32 main() {
+	// Nativo por defecto -> 3 (bare).  Interprete y JIT -> 4 (no hay tier).
+	return (i32) debajo();
+}
