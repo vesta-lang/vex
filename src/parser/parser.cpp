@@ -974,6 +974,24 @@ std::unique_ptr<ASTNode> Parser::parse_data_directive() {
 }
 
 std::unique_ptr<ASTNode> Parser::parse_instruction() {
+    /* La procedencia se apunta AQUI, no al final.
+     *
+     * El lexer ve un marcador `// @line N` mientras salta el blanco que
+     * precede al siguiente token, asi que al terminar de leer los operandos
+     * de esta instruccion ya ha consumido el marcador de la SIGUIENTE.
+     * Leerlo entonces desplazaba la tabla entera una instruccion: en un
+     * `*p` nulo el interprete acusaba a la sentencia de al lado -- y con el
+     * codigo aplanado, a otra funcion --, mientras el codigo compilado, que
+     * saca la linea del IR y no de esta tabla, acertaba.  Los puntos de
+     * ruptura por `fichero:linea` paraban tambien una instruccion tarde.
+     *
+     * Al entrar, `current` es ya el mnemonico y el marcador leido es el
+     * suyo; el `peek()` de mas abajo no estorba porque guarda y restaura
+     * estos campos. */
+    const int src_line = lexer.last_src_line;
+    const int src_column = lexer.last_src_column;
+    std::string src_stackmap = lexer.last_src_stackmap;
+    lexer.last_src_stackmap.clear();
     std::string opcode = current.lexeme;
     std::string ext_opcode;
     Token tok = peek();
@@ -1139,19 +1157,12 @@ exit_error:
     // Usa pattern.opcode para codegen
     auto instr =
         std::make_unique<Instruction>(pattern.opcode, std::move(operands));
-    // Captura la linea fuente Vesta del marcador `// @line N` mas
-    // reciente (rellenado por el lexer en skip_whitespace).  Esto
-    // se usa luego por el bytecode emitter para registrar el par
-    // (byte_offset, source_line) en la tabla debug del linker.
-    instr->source_line = lexer.last_src_line;
-    instr->source_column = lexer.last_src_column;
-    // Captura el stackmap preciso ( E.1) del marcador `// @sm <hex>`
-    // mas reciente.  A diferencia de @line (que persiste hasta el proximo
-    // marcador), el stackmap aplica SOLO a la instruccion inmediatamente
-    // siguiente: lo consumimos y limpiamos para que no se arrastre a una
-    // instruccion posterior que no sea safepoint.
-    instr->stackmap_hex = lexer.last_src_stackmap;
-    lexer.last_src_stackmap.clear();
+    /* Lo apuntado al ENTRAR (ver arriba); el bytecode emitter arma con esto
+     * el par (offset, linea) de la tabla de depuracion.  El stackmap vale
+     * solo para SU instruccion, por eso se limpio al capturarlo. */
+    instr->source_line = src_line;
+    instr->source_column = src_column;
+    instr->stackmap_hex = std::move(src_stackmap);
     return instr;
 }
 
