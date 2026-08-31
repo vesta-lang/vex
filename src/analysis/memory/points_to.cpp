@@ -203,17 +203,59 @@ struct Resolver {
     // --- Hechos de bucle, calculados SOLO si aparece un puntero inducido ---
     bool bucles_listos = false;
     LoopFacts lf;
-    std::vector<int> def_block;
+    /* Donde se define cada valor lo trae `facts`, que ya lo tenemos delante:
+     * era el mismo doble bucle que hizo `build_ir_facts`, repetido aqui. */
+    const std::vector<int32_t> &def_block = facts.def_block;
 
     void preparar_bucles() {
         if (bucles_listos) return;
         bucles_listos = true;
         lf = compute_loop_facts(fn);
-        def_block.assign(facts.def_of.size(), -1);
-        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi)
-            for (const ir::IrInstr &in : fn.blocks[bi].instrs)
-                if (in.dst != ir::IR_NO_VALUE && in.dst < def_block.size())
-                    def_block[in.dst] = static_cast<int>(bi);
+        shape_.assign(lf.loop_count, LoopShape{});
+        shape_ready_.assign(lf.loop_count, 0);
+    }
+
+    /**
+     * @brief Lo que se sabe de un bucle: su forma, su variable de induccion y
+     *        cuantas vueltas da.
+     *
+     * Las tres cosas se preguntan juntas y valen para todo el bucle, asi que
+     * viajan juntas y se calculan UNA vez.
+     */
+    struct LoopShape {
+        LoopStructure st;
+        LoopIV iv;
+        LoopTripInfo trip;
+        /// Sirve para acotar: forma valida, induccion encontrada y vueltas
+        /// conocidas.  Si es falso, no hay nada que afirmar.
+        bool usable = false;
+    };
+    std::vector<LoopShape> shape_;
+    std::vector<uint8_t> shape_ready_;
+
+    /**
+     * @brief La forma del bucle @p lid, calculada la primera vez que se pide.
+     *
+     * Memorizada por id porque quien pregunta es CADA PUNTERO inducido, y
+     * todos los de un mismo bucle comparten forma.  Sin esto, un bucle con N
+     * punteros reconstruia N veces lo mismo -- el vector de bloques, el
+     * conjunto de membresia y los PHIs del header --, y volvia a buscar N
+     * veces la misma induccion y las mismas vueltas.
+     */
+    const LoopShape &shape_of(uint32_t lid) {
+        static const LoopShape none;
+        if (lid >= shape_.size()) return none;
+        if (shape_ready_[lid]) return shape_[lid];
+        shape_ready_[lid] = 1;
+        LoopShape &s = shape_[lid];
+        s.st = detect_loop_structure(fn, lf, lid);
+        if (!s.st.valid) return s;
+        if (!detect_loop_iv(fn, def_block, s.st.header, s.st.preheader,
+                            s.st.latch, s.iv))
+            return s;
+        s.trip = compute_trip_count(fn, def_block, s.iv);
+        s.usable = s.trip.known() && s.trip.trip > 0;
+        return s;
     }
 
     /**
@@ -240,8 +282,10 @@ struct Resolver {
             return false;
         const uint32_t lid = lf.loop_id[bh];
         if (lid == LoopFacts::NO_LOOP) return false;
-        const LoopStructure ls = detect_loop_structure(fn, lf, lid);
-        if (!ls.valid) return false;
+        /* La forma del bucle, ya calculada si otro puntero del mismo bucle
+         * pregunto antes.  Trae la estructura, la induccion y las vueltas. */
+        const LoopShape &shape = shape_of(lid);
+        if (!shape.usable) return false;
 
         // El paso: el arg que vuelve por el latch es `phi + d` con d constante.
         int64_t paso = 0;
@@ -265,13 +309,8 @@ struct Resolver {
         }
         if (!hay_paso || paso == 0) return false;
 
-        // Las vueltas: del IV entero del mismo bucle.
-        LoopIV iv;
-        if (!detect_loop_iv(fn, def_block, ls.header, ls.preheader, ls.latch,
-                            iv))
-            return false;
-        const LoopTripInfo tc = compute_trip_count(fn, def_block, iv);
-        if (!tc.known() || tc.trip <= 0) return false;
+        // Las vueltas: del IV entero del mismo bucle, ya en la forma.
+        const LoopTripInfo &tc = shape.trip;
 
         const int64_t ini = base.off_exact ? base.off : 0;
         if (!base.off_exact && !base.off_rango) return false;

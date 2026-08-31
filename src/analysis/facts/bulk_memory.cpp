@@ -147,15 +147,10 @@ std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn) {
     const IrFacts hechos = build_ir_facts(fn);
     const PointsTo pt = compute_points_to(fn, hechos);
 
-    /* En QUE BLOQUE se define cada valor.  Solo esto: quien lo define ya lo
-     * sabe `hechos.def_of`, y se construia aqui otra vez a mano por delante
-     * -- el mismo recorrido, el mismo resultado, dos veces.  El bloque no lo
-     * lleva `IrFacts`, asi que ese si hay que sacarlo. */
-    std::vector<int> def_block(fn.values.size(), -1);
-    for (size_t bi = 0; bi < fn.blocks.size(); ++bi)
-        for (const ir::IrInstr &in : fn.blocks[bi].instrs)
-            if (in.dst != ir::IR_NO_VALUE && in.dst < def_block.size())
-                def_block[in.dst] = (int)bi;
+    /* Donde se define cada valor lo trae `hechos`: es el mismo recorrido que
+     * ya hizo `build_ir_facts` tres lineas mas arriba.  Se construia aqui a
+     * mano por delante -- el mismo doble bucle, el mismo resultado. */
+    const std::vector<int32_t> &def_block = hechos.def_block;
 
     for (uint32_t L = 0; L < lf.loop_count; ++L) {
         if (tiene_hijo[L]) continue;

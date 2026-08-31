@@ -17,6 +17,7 @@
 #include "util/env_flags.h"
 #include "ir/passes/unroll.h"
 
+#include "analysis/facts/ir_facts.h" // def_block: el hecho, no un recorrido propio
 #include "analysis/facts/loop_facts.h"
 #include "analysis/facts/loop_iv.h"
 #include "analysis/facts/loop_metrics.h"
@@ -340,16 +341,18 @@ bool ir_pass_unroll(IrFunction &fn, int factor) {
     // posterior lo borre.  detect_loop_structure calcula los preds del header
     // localmente.
 
-    // def_block[v] = bloque que define v (para distinguir invariante vs
-    // interno).
-    std::vector<int> def_block(fn.values.size(), -1);
-    for (size_t bi = 0; bi < fn.blocks.size(); ++bi)
-        for (const IrInstr &in : fn.blocks[bi].instrs)
-            if (in.dst != IR_NO_VALUE && in.dst < def_block.size())
-                def_block[in.dst] = (int)bi;
-
+    /* Lo PRIMERO, lo que decide si hay algo que hacer: sin bucles no hay nada
+     * que desenrollar, asi que preparar antes las tablas era recorrer la
+     * funcion entera para tirarlo. */
     analysis::LoopFacts lf = analysis::compute_loop_facts(fn);
     if (lf.loop_count == 0) return false;
+
+    /* def_block[v] = bloque que define v (para distinguir invariante vs
+     * interno).  Sale de los hechos, no de un recorrido propio: era el mismo
+     * doble bucle que ya hace `build_ir_facts`, y lo repetian ademas el
+     * resolvedor de punteros y el reconocedor de memoria por lotes. */
+    const analysis::IrFacts facts = analysis::build_ir_facts(fn);
+    const std::vector<int32_t> &def_block = facts.def_block;
 
     // Solo bucles INNERMOST (sin hijos): los que tienen cuerpo cloneable
     // simple.

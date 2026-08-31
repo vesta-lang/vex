@@ -8,9 +8,9 @@
 /**
  * @file analysis/facts/ir_facts.h
  * @brief HECHOS objetivos de una funcion IR: lo que se deriva con UN recorrido,
- *        SIN retículo, punto-fijo ni interpretacion.  Es la base compartida que
+ *        SIN reticulo, punto-fijo ni interpretacion.  Es la base compartida que
  *        consumen todos los analisis (no re-recorren el IR).  Criterio: si
- *        necesita retículo/punto-fijo/eleccion-de-precision es ANaLISIS, no
+ *        necesita reticulo/punto-fijo/eleccion-de-precision es ANALISIS, no
  *        hecho -- por eso aqui NO hay efectos, points-to ni alias (eso lo
  * produce EffectAnalysis/AliasAnalysis sobre estos hechos).
  *
@@ -47,6 +47,21 @@ struct IrFacts {
     // --- def-use ---
     std::vector<const ir::IrInstr *>
         def_of; ///< value id -> instr que lo define.
+    /**
+     * @brief value id -> BLOQUE donde se define, -1 si no lo define nadie.
+     *
+     * La otra mitad de la misma pregunta: `def_of` dice QUE instruccion, esto
+     * dice DONDE.  Se saca del mismo recorrido, asi que no cuesta nada de
+     * mas, y hace falta para lo que se pregunta constantemente -- si un valor
+     * es invariante en un bucle es, literalmente, si su bloque de definicion
+     * cae fuera --.
+     *
+     * Estaba, pero repartido: el desenrollador, el resolvedor de punteros y
+     * el reconocedor de memoria por lotes se lo construian CADA UNO por su
+     * cuenta con el mismo doble bucle.  Tres recorridos por funcion para el
+     * mismo hecho, que es justo lo que el ASA existe para no hacer.
+     */
+    std::vector<int32_t> def_block;
     std::vector<int32_t>
         param_of; ///< value id -> indice de parametro, -1 si no.
 
@@ -60,7 +75,7 @@ struct IrFacts {
     uint32_t loop_count = 0; ///< back-edges (aproximacion de bucles).
     bool recursive = false;  ///< se llama a si misma directamente.
 
-    /// ¿Hay def para @p v?  (helper de conveniencia.)
+    /// Hay def para @p v?  (helper de conveniencia.)
     const ir::IrInstr *def(ir::IrValueId v) const {
         return v < def_of.size() ? def_of[v] : nullptr;
     }

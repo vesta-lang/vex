@@ -1540,6 +1540,22 @@ else ()
     target_link_libraries(test_rbank_const_adapter PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# IrFacts::def_block: la otra mitad de def_of (donde se define cada valor, no
+# que instruccion lo define).  Comprueba que las dos CONCUERDAN, que es lo que
+# permitio tirar los recorridos propios que se hacian por su cuenta el
+# desenrollador, el resolvedor de punteros y el de memoria por lotes.
+add_executable(test_ir_facts_def_block tests/analysis/test_ir_facts_def_block.cpp)
+target_include_directories(test_ir_facts_def_block PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_ir_facts_def_block PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_ir_facts_def_block PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_ir_facts_def_block PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_ir_facts_def_block PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # LoopFacts (analysis) + LoopAdapter (banco ancho, Fase 0.25.4): deteccion de
 # bucles unificada (profundidad/header/parent) + adaptador loop_depth.
 add_executable(test_loop_facts tests/analysis/test_loop_facts.cpp)

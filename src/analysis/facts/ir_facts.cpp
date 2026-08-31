@@ -22,6 +22,7 @@ char IRFactsAnalysis::ID = 0;
 IrFacts build_ir_facts(const ir::IrFunction &fn) {
     IrFacts f;
     f.def_of.assign(fn.values.size(), nullptr);
+    f.def_block.assign(fn.values.size(), -1);
     f.param_of.assign(fn.values.size(), -1);
     for (size_t i = 0; i < fn.params.size(); ++i) {
         const ir::IrValueId p = fn.params[i];
@@ -32,9 +33,11 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
     for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
         const ir::IrBlock &b = fn.blocks[bi];
         for (const ir::IrInstr &in : b.instrs) {
-            // def-use.
-            if (in.dst != ir::IR_NO_VALUE && in.dst < f.def_of.size())
+            // def-use: QUE instruccion lo define, y en QUE bloque.
+            if (in.dst != ir::IR_NO_VALUE && in.dst < f.def_of.size()) {
                 f.def_of[in.dst] = &in;
+                f.def_block[in.dst] = static_cast<int32_t>(bi);
+            }
             // call-sites.
             switch (in.op) {
             case ir::IrOp::CALL:
