@@ -37,7 +37,7 @@ struct Cabecera {
 i32 doblar(i32 v) { return v * 2; }
 
 // ---- (1) const y comptime globales ----------------------------------------
-const i64    BASE = 10_i64; // runtime-inmutable, legible en comptime
+const    i64 BASE = 10_i64; // runtime-inmutable, legible en comptime
 comptime i64 g_id = 0_i64; // mutable EN comptime (id counter), congelado al final
 
 // ---- (2) comptime fn imperativa (loop + mutacion + locales pelados) --------

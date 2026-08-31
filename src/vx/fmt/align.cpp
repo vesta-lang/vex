@@ -371,7 +371,16 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
         if (primero != TokenKind::IDENTIFIER && !is_type_keyword(primero))
             return line;
         line.shape = Shape::Decl;
-        line.anchors = {i, solo}; // tipo, nombre
+        /* Las MISMAS columnas que la que si lleva `=`, menos la del `=`:
+         * calificadores, tipo y nombre.
+         *
+         * Tienen que corresponderse una a una porque las dos formas se agrupan
+         * juntas -- un `T val;` se alinea con el `u8 tag = 0;` de al lado --, y
+         * el reparto alinea la columna k de cada linea con la k de las demas.
+         * Si aqui hubiera una columna menos, la k-esima de una seria el nombre
+         * y la de la otra el tipo, y el bloque se descuadraria entero. */
+        const size_t tipo = skip_decl_qualifiers(pieces, i);
+        line.anchors = {i, tipo, solo}; // calificadores, tipo, nombre
         return line;
     }
 
@@ -410,25 +419,26 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
 
     if (name > i && !qualified) {
         line.shape = Shape::Decl;
-        /* TRES columnas: tipo (con sus calificadores dentro), nombre y `=`.
+        /* CUATRO columnas: calificadores, tipo, nombre y `=`.
          *
-         * Se probo partir el calificador en una CUARTA columna para que el
-         * tipo quedara a la misma altura:
+         * Con tres -- los calificadores DENTRO de la columna del tipo -- el
+         * tipo no quedaba a la misma altura en cuanto unas lineas del bloque
+         * llevaban calificador y otras no:
          *
-         *     in         i64* solo_lee = &a;
+         *     in i64*         solo_lee = &a;      <- el `i64*` baila
          *     in nonnull i64* firme    = &a;
          *
-         * Alinea, y ademas arreglaria el mismo caso con `const`.  Pero medido
-         * sobre el corpus toca 77 ficheros y el precio se paga en el caso
-         * COMUN: una declaracion sin calificador queda empujada a la derecha
-         * por el hueco de la columna vacia --  `Item a = new Item(10);` sale
-         * con cinco espacios delante solo porque una linea vecina lleva
-         * `const` --, y esa sangria no significa nada.
+         * Se emiten SIEMPRE las cuatro, aunque no haya calificador y la
+         * primera quede vacia: el reparto agrupa lineas con el mismo numero de
+         * anclas, asi que emitir tres unas veces y cuatro otras partiria en dos
+         * un bloque que se lee como uno.
          *
-         * Se deja como esta a la espera de decidirlo: alinear el tipo solo
-         * cuando TODAS las lineas del grupo llevan calificador evitaria el
-         * empujon, y es la variante que habria que medir. */
-        line.anchors = {i, name, assign}; // tipo, nombre, `=`
+         * Lo que evita que una linea SIN calificador salga empujada a la
+         * derecha no es contar aqui, es la regla de "ningun campo se estira si
+         * alguna linea lo tiene pegado al margen", que ya existia y ahora
+         * pregunta por cada campo y no solo por el primero. */
+        const size_t tipo = skip_decl_qualifiers(pieces, i);
+        line.anchors = {i, tipo, name, assign};
     } else {
         line.shape = Shape::Assign;
         // Toda la izquierda cuenta como UN campo: `c.handle` no se parte.
@@ -564,8 +574,8 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
             for (size_t l = start; l <= end; ++l)
                 if (lines[l].anchors.size() < n) n = lines[l].anchors.size();
             for (size_t k = 0; k < n; ++k) {
-                /* El PRIMER campo no se estira si alguna linea del bloque lo
-                 * tiene pegado al margen.
+                /* Un campo NO se estira si alguna linea del bloque lo tiene
+                 * pegado al margen.
                  *
                  * `R84` le da columna propia a los modificadores para que los
                  * tipos cuadren aunque solo algunas lineas lleven `const`.
@@ -579,12 +589,21 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
                  *
                  * La sangria es lo que dice el nivel de anidamiento, y eso
                  * pesa mas que cuadrar una columna.  Los demas campos se
-                 * siguen alineando: los nombres y el `=` quedan igual. */
-                if (k == 0) {
+                 * siguen alineando: los nombres y el `=` quedan igual.
+                 *
+                 * La comprobacion era solo para el campo 0, y esa era una
+                 * suposicion sobre la FORMA de las anclas, no sobre lo que la
+                 * regla dice.  Al partir la declaracion en calificador y tipo,
+                 * quien queda pegado al margen en una linea sin calificador es
+                 * el campo 1 -- su ancla y el inicio de la linea son la misma
+                 * pieza --, asi que el relleno volvia a entrar delante del
+                 * primer token por otra puerta.  Se pregunta por CADA campo,
+                 * que es lo que la regla queria decir desde el principio. */
+                {
                     bool alguna_al_margen = false;
                     for (size_t l = start; l <= end && !alguna_al_margen; ++l)
                         alguna_al_margen =
-                            lines[l].anchors[0] == spans[l].first;
+                            lines[l].anchors[k] == spans[l].first;
                     if (alguna_al_margen) continue;
                 }
 

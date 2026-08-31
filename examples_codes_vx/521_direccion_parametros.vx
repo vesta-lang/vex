@@ -103,7 +103,7 @@ i32 main() {
 	//
 	// Y compone con lo demas, cada palabra diciendo lo suyo: `in` que solo se
 	// lee, `nonnull` que no puede ser nulo.
-	in i64*         solo_lee = &a;
+	in         i64* solo_lee = &a;
 	in nonnull i64* firme    = &a;
 	// (*solo_lee) = 0;  <- error: por un `in` solo se lee
 
