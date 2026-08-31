@@ -1287,6 +1287,26 @@ uint64_t huella_de_funcion(const ir::IrFunction &fn) {
             h = util::fnv_mix(h, in.dst);
             h = util::fnv_mix(h, in.target_block);
             h = util::fnv_mix(h, in.false_block);
+            /* El INMEDIATO y la TABLA DE SALTOS entran en la huella.
+             *
+             * Sin ellos, dos funciones que solo se diferencian en el inmediato
+             * tienen la MISMA clave, y la segunda recibe los rangos de la
+             * primera.  No es una imprecision: son rangos de otro programa, y
+             * de ahi salen decisiones del optimizador.
+             *
+             * El caso que lo destapo: un `switch` denso lleva su base en `imm`
+             * -- el brazo `i` se toma cuando el selector vale `base + i` --, asi
+             * que dos switch con bases 0 y 10 se daban el uno los rangos del
+             * otro y el segundo acotaba a 0..2 en vez de a 10..12.
+             *
+             * Los valores CONSTANTES ya viajaban por otro lado (`values[].
+             * const_val`), y por eso esto aguanto: el `imm` de una CONST estaba
+             * cubierto y solo se notaba en las instrucciones que lo usan para
+             * otra cosa. */
+            h = util::fnv_mix(h, in.imm);
+            h = util::fnv_bytes(h, in.jump_targets.data(),
+                                in.jump_targets.size() *
+                                    sizeof(ir::IrBlockId));
             h = util::fnv_bytes(h, in.operands.data(),
                                 in.operands.size() * sizeof(ir::IrValueId));
             h = util::fnv_bytes(h, in.func_name.data(), in.func_name.size());
