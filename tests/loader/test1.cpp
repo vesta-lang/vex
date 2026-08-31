@@ -16,8 +16,7 @@
 #include <vector>
 #include <string>
 
-size_t total_allocated = 0;
-size_t peak_memory = 0;
+#include "../util/mem_stats.h"
 
 /**
  * Metodo de "limpiado de cache" llamado "cache thrashing",
@@ -32,22 +31,6 @@ void flush_cache() {
     for (size_t i = 0; i < SIZE; i += 64) {
         buffer[i]++; // tocar cada línea de caché
     }
-}
-
-void *operator new(std::size_t size) {
-    total_allocated += size;
-    peak_memory = std::max(peak_memory, total_allocated);
-    return malloc(size);
-}
-
-void operator delete(void *ptr) noexcept {
-    // no saber el tamaño aquí
-    free(ptr);
-}
-
-void print_memory_stats() {
-    std::cout << "Memoria actual: " << total_allocated
-              << " bytes, maximo: " << peak_memory << " bytes\n";
 }
 
 // modo perfilado activado

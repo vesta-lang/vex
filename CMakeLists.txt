@@ -529,11 +529,29 @@ target_link_libraries(aot_emit PUBLIC LibPEparse)
 set(VESTA_TUNE "native" CACHE STRING
     "Para que microarquitectura se afina (-mtune).  `generic` al publicar.")
 
+# NO se usa `-ffast-math`.
+#
+# Vesta IMPLEMENTA IEEE 754, asi que el C++ que la implementa no puede
+# compilarse suponiendo que los casos raros de IEEE no ocurren: eso es quitarle
+# al codigo la premisa sobre la que esta escrito.  Lo que costaba tenerlo se
+# midio: `NaN == NaN` daba `true` en un programa Vesta real, y peor aun, el
+# resultado dependia de si el optimizador habia mirado esa expresion o no.
+#
+# Antes se ponia global y se EXIMIAN los ficheros que hiciera falta.  Eso es una
+# lista de exclusiones, y su modo de fallar es el peor posible: al anadir un
+# fichero que calcule un resultado del usuario -- un plegado en el JIT, otro en
+# el AOT --, olvidarse no da error, da OTRO RESULTADO.  Ya paso:
+# `exec_instruction_float.cpp` se eximio en junio de 2026 y `ir_optimizer.cpp`
+# se quedo fuera dos meses y medio, plegando comparaciones con NaN.
+#
+# Sin el flag, olvidarse significa "va un poco mas lento", que es el lado
+# correcto donde equivocarse.  Y aqui apenas hay nada que perder: `-ffast-math`
+# solo toca aritmetica de coma flotante, y este compilador se pasa la vida
+# persiguiendo punteros, mirando tablas y manejando cadenas.
 set(VESTA_OPTS_CODIGO_RELEASE
         -O3
         -march=x86-64
         -mtune=${VESTA_TUNE}
-        -ffast-math
         -fstrict-aliasing
         -fno-plt
         -fvisibility=hidden
@@ -670,38 +688,11 @@ add_custom_target(vm_build_info ALL
 # es un fallo que no rompe el build, solo miente en la salida.
 add_dependencies(vmcore vm_build_info)
 
-# Los ficheros que calculan la aritmetica DEL LENGUAJE, con semantica IEEE 754.
-#
-# `-ffast-math` es una relajacion de SEMANTICA, no un conjunto de
-# instrucciones: no necesita nada de la CPU y no se emite nada especial.  Lo que
-# permite es suponer que no hay NaN ni Inf, ignorar el signo del cero y
-# reasociar.  Para el grueso del compilador -- mover punteros, tablas, cadenas
-# -- eso es gratis y se queda.  Pero donde se calcula el resultado que va a ver
-# un programa Vesta, la semantica IEEE es la especificacion, y suponer que no
-# hay NaN la incumple.
-#
-# Medido con los flags exactos del proyecto:
-#
-#     0.0/0.0      isnan = 1  ->  isnan = 0     (la comprobacion MIENTE)
-#     -0.0 + 0.0   +0.0       ->  -0.0          (no es IEEE)
-#
-# `exec_instruction_float.cpp` ya estaba eximido desde el 2026-06-02.  Faltaba
-# `ir_optimizer.cpp`, que pliega las constantes flotantes del lenguaje y lleva
-# esta guarda:
-#
-#     if (std::isnan(a) || std::isnan(b)) break;  // sound: no foldear NaN
-#
-# Con `-ffast-math` esa guarda es CoDIGO MUERTO -- `isnan` devuelve 0 con un NaN
-# de verdad --, asi que el optimizador plegaba comparaciones con NaN y daba un
-# resultado distinto del que da el interprete para el MISMO programa.
-#
-# Eximir no cuesta rendimiento donde lo habria: el plegado corre unas pocas
-# veces al compilar, no en ningun bucle caliente.
-set_source_files_properties(
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ir_optimizer.cpp
-    PROPERTIES COMPILE_FLAGS "-fno-fast-math -fno-finite-math-only"
-)
+# Nota: aqui habia exenciones `-fno-fast-math` para los dos ficheros que
+# calculan aritmetica del lenguaje (`src/runtime/exec_instruction_float.cpp` y
+# `src/ir/ir_optimizer.cpp`).  Sobran desde que `-ffast-math` no se usa en
+# ninguna parte -- ver la lista de opciones de Release --, y un flag muerto
+# confunde mas de lo que documenta.
 
 # `capstone` NO va aqui: es una libreria de OBJETOS, y CMake mete sus objetos
 # DENTRO de `libvmcore.a` al enlazarla contra el.  Ponerla ademas suelta los
@@ -1064,6 +1055,51 @@ endif ()
 add_executable(test_analysis_manager tests/analysis/test_manager.cpp)
 target_include_directories(test_analysis_manager PRIVATE ${VM_INCLUDES})
 
+# Coste por opcode derivado del codigo maquina de los handlers.  ENLAZA la VM
+# a proposito: asi las tablas de decodificacion son datos de este proceso y los
+# campos `exec`/`decode` son direcciones ya mapeadas, sin resolver simbolos ni
+# parsear PE/ELF.  No toca el interprete: mide desde fuera lo ya compilado.
+add_executable(test_coste_opcodes tests/coste/test_coste_opcodes.cpp)
+target_include_directories(test_coste_opcodes PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_coste_opcodes PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_coste_opcodes PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_coste_opcodes PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_coste_opcodes PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# ¿Se pisan las instrucciones de un bucle en la icache?  Simulacion ESTATICA
+# sobre el `.velb`: no ejecuta la VM y no la toca.  Contesta si el coste de
+# redescodificar se paga una vez o en cada vuelta, que es lo que decide si
+# merece la pena cambiar el indice de la icache.
+add_executable(test_icache_conflictos tests/coste/test_icache_conflictos.cpp)
+target_include_directories(test_icache_conflictos PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_icache_conflictos PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_icache_conflictos PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_icache_conflictos PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_icache_conflictos PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+add_executable(test_icache_real tests/coste/test_icache_real.cpp)
+target_include_directories(test_icache_real PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_icache_real PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_icache_real PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_icache_real PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_icache_real PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+
+
 # Sistema unico de efectos: reticulo AbstractLoc, combinadores seq/join,
 # contratos declarativos.
 add_executable(test_effects tests/effects/test_effects.cpp)
@@ -1343,6 +1379,13 @@ add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/vxdbg/store.cpp
                                 src/vxdbg/pack_store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
+if (WIN32)
+    # Y por la MISMA razon de arriba hace falta ntdll: `read_whole_file` abre
+    # por NtOpenFile, asi que quien compile ese fichero tiene que enlazarlo.
+    # El objetivo principal ya lo hacia; este se quedo fuera y volvia a romper
+    # `all` -- con ello el instalador -- por un test.
+    target_link_libraries(test_vxdbg_store PRIVATE ntdll)
+endif ()
 
 # Serializacion de cada nodo.  Comprueba, sobre todo, que la identidad de un
 # nodo ES su serializacion: si dos iguales dieran huellas distintas no se
@@ -1673,6 +1716,32 @@ else ()
     target_link_libraries(test_use_def_facts PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# El ALCANCE de un hecho: quien lo ve y quien no.  Su forma de fallar no es un
+# resultado equivocado, es SILENCIO -- y el silencio no se distingue de "no se
+# sabe" --, asi que hace falta un test que lo exija.
+add_executable(test_asa_ambito tests/analysis/test_asa_ambito.cpp)
+target_include_directories(test_asa_ambito PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_asa_ambito PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+
+# Que un analisis que no sabe algo diga POR QUE, y que las dos clases de "no
+# se" -- depende de la ejecucion / el analisis no cubre esa forma -- no se
+# confundan: de esa diferencia depende que el consumidor especule o se rinda.
+add_executable(test_trip_count_reason tests/analysis/test_trip_count_reason.cpp)
+target_include_directories(test_trip_count_reason PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_trip_count_reason PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+
+# Que lo DECLARADO de una funcion externa cuente, y -- lo que mas importa --
+# que lo NO declarado siga siendo conservador.
+add_executable(test_native_effects tests/analyze/test_native_effects.cpp)
+target_include_directories(test_native_effects PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_native_effects PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+
+# Que ningun veredicto de contrato se descarte en silencio, y que los codigos
+# del linter existan en los dos idiomas.
+add_executable(test_lint_contracts tests/analyze/test_lint_contracts.cpp)
+target_include_directories(test_lint_contracts PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_lint_contracts PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+
 add_executable(test_asa_fact_store tests/analysis/test_asa_fact_store.cpp)
 target_include_directories(test_asa_fact_store PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_asa_fact_store PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
@@ -1939,11 +2008,6 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/host_alloca_tracker.cpp
         # Sprint D.6 (2026-06-03): profile counters runtime para PGO + C2.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/profile.cpp
-        # Sprint edge-bugs (2026-06-02): exec_instruction_float.cpp implementa
-        # operaciones IEEE 754 (FCMP con NaN, etc.) y NO puede usar
-        # -ffast-math (que rompe isnan/isinf + asume no NaN).  Override
-        # con flags por-archivo: -fno-fast-math + -fno-finite-math-only.
-        # set_source_files_properties debe ir DESPUES de listar las sources.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/native_callback.cpp
 
         # Distribucion - VDP protocol + mailbox + dirty tracker
@@ -2004,13 +2068,22 @@ if (WIN32)
 else ()
     target_link_libraries(vesta_rt PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 endif ()
+# La MISMA lista que el resto del codigo, no una copia.
+#
+# Aqui habia una escrita a mano, y ademas solo cubria Release: en Profile este
+# runtime se compilaba SIN NINGUNA opcion, o sea sin optimizar, mientras todo lo
+# demas iba a `-O3`.  Un perfil sacado asi describe un programa que no es el que
+# se ejecuta, que es justo lo contrario de para lo que sirve el modo Profile.
+#
+# Debug se deja como estaba a proposito: los flags de depuracion del nucleo
+# incluyen `-DVM_DEBUG_CHECKS`, y `vesta_rt` es el runtime que se enlaza DENTRO
+# de los programas del usuario en AOT -- meterle aserciones ahi es una decision
+# de diseno, no una limpieza.
 target_compile_options(vesta_rt PRIVATE
         -D__STDC_LIMIT_MACROS
         -D__STDC_CONSTANT_MACROS
-        $<$<CONFIG:Release>:-O3 -march=x86-64 -mtune=${VESTA_TUNE} -ffast-math
-                            -fstrict-aliasing -fno-plt -fomit-frame-pointer
-                            -fvisibility=hidden -ffunction-sections
-                            -fdata-sections -DNDEBUG>
+        $<$<CONFIG:Release>:${VESTA_OPTS_CODIGO_RELEASE};-fomit-frame-pointer>
+        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};-g;-fno-omit-frame-pointer>
 )
 
 # Los tests.
