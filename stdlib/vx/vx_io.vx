@@ -28,7 +28,7 @@ import std.types only ssize_t;
 
 // Terminar el proceso SI es igual en los dos sistemas, asi que no lleva
 // @Target: std.os ya elige por dentro con que llamada se hace.
-// `Stream` para nombrar la salida de ERROR (ver __vx_uncaught_report); lo demas
+// `Stream` para nombrar la salida de ERROR (ver __uncaught_report); lo demas
 // de aqui sale por la estandar y bufferizada.
 //
 // El `write` portable NO se importa: en Linux este modulo ya trae el crudo del
@@ -248,7 +248,7 @@ void __vx_panic_null() {
 
 /// Lo que se hace con una excepcion que nadie recogio, CUANDO HAY SISTEMA.
 ///
-/// El gancho es `__vx_uncaught`, y vive en el runtime de excepciones
+/// El gancho es `__uncaught`, y vive en el runtime de excepciones
 /// (`vx_exc.vx`), que no importa nada: sin sistema lo unico que se puede hacer
 /// es parar la maquina.  Aqui esta lo otro -- contarlo --, en el modulo que
 /// sabe escribir; el driver antepone esta llamada al gancho cuando incluye
@@ -261,7 +261,7 @@ void __vx_panic_null() {
 ///
 /// Sale con 134, el mismo codigo que el interprete y el JIT ante lo mismo.  No
 /// vuelve.
-void __vx_uncaught_report() {
+void __uncaught_report() {
 	__vx_flush();
 	// Por la salida de ERROR: es un fallo, y quien encadene la salida del
 	// programa con otra cosa no debe tragarselo mezclado con los datos.

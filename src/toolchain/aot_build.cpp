@@ -862,7 +862,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
      * deja en paz. */
     bool uncaught_hook_es_del_usuario = false;
     for (const auto &af : aot_mod.functions)
-        if (af.name == "__vx_uncaught") uncaught_hook_es_del_usuario = true;
+        if (af.name == "__uncaught") uncaught_hook_es_del_usuario = true;
 
     // ----------------------------------------------------------------
     // Auto-bundle del runtime de excepciones (stdlib/vx/vx_exc.vx).
@@ -1478,12 +1478,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
              * ajena seria cambiarle el comportamiento a quien la escribio. */
             if (!uncaught_hook_es_del_usuario) {
                 for (auto &af : aot_mod.functions) {
-                    if (af.name != "__vx_uncaught" || af.blocks.empty())
+                    if (af.name != "__uncaught" || af.blocks.empty())
                         continue;
                     ir::IrInstr rp{};
                     rp.op = ir::IrOp::CALL;
                     rp.dst = ir::IR_NO_VALUE;
-                    rp.func_name = "__vx_uncaught_report";
+                    rp.func_name = "__uncaught_report";
                     if (!af.blocks[0].instrs.empty())
                         rp.source_line = af.blocks[0].instrs[0].source_line;
                     af.blocks[0].instrs.insert(af.blocks[0].instrs.begin(),

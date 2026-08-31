@@ -9540,13 +9540,13 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * callee-saved vs 6 en Win64) -> resultado erroneo en ELF.  Una sola
          * CALL por uso elimina la presion y unifica el codegen PE/ELF. */
         if (name.rfind("__vx_str", 0) == 0) return true;
-        /* `__vx_uncaught`: es un GANCHO.  Existe para que el usuario lo pueda
+        /* `__uncaught`: es un GANCHO.  Existe para que el usuario lo pueda
          * sustituir y para que el driver lo pueda completar -- ahi le antepone
          * el volcado del buffer de salida cuando hay runtime de I/O, para que
          * un programa que se rinde no se lleve por delante lo que llevaba
          * impreso.  Un gancho inlinado dentro de su unico llamante deja de ser
          * las dos cosas: ya no hay funcion a la que apuntar. */
-        if (name == "__vx_uncaught") return true;
+        if (name == "__uncaught") return true;
         return false;
     };
 

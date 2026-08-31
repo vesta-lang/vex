@@ -225,19 +225,19 @@ public void __vx_pop_frame() {
 // arrastrar `WriteFile` ni `ExitProcess` solo por tenerlo --.
 //
 // Cuando hay sistema, quien SABE escribir completa esto: el driver antepone
-// aqui una llamada a `__vx_uncaught_report` (en `vx_io.vx`), que vuelca lo que
+// aqui una llamada a `__uncaught_report` (en `vx_io.vx`), que vuelca lo que
 // el programa llevara impreso, dice lo que paso por la salida de error y sale
 // con 134 -- el mismo codigo que el interprete y el JIT --.  Esa llamada no
 // vuelve, asi que lo de abajo solo corre en un binario sin I/O.
 //
 // Y se puede SUSTITUIR: si el modulo del usuario define su propio
-// `__vx_uncaught`, gana el suyo al fusionar y el driver no le anade nada.
+// `__uncaught`, gana el suyo al fusionar y el driver no le anade nada.
 //
 // Antes esto era `while (true) { }` en todos los casos.  Un programa hospedado
 // que lanzaba y no capturaba se quedaba colgado PARA SIEMPRE y sin decir nada:
 // peor que terminar mal, porque ni siquiera termina.
 @Target("arch:x86_64 || arch:x86")
-public void __vx_uncaught() {
+public void __uncaught() {
 	// `hlt` en bucle: la forma clasica de detener un nucleo.  El bucle esta
 	// porque una interrupcion despierta al procesador de un `hlt` suelto.
 	while (true) {
@@ -246,7 +246,7 @@ public void __vx_uncaught() {
 }
 
 @Target("!arch:x86_64 && !arch:x86")
-public void __vx_uncaught() {
+public void __uncaught() {
 	while (true) { }
 }
 
@@ -262,7 +262,7 @@ public void __vx_throw(i64 value, i64 type_id) {
 	if (top != 0) {
 		__vx_longjmp(top, 1);
 	}
-	__vx_uncaught();
+	__uncaught();
 }
 
 // el valor de la excepcion activa (para el landingpad del catch).
