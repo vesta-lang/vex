@@ -28,13 +28,19 @@ i64 compute() {
 }
 
 i32 main() {
-	// (1) string + char: "hola  mundo!" -> 15, p[14]='!'(33).
-	string name = "";
+	// (1) string + char: "hola Vesta mundo!" -> 17, p[16]='!'(33).
+	//
+	// `name` lleva valor A PROPOSITO: con la cadena vacia esto no comprobaba
+	// que la parte de cadena se anadiera -- salia lo mismo interpolandola que
+	// ignorandola --.  Aqui estuvo el nombre viejo del lenguaje; al retirarlo
+	// se dejo en "" y los numeros se quedaron como estaban, asi que el ejemplo
+	// afirmaba 15 donde la respuesta correcta eran 12.
+	string name = "Vesta";
 	char   excl = '!';
 	string m1   = "hola ${name} mundo${excl}";
 	char*  p1   = m1.cstr();
-	if (m1.length() != 15) { return -1; }
-	if (p1[14] != 33) { return -2; }
+	if (m1.length() != 17) { return -1; }
+	if (p1[16] != 33) { return -2; }
 
 	// (2) int CONSTANTE: "n=42" -> 4, bytes 'n','=','4','2'.
 	i64    n  = 42_i64;
