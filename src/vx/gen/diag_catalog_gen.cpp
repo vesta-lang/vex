@@ -251,9 +251,7 @@ const CatEntry kEntries[] = {
     {"VXT002", {"literal {0} does not fit in its own suffix '{1}' ({2})", "el literal {0} no cabe en su propio sufijo '{1}' ({2})"}},
     {"VXT003", {"'{0}' is imported from two places and they are not the same function ({1} and {2}); qualify it with its namespace or rename one with 'as'", "'{0}' llega de dos sitios y no son la misma funcion ({1} y {2}); cualificala con su namespace o renombra una con 'as'"}},
     {"VXT004", {"'{0}' declares {1} and provably breaks it: {2}", "'{0}' declara {1} y esta demostrado que no lo cumple: {2}"}},
-    {"VXT005", {"parameter '{0}' is marked '{1}', which says what the function does with what it POINTS TO -- but its type '{2}' does not point to anything", "el parametro '{0}' lleva '{1}', que dice lo que la funcion hace con lo que APUNTA -- pero su tipo '{2}' no apunta a nada"}},
     {"VXT006", {"parameter '{0}' is marked '{1}' -- it promises to write what it points to -- but what it points to is declared 'const'", "el parametro '{0}' lleva '{1}' -- promete escribir lo que apunta -- pero lo que apunta esta declarado 'const'"}},
-    {"VXT007", {"writing through '{0}', which is marked 'in': through an 'in' parameter the function only reads", "escritura a traves de '{0}', que lleva 'in': por un parametro 'in' la funcion solo lee"}},
     {"VXT008", {"'{0}:{1}' is defined twice with different effects ({2}); continuing with the union of the worst of both, so some caller may fail to prove effects it could otherwise prove", "'{0}:{1}' esta definida dos veces con efectos distintos ({2}); se sigue con la union de lo peor de las dos, asi que algun llamante puede quedarse sin demostrar efectos que si podria"}},
     {"VXT009", {"'{0}' is marked '{1}' on a value ('{2}'): that is the output-parameter form -- the caller yields a slot and the callee writes it -- and it is not wired yet; write it as a pointer ('{2}*') meanwhile", "'{0}' lleva '{1}' sobre un valor ('{2}'): esa es la forma de parametro de SALIDA -- quien llama cede un hueco y el llamado lo escribe -- y todavia no esta conectada; escribelo como puntero ('{2}*') mientras tanto"}},
     {"VXW001", {"the contracts of '{0}' ({1}) are NOT being verified: {2} -- a contract is a CHECK, so one that cannot be checked promises without guarding anything: keep it as documented intent, or drop it, but do not read it as proven", "los contratos de '{0}' ({1}) NO se estan verificando: {2} -- un contrato es una COMPROBACION, asi que uno que no se puede comprobar promete sin guardar nada: dejalo como intencion documentada, o quitalo, pero no lo leas como demostrado"}},
@@ -269,7 +267,7 @@ const CatEntry kEntries[] = {
     {"VXW910", {"a declared bound looser than what was proven, and properties provable but not declared", "una cota declarada mas floja que la demostrada, y propiedades demostrables sin declarar"}},
     {"VXW911", {"what one boundary costs: how many functions cannot prove their effects because the closure leaves the program there", "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efectos porque el cierre sale del programa por ahi"}},
 };
-const int kEntryCount = 248;
+const int kEntryCount = 246;
 
 } // namespace
 

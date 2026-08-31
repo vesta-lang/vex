@@ -4608,5 +4608,89 @@ def _(ctx):
     ctx.ok("efectos extern (linux) -> VXT004: el mismo fichero, otro veredicto")
 
 
+
+
+# ---------------------------------------------------------------------------
+# La direccion (`in`/`out`/`inout`) tiene que INCUMPLIRSE cuando toca.
+#
+# El camino positivo lo cubre `521_direccion_parametros`, y por si solo no
+# demuestra nada: una marca que se acepta y no hace nada tambien compila y
+# tambien da 52.  Lo que hay que fijar es que CUMPLE lo que promete, y eso solo
+# se ve cuando el programa que la rompe NO compila.
+#
+# Se comprueba el CODIGO del catalogo y no el texto donde lo hay: el texto sale
+# en el idioma activo y cambiaria el resultado del test segun la variable de
+# entorno.  Donde el mensaje aun no esta en el catalogo se busca un trozo
+# estable.
+# ---------------------------------------------------------------------------
+DIR_NEG_CASES = [
+    ("dir_neg_in_ptr", """i64 f(in i64* p) {
+    (*p) = 1;
+    return 0;
+}
+""", "lvalue 'const'",
+     "in: escribir por un puntero `in` rechazado",
+     "in: escribir por un puntero `in` debio fallar"),
+    ("dir_neg_in_valor", """i64 f(in i64 x) {
+    x = 1;
+    return x;
+}
+""", "lvalue 'const'",
+     "in: escribir la copia de un valor `in` rechazado",
+     "in: escribir la copia de un valor `in` debio fallar"),
+    ("dir_neg_in_local", """i32 main() {
+    i64 v = 1;
+    in i64* p = &v;
+    (*p) = 2;
+    return 0;
+}
+""", "lvalue 'const'",
+     "in: el permiso vale igual en una VARIABLE, no solo en un parametro",
+     "in: escribir por una variable `in` debio fallar"),
+    ("dir_neg_in_auto", """i32 main() {
+    i64 v = 1;
+    in auto p = &v;
+    (*p) = 2;
+    return 0;
+}
+""", "lvalue 'const'",
+     "in: la promesa SOBREVIVE a la inferencia de tipo",
+     "in: escribir por un `in auto` debio fallar"),
+    ("dir_neg_out_const", """i64 f(out const i64* p) {
+    return 0;
+}
+""", "VXT006",
+     "out sobre un pointee `const`: la contradiccion se detecta",
+     "out sobre un pointee `const` debio fallar"),
+    ("dir_neg_out_valor", """i64 f(out i64 x) {
+    return x;
+}
+""", "VXT009",
+     "out sobre un VALOR: se dice que es el parametro de salida y que no esta "
+     "conectado, en vez de aceptarlo sin cumplirlo",
+     "out sobre un valor debio dar VXT009"),
+]
+
+
+def _dir_neg_case(tag, source, pattern, ok_msg, fail_msg):
+    def fn(ctx):
+        vx = _write_vx(ctx, tag + ".vx", source)
+        rc, log = ctx.run([VM_EXE, "--vesta", vx, "-o", ctx.path(tag)])
+        if rc == 0:
+            ctx.fail(fail_msg, log)
+            return
+        if pattern not in log:
+            ctx.fail("%s: fallo, pero no por lo esperado ('%s')"
+                     % (tag, pattern), log)
+            return
+        ctx.ok(ok_msg)
+    fn.__name__ = "case_" + tag
+    return fn
+
+
+for _t, _s, _p, _m, _f in DIR_NEG_CASES:
+    _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
+
+
 if __name__ == "__main__":
     main()

@@ -1216,34 +1216,33 @@ es = "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efec
 en = "{0} function(s) here cannot prove their effects (@pure, @nothrow, @nopanic, @alloc, @stack) because their call closure reaches a call whose target is not resolved -- unlike a boundary that leaves the program, this one is the analysis falling short: resolve the target and all {0} follow (first one: '{2}')"
 es = "{0} funcion(es) de aqui no pueden demostrar sus efectos (@pure, @nothrow, @nopanic, @alloc, @stack) porque su cierre de llamadas llega a una llamada cuyo destino no se resuelve -- a diferencia de una frontera que sale del programa, esta es el analisis quedandose corto: si el destino se resuelve, las {0} salen con el (la primera: '{2}')"
 
-# --- la direccion de un parametro (VXT005-VXT007) ---
+# --- la direccion: la contradiccion con `const` (VXT006) ---
 #
-# `in`/`out`/`inout` habla de lo que la funcion hace con lo que el parametro
-# APUNTA, asi que sobre algo que no apunta a nada no dice nada (VXT005).
-#
-# VXT006 es la contradiccion con `const`, y merece la pena entender por que NO
-# sobra: los dos ejes son distintos y a proposito.  `const` es un permiso POR
-# NIVEL sobre el tipo -- lo mismo que en C, donde `const T*` y `T* const` no
-# son lo mismo --, mientras que la direccion habla del nivel EXTERNO y de lo
-# que hace la funcion.  Por eso `in T const*` es correcto (y algo redundante),
+# Es el UNICO codigo propio que necesita la marca, y merece la pena entender
+# por que.  `const` y la direccion son dos ejes distintos, a proposito: `const`
+# es un permiso POR NIVEL sobre el tipo -- lo mismo que en C, donde `const T*`
+# y `T* const` no son lo mismo --, mientras que la direccion habla del nivel
+# EXTERNO.  Por eso `in T const*` es correcto (y algo redundante) y
 # `out T const**` tambien lo es -- se escribe el nivel de fuera y lo de dentro
-# sigue siendo const --, y solo choca cuando la promesa de escribir cae justo
+# sigue siendo const --; solo choca cuando la promesa de escribir cae justo
 # sobre el nivel declarado no escribible.
 #
-# VXT007 es lo que hace que `in` VALGA para algo: prohibe escribir por ahi sin
-# tener que pedir `const`.
-
-[VXT005]
-en = "parameter '{0}' is marked '{1}', which says what the function does with what it POINTS TO -- but its type '{2}' does not point to anything"
-es = "el parametro '{0}' lleva '{1}', que dice lo que la funcion hace con lo que APUNTA -- pero su tipo '{2}' no apunta a nada"
+# Lo demas NO tiene codigo propio, y es deliberado:
+#
+#   - Escribir por un `in` sale por el camino de `const`, que ya existe y es
+#     uniforme ("escribir a un lvalue const es error").  Aqui hubo un VXT007
+#     para eso; se quito al ver que nadie lo emitia.  Una entrada del catalogo
+#     que ningun sitio usa es una mentira silenciosa sobre lo que el compilador
+#     sabe decir: aparece en la lista y no sale nunca.
+#   - `in` sobre un valor es LEGAL (una copia de solo lectura), asi que el
+#     VXT005 que rechazaba la marca sobre algo que no apunta se quedo tambien
+#     sin emisor y se fue con el.
+#   - `out` sobre un valor tiene el suyo, VXT009, porque no dice "esto esta
+#     mal" sino "esto significa otra cosa y aun no esta conectada".
 
 [VXT006]
 en = "parameter '{0}' is marked '{1}' -- it promises to write what it points to -- but what it points to is declared 'const'"
 es = "el parametro '{0}' lleva '{1}' -- promete escribir lo que apunta -- pero lo que apunta esta declarado 'const'"
-
-[VXT007]
-en = "writing through '{0}', which is marked 'in': through an 'in' parameter the function only reads"
-es = "escritura a traves de '{0}', que lleva 'in': por un parametro 'in' la funcion solo lee"
 
 # --- dos definiciones de la misma nativa que no coinciden (VXT008) ---
 #
