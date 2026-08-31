@@ -15,12 +15,14 @@ if not t.compile_aot("examples_codes_vx/182_vectorize_elementwise.vx", obj, floa
     t.fail("FALLO: no se genero el .o avx")
     t.finish()
 
-# CERO legacy SSE float escalar (arith + cvt + cmp + sqrt + neg/abs + moves).
+# CERO legacy SSE float escalar (arith + cvt + cmp + sqrt + neg/abs + moves)
+# EN EL CODIGO GENERADO.  En el despachador de `std.memory` el SSE legacy
+# es obligatorio: su ruta sin AVX corre en CPUs donde VEX no existe.
 # \b evita matchear las VX (vmovq/vmovsd... empiezan por 'v').
 LEGACY = (r"\baddsd|\bsubsd|\bmulsd|\bdivsd|\baddss|\bsubss|\bmulss|\bdivss|"
           r"\bcvtsi2sd|\bcvttsd2si|\bcvtsi2ss|\bcvttss2si|\bcvtss2sd|\bcvtsd2ss|"
           r"\bucomisd|\bucomiss|\bsqrtsd|\bsqrtss|\bxorps|\bandps|\bmovsd|\bmovss|\bmovq")
-dis = t.disasm(obj)
+dis = t.disasm_generado(obj)
 leg = t.count_lines(dis, LEGACY)
 bad = t.count_lines(dis, r"\(bad\)")
 if leg == 0 and bad == 0:

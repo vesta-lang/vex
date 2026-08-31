@@ -144,6 +144,36 @@ class AotTest:
         cmd = ["objdump", "-d"] + (["-M", "intel"] if intel else []) + [f]
         return subprocess.run(cmd, capture_output=True, text=True).stdout
 
+    # Rutinas que llevan A PROPOSITO varias versiones del mismo codigo, una por
+    # familia de instrucciones, y eligen en EJECUCION segun lo que diga la CPU.
+    # Ver `std.memory`: el despachador comprueba los rasgos y salta a la variante
+    # SSE2, AVX2 o AVX-512 que toque.
+    MULTIVERSION = ("std__memory__",)
+
+    def disasm_generado(self, f, intel=False):
+        """El desensamblado SOLO del codigo que genero el compilador.
+
+        Cualquier comprobacion sobre QUE instrucciones se emiten tiene que mirar
+        aqui, no al objeto entero.  Un programa que toque memoria arrastra el
+        despachador de `std.memory`, que contiene TODAS las variantes -- SSE2,
+        AVX2 y AVX-512 a la vez -- porque la eleccion es en ejecucion.  Contarlas
+        como si fueran codigo generado dice que un binario `--float-isa sse2`
+        emite AVX-512, que es falso: lo emite la stdlib, guardado tras una
+        comprobacion de CPU, y no se ejecuta donde no se puede.
+
+        Por lo mismo, en la ruta sin AVX de esas rutinas el SSE es legacy A LA
+        FUERZA: en una CPU sin AVX no existe la codificacion VEX.
+        """
+        out = []
+        incluir = True
+        for ln in self.disasm(f, intel).splitlines(True):
+            if ln and ln[0].isalnum() and " <" in ln and ln.rstrip().endswith(">:"):
+                nombre = ln.split("<", 1)[1]
+                incluir = not any(m in nombre for m in self.MULTIVERSION)
+            if incluir:
+                out.append(ln)
+        return "".join(out)
+
     def symbols(self, f):
         """Devuelve la tabla de simbolos (`objdump -t`) como texto."""
         return subprocess.run(["objdump", "-t", f], capture_output=True,

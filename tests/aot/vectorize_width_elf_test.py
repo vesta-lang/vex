@@ -17,7 +17,11 @@ if not t.compile_aot("examples_codes_vx/182_vectorize_elementwise.vx", obj, arch
     t.finish()
 
 # 1. cross-compile-safe: NADA de ymm/zmm en el default (sse2 -> 128b).
-wide = t.count_lines(t.disasm(obj), r"ymm|zmm")
+#    Se mira SOLO el codigo generado: el objeto entero incluye el
+#    despachador de `std.memory`, que lleva las variantes SSE2, AVX2 y
+#    AVX-512 a la vez y elige en EJECUCION segun la CPU.  Contarlas aqui
+#    decia que un binario sse2 emite AVX-512, que no es lo que pasa.
+wide = t.count_lines(t.disasm_generado(obj), r"ymm|zmm")
 if wide == 0:
     t.ok("WIDTH: default sse2 = 128b puro (0 ymm/zmm) OK")
 else:
