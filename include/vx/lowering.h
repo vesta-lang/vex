@@ -3383,6 +3383,18 @@ class Lowering {
     void register_extern_import_(ir::IrModule &out, const std::string &lib,
                                  const std::string &fn);
 
+    /**
+     * @brief La direccion de un lvalue, como si se hubiera escrito `&`.
+     * @param lvalue La expresion.  El llamante sigue siendo su dueno.
+     * @return El valor SSA con la direccion, o @c IR_NO_VALUE si no se pudo.
+     *
+     * Lo necesita el argumento de un parametro de SALIDA: lo que viaja es la
+     * direccion del hueco, y tiene que salir por el MISMO sitio que un `&x`
+     * escrito a mano -- si no, se pasaria distinto y eso no da un error, da
+     * otra direccion.
+     */
+    ir::IrValueId lower_addr_of_lvalue(ast::Expr *lvalue);
+
     /// Externs cuyo `&fn` (o promocion a cfn) se uso como function value.
     /// Para cada uno generamos un thunk Vesta `__cfnthunk_<fn>` que reenvia
     /// al CALLN nativo, asi el cfn es invocable por CALLIND en cualquier
@@ -3840,6 +3852,28 @@ class Lowering {
     /// accesor lo usa unicamente quien libera o quien va a escribir encima.
     ir::IrValueId emit_native_str_is_owned(ir::IrValueId v_slot,
                                            uint32_t source_line);
+    /// @brief Deja el value-string en condiciones de que se le ESCRIBA encima.
+    ///
+    /// Un literal largo no se copia: el slot APUNTA al binario y se marca
+    /// prestado, con capacidad 0.  Es lo que hace que un programa que solo
+    /// menciona cadenas constantes no arrastre el asignador.  El precio es un
+    /// contrato: **quien vaya a escribir copia antes**.
+    ///
+    /// Este es ese "copia antes", en UN sitio.  Si el slot esta prestado,
+    /// reserva un buffer propio, copia los bytes con su nul y reescribe los
+    /// campos como propios; si ya era propio o cabe inline, no hace nada.  Un
+    /// escritor nuevo debe llamarlo, no volver a escribir la copia.
+    ///
+    /// Hizo falta porque el contrato estaba escrito y a la vez incumplido:
+    /// `s[i] = c` escribia directo, asi que mutar una cadena LARGA nacida de un
+    /// literal escribia en memoria de solo lectura y mataba el proceso -- y con
+    /// una corta funcionaba, porque esa si se copia al hueco de 24 bytes.  El
+    /// comportamiento dependia del LARGO del literal.
+    ///
+    /// @param v_slot Slot de 24 bytes del value-string.
+    /// @param source_line Linea de fuente para el diagnostico.
+    void emit_native_str_make_writable(ir::IrValueId v_slot,
+                                       uint32_t source_line);
     /// @brief Rellena el slot de 24 bytes como VISTA sobre un buffer ajeno.
     /// @param v_slot Slot destino.
     /// @param v_buf Puntero a los bytes (tipicamente `.rodata`).

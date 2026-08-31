@@ -1100,6 +1100,74 @@ std::string Lowering::ensure_strlen_helper() {
     return name;
 }
 
+void Lowering::emit_native_str_make_writable(ir::IrValueId v_slot,
+                                             uint32_t source_line) {
+    /* El "copia antes" que exige `store_slot_fields_prestado`.
+     *
+     * Solo hay que copiar cuando el slot esta PRESTADO -- apunta al binario,
+     * capacidad 0 --.  Un slot propio ya tiene su buffer, y uno inline tiene
+     * los datos dentro del propio hueco: los dos se escriben tal cual.  Por eso
+     * esto es una RAMA y no una copia incondicional; escribir un byte de una
+     * cadena que ya es tuya no debe pagar una reserva.
+     *
+     * `emit_native_str_is_owned` distingue los tres estados, pero aqui la
+     * pregunta no es si es PROPIO sino si es ESCRIBIBLE, y son distintas: una
+     * cadena corta no es propia -- no hay buffer -- y sin embargo se escribe
+     * perfectamente.  Se mira el bit 6, que es el que dice prestado. */
+    const ir::IrValueId v_off23 = emit_const(ir::IrType::I64, 23, source_line);
+    const ir::IrValueId v_b23 = emit_load_typed(
+        emit_ptr_add(v_slot, v_off23, source_line), ir::IrType::U8,
+        source_line);
+    const ir::IrValueId v_seis = emit_const(ir::IrType::I64, 6, source_line);
+    const ir::IrValueId v_top2 = emit_ir_binop(
+        ir::IrOp::SHR, v_b23, v_seis, ir::IrType::I64, source_line);
+    const ir::IrValueId v_tres = emit_const(ir::IrType::I64, 3, source_line);
+    const ir::IrValueId v_prestado = emit_ir_binop(
+        ir::IrOp::CMP_EQ, v_top2, v_tres, ir::IrType::BOOL, source_line);
+
+    const ir::IrBlockId copy_bb = fn_->new_block("str_cow");
+    const ir::IrBlockId merge_bb = fn_->new_block("str_cow_merge");
+    emit_br_cond(v_prestado, copy_bb, merge_bb, source_line);
+
+    current_block_ = copy_bb;
+    {
+        // len y datos ANTES de tocar nada: se leen del slot prestado.
+        const ir::IrValueId v_len = emit_native_str_len(v_slot, source_line);
+        const ir::IrValueId v_src = emit_native_str_data_ptr(v_slot,
+                                                             source_line);
+        const ir::IrValueId v_uno = emit_const(ir::IrType::I64, 1,
+                                               source_line);
+        const ir::IrValueId v_cap = emit_ir_binop(
+            ir::IrOp::ADD, v_len, v_uno, ir::IrType::I64, source_line);
+        ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_buf].is_host_ptr = true;
+        {
+            ir::IrInstr ra{};
+            ra.op = ir::IrOp::RAW_ALLOC;
+            ra.type = ir::IrType::PTR;
+            ra.dst = v_buf;
+            ra.operands = {v_cap};
+            ra.source_line = source_line;
+            emit(current_block_, std::move(ra));
+        }
+        emit_memcpy(v_buf, v_src, v_len, source_line);
+        // El nul va explicito: se copian `len` bytes, no `len+1`, porque de un
+        // prestado solo se garantiza lo que su longitud dice.
+        emit_store_typed(emit_ptr_add(v_buf, v_len, source_line),
+                         emit_const(ir::IrType::U8, 0, source_line),
+                         ir::IrType::U8, source_line);
+        // No se libera nada: lo que habia era del binario, no nuestro.
+        emit_store_typed(v_slot, v_buf, ir::IrType::I64, source_line);
+        emit_store_typed(
+            emit_ptr_add(v_slot, emit_const(ir::IrType::I64, 8, source_line),
+                         source_line),
+            v_len, ir::IrType::I64, source_line);
+        emit_str_meta_heap(v_slot, v_cap, source_line);
+        emit_br(merge_bb, source_line);
+    }
+    current_block_ = merge_bb;
+}
+
 void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
                                             uint32_t source_line) {
     // free(is_heap ? ptr@0 : 0).  Branchless via AND-mask:

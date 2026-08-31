@@ -947,7 +947,16 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
             v_val = emit_binop_ir(bop, v_old, v_val, PrimitiveKind::U8, e->loc);
         }
-        // data_ptr (flag-aware) + i -> direccion del byte.
+        /* Copiar antes de escribir, si hace falta.  Una cadena nacida de un
+         * literal LARGO no tiene buffer propio: el slot apunta al binario y
+         * esta marcado prestado.  Escribir ahi es escribir en memoria de solo
+         * lectura -- el proceso moria --, y con un literal corto funcionaba,
+         * porque ese si se copia al hueco de 24 bytes: el comportamiento
+         * dependia del LARGO del literal.  El helper no hace nada cuando el
+         * buffer ya es escribible. */
+        emit_native_str_make_writable(v_src, e->loc.line);
+        // data_ptr (flag-aware) + i -> direccion del byte.  DESPUES de lo de
+        // arriba: si hubo copia, el puntero bueno es el nuevo.
         ir::IrValueId v_ptr = emit_native_str_data_ptr(v_src, e->loc.line);
         ir::IrValueId v_addr = emit_ptr_add(v_ptr, v_idx, e->loc.line);
         // STORE u8: el char rhs se guarda truncado a 1 byte.

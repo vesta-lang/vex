@@ -1060,9 +1060,24 @@ void Lowering::scan_escaping_expr(ast::Expr *e, AliasGraph &alias) {
                 if (!value_has_copy_hook(a->value.get()))
                     mark_escaping_if_ident(a->value.get());
                 break;
-            case ast::NodeKind::IndexExpr:
+            case ast::NodeKind::IndexExpr: {
                 mark_escaping_if_ident(a->value.get());
+                /* `s[i] = c` sobre una CADENA la vuelve suya.  Si nacio de un
+                 * literal largo, el slot era una vista prestada sobre el
+                 * binario y escribir obliga a copiar antes (ver
+                 * `emit_native_str_make_writable`): a partir de ahi hay un
+                 * buffer que liberar.  Sin apuntarlo aqui, la limpieza del
+                 * ambito se omitia -- se decide mirando este conjunto -- y ese
+                 * buffer se quedaba sin liberar. */
+                auto *ix_t = static_cast<ast::IndexExpr *>(a->target.get());
+                if (ix_t->base &&
+                    ix_t->base->kind == ast::NodeKind::IdentExpr &&
+                    ix_t->base->result_type.kind == PrimitiveKind::STRING) {
+                    reassigned_locals_.insert(
+                        static_cast<ast::IdentExpr *>(ix_t->base.get())->name);
+                }
                 break;
+            }
             case ast::NodeKind::UnaryExpr: {
                 auto *u = static_cast<ast::UnaryExpr *>(a->target.get());
                 if (u->op == ast::UnOp::Deref) {
