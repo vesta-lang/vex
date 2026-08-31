@@ -78,6 +78,10 @@ deepseck*
 *.vexir
 *.vxi
 *.vxir
+# Lo que el ASA supo del modulo, guardado para la siguiente compilacion.  Es
+# cache como los dos de arriba: se regenera y no describe el programa, lo
+# describe el fuente.
+*.vxfacts
 
 doc/exhaustive_tests*
 __pycache__

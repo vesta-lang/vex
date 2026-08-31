@@ -26,6 +26,8 @@
 #include "ir/ir_emitter.h"
 #include "analysis/asa/aggregate_facts.h"
 #include "analysis/asa/fact_store.h" // el almacen de hechos de la compilacion
+#include "vx/project_cache.h" // `ensure_facts`: la MISMA puerta que el proyecto
+#include "vx/source_hash.h"   // la identidad del modulo, por sus tokens
 #include "ir/ir_optimizer.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
@@ -1204,11 +1206,12 @@ CompileResult compile_vx_source(const std::string &source,
         // contra la huella del IR PRE-opt (@c irmod, donde TODAS las funciones
         // existen -> enforcement completo; semantica source-level: source<=N =>
         // efectivo<=N, sound).  Sound/asimetrico: solo error si es demostrable.
-        /* Antes que nada: si DOS definiciones de la misma nativa se contradicen,
-         * decirlo.  Va fuera del `if (!res.contracts.empty())` a proposito --
-         * un conflicto lo es aunque el programa no escriba ni un contrato --, y
-         * antes de verificarlos porque explica por que uno puede no salir: el
-         * modulo ya se quedo con la union de lo peor de las dos. */
+        /* Antes que nada: si DOS definiciones de la misma nativa se
+         * contradicen, decirlo.  Va fuera del `if (!res.contracts.empty())` a
+         * proposito -- un conflicto lo es aunque el programa no escriba ni un
+         * contrato --, y antes de verificarlos porque explica por que uno puede
+         * no salir: el modulo ya se quedo con la union de lo peor de las dos.
+         */
         analyze::report_native_effect_conflicts(irmod, filename,
                                                 res.diagnostics);
         collect_contracts_(mod->decls, res.contracts);
@@ -1308,6 +1311,31 @@ CompileResult compile_vx_source(const std::string &source,
             std::chrono::duration_cast<std::chrono::microseconds>(
                 RelojFase::now() - marca_opt)
                 .count());
+
+        /* Lo que se sabe de este modulo, GUARDADO para la proxima vez.
+         *
+         * Compilar un fichero suelto no producia ni reutilizaba ni un hecho:
+         * todo lo que el compilador sabia se recalculaba en cada compilacion y
+         * se tiraba al terminar, mientras el camino de varios modulos si tenia
+         * su fichero de hechos.  Que la capa de conocimiento existiera solo por
+         * un lado es lo que hacia que "el ASA" fuera un modo aparte en vez de
+         * como trabaja el compilador.
+         *
+         * Va por la MISMA puerta que el otro camino -- `ensure_facts` --, que
+         * es la que decide si lo guardado vale: escribir aqui una segunda
+         * version seria tener dos criterios de cuando fiarse de la cache, y
+         * bastaria que uno se quedara atras para que el mismo programa se
+         * compilara distinto segun por donde entrara.
+         *
+         * La identidad del modulo es el hash de sus TOKENS, no del texto: un
+         * comentario o un espacio de mas no cambian lo que el compilador sabe,
+         * y con el texto crudo cualquier retoque tiraba la cache entera. */
+        if (!filename.empty() && !opts.asa_domains.empty()) {
+            const uint64_t huella =
+                hash_de_tokens(source, /*con_lineas=*/false);
+            ensure_facts(irmod_for_section, res.facts, opts.asa_domains,
+                         vxfacts_path_for(filename, std::string()), huella);
+        }
         /* Y aqui otra vez, si se pidio.  Es el sitio donde mas falta hace: el
          * optimizador opera SOBRE el grafo -- corta bloques, los une, mueve
          * instrucciones -- y una cirugia mal cerrada no se nota hasta que el

@@ -34,8 +34,9 @@
 
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
-#include "analyze/fingerprint.h" // FunctionContracts
-#include "vxdbg/ids.h"           // huella del mapa de simbolos
+#include "analyze/fingerprint.h"     // FunctionContracts
+#include "analysis/asa/fact_store.h" // lo que se supo del modulo al compilarlo
+#include "vxdbg/ids.h"               // huella del mapa de simbolos
 
 /// El almacen de hechos del ASA viaja por referencia; no hace falta su
 /// definicion aqui, y traerla obligaria a todo el que incluya esto a compilar
@@ -58,6 +59,19 @@ namespace vx {
  */
 struct CompileOptions {
     std::string module_name; ///< Nombre logico del modulo (por defecto "main").
+    /**
+     * @brief Dominios del ASA que alguien va a consultar.  Vacio = ninguno.
+     *
+     * Vacio POR DEFECTO, y eso es la mitad del diseno: producir conocimiento
+     * que nadie pide no es prevision, es tiempo tirado.  Medido en
+     * `199_cfn_vs_lambda`, producirlo todo llevaba la compilacion de 200 ms a
+     * 1,5 s -- siete veces --, y no habia un solo consumidor esperandolo.
+     *
+     * Quien lo necesite lo pide, y entonces ademas se GUARDA: la proxima
+     * compilacion del mismo modulo lo lee en vez de rehacerlo.  Asi el coste lo
+     * paga quien lo usa y solo la primera vez.
+     */
+    std::vector<const char *> asa_domains;
     bool emit_debug =
         false; ///< Emitir comentarios @line N en el .vel generado.
     /// Carpeta donde volcar la base de conocimiento de depuracion (@c vxdbg).
@@ -351,6 +365,16 @@ void traer_asignador_del_lenguaje(ir::IrModule &mod, const CompileOptions &opts,
  */
 struct CompileResult {
     bool ok = false; ///< Exito global.
+    /**
+     * @brief Lo que se supo del modulo al compilarlo.
+     *
+     * Sale de la compilacion en vez de morir con ella, que es la diferencia
+     * entre una capa de conocimiento y un analisis de usar y tirar.  Quien
+     * compile puede consultarlo -- el editor, el linter -- sin volver a
+     * producirlo, y lo que costo producir queda ademas en disco para la
+     * siguiente compilacion del mismo modulo.
+     */
+    analysis::asa::FactStore facts;
     /// Huella del mapa que liga los simbolos del artefacto con las entidades
     /// del grafo de depuracion.  Quien produzca el artefacto final la publica
     /// bajo su identificador de construccion: es lo que permite, desde una

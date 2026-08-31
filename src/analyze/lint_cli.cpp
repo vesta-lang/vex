@@ -105,6 +105,15 @@ int run(int argc, char **argv) {
     copts.opt_level = 2;
     copts.ir_only = true;
     copts.report_bounds = false;
+    /* Y se le pide al COMPILADOR que deje hechos los dominios que las familias
+     * encendidas van a consultar.
+     *
+     * Asi el conocimiento se produce dentro de la compilacion -- donde el
+     * modulo ya esta en memoria y su identidad se conoce -- y ademas queda
+     * guardado: la siguiente pasada del linter sobre el mismo fichero lo lee en
+     * vez de rehacerlo.  Antes se producia aqui, despues, y moria con el
+     * proceso. */
+    copts.asa_domains = lint_required_domains(wanted);
     const bool as_project = vx::vx_source_has_imports(source) ||
                             vx::vx_source_declara_namespace(source);
     vx::CompileResult cr = as_project
@@ -127,7 +136,13 @@ int run(int argc, char **argv) {
     register_asm_producer();
     register_fingerprint_producer();
 
-    analysis::asa::FactStore facts;
+    /* Lo que la compilacion ya dejo hecho, si el camino de un fichero suelto lo
+     * produjo: se le pidieron los dominios de las familias encendidas, asi que
+     * o vienen de aqui o de su fichero de hechos, y en ninguno de los dos casos
+     * hay que rehacerlos.  `produce` mas abajo se salta los dominios que ya
+     * estan, asi que esto no es un atajo: es el mismo camino con el trabajo ya
+     * hecho. */
+    analysis::asa::FactStore facts = std::move(cr.facts);
     /* SOLO lo que las familias ENCENDIDAS vayan a consultar.  Producirlo todo
      * se iba a ~544 us por modulo y el 80% eran los rangos, que aqui no los
      * mira nadie.  Ademas la produccion es idempotente y se apoya en la cache

@@ -35,6 +35,8 @@
 #include <vector>
 
 #include "analysis/asa/fact.h"
+#include "analysis/asa/fact_store.h" // los hechos que se dejan al compilar
+#include "ir/ssa_ir.h"               // el modulo del que se sabe
 #include "vx/diagnostic.h"
 
 namespace vx {
@@ -254,6 +256,36 @@ bool project_cache_load_vxdbg(const std::string &cache_path,
 
 /// @brief FNV-1a 64 helper (publico para uso en @c compile_vx_project).
 uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;
+
+/**
+ * @brief Deja en @p store los hechos de @p wanted, vengan de donde vengan.
+ *
+ * Es la puerta que usan los consumidores, y esconde a proposito de DoNDE sale
+ * el conocimiento: de la cache de una compilacion anterior, o producido ahora.
+ * Un consumidor que tuviera que saberlo acabaria decidiendo por su cuenta
+ * cuando fiarse de la cache, y esa decision estaria escrita en tantos sitios
+ * como consumidores haya.
+ *
+ * Se declara aqui -- y no se queda dentro del compilador de proyecto -- porque
+ * la usan los DOS caminos.  Compilar un fichero suelto no producia ni
+ * reutilizaba nada: todo lo que se sabia del modulo se recalculaba en cada
+ * compilacion y se tiraba al acabar, que es justo lo que esta capa existe para
+ * no hacer.  Escribir aqui una segunda version habria sido tener dos criterios
+ * de cuando fiarse de la cache.
+ *
+ * @param mod         Modulo del que se sabe.
+ * @param store       Almacen de esta compilacion.
+ * @param wanted      Dominios que alguien va a consultar.  Vacio = todos.
+ * @param path        Fichero de hechos, o vacio para no tocar disco.
+ * @param fingerprint Identidad del modulo: si no coincide, lo guardado no vale.
+ */
+void ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
+                  const std::vector<const char *> &wanted,
+                  const std::string &path, uint64_t fingerprint);
+
+/// Path del fichero de hechos de @p source_path (`.vxfacts` en la cache).
+std::string vxfacts_path_for(const std::string &source_path,
+                             const std::string &tgt_suffix);
 
 } // namespace vx
 

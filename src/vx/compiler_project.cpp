@@ -530,10 +530,10 @@ recuperar_hechos_(const std::string &ruta, analysis::asa::FactStore &destino,
  * @param path        Fichero de hechos, o vacio para no tocar disco.
  * @param fingerprint Identidad del modulo: si no coincide, lo guardado no vale.
  */
-static void ensure_facts_(const ir::IrModule &mod,
-                          analysis::asa::FactStore &store,
-                          const std::vector<const char *> &wanted,
-                          const std::string &path, uint64_t fingerprint) {
+void ensure_facts_impl_(const ir::IrModule &mod,
+                        analysis::asa::FactStore &store,
+                        const std::vector<const char *> &wanted,
+                        const std::string &path, uint64_t fingerprint) {
     /* Sin ruta no hay cache entre compilaciones: se produce y ya.  Pasa en los
      * caminos que no tienen un fichero al que atribuir el modulo. */
     if (path.empty()) {
@@ -1191,6 +1191,22 @@ build_ns_to_all_modnames_(const std::vector<ProjectModuleWork> &work) {
 ///   - vacio (paquete anonimo) si no hay manifest ni nombre.
 
 } // namespace
+
+/* Las dos puertas que el camino de un fichero suelto tambien usa.  Salen del
+ * namespace anonimo -- y no se duplican alli -- porque el criterio de cuando
+ * fiarse de lo guardado tiene que ser UNO: con dos, basta que uno se quede
+ * atras para que el mismo programa se compile distinto segun por donde entre.
+ */
+std::string vxfacts_path_for(const std::string &source_path,
+                             const std::string &tgt_suffix) {
+    return rutas_cache_(source_path, tgt_suffix).hechos;
+}
+
+void ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
+                  const std::vector<const char *> &wanted,
+                  const std::string &path, uint64_t fingerprint) {
+    ensure_facts_impl_(mod, store, wanted, path, fingerprint);
+}
 
 ///  M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
 /// sin imports.  Nivel N = 1 + max(niveles de sus deps).  Modulos del
@@ -4154,11 +4170,24 @@ CompileResult compile_vx_project(
          *
          * Sin identidad del modulo no se toca el disco: comprobar que lo
          * guardado es de ESTE programa es lo unico que hace sana una cache. */
-        ensure_facts_(merged, facts, {"asa.layout"},
-                      root_facts_key != 0
-                          ? rutas_cache_(root_path, std::string()).hechos
-                          : std::string(),
-                      root_facts_key);
+        /* `asa.layout` porque lo consume el informe de precondiciones de aqui
+         * abajo, y ademas lo que haya pedido quien compila: el linter y el
+         * editor saben que dominios van a consultar, y producirlos AQUI -- con
+         * el modulo en memoria y su identidad conocida -- deja el trabajo hecho
+         * y guardado, en vez de que cada consumidor lo rehaga despues y lo
+         * tire al terminar. */
+        std::vector<const char *> quiere = {"asa.layout"};
+        for (const char *d : opts.asa_domains)
+            if (d != nullptr) quiere.push_back(d);
+        ensure_facts_impl_(merged, facts, quiere,
+                           root_facts_key != 0
+                               ? rutas_cache_(root_path, std::string()).hechos
+                               : std::string(),
+                           root_facts_key);
+        /* Y sale con el resultado, para que quien compilo pueda consultarlo sin
+         * volver a producirlo.  Se COPIA y no se mueve: el informe de abajo
+         * todavia lo usa. */
+        res.facts = facts;
         vx_report_asm_preconditions(merged, res.diagnostics, root_path,
                                     hay_main, opts.emit_ir_preopt,
                                     opts.native_poo ? "aot" : "vm", facts);
