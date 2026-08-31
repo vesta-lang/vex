@@ -2981,10 +2981,10 @@ modes3_case("cmb239", "combo memoria: borrow sobre unique y sobre shared", "239_
 modes3_case("ret110", "unique<T> retornado desde funciones (SRET Tier 1)", "110_unique_return_from_fn.vx", 42, line=2039)
 r0_case("borrow111", "borrow<T> shared multiple coexisten (R2)", "111_borrow_shared_ok.vx", 42, line=2045)
 r0_case("borrow112", "borrow_mut<T> exclusive + write_borrow OK", "112_borrow_mut_ok.vx", 42, line=2047)
-fails_case("berr113", "borrow R1: shared tras mutable", "113_borrow_err_mut_shared.vx", "ya esta prestado como mutable", line=2067)
-fails_case("berr114", "borrow R1: doble mutable", "114_borrow_err_double_mut.vx", "ya esta prestado como mutable", line=2070)
-fails_case("berr115", "borrow R2: mut tras shared activo", "115_borrow_err_mut_during_shared.vx", "prestamo(s) shared activo(s)", line=2073)
-fails_case("berr116", "borrow R3: move while borrowed", "116_borrow_err_move_while_borrowed.vx", "no se puede mover .* porque tiene un prestamo", line=2076)
+fails_case("berr113", "borrow R1: shared tras mutable", "113_borrow_err_mut_shared.vx", "VX2026", line=2067)
+fails_case("berr114", "borrow R1: doble mutable", "114_borrow_err_double_mut.vx", "VX2026", line=2070)
+fails_case("berr115", "borrow R2: mut tras shared activo", "115_borrow_err_mut_during_shared.vx", "VX2027", line=2073)
+fails_case("berr116", "borrow R3: move while borrowed", "116_borrow_err_move_while_borrowed.vx", "VX2034", line=2076)
 r0_case("borrow117", "borrow F2+F4: param escape + lifetime elision regla 1", "117_borrow_param_elision.vx", 42, line=2082)
 r0_case("borrow118", "borrow F1: NLL libera borrow tras ultimo uso (move OK)", "118_borrow_nll.vx", 42, line=2084)
 r0_case("borrow119", "borrow F3: shared reborrow lend(borrow_shared)", "119_borrow_reborrow.vx", 42, line=2086)
@@ -2997,8 +2997,8 @@ r0_case("borrow125", "borrow realista: NLL con compute + move (compute_length + 
 r0_case("borrow126", "borrow realista: reborrow_mut dentro de helper (outer/inner pattern)", "126_borrow_reborrow_helper.vx", 42, line=2105)
 r0_case("borrow127", "borrow realista: state machine via apply_op + validador shared", "127_borrow_state_machine.vx", 42, line=2107)
 r0_case("borrow128", "borrow realista: factory chain con F4 elision (3 niveles deep_read)", "128_borrow_factory_chain.vx", 42, line=2109)
-fails_case("berr129", "borrow realista R1: doble mutable cross-call (E0499 rust)", "129_borrow_err_helper_double_mut.vx", "ya esta prestado como mutable", line=2113)
-fails_case("berr130", "borrow realista R4: return borrow a local (E0515 rust)", "130_borrow_err_return_local.vx", "no puede sobrevivir a su origen", line=2116)
+fails_case("berr129", "borrow realista R1: doble mutable cross-call (E0499 rust)", "129_borrow_err_helper_double_mut.vx", "VX2026", line=2113)
+fails_case("berr130", "borrow realista R4: return borrow a local (E0515 rust)", "130_borrow_err_return_local.vx", "VX2037", line=2116)
 r0_case("borrow131", "borrow realista integrador: pipeline + validador + elision combinados", "131_borrow_combined_real.vx", 42, line=2122)
 r0_case("comptime132", "comptime introspect: sizeof/alignof/typename/type_id/kind", "132_comptime_introspect.vx", 42, line=2129)
 r0_case("comptime133", "comptime introspect: fields + methods + subtype + is_*", "133_comptime_introspect2.vx", 42, line=2136)
@@ -4936,7 +4936,7 @@ i32 main() {
     f(x, x);
     return 0;
 }
-""", "ya esta prestado como mutable",
+""", "VX2026",
      "dos `inout` al mismo dueno: aliasing mutable, por R1 del borrow checker",
      "dos `inout` al mismo dueno debio fallar"),
 ]

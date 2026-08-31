@@ -2819,9 +2819,14 @@ void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
          * -- dos prestamos exclusivos del mismo dueno -- sin que nadie tenga
          * que escribir una segunda regla de aliasing. */
         const bool is_mut = (d != ast::ParamDir::In);
-        const std::string borrower = "el argumento " + std::to_string(i + 1) +
-                                     (callee.empty() ? std::string()
-                                                     : (" de " + callee));
+        /* Como se cita al argumento en la nota del prestamo.  Sale del
+         * catalogo y no de aqui: es texto que ve el usuario -- entra DENTRO de
+         * un mensaje traducido --, asi que fabricarlo en un idioma fijo dejaba
+         * el diagnostico a medias en cualquier otro. */
+        const std::string borrower =
+            callee.empty()
+                ? diag::format("VX2044", {std::to_string(i + 1)})
+                : diag::format("VX2043", {std::to_string(i + 1), callee});
         if (borrow_checker_.on_lend(owner, borrower, e->args[i]->loc, is_mut))
             tomados.push_back(borrower);
     }

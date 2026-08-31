@@ -37,6 +37,25 @@ const CatEntry kEntries[] = {
     {"VX2023", {"uses the collector", "usa el recolector"}},
     {"VX2024", {"needs the runtime", "necesita el runtime"}},
     {"VX2025", {"may abort (panic)", "puede abortar (panic)"}},
+    {"VX2026", {"cannot borrow '{0}' as {1} because it is already borrowed as {2}", "no se puede prestar '{0}' como {1} porque ya esta prestado como {2}"}},
+    {"VX2027", {"cannot borrow '{0}' as {1} because there are {2} shared borrow(s) active", "no se puede prestar '{0}' como {1} porque ya hay {2} prestamo(s) compartido(s) activo(s)"}},
+    {"VX2028", {"previous borrow ({0}) by '{1}' taken here", "prestamo previo ({0}) por '{1}' tomado aqui"}},
+    {"VX2029", {"previous borrow ({0}) taken here", "prestamo previo ({0}) tomado aqui"}},
+    {"VX2030", {"the {0} borrow is attempted here", "se intenta tomar el prestamo {0} aqui"}},
+    {"VX2031", {"cannot mutate '{0}' because it has an active {1} borrow", "no se puede mutar '{0}' porque tiene un prestamo {1} activo"}},
+    {"VX2032", {"cannot read '{0}' because it has an active exclusive borrow", "no se puede leer '{0}' porque tiene un prestamo exclusivo activo"}},
+    {"VX2033", {"the conflict is here: the owner is {0}", "el conflicto esta aqui: el dueno se {0}"}},
+    {"VX2034", {"cannot move '{0}' because it has an active {1} borrow", "no se puede mover '{0}' porque tiene un prestamo {1} activo"}},
+    {"VX2035", {"move(...) of the owner here", "move(...) del dueno aqui"}},
+    {"VX2036", {"end the borrow's scope before moving the owner, or use 'shared<T>' if you need several owners", "termina el ambito del prestamo antes de mover al dueno, o usa 'shared<T>' si necesitas varios poseedores"}},
+    {"VX2037", {"the borrow cannot outlive what it came from: the local '{0}' that '{1}' points to lives only for this function, and {2} exposes the borrow outside the scope where that local exists", "el prestamo no puede sobrevivir a su origen: el local '{0}' al que apunta '{1}' vive solo durante esta funcion, y {2} lo expone fuera del ambito donde ese local existe"}},
+    {"VX2038", {"change the type to `unique<T>` or `shared<T>` to transfer or clone the ownership instead of borrowing, or return the value with read_borrow(b) instead of the borrow", "cambia el tipo a `unique<T>` o `shared<T>` para transferir o clonar la posesion en lugar de prestar, o devuelve el valor con read_borrow(b) en lugar del prestamo"}},
+    {"VX2039", {"shared", "compartido"}},
+    {"VX2040", {"exclusive", "exclusivo"}},
+    {"VX2041", {"mutated", "muta"}},
+    {"VX2042", {"read", "lee"}},
+    {"VX2043", {"argument {0} of {1}", "el argumento {0} de {1}"}},
+    {"VX2044", {"argument {0}", "el argumento {0}"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -270,7 +289,7 @@ const CatEntry kEntries[] = {
     {"VXW910", {"a declared bound looser than what was proven, and properties provable but not declared", "una cota declarada mas floja que la demostrada, y propiedades demostrables sin declarar"}},
     {"VXW911", {"what one boundary costs: how many functions cannot prove their effects because the closure leaves the program there", "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efectos porque el cierre sale del programa por ahi"}},
 };
-const int kEntryCount = 249;
+const int kEntryCount = 268;
 
 } // namespace
 

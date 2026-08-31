@@ -277,6 +277,13 @@ class BorrowChecker {
     /// Consultado por @c register_borrow al crear cada borrow.
     std::unordered_map<std::string, uint32_t> pending_last_use_;
 
+    /// Emite la nota que cita DONDE se tomo el prestamo que estorba.
+    ///
+    /// La ponen los tres errores -- prestar encima, usar al dueno prestado y
+    /// moverlo --, asi que vive en un sitio: con tres copias, el dia que la
+    /// nota cambie cambiaria en dos.
+    void note_previous_borrow_(const BorrowRecord &rec);
+
     /// Helper: emite error de R1 (exclusividad mutable) con dos puntos
     /// citados (toma original + toma conflictiva).
     void error_aliasing(SourceLoc loc_conflict, const std::string &owner_name,

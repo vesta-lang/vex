@@ -33,20 +33,30 @@
 
 #include "vx/borrow_checker.h"
 
+#include "vx/diag/diag_catalog.h" // las palabras del mensaje, por idioma
+
 #include <utility>
 
 namespace vx {
 
 namespace {
-/// Convierte BorrowKind a una etiqueta legible para mensajes.
-const char *kind_label(BorrowKind k) noexcept {
-    switch (k) {
-    case BorrowKind::None: return "ninguno";
-    case BorrowKind::Shared: return "shared";
-    case BorrowKind::Mutable: return "mutable";
-    case BorrowKind::SuspendedByReborrow: return "suspendido (reborrow)";
-    }
-    return "?";
+/**
+ * @brief El codigo de catalogo que nombra una clase de prestamo.
+ * @param k La clase.
+ * @return El codigo, para resolverlo al idioma activo.
+ *
+ * Devuelve un CODIGO y no una palabra porque "compartido" y "exclusivo" son
+ * parte de la frase, y una frase a medio traducir es peor que una sin traducir.
+ * No son palabras clave del lenguaje -- esas son `borrow<T>` y `borrow_mut<T>`,
+ * y no se traducen nunca --, son la descripcion de lo que hace cada una.
+ */
+const char *kind_code(BorrowKind k) noexcept {
+    return k == BorrowKind::Mutable ? "VX2040" : "VX2039";
+}
+
+/// La clase de prestamo, ya en el idioma activo.
+std::string kind_word(BorrowKind k) {
+    return diag::format(kind_code(k), {});
 }
 } // namespace
 
@@ -328,18 +338,9 @@ bool BorrowChecker::on_borrow_escape(const std::string &borrower_name,
         return true;
     }
     // Owner es local -> el borrow no puede sobrevivir a la funcion.
-    diags_.error(
-        loc_escape,
-        std::string("el borrow no puede sobrevivir a su origen\n") +
-            "  el local '" + owner + "' al que apunta '" + borrower_name +
-            "' vive solo durante esta funcion;\n" + "  " + escape_kind +
-            " del borrow lo expone fuera del scope donde el local existe.");
-    diags_.note(
-        loc_escape,
-        std::string(
-            "considera cambiar el tipo a `unique<T>` o `shared<T>` para "
-            "transferir/clonar la posesion en lugar de prestar,\n") +
-            "  o devolver el valor con read_borrow(b) en lugar del borrow.");
+    diags_.diag(loc_escape, DiagLevel::ERR, "VX2037",
+                {owner, borrower_name, escape_kind});
+    diags_.diag(loc_escape, DiagLevel::NOTE, "VX2038", {});
     return false;
 }
 
@@ -347,71 +348,55 @@ bool BorrowChecker::on_borrow_escape(const std::string &borrower_name,
 // Helpers de error.
 // -----------------------------------------------------------------------
 
+void BorrowChecker::note_previous_borrow_(const BorrowRecord &rec) {
+    // En un sitio porque la ponen los TRES errores: quien presta encima, quien
+    // usa al dueno prestado y quien lo mueve.  Con tres copias, el dia que la
+    // nota cambie cambiaria en dos.
+    const std::string clase = kind_word(rec.kind);
+    if (!rec.borrower_name.empty())
+        diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2028",
+                    {clase, rec.borrower_name});
+    else
+        diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2029", {clase});
+}
+
 void BorrowChecker::error_aliasing(SourceLoc loc_conflict,
                                    const std::string &owner_name,
                                    const BorrowRecord &rec, bool trying_mut) {
-    std::string msg;
-    if (rec.kind == BorrowKind::Mutable) {
-        msg = std::string("no se puede prestar '") + owner_name +
-              "' como " + (trying_mut ? "mutable" : "shared") +
-              " porque ya esta prestado como mutable";
-    } else {
-        msg = std::string("no se puede prestar '") + owner_name +
-              "' como mutable porque ya hay " +
-              std::to_string(rec.shared_count) +
-              " prestamo(s) shared activo(s)";
-    }
-    diags_.error(loc_conflict, msg);
-    // Note del prestamo previo, citando nombre del borrower si esta.
-    std::string note_msg =
-        std::string("prestamo previo (") + kind_label(rec.kind) + ")";
-    if (!rec.borrower_name.empty()) {
-        note_msg += " por '" + rec.borrower_name + "'";
-    }
-    note_msg += " tomado aqui";
-    diags_.note(rec.loc_taken, note_msg);
-    diags_.note(loc_conflict, std::string("se intenta tomar prestamo ") +
-                                  (trying_mut ? "mutable" : "shared") +
-                                  " aqui");
+    const std::string quiere =
+        diag::format(trying_mut ? "VX2040" : "VX2039", {});
+    if (rec.kind == BorrowKind::Mutable)
+        diags_.diag(loc_conflict, DiagLevel::ERR, "VX2026",
+                    {owner_name, quiere, kind_word(rec.kind)});
+    else
+        diags_.diag(loc_conflict, DiagLevel::ERR, "VX2027",
+                    {owner_name, quiere, std::to_string(rec.shared_count)});
+    note_previous_borrow_(rec);
+    diags_.diag(loc_conflict, DiagLevel::NOTE, "VX2030", {quiere});
 }
 
 void BorrowChecker::error_use_while_borrowed(SourceLoc loc_use,
                                              const std::string &owner_name,
                                              const BorrowRecord &rec,
                                              bool is_mutation) {
-    std::string msg;
-    if (is_mutation) {
-        msg = std::string("no se puede mutar '") + owner_name +
-              "' porque tiene un prestamo " + kind_label(rec.kind) + " activo";
-    } else {
-        msg = std::string("no se puede leer '") + owner_name +
-              "' porque tiene un prestamo mutable activo (exclusivo)";
-    }
-    diags_.error(loc_use, msg);
-    diags_.note(rec.loc_taken, std::string("prestamo ") + kind_label(rec.kind) +
-                                   " por '" + rec.borrower_name +
-                                   "' tomado aqui");
-    diags_.note(loc_use, std::string("conflicto: ") +
-                             (is_mutation ? "mutacion" : "lectura") +
-                             " del owner aqui");
+    if (is_mutation)
+        diags_.diag(loc_use, DiagLevel::ERR, "VX2031",
+                    {owner_name, kind_word(rec.kind)});
+    else
+        diags_.diag(loc_use, DiagLevel::ERR, "VX2032", {owner_name});
+    note_previous_borrow_(rec);
+    diags_.diag(loc_use, DiagLevel::NOTE, "VX2033",
+                {diag::format(is_mutation ? "VX2041" : "VX2042", {})});
 }
 
 void BorrowChecker::error_move_while_borrowed(SourceLoc loc_move,
                                               const std::string &owner_name,
                                               const BorrowRecord &rec) {
-    diags_.error(loc_move, std::string("no se puede mover '") +
-                               owner_name + "' porque tiene un prestamo " +
-                               kind_label(rec.kind) + " activo");
-    std::string note_msg = std::string("prestamo ") + kind_label(rec.kind);
-    if (!rec.borrower_name.empty())
-        note_msg += " por '" + rec.borrower_name + "'";
-    note_msg += " tomado aqui";
-    diags_.note(rec.loc_taken, note_msg);
-    diags_.note(loc_move, "move(...) del owner aqui");
-    diags_.note(
-        loc_move,
-        "sugerencia: termina el scope del borrow antes de mover el owner,\n"
-        "  o usa 'shared<T>' si necesitas multiples poseedores.");
+    diags_.diag(loc_move, DiagLevel::ERR, "VX2034",
+                {owner_name, kind_word(rec.kind)});
+    note_previous_borrow_(rec);
+    diags_.diag(loc_move, DiagLevel::NOTE, "VX2035", {});
+    diags_.diag(loc_move, DiagLevel::NOTE, "VX2036", {});
 }
 
 } // namespace vx
