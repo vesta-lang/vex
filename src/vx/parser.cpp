@@ -1024,7 +1024,9 @@ void Parser::parse_extern_block(ast::ModuleNode &mod) {
 
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
-        // Cada fn: `fn <name>(<params>) -> <ret>;`
+        // Cada fn: `[@efecto...] fn <name>(<params>) -> <ret>;`
+        ast::ExternEffects fx_decl;
+        parse_extern_effects_(fx_decl);
         const SourceLoc fn_loc = current_.loc;
         if (expect(TokenKind::KW_FN,
                    "se esperaba 'fn' al inicio de declaracion extern")
@@ -1114,6 +1116,7 @@ void Parser::parse_extern_block(ast::ModuleNode &mod) {
         efd->return_type = std::move(ret_type);
         efd->name = fn_name;
         efd->params = std::move(params);
+        efd->effects = fx_decl;
         mod.decls.push_back(std::move(efd));
     }
     if (expect(TokenKind::RBRACE, "se esperaba '}' al final del bloque extern")
@@ -3188,6 +3191,84 @@ static bool token_opens_type(const Token &t) noexcept {
         return true;
     default: return false;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Los efectos DEFINIDOS de una funcion externa, con `when:` opcional.
+//
+// Mismas palabras que los contratos, y el sitio decide si se comprueba o se
+// cree: en una funcion Vesta `@nopanic` es un contrato que el compilador
+// VERIFICA contra el codigo; aqui no hay codigo que leer, asi que es la palabra
+// de quien lo escribe.  Una palabra, dos sitios; cambia quien responde por
+// ella.
+//
+// El vocabulario suma formas POSITIVAS que un contrato no necesita.  Un
+// contrato ACOTA, y por eso le bastan las negativas; una descripcion COMPLETA
+// -- lo que no se escribe, no ocurre -- tiene que poder decir que SI, o el
+// silencio se leeria como una demostracion.
+//
+// El `when:` se resuelve AQUI.  El objetivo se conoce al compilar -- es lo
+// mismo que ya hace `@Target` sobre una declaracion --, asi que mas abajo llega
+// un conjunto para EL objetivo activo y nadie tiene que arrastrar ambitos.  Y
+// es la pieza que hace que esto sea distinto de repetir la declaracion con
+// `@Target`: alli lo que cambia es QUE SIMBOLO existe; aqui la funcion es una
+// sola y lo que varia es lo que hace.
+//
+// Lo escrito SIN `when:` vale en todos los objetivos y lo condicionado se SUMA
+// donde case, que es como ya se comporta un contrato sin `when:`.
+// ---------------------------------------------------------------------------
+void Parser::parse_extern_effects_(ast::ExternEffects &out) {
+    while (current_.kind == TokenKind::AT) {
+        const Token &nx = lex_.peek_at(0);
+        if (nx.kind != TokenKind::IDENTIFIER) return;
+        const std::string nm = nx.lexeme; // COPIA: los consume() lo invalidan
+        // Solo se consume si el nombre ES un efecto; cualquier otra anotacion
+        // la maneja quien ya la manejaba.
+        const bool conocido =
+            (nm == "pure" || nm == "io" || nm == "throws" || nm == "panics" ||
+             nm == "alloc" || nm == "nondet" || nm == "reads_global" ||
+             nm == "writes_global" || nm == "nothrow" || nm == "nopanic");
+        if (!conocido) return;
+        (void)consume(); // '@'
+        (void)consume(); // el nombre
+        std::string when;
+        if (current_.kind == TokenKind::LPAREN) {
+            (void)consume(); // '('
+            when = read_footprint_when_();
+            (void)expect(TokenKind::RPAREN, "se esperaba ')' tras el `when:`");
+        }
+        out.any = true; // alguien hablo, aunque su `when:` no case aqui
+        if (!when.empty() && !target_expr_matches(when))
+            continue; // cierto en otro objetivo, no en este
+        // `pure`, `nothrow` y `nopanic` no ponen nada: bajo descripcion
+        // completa el default ya es que no pasa nada.  Se aceptan porque
+        // escribirlo es mas claro que dejar la linea en blanco, y porque son
+        // las palabras que el usuario ya conoce.
+        if (nm == "io")
+            out.io = true;
+        else if (nm == "throws")
+            out.may_throw = true;
+        else if (nm == "panics")
+            out.may_panic = true;
+        else if (nm == "alloc")
+            out.allocates = true;
+        else if (nm == "nondet")
+            out.nondeterministic = true;
+        else if (nm == "reads_global")
+            out.reads_global = true;
+        else if (nm == "writes_global")
+            out.writes_global = true;
+    }
+}
+
+bool Parser::looks_like_param_dir_storage() const noexcept {
+    Lexer &ml = const_cast<Lexer &>(lex_);
+    if (current_.kind == TokenKind::KW_IN)
+        return token_opens_type(ml.peek_at(0));
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        (current_.lexeme == "out" || current_.lexeme == "inout"))
+        return token_opens_type(ml.peek_at(0));
+    return false;
 }
 
 ast::ParamDir Parser::parse_opt_param_dir_() {
@@ -7269,6 +7350,15 @@ std::unique_ptr<ast::Stmt> Parser::parse_statement_inner() {
         // `register` sea un IDENTIFIER (no keyword) y starts_type() lo
         // ignore.
         if (looks_like_register_storage()) return parse_var_decl_stmt(false);
+        /* `in i64* p = ...;` / `out T* q;`: la direccion va DELANTE del tipo,
+         * asi que `starts_type()` -- que mira el token de ahora -- no la ve.
+         * Mismo caso que `register("reg")`, y se resuelve igual.
+         *
+         * No puede confundirse con una expresion: `out` como variable va
+         * seguido de `=`, `.`, `[`, `(` o un operador, y ninguno de esos abre
+         * un tipo.  Y el `in` del `for (x in col)` no esta al principio de un
+         * statement. */
+        if (looks_like_param_dir_storage()) return parse_var_decl_stmt(false);
         if (starts_type()) return parse_var_decl_stmt(false);
         return parse_expr_stmt();
     }
@@ -7279,6 +7369,11 @@ std::unique_ptr<ast::Stmt> Parser::parse_var_decl_stmt(bool is_const,
     auto vd = std::make_unique<ast::VarDeclStmt>();
     vd->loc = current_.loc;
     vd->is_const = is_const;
+    /* Direccion: `in i64* vista = null;`.  El MISMO lector que en un
+     * parametro, para que la marca no signifique una cosa aqui y otra alli.
+     * Lo que cambia es lo que queda de ella: en un parametro dice ademas que
+     * hace la funcion; en una variable solo el permiso. */
+    vd->dir = parse_opt_param_dir_();
     /*  AS inc.2: storage-class `register("reg")` antes del tipo.
      * El patron ya fue validado por looks_like_register_storage() en el
      * router, pero KW_CONST / for-init tambien llaman aqui; reconsumimos

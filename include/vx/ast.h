@@ -302,6 +302,41 @@ struct ClassMethodDecl; ///< Necesaria para StructDecl::methods antes de
 struct BlockStmt;       ///< Necesaria para LambdaExpr antes de su definicion.
 
 /**
+ * @enum ParamDir
+ * @brief Direccion declarada: que puede hacerse con lo que algo APUNTA.
+ *
+ * `in T* p` = solo se lee;  `out T* p` = solo se escribe;  `inout T* p` = las
+ * dos cosas.  Sin marca, @c None: no se dice nada, que NO es lo mismo que
+ * decir que no toca nada.
+ *
+ * Habla de lo APUNTADO y no de lo declarado: un valor viaja por copia -- Vesta
+ * no tiene paso por referencia --, asi que `out i32 x` no significaria nada y
+ * el comprobador lo rechaza.  Por eso vive en la DECLARACION y no en el tipo.
+ *
+ * Es un eje DISTINTO de `const`, y compone con el.  `const` es un permiso por
+ * NIVEL sobre el tipo, igual que en C, donde `const T*` y `T* const` no son lo
+ * mismo; la direccion habla del nivel EXTERNO.  Por eso `in T const*` se puede
+ * escribir -- y es algo redundante -- y `out T const**` tambien: se escribe el
+ * puntero de fuera y lo de dentro sigue siendo const.  Colapsarlos haria el
+ * segundo inexpresable sin ganar nada.
+ *
+ * Y significa dos cosas segun donde este, a proposito:
+ *   - en un @c ExternFnDecl DEFINE, porque no hay cuerpo que mirar y lo unico
+ *     que hay es la palabra de quien lo escribe;
+ *   - en codigo Vesta es un CONTRATO, que el compilador COMPRUEBA.
+ * Una palabra, dos sitios; lo que cambia es quien responde por ella.
+ *
+ * Vive arriba del todo porque la llevan varias clases de declaracion -- el
+ * parametro, la variable local -- y tienen que verla todas.
+ */
+enum class ParamDir : uint8_t {
+    None = 0, ///< sin marca: no se afirma nada sobre lo apuntado.
+    In,       ///< `in`: solo se LEE lo apuntado.
+    Out,      ///< `out`: solo se ESCRIBE lo apuntado.
+    InOut,    ///< `inout`: se lee y se escribe.
+};
+
+/**
  * @struct PendingComplexity
  * @brief Un @c @complexity cuyo @c when: habla del PARAMETRO DE TIPO y por
  *        tanto no se puede resolver al parsear.
@@ -1289,6 +1324,16 @@ struct VarDeclStmt : Stmt {
     std::string name;
     std::unique_ptr<Expr> init; ///< null si no hay inicializador.
     bool is_const = false;
+    /** Direccion declarada (`in i64* p`), ver @c ParamDir.
+     *
+     * En un parametro la marca dice dos cosas -- que puede hacerse por ahi, y
+     * que HACE la funcion --; en una variable solo queda la primera, que es un
+     * PERMISO: por un `in` solo se lee.
+     *
+     * Sigue siendo un eje distinto de `const`, con el que compone:
+     * `in nonnull i64* p` y `in const i64* p` se escriben los dos, y cada
+     * palabra sigue diciendo lo suyo. */
+    ParamDir dir = ParamDir::None;
     /// marca `comptime const NAME = expr;` local.  El type
     /// checker evalua el init y registra en
     /// @c TypeChecker::comptime_const_locals_; el lowering omite la
@@ -1612,34 +1657,6 @@ struct AsmStmt : Stmt {
 // -------------------------------------------------------------------
 // Declaraciones.
 // -------------------------------------------------------------------
-
-/**
- * @enum ParamDir
- * @brief Direccion declarada de un parametro: que hace la funcion con lo que
- *        ese parametro APUNTA.
- *
- * `in T* p` = lo lee y no lo escribe;  `out T* p` = lo escribe y no lo lee;
- * `inout T* p` = las dos cosas.  Sin marca, @c None: no se dice nada, que NO
- * es lo mismo que decir que no toca nada.
- *
- * Habla de lo APUNTADO, no del parametro: el parametro siempre viaja por valor
- * (Vesta no tiene paso por referencia), asi que `out i32 x` no tiene sentido y
- * el type checker lo rechaza.  Por eso vive aqui y no en el tipo: es una
- * propiedad de COMO la funcion usa ese argumento, no de que es el argumento.
- *
- * El mismo marcador significa dos cosas segun donde este, y es a proposito:
- *   - en un @c ExternFnDecl DEFINE, porque no hay cuerpo que mirar y lo unico
- *     que hay es la palabra de quien lo escribe;
- *   - en una funcion Vesta es un CONTRATO, que el compilador COMPRUEBA contra
- *     lo que el analisis ve de verdad.
- * Una palabra, dos sitios; lo que cambia es quien responde por ella.
- */
-enum class ParamDir : uint8_t {
-    None = 0, ///< sin marca: no se afirma nada sobre lo apuntado.
-    In,       ///< `in`: la funcion LEE lo apuntado y no lo escribe.
-    Out,      ///< `out`: la funcion ESCRIBE lo apuntado y no lo lee.
-    InOut,    ///< `inout`: lo lee y lo escribe.
-};
 
 /**
  * @struct ParamDecl
@@ -2007,11 +2024,46 @@ struct ImplDecl : Node {
  * que @c "stdlib/native/io/vesta_io" usando el mismo mecanismo
  * @c LoadLibraryA + @c GetProcAddress de @c src/ffi/native_ffi.cpp.
  */
+/**
+ * @struct ExternEffects
+ * @brief Lo que se DEFINIO de una funcion externa, aparte de sus punteros.
+ *
+ * Los ejes que hablan de argumentos (`in`/`out`/`inout`) viven en cada
+ * @c ParamDecl porque son posicionales; estos son los que hablan de la funcion
+ * entera.
+ *
+ * Es una DESCRIPCION COMPLETA: lo que no se escribe, no ocurre.  Por eso el
+ * vocabulario tiene formas POSITIVAS (`@io`, `@throws`, `@panics`, `@alloc`)
+ * que un contrato no necesita -- un contrato ACOTA, y por eso le bastan las
+ * negativas (`@nothrow`, `@nopanic`) --.  Una descripcion tiene que poder decir
+ * que SI, o el silencio se leeria como una demostracion.
+ *
+ * @c any distingue "nadie dijo nada" de "dijeron que no hace nada", que son
+ * cosas MUY distintas: la primera obliga a suponer lo peor.
+ *
+ * El `when:` de cada anotacion ya esta RESUELTO aqui: el objetivo se conoce al
+ * compilar -- igual que para un `@Target` sobre una declaracion --, asi que el
+ * parser se queda solo con lo que aplica.  Lo que llega mas abajo es un
+ * conjunto para EL objetivo activo, sin ambitos que arrastrar.
+ */
+struct ExternEffects {
+    bool any = false; ///< alguien escribio algo (aunque fuera `@pure`)
+    bool io = false;
+    bool may_throw = false;
+    bool may_panic = false;
+    bool allocates = false;
+    bool reads_global = false;
+    bool writes_global = false;
+    bool nondeterministic = false;
+};
+
 struct ExternFnDecl : Node {
     std::string lib; ///< nombre de la libreria (e.g. "user32.dll")
     std::unique_ptr<TypeNode> return_type;
     std::string name; ///< nombre de la funcion nativa
     std::vector<std::unique_ptr<ParamDecl>> params;
+    /// Lo definido de ella, ya resuelto contra el objetivo activo.
+    ExternEffects effects;
     ExternFnDecl() : Node(NodeKind::ExternFnDecl) {}
 };
 

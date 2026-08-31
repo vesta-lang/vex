@@ -598,6 +598,25 @@ class Parser {
     ast::ParamDir parse_opt_param_dir_();
 
     /**
+     * @brief El statement actual empieza por una direccion (`in`/`out`/
+     *        `inout`) seguida de un tipo, o sea es una declaracion.
+     *
+     * Hace falta porque @c starts_type mira el token de AHORA y la marca va
+     * DELANTE del tipo -- el mismo caso que @c looks_like_register_storage.
+     */
+    bool looks_like_param_dir_storage() const noexcept;
+
+    /**
+     * @brief Lee los efectos definidos de una funcion externa (`@io`,
+     *        `@throws`, `@panics`, `@alloc`, ...), con `when:` opcional.
+     * @param out Donde se acumulan, ya RESUELTOS contra el objetivo activo.
+     *
+     * Se llama antes del `fn` de cada declaracion dentro de un bloque
+     * `extern`.  Si lo que hay no es un efecto conocido, no consume nada.
+     */
+    void parse_extern_effects_(ast::ExternEffects &out);
+
+    /**
      * @brief Decide si el `(` actual inicia un cast C-style `(T) expr`.
      *
      * El parser reconoce el patron `(<type>) <unary>` solo cuando el

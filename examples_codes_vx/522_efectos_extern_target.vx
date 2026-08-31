@@ -1,0 +1,79 @@
+namespace ejemplos.efectos_extern_target;
+
+// Los efectos de una funcion EXTERNA, y como se dice que dependen del objetivo.
+//
+// Una funcion externa es codigo que no esta en el programa: no hay cuerpo que
+// leer, asi que sin decir nada lo unico honesto es suponer que hace cualquier
+// cosa -- y eso tumba las cinco propiedades de efectos de todo el que la llame.
+// El `extern` es justo la frontera donde el lenguaje deja de ser nuestro, y por
+// eso es donde se DEFINEN.
+//
+// Definir no es lo mismo que contratar, aunque se escriban con las mismas
+// palabras.  En una funcion Vesta `@nopanic` es un CONTRATO: el compilador lo
+// comprueba contra el codigo.  Aqui no hay codigo, asi que es la palabra de
+// quien lo escribe.  Una palabra, dos sitios; cambia quien responde por ella.
+//
+// Y es una descripcion COMPLETA: lo que no se escribe, no ocurre.  De ahi que
+// el vocabulario tenga formas POSITIVAS (`@io`, `@throws`, `@panics`, `@alloc`)
+// que un contrato no necesita -- un contrato ACOTA y le bastan las negativas --.
+// Una descripcion tiene que poder decir que SI, o el silencio se leeria como
+// una demostracion.
+//
+// Lo que este ejemplo fija es el `when:`.  Repetir la declaracion con `@Target`
+// NO sirve para esto: alli lo que cambia es QUE SIMBOLO existe, y aqui la
+// funcion es una sola -- un nombre, una libreria -- y lo que varia es lo que
+// HACE segun donde corra.  Por eso la condicion viaja con el EFECTO y no con la
+// declaracion, igual que el `when:` de un contrato viaja con el contrato.
+//
+// Lo escrito sin `when:` vale en todos los objetivos; lo condicionado se SUMA
+// donde su ambito case.
+//
+// Esperado, y son las DOS mitades: en Windows imprime "Hola FFI!" y devuelve
+// 42; compilando el MISMO fichero para Linux, el `@nopanic` de `escribir` se
+// incumple (VXT004) porque alli la definicion dice que la nativa puede entrar
+// en panico.  Un fichero, una declaracion, y el veredicto cambia con el
+// objetivo -- que es justamente lo que no se puede conseguir repitiendo la
+// declaracion con `@Target`.
+
+extern "stdlib/native/io/vesta_io" {
+	// `in`: solo lee lo apuntado.  Va por argumento, no en una frase suelta,
+	// asi que se escribe una vez y sigue siendo precisa en cada sitio de
+	// llamada: el analisis resuelve "lo que apunta su primer argumento" con
+	// points-to alli donde se llama.
+	//
+	// `@io` en todos los objetivos.  El `@panics` solo donde su ambito case:
+	// es LA MISMA funcion, no otra.
+	@io
+	@panics(when: os:linux)
+	fn vio_print_buf(in u8* buf, u64 len) -> i64;
+}
+
+// Los contratos de aqui son lo que hace VISIBLE la diferencia.  En Windows lo
+// definido dice que la nativa no entra en panico, asi que `@nopanic` se
+// demuestra; para Linux dice que si puede, y entonces el mismo `@nopanic` se
+// incumple y el compilador lo dice.
+//
+// Sin la definicion no pasaria ninguna de las dos cosas: el cierre saldria del
+// programa por esa frontera y el contrato quedaria INDECIDIBLE -- ni demostrado
+// ni roto --, que es la situacion que se quiere evitar.
+@nothrow
+@nopanic
+i64 escribir(in u8* p, u64 n) {
+	return vio_print_buf(p, n);
+}
+
+i32 main() {
+	u8[10] msg;
+	msg[0] = 72_u8;  // H
+	msg[1] = 111_u8; // o
+	msg[2] = 108_u8; // l
+	msg[3] = 97_u8;  // a
+	msg[4] = 32_u8;  // ' '
+	msg[5] = 70_u8;  // F
+	msg[6] = 70_u8;  // F
+	msg[7] = 73_u8;  // I
+	msg[8] = 33_u8;  // !
+	msg[9] = 10_u8;  // \n
+	escribir(&msg[0], 10_u64);
+	return 42;
+}

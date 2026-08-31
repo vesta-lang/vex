@@ -1893,17 +1893,25 @@ class TypeChecker {
     Type type_from_node_impl(const ast::TypeNode *tn) const;
 
     /**
-     * @brief Comprueba que la direccion declarada de un parametro
-     *        (`in`/`out`/`inout`) tenga sentido con su tipo.
-     * @param p  El parametro, tal cual lo escribio quien lo declaro.
-     * @param pt Su tipo ya resuelto.
+     * @brief Comprueba que una direccion declarada (`in`/`out`/`inout`) tenga
+     *        sentido con el tipo de lo que la lleva.
+     * @param name Nombre de lo declarado, para el mensaje.
+     * @param dir  La marca escrita.
+     * @param loc  Donde se escribio.
+     * @param pt   Su tipo ya resuelto.
      *
-     * En UN solo sitio a proposito: la marca vale en los siete contextos donde
-     * se declaran parametros, asi que su comprobacion no puede vivir en uno de
-     * ellos -- si viviera, los otros seis aceptarian en silencio lo que este
+     * En UN solo sitio a proposito.  La marca vale en TODO lo que se declara
+     * -- parametros en sus siete contextos, variables locales y campos de
+     * struct, clase, enum u overlay --, asi que su comprobacion no puede vivir
+     * en uno de ellos: si viviera, los demas aceptarian en silencio lo que ese
      * rechaza, y ese desajuste no lo nota nadie hasta que alguien lo sufre.
+     *
+     * Por eso toma los datos sueltos y no un nodo concreto: lo que se
+     * comprueba es la marca contra el tipo, y eso no depende de en que clase
+     * de declaracion aparezca.
      */
-    void check_param_dir_(const ast::ParamDecl &p, const Type &pt);
+    void check_param_dir_(const std::string &name, ast::ParamDir dir,
+                          SourceLoc loc, Type &pt);
 
     /**
      * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.

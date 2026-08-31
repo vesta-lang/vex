@@ -1263,3 +1263,16 @@ es = "escritura a traves de '{0}', que lleva 'in': por un parametro 'in' la func
 [VXT008]
 en = "'{0}:{1}' is defined twice with different effects ({2}); continuing with the union of the worst of both, so some caller may fail to prove effects it could otherwise prove"
 es = "'{0}:{1}' esta definida dos veces con efectos distintos ({2}); se sigue con la union de lo peor de las dos, asi que algun llamante puede quedarse sin demostrar efectos que si podria"
+
+# --- `out` sobre un valor: parametro de SALIDA (VXT009) ---
+#
+# `out i32 x` tiene un significado obvio y util -- el de C# o Ada --: quien
+# llama cede un hueco y el llamado lo escribe.  Baja a lo que ya existe (un
+# `T*` con `&` en el sitio de llamada), pero eso es reescribir la llamada, y
+# hasta que ese paso este hecho es mejor decirlo que aceptarlo sin hacerlo:
+# aceptar la marca y no cumplirla es peor que rechazarla, porque el programa
+# parece decir algo que no ocurre.
+
+[VXT009]
+en = "'{0}' is marked '{1}' on a value ('{2}'): that is the output-parameter form -- the caller yields a slot and the callee writes it -- and it is not wired yet; write it as a pointer ('{2}*') meanwhile"
+es = "'{0}' lleva '{1}' sobre un valor ('{2}'): esa es la forma de parametro de SALIDA -- quien llama cede un hueco y el llamado lo escribe -- y todavia no esta conectada; escribelo como puntero ('{2}*') mientras tanto"

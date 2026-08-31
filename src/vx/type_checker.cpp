@@ -2761,23 +2761,55 @@ Type TypeChecker::enum_type_of(const EnumLayout &lay,
 // puntero de fuera y lo de dentro sigue siendo const.  Colapsar los dos ejes
 // haria de `out T const**` algo inexpresable sin ganar nada.
 // ---------------------------------------------------------------------------
-void TypeChecker::check_param_dir_(const ast::ParamDecl &p, const Type &pt) {
-    if (p.dir == ast::ParamDir::None) return;
-    const char *marca = p.dir == ast::ParamDir::In      ? "in"
-                        : p.dir == ast::ParamDir::Out   ? "out"
-                                                        : "inout";
-    // Lo que apunta el parametro.  Un array nativo tambien apunta: el callee
-    // recibe la direccion del primer elemento, no una copia del bloque.
+void TypeChecker::check_param_dir_(const std::string &name, ast::ParamDir dir,
+                                   SourceLoc loc, Type &pt) {
+    if (dir == ast::ParamDir::None) return;
+    const char *marca = dir == ast::ParamDir::In    ? "in"
+                        : dir == ast::ParamDir::Out ? "out"
+                                                    : "inout";
+    // Lo que apunta.  Un array nativo tambien apunta: lo que viaja es la
+    // direccion del primer elemento, no una copia del bloque.
     const bool apunta =
         (pt.kind == PrimitiveKind::PTR || pt.kind == PrimitiveKind::ARRAY);
+
     if (!apunta) {
-        diags_.diag(p.loc, DiagLevel::ERR, "VXT005",
-                    {p.name, marca, type_to_string(pt)});
+        // Sobre un VALOR la marca sigue significando algo, y cada palabra una
+        // cosa distinta, porque el mecanismo tiene que expresar lo que dice.
+        if (dir == ast::ParamDir::In) {
+            // `in` = copia de solo lectura.  Se cumple con el `const` que ya
+            // existe: escribir a un lvalue const ya es error, y es la MISMA
+            // regla en todo el lenguaje.  Un segundo camino de enforcement
+            // seria otra copia del criterio, con su forma de divergir.
+            pt.is_const = true;
+            return;
+        }
+        // `out`/`inout` sobre un valor es el parametro de SALIDA -- quien
+        // llama cede un hueco y el llamado lo escribe --.  Baja a lo que ya
+        // existe (un `T*` con `&` en el sitio de llamada), pero eso es
+        // reescribir la llamada y todavia no esta hecho.  Se dice: aceptar la
+        // marca sin cumplirla seria peor que rechazarla, porque el programa
+        // pareceria decir algo que no ocurre.
+        diags_.diag(loc, DiagLevel::ERR, "VXT009",
+                    {name, marca, type_to_string(pt)});
         return;
     }
-    if (p.dir == ast::ParamDir::In) return; // leer nunca contradice a `const`
+
+    if (dir == ast::ParamDir::In) {
+        // `in T*` = por ahi solo se lee.  Misma via: se marca const lo
+        // APUNTADO, no el puntero -- el puntero si se puede reasignar --.
+        //
+        // El pointee se COPIA antes de tocarlo: es un `shared_ptr` que puede
+        // estar compartido con otros tipos, y marcarlo en sitio le pondria
+        // const a quien no lo pidio.
+        if (pt.pointee) {
+            auto solo_lectura = std::make_shared<Type>(*pt.pointee);
+            solo_lectura->is_const = true;
+            pt.pointee = std::move(solo_lectura);
+        }
+        return; // leer nunca contradice a `const`
+    }
     if (pt.pointee && pt.pointee->is_const)
-        diags_.diag(p.loc, DiagLevel::ERR, "VXT006", {p.name, marca});
+        diags_.diag(loc, DiagLevel::ERR, "VXT006", {name, marca});
 }
 
 Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
@@ -5538,13 +5570,13 @@ void TypeChecker::collect_globals() {
             sig.return_type = type_from_node(efd->return_type.get());
             sig.param_types.reserve(efd->params.size());
             for (auto &p : efd->params) {
-                const Type pt = type_from_node(p->type.get());
+                Type pt = type_from_node(p->type.get());
                 // Un extern no tiene cuerpo, asi que no pasa por
                 // declare_params_in_scope y hay que preguntarlo aqui.  Y es
                 // justo donde MAS importa: aqui la marca no es un contrato que
                 // alguien vaya a comprobar contra el codigo, es lo unico que se
                 // sabe de esa funcion.
-                check_param_dir_(*p, pt);
+                check_param_dir_(p->name, p->dir, p->loc, pt);
                 sig.param_types.push_back(pt);
             }
             sig.extern_lib = efd->lib;
@@ -5874,7 +5906,7 @@ void TypeChecker::declare_params_in_scope(
         // los tres reciben el mismo criterio sin repetirlo tres veces.  Se
         // mira el tipo YA envuelto: en un variadico `in T... xs` el callee
         // recibe el puntero al array, que si apunta a algo.
-        check_param_dir_(*p, sp.type);
+        check_param_dir_(p->name, p->dir, p->loc, sp.type);
         if (!declare(p->name, sp))
             diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
     }
@@ -7604,6 +7636,11 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
     } else {
         s.type = type_from_node(vd->type.get());
     }
+    /* Y la direccion, si la lleva.  Por el MISMO sitio que la de un parametro:
+     * en una variable la marca ya no dice que hace una funcion -- no hay
+     * funcion --, pero el permiso es el mismo, y con dos criterios acabarian
+     * siendo dos cosas con el mismo nombre. */
+    check_param_dir_(vd->name, vd->dir, vd->loc, s.type);
     s.is_const = vd->is_const;
     // Captura del alias de reflexion (Class/Method/Field/Object) para
     // habilitar dispatch ergonomico `cls.getMethod(...)` etc.  El TypeNode
@@ -9394,7 +9431,7 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
         // El cuerpo de una lambda no pasa por declare_params_in_scope, asi que
         // sin esto seria el unico de los siete contextos donde la marca se
         // aceptaria sin mirarla.
-        check_param_dir_(*p, pt);
+        check_param_dir_(p->name, p->dir, p->loc, pt);
         param_types.push_back(pt);
     }
 

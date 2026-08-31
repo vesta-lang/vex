@@ -1,0 +1,120 @@
+namespace ejemplos.direccion_parametros;
+
+// `in` / `out` / `inout`: que hace una funcion con lo que un parametro APUNTA.
+//
+// La marca habla de lo APUNTADO y no del parametro, porque el parametro siempre
+// viaja por valor -- Vesta no tiene paso por referencia --, asi que decirla de
+// un `i32` no significaria nada.
+//
+// Es un eje DISTINTO de `const`, y los dos componen.  `const` es un permiso por
+// NIVEL sobre el tipo, igual que en C, donde `const T*` y `T* const` no son lo
+// mismo; la direccion habla del nivel EXTERNO y de lo que la funcion hace.  Por
+// eso `in T const*` es correcto -- y algo redundante -- y `out T const**`
+// tambien lo es: se escribe el puntero de fuera y lo de dentro sigue siendo
+// const.  Si se colapsaran en uno, el segundo no se podria ni escribir.
+//
+// Y vale en los SIETE contextos donde se declaran parametros, que es la
+// propiedad que el lenguaje ya promete de ellos: funcion suelta, metodo,
+// constructor, metodo de interfaz, funcion comptime, lambda con tipos y bloque
+// `extern`.  Aqui aparecen los siete, y el resultado dice cual contribuyo cada
+// uno para que "compila" no se confunda con "funciona".
+
+// 1. Funcion suelta: escribe por uno y lee por el otro.
+void copiar(out i64* dst, in i64* src) {
+	(*dst) = (*src);
+}
+
+// 2. Funcion comptime: la marca se DECLARA igual que en cualquier otra.
+//
+// No se la llama desde `main` a proposito.  Lo que se le puede PASAR a una
+// comptime tiene que ser constante al compilar, y la direccion de una variable
+// de ejecucion no lo es -- ese limite es del `comptime`, no de la marca --.  Lo
+// que este ejemplo fija aqui es que el contexto la ADMITE, que es lo que se
+// romperia si la gramatica de parametros no fuera la misma en los siete sitios.
+comptime i64 doble(in i64* p) {
+	return (*p) * 2_i64;
+}
+
+// `in T const*`: la direccion y el `const` conviven sin pisarse.
+i64 leer_const(in const i64* p) {
+	return (*p);
+}
+
+// `out T const**`: se escribe el nivel de FUERA; lo de dentro sigue sin
+// poder escribirse.  Es el caso que se perderia si los dos ejes fueran uno.
+void apuntar(out const i64** q, in const i64* a) {
+	(*q) = a;
+}
+
+interface Fuente {
+	// 3. Metodo de interfaz.
+	i64 leer(in i64* p);
+}
+
+class Origen : Fuente {
+	public i64 base;
+
+	// 4. Constructor.
+	public Origen(in i64* semilla) {
+		this.base = (*semilla);
+	}
+
+	// 5. Metodo.
+	@Override
+	public i64 leer(in i64* p) {
+		return (*p) + this.base;
+	}
+}
+
+// `out` NO es palabra reservada, y no puede serlo: aqui es un nombre de
+// parametro corriente, y en un bloque `asm` es una instruccion de x86.
+void poner(i64* out, i64 v) {
+	(*out) = v;
+}
+
+i32 main() {
+	i64 a = 7_i64;
+	i64 b = 0_i64;
+	copiar(&b, &a); // b = 7
+
+	i64 c = 3_i64;
+
+	const i64 fijo = 10_i64;
+	i64       e    = leer_const(&fijo); // 10
+
+	const i64* vista = null;
+	apuntar(&vista, &fijo);
+	i64 f = (*vista); // 10, por el puntero que se escribio
+
+	Origen o = new Origen(&b); // base = 7
+	i64    g = o.leer(&c);     // 3 + 7 = 10
+
+	// 6. Lambda con tipos: la misma gramatica que en todo lo demas.
+	fn(i64*) -> i64 lee = (in i64* p) => (*p);
+	i64             h   = lee(&a); // 7
+
+	i64 z = 0_i64;
+	poner(&z, 1_i64); // el `out` que es solo un nombre
+
+	// Y en una VARIABLE.  Aqui la marca ya no dice que hace una funcion -- no
+	// hay funcion --: queda el permiso, que es la otra mitad de lo que
+	// significa.  Por `solo_lee` se lee y nada mas; escribir por ahi es error
+	// de compilacion, sin haber tenido que pedir `const`.
+	//
+	// Y compone con lo demas, cada palabra diciendo lo suyo: `in` que solo se
+	// lee, `nonnull` que no puede ser nulo.
+	in i64*         solo_lee = &a;
+	in nonnull i64* firme    = &a;
+	// (*solo_lee) = 0;  <- error: por un `in` solo se lee
+
+	// Y con inferencia de tipo, que no cambia nada: lo que se infiere es el
+	// TIPO, y la marca no es parte del tipo sino de la declaracion.  El
+	// permiso sigue en pie -- escribir por `leido` tambien es error --, que es
+	// lo que hay que exigirle: una promesa que se pierde al no escribir el
+	// tipo no seria una promesa.
+	in auto leido = &a;
+
+	// 7 + 10 + 10 + 10 + 7 + 1 + 7 = 52.  Cada sumando viene de un contexto
+	// distinto, asi que el numero dice CUALES funcionaron, no solo que compilo.
+	return (i32)(b + e + f + g + h + z + (*leido));
+}

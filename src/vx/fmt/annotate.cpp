@@ -362,19 +362,38 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
 
         if (stmt_start && i >= decl_until) {
             size_t j = i;
-            while (j < pieces.size() && precedes_type(kind_of(pieces[j])))
-                ++j;
-            /* Un calificador que el lexer entrega como NOMBRE.
-             *
-             * `comptime` no tiene token propio, asi que `comptime char* cn` no
-             * se leia como declaracion.  Se reconoce por la FORMA y no por el
-             * nombre -- un nombre seguido de un TIPO solo puede ser un
-             * calificador --, que ademas cubre a los que vengan despues sin
-             * tener que enumerarlos. */
-            if (j + 1 < pieces.size() &&
-                kind_of(pieces[j]) == TokenKind::IDENTIFIER &&
-                is_type_keyword(kind_of(pieces[j + 1])))
-                ++j;
+            /* Los calificadores se saltan EN BUCLE porque se combinan: la
+             * direccion de un parametro puede llevar un `const` detras
+             * (`out const i64** q`), y saltando una sola vez el `const` se
+             * quedaba sin saltar -- con lo que `out` pasaba por ser el TIPO y
+             * las dos estrellas salian separadas, `i64 * *q`. */
+            for (;;) {
+                const size_t antes = j;
+                while (j < pieces.size() && precedes_type(kind_of(pieces[j])))
+                    ++j;
+                /* Un calificador que el lexer NO entrega como palabra propia
+                 * del sitio donde esta.
+                 *
+                 * `comptime` no tiene token propio, asi que `comptime char* cn`
+                 * no se leia como declaracion.  Y la direccion de un parametro
+                 * tiene el mismo problema por partida doble: `out`/`inout` son
+                 * nombres corrientes -- no pueden ser reservados, porque `out`
+                 * es una instruccion de x86 dentro de un bloque `asm` -- e `in`
+                 * es una palabra reservada, pero de OTRA cosa (el `for (x in
+                 * col)`).
+                 *
+                 * Se reconoce por la FORMA y no por el nombre: algo seguido de
+                 * un tipo, o de otro calificador, solo puede ser un
+                 * calificador.  Asi cubre tambien a los que vengan despues sin
+                 * tener que enumerarlos. */
+                if (j + 1 < pieces.size() &&
+                    (kind_of(pieces[j]) == TokenKind::IDENTIFIER ||
+                     kind_of(pieces[j]) == TokenKind::KW_IN) &&
+                    (is_type_keyword(kind_of(pieces[j + 1])) ||
+                     precedes_type(kind_of(pieces[j + 1]))))
+                    ++j;
+                if (j == antes) break;
+            }
 
             /* Una clase de almacenamiento con argumento -- `register("rsi")`,
              * y cualquiera que venga despues con la misma forma -- tambien va
