@@ -136,12 +136,23 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     try_lower_comptime_ctor_call(e, slay);
                 v_ct != ir::IR_NO_VALUE)
                 return v_ct;
-            bool has_ctor = false;
+            /* La ficha del constructor que se va a llamar, no solo si lo hay:
+             * de ella sale como viaja cada argumento -- un `out` va como la
+             * direccion del hueco --, igual que en cualquier otro metodo. */
+            const ClassMethodInfo *ctor_sig = nullptr;
             for (const auto &m : slay.methods)
-                if (m.is_constructor) {
-                    has_ctor = true;
+                if (m.is_constructor &&
+                    m.param_types.size() == e->args.size()) {
+                    ctor_sig = &m;
                     break;
                 }
+            bool has_ctor = ctor_sig != nullptr;
+            if (!has_ctor)
+                for (const auto &m : slay.methods)
+                    if (m.is_constructor) {
+                        has_ctor = true;
+                        break;
+                    }
             if (has_ctor) {
                 const uint64_t buf_bytes =
                     (static_cast<uint64_t>(slay.size_bytes) + 7ULL) & ~7ULL;
@@ -170,10 +181,15 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 std::vector<ir::IrValueId> operands;
                 operands.reserve(e->args.size() + 1);
                 operands.push_back(v_buf); // this = buffer a inicializar
-                for (auto &a : e->args) {
-                    const ir::IrValueId av = lower_expr(a.get());
-                    if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                    operands.push_back(av);
+                if (ctor_sig) {
+                    if (!lower_method_call_args(e->args, *ctor_sig, operands))
+                        return ir::IR_NO_VALUE;
+                } else {
+                    for (auto &a : e->args) {
+                        const ir::IrValueId av = lower_expr(a.get());
+                        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                        operands.push_back(av);
+                    }
                 }
                 ir::IrInstr ins{};
                 ins.op = ir::IrOp::CALL;
@@ -379,26 +395,8 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 return ir::IR_NO_VALUE;
             }
             std::vector<ir::IrValueId> args;
-            args.reserve(e->args.size());
-            // Promocion del literal a StringObject segun los tipos de parametro
-            // que declara el cfn (ver la misma logica en la via indirecta
-            // generica): sin ella, un literal en posicion `string` llegaba como
-            // puntero crudo a static_data y el callee leia basura.
-            for (size_t ai = 0; ai < e->args.size(); ++ai) {
-                ast::Expr *a = e->args[ai].get();
-                ir::IrValueId av;
-                if (a && a->kind == ast::NodeKind::StringLitExpr &&
-                    ai < id->result_type.fn_params.size() &&
-                    id->result_type.fn_params[ai].kind ==
-                        PrimitiveKind::STRING) {
-                    av = lower_string_literal_to_string_object(
-                        static_cast<ast::StringLitExpr *>(a));
-                } else {
-                    av = lower_expr(a);
-                }
-                if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                args.push_back(av);
-            }
+            if (!lower_indirect_call_args(e, id->result_type, args))
+                return ir::IR_NO_VALUE;
             const ir::IrType rt = ir_type_from_primitive(
                 id->result_type.pointee ? id->result_type.pointee->kind
                                         : PrimitiveKind::VOID);
@@ -457,9 +455,13 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         std::vector<ir::IrValueId> arg_ids;
         arg_ids.reserve(1 + e->args.size());
         arg_ids.push_back(env_addr);
-        for (auto &a : e->args) {
-            arg_ids.push_back(lower_expr(a.get()));
-        }
+        /* Y los argumentos como en cualquier otra llamada indirecta: lo que
+         * dice como viaja cada uno es el TIPO del que se llama.  Aqui habia
+         * una copia del bucle que no lo miraba, asi que un `out` viajaba por
+         * VALOR -- el llamado escribia a traves de un numero que no es una
+         * direccion, y el programa moria en 0x0 --. */
+        if (!lower_indirect_call_args(e, id->result_type, arg_ids))
+            return ir::IR_NO_VALUE;
         /* Si el ultimo parametro recoge los que sobren, se meten en un array y
          * se pasa su direccion y cuantos son.  El uno de mas es el entorno, que
          * va delante de todo por la convencion del opcode. */
@@ -998,21 +1000,21 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
         }
     }
     std::vector<ir::IrValueId> arg_vals;
-    arg_vals.reserve(e->args.size());
-    for (size_t ai = 0; ai < e->args.size(); ++ai) {
-        auto &a = e->args[ai];
-        const bool param_is_string =
-            ctor_sig && ai < ctor_sig->param_types.size() &&
-            ctor_sig->param_types[ai].kind == PrimitiveKind::STRING;
-        ir::IrValueId av;
-        if (param_is_string && a->kind == ast::NodeKind::StringLitExpr) {
-            auto *slit = static_cast<ast::StringLitExpr *>(a.get());
-            av = lower_string_literal_to_string_object(slit);
-        } else {
-            av = lower_expr(a.get());
+    if (ctor_sig) {
+        /* Un constructor es un metodo: a sus argumentos les pasa lo mismo, y
+         * lo contesta el mismo sitio.  Aqui habia una copia que solo sabia la
+         * mitad -- la promocion del literal --, asi que un `out` en un
+         * constructor viajaba por VALOR y el programa moria en 0x0. */
+        if (!lower_method_call_args(e->args, *ctor_sig, arg_vals))
+            return ir::IR_NO_VALUE;
+    } else {
+        // Sin ficha no hay nada que consultar: los argumentos van tal cual.
+        arg_vals.reserve(e->args.size());
+        for (auto &a : e->args) {
+            const ir::IrValueId av = lower_expr(a.get());
+            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            arg_vals.push_back(av);
         }
-        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-        arg_vals.push_back(av);
     }
 
     /* Si el constructor recoge los que sobren, no van uno por uno: se meten en
@@ -1112,7 +1114,13 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
      * no sabia ni lo uno ni lo otro. */
     std::vector<std::pair<std::string, ir::IrValueId>> param_bindings;
     param_bindings.reserve(e->params.size() + 1);
-    declare_params(child_fn, e->params, param_bindings);
+    /* Y los de SALIDA se marcan igual que en los otros tres caminos.  Aqui no
+     * hay `clear()` de por medio -- la lambda hereda el marcado de quien la
+     * contiene --, asi que va justo detras de declararlos. */
+    std::vector<ByRefParam> by_ref_params;
+    declare_params(child_fn, e->params, param_bindings, /*reserved_slots=*/0,
+                   &by_ref_params);
+    mark_by_ref_params_address_taken(by_ref_params);
 
     // AOT (native_poo_) con capturas: el env se pasa como PARAMETRO OCULTO
     // FINAL (convencion C `void* userdata`), no por R14.  Asi el helper usa
@@ -1294,6 +1302,7 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     }
 
     pop_scope();
+    check_by_ref_params_written(by_ref_params, child_fn);
     // Encolar el helper para volcado al modulo al final de run().
     pending_spawn_helpers_.push_back(std::move(child_fn));
 
@@ -1747,6 +1756,78 @@ ir::IrValueId Lowering::lower_addr_of_lvalue(ast::Expr *lvalue) {
     const ir::IrValueId v = lower_unary(&envoltorio);
     (void)envoltorio.operand.release();
     return v;
+}
+
+/**
+ * @copydoc vx::Lowering::lower_method_call_args
+ */
+bool Lowering::lower_method_call_args(
+    const std::vector<std::unique_ptr<ast::Expr>> &args,
+    const ClassMethodInfo &mtd, std::vector<ir::IrValueId> &out) {
+    out.reserve(out.size() + args.size());
+    for (size_t ai = 0; ai < args.size(); ++ai) {
+        const auto &a = args[ai];
+        if (!a) return false;
+        ir::IrValueId av;
+        /* Parametro de SALIDA por referencia: lo que viaja es la DIRECCION del
+         * hueco.  Un metodo no es un caso aparte -- lo mismo que en una
+         * funcion suelta --, y sin esto el argumento viajaba por VALOR donde
+         * el llamado espera una direccion: escribia a traves de un numero que
+         * no es una direccion, y el resultado no volvia. */
+        if (ai < 64 && (mtd.param_by_ref_mask & (1ull << ai)) != 0) {
+            av = lower_addr_of_lvalue(a.get());
+        } else if (ai < mtd.param_types.size() &&
+                   mtd.param_types[ai].kind == PrimitiveKind::STRING &&
+                   a->kind == ast::NodeKind::StringLitExpr) {
+            /* Promocion del literal a StringObject cuando el parametro espera
+             * `string`.  Sin ella se pasaba la direccion cruda del literal
+             * como un manejador, y `s.cstr()` dentro del metodo leia basura.
+             * Vale para literales puros y para los interpolados: el helper
+             * construye el StringObject correcto en los dos casos. */
+            av = lower_string_literal_to_string_object(
+                static_cast<ast::StringLitExpr *>(a.get()));
+        } else {
+            av = lower_expr(a.get());
+        }
+        if (av == ir::IR_NO_VALUE) return false;
+        out.push_back(av);
+    }
+    return true;
+}
+
+/**
+ * @copydoc vx::Lowering::lower_indirect_call_args
+ */
+bool Lowering::lower_indirect_call_args(const ast::CallExpr *e,
+                                        const Type &fnty,
+                                        std::vector<ir::IrValueId> &out) {
+    out.reserve(out.size() + e->args.size()); // puede venir con algo ya
+    for (size_t ai = 0; ai < e->args.size(); ++ai) {
+        ast::Expr *a = e->args[ai].get();
+        ir::IrValueId av;
+        /* Parametro de SALIDA por referencia, igual que en la llamada directa
+         * -- lo que viaja es la direccion del hueco --, solo que aqui no hay
+         * firma a la que preguntar: lo dice el TIPO del puntero, que es lo
+         * unico que tiene una llamada indirecta. */
+        if (ai < 64 && (fnty.fn_param_by_ref_mask & (1ull << ai)) != 0) {
+            av = lower_addr_of_lvalue(a);
+        } else if (a && a->kind == ast::NodeKind::StringLitExpr &&
+                   ai < fnty.fn_params.size() &&
+                   fnty.fn_params[ai].kind == PrimitiveKind::STRING) {
+            /* Promocion del literal a StringObject segun lo que DECLARA el
+             * cfn.  Una llamada directa mira la firma; aqui el tipo dice lo
+             * mismo.  Sin esto, un literal en posicion `string` llegaba como
+             * puntero crudo a static_data y el callee leia basura
+             * (str_length daba 0). */
+            av = lower_string_literal_to_string_object(
+                static_cast<ast::StringLitExpr *>(a));
+        } else {
+            av = lower_expr(a);
+        }
+        if (av == ir::IR_NO_VALUE) return false;
+        out.push_back(av);
+    }
+    return true;
 }
 
 /**
@@ -2483,29 +2564,8 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
     }
     const ir::IrValueId fnp = lower_expr(e->callee.get());
     std::vector<ir::IrValueId> args;
-    args.reserve(e->args.size());
-    // Promocion del literal a StringObject usando los tipos de parametro
-    // que DECLARA el cfn.  En una llamada directa el lowering conoce la
-    // firma del callee y la hace; por la via indirecta no se consultaba, y
-    // un literal en posicion `string` llegaba como puntero crudo a
-    // static_data -> el callee lo leia como StringObject y sacaba basura
-    // (str_length daba 0).  Mismo criterio que el resto de sitios que
-    // conocen el tipo esperado.
-    const Type &fnty = e->callee->result_type;
-    for (size_t ai = 0; ai < e->args.size(); ++ai) {
-        ast::Expr *a = e->args[ai].get();
-        ir::IrValueId av;
-        if (a && a->kind == ast::NodeKind::StringLitExpr &&
-            ai < fnty.fn_params.size() &&
-            fnty.fn_params[ai].kind == PrimitiveKind::STRING) {
-            av = lower_string_literal_to_string_object(
-                static_cast<ast::StringLitExpr *>(a));
-        } else {
-            av = lower_expr(a);
-        }
-        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-        args.push_back(av);
-    }
+    if (!lower_indirect_call_args(e, e->callee->result_type, args))
+        return ir::IR_NO_VALUE;
     const ir::IrType rt = ir_type_from_primitive(e->result_type.kind);
     const ir::IrValueId dst = (e->result_type.kind == PrimitiveKind::VOID)
                                   ? ir::IR_NO_VALUE

@@ -109,31 +109,6 @@ enum class SymbolKind : uint8_t {
 };
 
 /**
- * @brief Un `out T x` / `inout T x` que viaja POR REFERENCIA.
- * @param d Direccion declarada.
- * @param t Tipo escrito por el usuario.
- * @return true si es un parametro de SALIDA por referencia.
- *
- * Es cierto cuando la marca promete ESCRIBIR y lo declarado no apunta a nada:
- * escribir una copia no se ve desde fuera, asi que la unica lectura util es la
- * de C# o Ada -- quien llama cede un hueco y el llamado lo escribe --, y para
- * eso lo que viaja es la direccion del hueco.
- *
- * Sobre algo que YA apunta (`out T* p`) no hace falta: la direccion la esta
- * dando el usuario.
- *
- * Vive en UN sitio porque lo preguntan TRES: la firma -- que convierte el tipo
- * a puntero --, el cuerpo -- que lo ve como una `T` y accede por la direccion
- * -- y el sitio de llamada, que toma la direccion del argumento.  Si cada uno
- * lo decidiera por su cuenta, bastaria que dos no coincidieran para pasar una
- * cosa y leer otra, y eso no da un error: da OTRO VALOR.
- */
-inline bool is_by_ref_out_param(ast::ParamDir d, const Type &t) noexcept {
-    if (d != ast::ParamDir::Out && d != ast::ParamDir::InOut) return false;
-    return t.kind != PrimitiveKind::PTR && t.kind != PrimitiveKind::ARRAY;
-}
-
-/**
  * @struct FunctionSig
  * @brief Firma de una funcion: tipo de retorno + tipos de parametros.
  */
@@ -154,7 +129,7 @@ struct FunctionSig {
     /// `T*`, asi que el caller tiene que tomar la direccion del argumento --
     /// y para saberlo tiene que poder preguntarlo desde donde llama, que
     /// muchas veces es otro fichero.
-    std::vector<ast::ParamDir> param_dirs;
+    std::vector<ParamDir> param_dirs;
     /// Que parametros CONVIRTIO la firma a puntero por ser de salida por
     /// referencia: bit i = el i-esimo.
     ///
@@ -299,7 +274,7 @@ struct ClassMethodInfo {
     std::vector<Type> param_types;
     /// Direccion por parametro, alineada con @c param_types.  Misma razon que
     /// en @c FunctionSig::param_dirs: la necesita quien LLAMA.
-    std::vector<ast::ParamDir> param_dirs;
+    std::vector<ParamDir> param_dirs;
     /// Ver @c FunctionSig::param_by_ref_mask.
     uint64_t param_by_ref_mask = 0;
     /**
@@ -1850,10 +1825,26 @@ class TypeChecker {
 
     bool arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta);
 
+    /**
+     * @brief Comprueba un argumento contra su parametro.
+     * @param arg El argumento escrito.
+     * @param tp El tipo del parametro, tal y como quedo en la firma.
+     * @param idx Su posicion, para el mensaje.
+     * @param what Que se esta llamando, para el mensaje.
+     * @param dir La direccion declarada.
+     * @param by_ref Si el parametro viaja como la direccion de un hueco.
+     * @param known Su tipo, si ya se calculo; nulo para calcularlo aqui.
+     *
+     * @p known existe porque elegir una SOBRECARGA obliga a mirar los tipos de
+     * los argumentos antes de saber contra quien se comparan.  Volver a
+     * comprobarlos aqui repetiria los avisos del propio argumento, asi que se
+     * pasan hechos -- y no una segunda version de esta comprobacion, que es lo
+     * que habia y se quedo sin la mitad de la regla.
+     */
     void check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
                         const std::string &what = std::string(),
-                        ast::ParamDir dir = ast::ParamDir::None,
-                        bool by_ref = false);
+                        ParamDir dir = ParamDir::None, bool by_ref = false,
+                        const Type *known = nullptr);
 
     void check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
                            const std::string &name);
@@ -1994,9 +1985,25 @@ class TypeChecker {
         Storage,
     };
 
-    void check_param_dir_(const std::string &name, ast::ParamDir dir,
-                          SourceLoc loc, Type &pt,
-                          DirSite site = DirSite::Storage);
+    void check_param_dir_(const std::string &name, ParamDir dir, SourceLoc loc,
+                          Type &pt, DirSite site = DirSite::Storage) const;
+
+    /**
+     * @brief Apunta la direccion de un parametro EN UNA FIRMA y convierte.
+     * @param p La declaracion del parametro.
+     * @param pt Su tipo; sale convertido a `T*` si viaja por referencia.
+     * @param mask Donde se apunta el bit.
+     * @param idx Su posicion.
+     *
+     * Los CUATRO sitios que construyen una firma -- funcion suelta, `extern`,
+     * metodo y lambda -- tienen que hacer lo mismo y en el mismo ORDEN:
+     * preguntar ANTES de convertir, y apuntarlo.  Despues no se puede: un
+     * `out T*` escrito por el usuario y un `out T` convertido son
+     * indistinguibles, y deducirlo trataba al primero como al segundo -- le
+     * pedia la direccion de una direccion --.
+     */
+    void note_param_dir_(const ast::ParamDecl &p, Type &pt, uint64_t &mask,
+                         size_t idx) const;
 
     /* Que un parametro de SALIDA se escriba lo comprueba el hecho
      * @c analysis::DefiniteStoreFacts, sobre el IR y en TODOS los caminos.
@@ -2026,10 +2033,9 @@ class TypeChecker {
      * ya existe.
      */
     void check_call_arg_borrows_(const ast::CallExpr *e,
-                                 const std::vector<ast::ParamDir> &dirs,
+                                 const std::vector<ParamDir> &dirs,
                                  const std::vector<Type> &ptypes,
-                                 uint64_t by_ref,
-                                 const std::string &callee);
+                                 uint64_t by_ref, const std::string &callee);
 
     /**
      * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.

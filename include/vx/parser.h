@@ -595,7 +595,7 @@ class Parser {
      * corrientes en cualquier otra posicion, incluido el `out` de x86 dentro
      * de un bloque @c asm.
      */
-    ast::ParamDir parse_opt_param_dir_();
+    ParamDir parse_opt_param_dir_();
 
     /**
      * @brief El statement actual empieza por una direccion (`in`/`out`/

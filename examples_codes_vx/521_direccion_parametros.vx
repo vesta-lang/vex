@@ -90,8 +90,8 @@ i32 main() {
 	i64    g = o.leer(&c);     // 3 + 7 = 10
 
 	// 6. Lambda con tipos: la misma gramatica que en todo lo demas.
-	fn(i64*) -> i64 lee = (in i64* p) => (*p);
-	i64             h   = lee(&a); // 7
+	fn(in i64*) -> i64 lee = (in i64* p) => (*p);
+	i64                h   = lee(&a); // 7
 
 	i64 z = 0_i64;
 	poner(&z, 1_i64); // el `out` que es solo un nombre

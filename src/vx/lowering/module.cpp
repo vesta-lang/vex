@@ -310,14 +310,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 ir::IrNativeEffects fx;
                 for (size_t pi = 0; pi < efd->params.size() && pi < 32; ++pi) {
                     const ast::ParamDecl *p = efd->params[pi].get();
-                    if (!p || p->dir == ast::ParamDir::None) continue;
+                    if (!p || p->dir == ParamDir::None) continue;
                     fx.declared = true;
                     const uint32_t bit = 1u << (uint32_t)pi;
-                    if (p->dir == ast::ParamDir::In ||
-                        p->dir == ast::ParamDir::InOut)
+                    if (p->dir == ParamDir::In || p->dir == ParamDir::InOut)
                         fx.reads_pointee |= bit;
-                    if (p->dir == ast::ParamDir::Out ||
-                        p->dir == ast::ParamDir::InOut)
+                    if (p->dir == ParamDir::Out || p->dir == ParamDir::InOut)
                         fx.writes_pointee |= bit;
                 }
                 // Y los ejes que hablan de la funcion entera, ya resueltos por
@@ -1092,12 +1090,6 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      *
      * Se guardan y se re-insertan mas abajo por la misma razon que los de ABI
      * custom: `address_taken_locals_` se limpia despues de este punto. */
-    struct ByRefParam {
-        std::string name;
-        ir::IrValueId value;
-        ast::ParamDir dir;
-        SourceLoc loc;
-    };
     std::vector<ByRefParam> by_ref_params;
     // Hidden retbuf param para sret (si aplica): primero en la lista.
     ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
@@ -1119,7 +1111,8 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         push_abi(""); // retbuf SRET: ABI estandar (primer arg-reg)
     }
     for (const DeclaredParam &d :
-         declare_params(fn, fd->params, param_bindings)) {
+         declare_params(fn, fd->params, param_bindings,
+                        /*reserved_slots=*/0, &by_ref_params)) {
         /* El registro que cada parametro pidio, en el orden en que quedaron.
          * El contador oculto de un variadico no pide ninguno: va por donde
          * diga la convencion. */
@@ -1127,15 +1120,6 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         if (d.decl && !d.decl->abi_reg.empty())
             custom_abi_params.push_back(
                 {d.decl->name, d.value, d.decl->abi_reg, d.type});
-        // El tipo se resuelve del NODO -- lo que el usuario escribio -- y se
-        // pregunta al mismo predicado que uso la firma: si el bajado decidiera
-        // por su cuenta, bastaria que discrepara para pasar una direccion y
-        // leerla como valor, y eso no da un error sino OTRO VALOR.
-        if (d.decl && d.decl->dir != ast::ParamDir::None && d.decl->type &&
-            is_by_ref_out_param(d.decl->dir,
-                                tc_.resolve_type_node(d.decl->type.get())))
-            by_ref_params.push_back(
-                {d.decl->name, d.value, d.decl->dir, d.decl->loc});
     }
 
     // Bloque entry.
@@ -1260,8 +1244,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Y los de salida por referencia, por lo mismo: el clear() de arriba borra
     // el marcado, y sin el `read_local` devolveria la DIRECCION en vez de leer
     // el hueco -- el cuerpo veria un puntero donde escribio una `T`.
-    for (const ByRefParam &p : by_ref_params)
-        address_taken_locals_.insert(p.name);
+    mark_by_ref_params_address_taken(by_ref_params);
     // fix9 - eliminados los pre-pases scan_try / scan_loops.
     // Las flags `current_fn_has_try_` y `current_fn_has_loops_` solo
     // se usaban para decidir si emitir el cleanup RAW_ASM de fix
@@ -1451,17 +1434,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * rellenarlo -- se calla: acusar a codigo correcto es peor que no avisar.
      *
      * `inout` no entra: alli ya llega un valor y no cambiarlo es legitimo. */
-    for (const ByRefParam &p : by_ref_params) {
-        if (p.dir != ast::ParamDir::Out) continue;
-        const analysis::DefiniteStoreFacts d =
-            analysis::compute_definite_store(fn, p.value);
-        if (!d.proven_missing()) continue;
-        SourceLoc donde = p.loc;
-        // La linea del retorno por el que se sale sin escribir: es donde el
-        // programa incumple, y es la prueba del veredicto.
-        if (d.witness_line != 0) donde.line = d.witness_line;
-        diags_.diag(donde, DiagLevel::ERR, "VXT012", {p.name});
-    }
+    check_by_ref_params_written(by_ref_params, fn);
     out.add_function(std::move(fn));
     fn_ = nullptr;
 }

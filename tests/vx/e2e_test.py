@@ -4772,6 +4772,60 @@ i32 main() {
 """, "VXT011",
      "el argumento de un `out` tiene que ser un SITIO donde escribir",
      "pasar un literal a un `out` debio fallar"),
+    ("dir_neg_tipo_marca_perdida", """void escribe(out i64 r) {
+    r = 7;
+}
+i32 main() {
+    cfn(i64*) -> void perdida = &escribe;
+    return 0;
+}
+""", "incompatible con tipo declarado",
+     "la marca no se cae al guardar la funcion en una variable",
+     "guardar un `out` en un cfn sin marca debio fallar"),
+    ("dir_neg_tipo_marca_inventada", """void por_puntero(i64* p) {
+    *p = 9;
+}
+i32 main() {
+    cfn(out i64) -> void inventada = &por_puntero;
+    return 0;
+}
+""", "incompatible con tipo declarado",
+     "el tipo no puede prometer lo que la funcion no dice",
+     "prometer `out` sobre una funcion sin marca debio fallar"),
+    ("dir_neg_out_ctor_no_lvalue", """class Kaja {
+    public i64 v;
+    public Kaja(i64 x, out i64 eco) { this.v = x; eco = x; }
+}
+i32 main() {
+    Kaja k = new Kaja(6, 3);
+    return 0;
+}
+""", "VXT011",
+     "un constructor exige lo mismo que cualquier otra llamada",
+     "pasar un literal al `out` de un constructor debio fallar"),
+    ("dir_neg_tipo_borrow_indirecto", """void dos(inout i64 a, inout i64 b) {
+    a = a + 1;
+    b = b + 1;
+}
+i32 main() {
+    cfn(inout i64, inout i64) -> void f = &dos;
+    i64 x = 1;
+    f(x, x);
+    return (i32) x;
+}
+""", "VX2026",
+     "las reglas de prestamo valen tambien por PUNTERO a funcion",
+     "dos `inout` al mismo dueno por puntero debieron fallar"),
+    ("dir_neg_tipo_otra_marca", """void escribe(out i64 r) {
+    r = 7;
+}
+i32 main() {
+    cfn(inout i64) -> void otra = &escribe;
+    return 0;
+}
+""", "incompatible con tipo declarado",
+     "`inout` promete mas que `out`: no son el mismo tipo",
+     "cambiar `out` por `inout` en el tipo debio fallar"),
 ]
 
 
@@ -5073,6 +5127,31 @@ i32 main() {
                      % (modo, got), log)
             return
         ctx.ok("out en todos los caminos (-m %s) -> 5" % modo)
+
+
+
+# ---------------------------------------------------------------------------
+# La direccion FORMA PARTE del tipo de una funcion.
+#
+# El positivo enseña las dos direcciones del cast; el negativo fija que sin el
+# cast la marca NO se cae en silencio, que es lo unico que hace que el tipo
+# sirva de algo.
+# ---------------------------------------------------------------------------
+modes3_case("direccion_en_el_tipo",
+            "in/out/inout dentro del tipo de un puntero a funcion",
+            "527_direccion_en_el_tipo.vx", 45)
+
+fails_case("direccion_tipo_err",
+           "perder o inventar la marca en el tipo es un ERROR",
+           "528_direccion_tipo_err.vx", "incompatible con tipo declarado")
+
+# Las OCHO formas de llamar bajan por caminos distintos, y cuatro de ellos no
+# tomaban la direccion: el metodo de un struct, una lambda en una variable, un
+# metodo ligado y un constructor.  Ninguno daba un error -- daban CERO --, asi
+# que lo que hay que fijar es que las ocho coincidan.
+modes3_case("out_por_todos_los_caminos",
+            "un `out` cumple lo mismo se llame como se llame (8 caminos)",
+            "529_out_por_todos_los_caminos.vx", 21)
 
 
 if __name__ == "__main__":

@@ -2776,7 +2776,8 @@ static std::string borrowed_root_name(const ast::Expr *a) {
         return static_cast<const ast::IdentExpr *>(a)->name;
     if (a->kind == ast::NodeKind::UnaryExpr) {
         const auto *u = static_cast<const ast::UnaryExpr *>(a);
-        if (u->op == ast::UnOp::AddrOf) return borrowed_root_name(u->operand.get());
+        if (u->op == ast::UnOp::AddrOf)
+            return borrowed_root_name(u->operand.get());
         return std::string();
     }
     if (a->kind == ast::NodeKind::FieldAccessExpr)
@@ -2789,7 +2790,7 @@ static std::string borrowed_root_name(const ast::Expr *a) {
 }
 
 void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
-                                          const std::vector<ast::ParamDir> &dirs,
+                                          const std::vector<ParamDir> &dirs,
                                           const std::vector<Type> &ptypes,
                                           uint64_t by_ref,
                                           const std::string &callee) {
@@ -2799,15 +2800,15 @@ void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
     std::vector<std::string> tomados;
     const size_t n = std::min(e->args.size(), dirs.size());
     for (size_t i = 0; i < n; ++i) {
-        const ast::ParamDir d = dirs[i];
-        if (d == ast::ParamDir::None) continue;
+        const ParamDir d = dirs[i];
+        if (d == ParamDir::None) continue;
         // La marca tiene que hablar de MEMORIA prestada: o el parametro apunta
         // a algo, o es de salida por referencia (y entonces lo que viaja es la
         // direccion de un hueco del llamante).
         const bool por_ref = (i < 64) && ((by_ref & (1ull << i)) != 0);
-        const bool apunta = i < ptypes.size() &&
-                            (ptypes[i].kind == PrimitiveKind::PTR ||
-                             ptypes[i].kind == PrimitiveKind::ARRAY);
+        const bool apunta =
+            i < ptypes.size() && (ptypes[i].kind == PrimitiveKind::PTR ||
+                                  ptypes[i].kind == PrimitiveKind::ARRAY);
         if (!por_ref && !apunta) continue;
 
         const std::string owner = borrowed_root_name(e->args[i].get());
@@ -2818,7 +2819,7 @@ void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
          * al mismo checker: asi `f(x, x)` con dos `inout` sale como lo que es
          * -- dos prestamos exclusivos del mismo dueno -- sin que nadie tenga
          * que escribir una segunda regla de aliasing. */
-        const bool is_mut = (d != ast::ParamDir::In);
+        const bool is_mut = (d != ParamDir::In);
         /* Como se cita al argumento en la nota del prestamo.  Sale del
          * catalogo y no de aqui: es texto que ve el usuario -- entra DENTRO de
          * un mensaje traducido --, asi que fabricarlo en un idioma fijo dejaba
@@ -2834,10 +2835,20 @@ void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
         borrow_checker_.on_borrow_drop(b, e->loc);
 }
 
-void TypeChecker::check_param_dir_(const std::string &name, ast::ParamDir dir,
-                                   SourceLoc loc, Type &pt, DirSite site) {
-    if (dir == ast::ParamDir::None) return;
-    const char *marca = ast::param_dir_name(dir);
+/**
+ * @copydoc vx::TypeChecker::note_param_dir_
+ */
+void TypeChecker::note_param_dir_(const ast::ParamDecl &p, Type &pt,
+                                  uint64_t &mask, size_t idx) const {
+    if (is_by_ref_out_param(p.dir, pt) && idx < 64) mask |= 1ull << idx;
+    check_param_dir_(p.name, p.dir, p.loc, pt, DirSite::Signature);
+}
+
+void TypeChecker::check_param_dir_(const std::string &name, ParamDir dir,
+                                   SourceLoc loc, Type &pt,
+                                   DirSite site) const {
+    if (dir == ParamDir::None) return;
+    const char *marca = param_dir_name(dir);
     // Lo que apunta.  Un array nativo tambien apunta: lo que viaja es la
     // direccion del primer elemento, no una copia del bloque.
     const bool apunta =
@@ -2846,7 +2857,7 @@ void TypeChecker::check_param_dir_(const std::string &name, ast::ParamDir dir,
     if (!apunta) {
         // Sobre un VALOR la marca sigue significando algo, y cada palabra una
         // cosa distinta, porque el mecanismo tiene que expresar lo que dice.
-        if (dir == ast::ParamDir::In) {
+        if (dir == ParamDir::In) {
             // `in` = copia de solo lectura.  Se cumple con el `const` que ya
             // existe: escribir a un lvalue const ya es error, y es la MISMA
             // regla en todo el lenguaje.  Un segundo camino de enforcement
@@ -2872,7 +2883,7 @@ void TypeChecker::check_param_dir_(const std::string &name, ast::ParamDir dir,
         return;
     }
 
-    if (dir == ast::ParamDir::In) {
+    if (dir == ParamDir::In) {
         // `in T*` = por ahi solo se lee.  Misma via: se marca const lo
         // APUNTADO, no el puntero -- el puntero si se puede reasignar --.
         //
@@ -3198,6 +3209,7 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
         const auto *fn = static_cast<const ast::FunctionTypeNode *>(tn);
         std::vector<Type> params;
         params.reserve(fn->param_types.size());
+        uint64_t by_ref_mask = 0;
         for (size_t i = 0; i < fn->param_types.size(); ++i) {
             Type pt = type_from_node(fn->param_types[i].get());
             /* `fn(T...) -> R`: dentro del cuerpo el ultimo es la DIRECCION del
@@ -3205,6 +3217,21 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
              * mismo aqui que en una declaracion de parametros. */
             if (fn->is_variadic && i + 1 == fn->param_types.size())
                 pt = Type::make_ptr(pt);
+            /* La marca hace en un TIPO lo mismo que en una declaracion -- `in
+             * T*` marca const lo apuntado, `out T` viaja como la direccion del
+             * hueco --, asi que lo decide EL MISMO productor.  Escribir aqui
+             * una segunda version bastaria para que un dia dijeran cosas
+             * distintas, y eso no da un error: da otro tipo.
+             *
+             * Sin esto el tipo escrito no casaba con el que sale de
+             * `&funcion`, que ya viene convertido, y la marca no servia. */
+            if (i < fn->param_dirs.size() &&
+                fn->param_dirs[i] != ParamDir::None) {
+                if (is_by_ref_out_param(fn->param_dirs[i], pt) && i < 64)
+                    by_ref_mask |= 1ull << i;
+                check_param_dir_(std::string(), fn->param_dirs[i], fn->loc, pt,
+                                 DirSite::Signature);
+            }
             params.push_back(std::move(pt));
         }
         Type ret = type_from_node(fn->return_type.get());
@@ -3221,6 +3248,8 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                                           "\") en el tipo funcion: '" + r +
                                           "' no es un registro reconocido");
         ft.fn_param_abi_regs = fn->param_abi_regs;
+        ft.fn_param_dirs = fn->param_dirs;
+        ft.fn_param_by_ref_mask = by_ref_mask;
         return ft;
     }
     return Type{};
@@ -5547,14 +5576,8 @@ void TypeChecker::collect_globals() {
                 // por referencia se convierte en `T*`: es la direccion lo que
                 // viaja.  El cuerpo lo sigue viendo como una `T`
                 // (declare_params_in_scope pregunta lo mismo con ParamBody).
-                //
-                // Se pregunta ANTES de convertir y se APUNTA: despues, un
-                // `out T*` escrito por el usuario y este son indistinguibles.
-                if (is_by_ref_out_param(p->dir, pt) &&
-                    sig.param_types.size() < 64)
-                    sig.param_by_ref_mask |= 1ull << sig.param_types.size();
-                check_param_dir_(p->name, p->dir, p->loc, pt,
-                                 DirSite::Signature);
+                note_param_dir_(*p, pt, sig.param_by_ref_mask,
+                                sig.param_types.size());
                 // ABI custom (register("rXX") en el param): validar que el
                 // registro sea reconocido -> error temprano y claro.
                 if (!p->abi_reg.empty() &&
@@ -5675,11 +5698,8 @@ void TypeChecker::collect_globals() {
                 // justo donde MAS importa: aqui la marca no es un contrato que
                 // alguien vaya a comprobar contra el codigo, es lo unico que se
                 // sabe de esa funcion.
-                if (is_by_ref_out_param(p->dir, pt) &&
-                    sig.param_types.size() < 64)
-                    sig.param_by_ref_mask |= 1ull << sig.param_types.size();
-                check_param_dir_(p->name, p->dir, p->loc, pt,
-                                 DirSite::Signature);
+                note_param_dir_(*p, pt, sig.param_by_ref_mask,
+                                sig.param_types.size());
                 sig.param_types.push_back(pt);
                 sig.param_dirs.push_back(p->dir);
             }
@@ -5872,9 +5892,7 @@ void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
         Type pt = type_from_node(p->type.get());
         // Un metodo no es un caso aparte: misma pregunta y mismo sitio que en
         // una funcion suelta, incluido apuntar cual se convirtio.
-        if (is_by_ref_out_param(p->dir, pt) && mi.param_types.size() < 64)
-            mi.param_by_ref_mask |= 1ull << mi.param_types.size();
-        check_param_dir_(p->name, p->dir, p->loc, pt, DirSite::Signature);
+        note_param_dir_(*p, pt, mi.param_by_ref_mask, mi.param_types.size());
         if (p->is_variadic) {
             /* El que recoge los que sobren tiene que ser el ULTIMO: si no, no
              * habria forma de saber donde acaban los suyos y empiezan los del
@@ -5985,8 +6003,8 @@ void TypeChecker::check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
             continue;
         }
         const Type &tp = (i >= fixed) ? mi.variadic_elem : mi.param_types[i];
-        const ast::ParamDir d =
-            (i < mi.param_dirs.size()) ? mi.param_dirs[i] : ast::ParamDir::None;
+        const ParamDir d =
+            (i < mi.param_dirs.size()) ? mi.param_dirs[i] : ParamDir::None;
         const bool by_ref = i < 64 && (mi.param_by_ref_mask & (1ull << i)) != 0;
         check_call_arg(e->args[i].get(), tp, i, "el metodo '" + name + "'", d,
                        by_ref);
@@ -9337,15 +9355,22 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             /* Los tipos ya se calcularon arriba para elegir el constructor,
              * asi que aqui se aplica la REGLA sin volver a comprobar: hacerlo
              * dos veces repetiria los avisos del propio argumento. */
-            Type targ = ta;
-            if (!arg_fits_param(e->args[i].get(), tp, targ)) {
-                diags_.error(e->args[i]->loc,
-                             std::string("argumento ") + std::to_string(i + 1) +
-                                 " del constructor '" + e->class_name +
-                                 "': tipo (" + type_to_string(targ) +
-                                 ") incompatible con parametro (" +
-                                 type_to_string(tp) + ")");
-            }
+            /* La MISMA comprobacion que en cualquier otra llamada, incluida la
+             * de un parametro de SALIDA -- que se compara contra lo apuntado
+             * y exige un sitio donde escribir --.  Un constructor es uno de
+             * los siete contextos donde la marca se declara, y aqui habia una
+             * segunda version que no la conocia: se aceptaba declararla y
+             * luego no habia forma de llamar al constructor.
+             *
+             * El tipo va HECHO porque elegir la sobrecarga ya obligo a
+             * calcularlo, y hacerlo dos veces repetiria los avisos del propio
+             * argumento. */
+            check_call_arg(
+                e->args[i].get(), tp, i,
+                "el constructor '" + e->class_name + "'",
+                i < ctor->param_dirs.size() ? ctor->param_dirs[i]
+                                            : ParamDir::None,
+                i < 64 && (ctor->param_by_ref_mask & (1ull << i)) != 0, &ta);
         }
     }
     return new_expr_result_type(e->class_name);
@@ -9534,6 +9559,12 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
     std::vector<Type> param_types;
     param_types.reserve(e->params.size());
     bool lam_variadic = false;
+    /* La direccion tambien forma parte del tipo de la lambda: sin esto, `(in
+     * i64* p) => ...` daba un `fn(const i64*)` y no casaba con el `fn(in
+     * i64*)` declarado -- la marca se perdia justo al guardarla. */
+    std::vector<ParamDir> lam_dirs;
+    bool lam_any_dir = false;
+    uint64_t lam_by_ref = 0;
     for (auto &p : e->params) {
         Type pt;
         if (p->type) {
@@ -9554,7 +9585,9 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
         // El cuerpo de una lambda no pasa por declare_params_in_scope, asi que
         // sin esto seria el unico de los siete contextos donde la marca se
         // aceptaria sin mirarla.
-        check_param_dir_(p->name, p->dir, p->loc, pt, DirSite::Signature);
+        note_param_dir_(*p, pt, lam_by_ref, param_types.size());
+        lam_dirs.push_back(p->dir);
+        if (p->dir != ParamDir::None) lam_any_dir = true;
         param_types.push_back(pt);
     }
 
@@ -9581,6 +9614,19 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
         Symbol sym;
         sym.kind = SymbolKind::Param;
         sym.type = param_types[i];
+        /* Dentro del cuerpo, un parametro de SALIDA se ve como una `T` aunque
+         * la firma lo haya convertido a `T*`: se escribe `x = ...` y lo que
+         * viaja es la direccion.  Es la misma vista que en los otros seis
+         * contextos, y sin ella el cuerpo de una lambda era el UNICO sitio
+         * donde el parametro se veia como puntero.
+         *
+         * Se deshace la conversion en vez de recalcularla: el bit ya se
+         * decidio arriba con el mismo predicado, y volver a preguntarlo sobre
+         * el tipo YA convertido daria que no. */
+        if (i < 64 && (lam_by_ref & (1ull << i)) != 0 && sym.type.pointee) {
+            sym.type = *sym.type.pointee;
+            sym.is_by_ref = true;
+        }
         (void)declare(e->params[i]->name, std::move(sym));
     }
 
@@ -9615,6 +9661,8 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
     Type lam_t =
         Type::make_function(std::move(param_types), std::move(return_t));
     lam_t.fn_is_variadic = lam_variadic;
+    if (lam_any_dir) lam_t.fn_param_dirs = std::move(lam_dirs);
+    lam_t.fn_param_by_ref_mask = lam_by_ref;
     return lam_t;
 }
 
@@ -10777,6 +10825,11 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
             /* Un puntero a codigo crudo (ocho bytes) y un lambda (direccion mas
              * entorno) NO son el mismo tipo: se respeta el del parametro. */
             fnv.fn_is_raw = tp.fn_is_raw;
+            /* La direccion viaja con la funcion tambien por aqui: el nombre
+             * desnudo tiene que valer lo mismo que `&nombre`, o el mismo
+             * argumento pasaria por una via y no por la otra. */
+            fnv.fn_param_dirs = arg_sig.param_dirs;
+            fnv.fn_param_by_ref_mask = arg_sig.param_by_ref_mask;
             if (types_assignable(tp, fnv)) {
                 ta = fnv;
                 id_arg->result_type = fnv;
@@ -10973,10 +11026,10 @@ Type TypeChecker::check_variant_ctor(ast::CallExpr *e, ast::FieldAccessExpr *fa,
  * @copydoc vx::TypeChecker::check_call_arg
  */
 void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
-                                 const std::string &what, ast::ParamDir dir,
-                                 bool by_ref) {
+                                 const std::string &what, ParamDir dir,
+                                 bool by_ref, const Type *known) {
     if (!arg) return;
-    Type ta = check_expr(arg);
+    Type ta = known ? *known : check_expr(arg);
     /* Un parametro de SALIDA por referencia: el parametro es `T*` -- lo
      * convirtio la firma -- pero quien llama escribe el HUECO, no su direccion.
      *
@@ -10991,19 +11044,18 @@ void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
     if (by_ref && tp.kind == PrimitiveKind::PTR && tp.pointee) {
         if (!is_lvalue_expr(arg)) {
             diags_.diag(arg->loc, DiagLevel::ERR, "VXT011",
-                        {std::to_string(idx + 1), ast::param_dir_name(dir)});
+                        {std::to_string(idx + 1), param_dir_name(dir)});
             return;
         }
         Type esperado = *tp.pointee;
         esperado.is_const = false; // el hueco se escribe: su const no aplica
         if (arg_fits_param(arg, esperado, ta)) return;
-        diags_.error(arg->loc,
-                     std::string("argumento ") + std::to_string(idx + 1) +
-                         (what.empty() ? std::string() : (" de " + what)) +
-                         ": tipo (" + type_to_string(ta) +
-                         ") incompatible con el parametro '" +
-                         ast::param_dir_name(dir) + " " +
-                         type_to_string(esperado) + "'");
+        diags_.error(
+            arg->loc,
+            std::string("argumento ") + std::to_string(idx + 1) +
+                (what.empty() ? std::string() : (" de " + what)) + ": tipo (" +
+                type_to_string(ta) + ") incompatible con el parametro '" +
+                param_dir_name(dir) + " " + type_to_string(esperado) + "'");
         return;
     }
     if (arg_fits_param(arg, tp, ta)) return;
@@ -11555,6 +11607,10 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                         // Tipo resultante = fn(...params) -> ret (lambda).
                         Type fnt = Type::make_function(method->param_types,
                                                        method->return_type);
+                        // Aqui el receptor va CAPTURADO, no delante, asi que
+                        // las marcas se copian sin desplazar.
+                        fnt.fn_param_dirs = method->param_dirs;
+                        fnt.fn_param_by_ref_mask = method->param_by_ref_mask;
                         // Construir y type-checkear el lambda desugarado.
                         e->desugared_bound_method = build_bound_method_lambda(
                             bid->name, *method, e->loc);
@@ -11689,6 +11745,16 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                         params.push_back(pt);
                     Type cfnt = Type::make_function(params, m.return_type);
                     cfnt.fn_is_raw = true;
+                    // La direccion viaja DENTRO del tipo, asi que se copia con
+                    // el hueco del `this` delante para que siga alineada con
+                    // `params`.
+                    if (!m.param_dirs.empty()) {
+                        cfnt.fn_param_dirs.reserve(m.param_dirs.size() + 1);
+                        cfnt.fn_param_dirs.push_back(ParamDir::None);
+                        for (const auto d : m.param_dirs)
+                            cfnt.fn_param_dirs.push_back(d);
+                        cfnt.fn_param_by_ref_mask = m.param_by_ref_mask << 1;
+                    }
                     fa->is_func_ref = true;
                     fa->func_ref_mangled = bid->name + "__" + m.name;
                     fa->result_type = cfnt;
@@ -11868,6 +11934,8 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                     Type cfnt = Type::make_function(fsig->param_types,
                                                     fsig->return_type);
                     cfnt.fn_is_raw = true; // cfn, no lambda
+                    cfnt.fn_param_dirs = fsig->param_dirs;
+                    cfnt.fn_param_by_ref_mask = fsig->param_by_ref_mask;
                     e->result_type = cfnt;
                     return cfnt;
                 }
@@ -12025,7 +12093,21 @@ std::unique_ptr<ast::Expr> TypeChecker::build_bound_method_lambda(
         auto pd = std::make_unique<ast::ParamDecl>();
         pd->loc = loc;
         pd->name = "__bm" + std::to_string(i);
-        pd->type = type_to_node(m.param_types[i], loc);
+        /* La envoltura declara la MISMA firma que el metodo, marcas incluidas:
+         * es lo que va a llamar, y si declarara otra cosa el argumento pasaria
+         * por una via y se leeria por otra.
+         *
+         * Para un parametro de SALIDA hay que declarar lo APUNTADO -- la ficha
+         * del metodo guarda el tipo ya convertido a `T*` --, porque la marca
+         * vuelve a convertirlo.  Copiando el tipo tal cual, la envoltura
+         * recibia un `T*` y se lo pasaba al metodo, que pedia un sitio donde
+         * escribir: la direccion de una direccion. */
+        const bool por_ref = i < 64 && (m.param_by_ref_mask & (1ull << i)) != 0;
+        pd->dir = i < m.param_dirs.size() ? m.param_dirs[i] : ParamDir::None;
+        pd->type = type_to_node((por_ref && m.param_types[i].pointee)
+                                    ? *m.param_types[i].pointee
+                                    : m.param_types[i],
+                                loc);
         lam->params.push_back(std::move(pd));
         // Arg correspondiente para la llamada.
         auto arg = std::make_unique<ast::IdentExpr>();
@@ -12127,6 +12209,13 @@ Type TypeChecker::maybe_promote_func_ref(ast::Expr *val, const Type &target,
     // destino declare la MISMA ABI -> asignar &f_abiA a un cfn-de-abiB (o a un
     // cfn sin ABI) es un error de tipos claro.
     ft.fn_param_abi_regs = fsig->param_abi_regs;
+    // Y la direccion, por lo mismo: `&escribe` sobre `void escribe(out i64 r)`
+    // vale para un `cfn(out i64) -> void` y NO para un `cfn(i64*) -> void`.
+    // Los dos llaman igual -- un `out T` ya viaja como `T*` --, asi que la
+    // diferencia es solo la PROMESA; por eso la salida es un cast, que la
+    // deja escrita en el fuente en vez de perderla en silencio.
+    ft.fn_param_dirs = fsig->param_dirs;
+    ft.fn_param_by_ref_mask = fsig->param_by_ref_mask;
     val->result_type = ft;
     return ft;
 }
@@ -16859,7 +16948,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 bool ok = true;
                 for (size_t i = 0; i < arg_types.size(); ++i) {
                     if (arg_types[i].kind == PrimitiveKind::COUNT) continue;
-                    if (!types_assignable(m.param_types[i], arg_types[i])) {
+                    /* Un parametro de SALIDA se compara contra lo APUNTADO:
+                     * quien llama cede el hueco, no su direccion.  Sin esto,
+                     * un constructor con `out` se podia declarar y no habia
+                     * forma de llamarlo -- ninguna sobrecarga encajaba --. */
+                    const Type &tp = m.param_types[i];
+                    const bool por_ref =
+                        i < 64 && (m.param_by_ref_mask & (1ull << i)) != 0;
+                    const Type &esperado =
+                        (por_ref && tp.pointee) ? *tp.pointee : tp;
+                    if (!types_assignable(esperado, arg_types[i])) {
                         ok = false;
                         break;
                     }
@@ -17039,10 +17137,24 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
              fn_type.fn_params.back().pointee)
                 ? *fn_type.fn_params.back().pointee
                 : Type{};
-        for (size_t i = 0; i < n; ++i)
+        /* La direccion y el "viaja por referencia" salen del TIPO, que es lo
+         * unico que hay por esta via -- no hay firma --, y de ahi en adelante
+         * es la MISMA comprobacion que en una llamada directa: contra lo
+         * apuntado, y exigiendo un sitio donde escribir. */
+        for (size_t i = 0; i < n; ++i) {
+            const ParamDir d = i < fn_type.fn_param_dirs.size()
+                                   ? fn_type.fn_param_dirs[i]
+                                   : ParamDir::None;
+            const bool by_ref =
+                i < 64 && (fn_type.fn_param_by_ref_mask & (1ull << i)) != 0;
             check_call_arg(e->args[i].get(),
-                           (i >= fn_fixed) ? var_elem : fn_type.fn_params[i],
-                           i);
+                           (i >= fn_fixed) ? var_elem : fn_type.fn_params[i], i,
+                           std::string(), d, by_ref);
+        }
+        /* Y las reglas de prestamo tambien: un `inout` por puntero a funcion
+         * es un prestamo exclusivo igual que uno por llamada directa. */
+        check_call_arg_borrows_(e, fn_type.fn_param_dirs, fn_type.fn_params,
+                                fn_type.fn_param_by_ref_mask, std::string());
         for (size_t i = n; i < e->args.size(); ++i)
             (void)check_expr(e->args[i].get());
         // Marcar el callee con el tipo function para que el lowering
@@ -17303,18 +17415,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     for (size_t i = 0; i < n; ++i)
         check_call_arg(e->args[i].get(), sig.param_types[i], i, std::string(),
                        i < sig.param_dirs.size() ? sig.param_dirs[i]
-                                                 : ast::ParamDir::None,
+                                                 : ParamDir::None,
                        i < 64 && (sig.param_by_ref_mask & (1ull << i)) != 0);
     /* Y lo que esos argumentos PRESTAN, por el mismo checker que los
      * `borrow<T>`: dos ideas parecidas de quien puede aliasar a quien acaban
      * divergiendo, y la que se quede corta no avisa a nadie. */
-    check_call_arg_borrows_(e, sig.param_dirs, sig.param_types,
-                            sig.param_by_ref_mask,
-                            e->callee && e->callee->kind ==
-                                             ast::NodeKind::IdentExpr
-                                ? static_cast<ast::IdentExpr *>(e->callee.get())
-                                      ->name
-                                : std::string());
+    check_call_arg_borrows_(
+        e, sig.param_dirs, sig.param_types, sig.param_by_ref_mask,
+        e->callee && e->callee->kind == ast::NodeKind::IdentExpr
+            ? static_cast<ast::IdentExpr *>(e->callee.get())->name
+            : std::string());
     // Chequear los argumentos extra para sus efectos (si la aridad fallo).
     for (size_t i = n; i < e->args.size(); ++i)
         (void)check_expr(e->args[i].get());

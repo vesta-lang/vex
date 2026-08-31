@@ -302,60 +302,6 @@ struct ClassMethodDecl; ///< Necesaria para StructDecl::methods antes de
 struct BlockStmt;       ///< Necesaria para LambdaExpr antes de su definicion.
 
 /**
- * @enum ParamDir
- * @brief Direccion declarada: que puede hacerse con lo que algo APUNTA.
- *
- * `in T* p` = solo se lee;  `out T* p` = solo se escribe;  `inout T* p` = las
- * dos cosas.  Sin marca, @c None: no se dice nada, que NO es lo mismo que
- * decir que no toca nada.
- *
- * Habla de lo APUNTADO y no de lo declarado: un valor viaja por copia -- Vesta
- * no tiene paso por referencia --, asi que `out i32 x` no significaria nada y
- * el comprobador lo rechaza.  Por eso vive en la DECLARACION y no en el tipo.
- *
- * Es un eje DISTINTO de `const`, y compone con el.  `const` es un permiso por
- * NIVEL sobre el tipo, igual que en C, donde `const T*` y `T* const` no son lo
- * mismo; la direccion habla del nivel EXTERNO.  Por eso `in T const*` se puede
- * escribir -- y es algo redundante -- y `out T const**` tambien: se escribe el
- * puntero de fuera y lo de dentro sigue siendo const.  Colapsarlos haria el
- * segundo inexpresable sin ganar nada.
- *
- * Y significa dos cosas segun donde este, a proposito:
- *   - en un @c ExternFnDecl DEFINE, porque no hay cuerpo que mirar y lo unico
- *     que hay es la palabra de quien lo escribe;
- *   - en codigo Vesta es un CONTRATO, que el compilador COMPRUEBA.
- * Una palabra, dos sitios; lo que cambia es quien responde por ella.
- *
- * Vive arriba del todo porque la llevan varias clases de declaracion -- el
- * parametro, la variable local -- y tienen que verla todas.
- */
-enum class ParamDir : uint8_t {
-    None = 0, ///< sin marca: no se afirma nada sobre lo apuntado.
-    In,       ///< `in`: solo se LEE lo apuntado.
-    Out,      ///< `out`: solo se ESCRIBE lo apuntado.
-    InOut,    ///< `inout`: se lee y se escribe.
-};
-
-/**
- * @brief La palabra que el usuario escribio, para citarla en un diagnostico.
- * @param d La direccion.
- * @return "in" / "out" / "inout", o "" si no hay marca.
- *
- * En un sitio porque la citan el parser y el comprobador de tipos, y un
- * mensaje que llame `out` a lo que el usuario escribio `inout` manda a mirar
- * la linea equivocada.
- */
-inline const char *param_dir_name(ParamDir d) noexcept {
-    switch (d) {
-    case ParamDir::In: return "in";
-    case ParamDir::Out: return "out";
-    case ParamDir::InOut: return "inout";
-    default: return "";
-    }
-}
-
-
-/**
  * @struct PendingComplexity
  * @brief Un @c @complexity cuyo @c when: habla del PARAMETRO DE TIPO y por
  *        tanto no se puede resolver al parsear.
@@ -571,6 +517,10 @@ struct FunctionTypeNode : TypeNode {
     /// puntero cambie en runtime). Vacio TAMBIEN cuando ningun parametro
     /// declara ABI custom (caso comun).
     std::vector<std::string> param_abi_regs;
+    /// Direccion por parametro escrita en el TIPO (`cfn(in T*) -> R`).
+    /// Alineada con @c param_types; vacio = ninguno la lleva.  Forma parte de
+    /// la identidad del tipo -- ver @c Type::fn_param_dirs.
+    std::vector<ParamDir> param_dirs;
     FunctionTypeNode() : TypeNode(NodeKind::FunctionTypeNode) {}
 };
 

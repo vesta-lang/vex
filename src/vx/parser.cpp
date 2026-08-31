@@ -1060,7 +1060,7 @@ void Parser::parse_extern_block(ast::ModuleNode &mod) {
                 // argumento de `IrNativeEffects`, que es lo que permite decir
                 // "escribe lo apuntado por su primer argumento" y que el
                 // analisis lo resuelva en cada sitio de llamada.
-                const ast::ParamDir p_dir = parse_opt_param_dir_();
+                const ParamDir p_dir = parse_opt_param_dir_();
                 auto p_type = parse_type_node();
                 if (!p_type) {
                     synchronize();
@@ -2844,7 +2844,7 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
     // metodo, constructor, metodo de interfaz, funcion comptime, lambda con
     // tipos y bloque extern --, la marca vale en todos ellos por construccion,
     // que es justo la propiedad que el lenguaje promete de sus parametros.
-    const ast::ParamDir param_dir = parse_opt_param_dir_();
+    const ParamDir param_dir = parse_opt_param_dir_();
     // ABI custom por funcion: `register("rXX") T name` fija el registro fisico
     // en el que este parametro se recibe (y donde el caller lo coloca).  Mismo
     // patron que la storage-class de var-decls; aqui el nombre se guarda en
@@ -3271,11 +3271,11 @@ bool Parser::looks_like_param_dir_storage() const noexcept {
     return false;
 }
 
-ast::ParamDir Parser::parse_opt_param_dir_() {
+ParamDir Parser::parse_opt_param_dir_() {
     // `in`: reservada, no hay ambiguedad posible.
     if (current_.kind == TokenKind::KW_IN) {
         (void)consume();
-        return ast::ParamDir::In;
+        return ParamDir::In;
     }
     // `out` / `inout`: contextuales.  Solo cuentan si detras abre un tipo; si
     // no, se dejan intactas para que las lea quien las leia antes.
@@ -3284,9 +3284,9 @@ ast::ParamDir Parser::parse_opt_param_dir_() {
         token_opens_type(lex_.peek_at(0))) {
         const bool both = (current_.lexeme == "inout");
         (void)consume();
-        return both ? ast::ParamDir::InOut : ast::ParamDir::Out;
+        return both ? ParamDir::InOut : ParamDir::Out;
     }
-    return ast::ParamDir::None;
+    return ParamDir::None;
 }
 
 std::string Parser::parse_opt_param_reg() {
@@ -3522,8 +3522,14 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         // puede llevar `register("rXX")` delante: la ABI custom forma parte del
         // tipo (dos cfn con ABIs distintas son tipos incompatibles).
         bool any_abi = false;
+        bool any_dir = false;
         while (current_.kind != TokenKind::RPAREN &&
                current_.kind != TokenKind::END_OF_FILE) {
+            /* La direccion tambien va DENTRO del tipo: `cfn(in T*) -> R`.
+             * Se lee antes que la ABI porque va delante, igual que en una
+             * declaracion. */
+            const ParamDir dir = parse_opt_param_dir_();
+            if (dir != ParamDir::None) any_dir = true;
             std::string abi = parse_opt_param_reg();
             if (!abi.empty()) any_abi = true;
             auto pt = parse_type_node();
@@ -3537,11 +3543,13 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
             }
             fn->param_types.push_back(std::move(pt));
             fn->param_abi_regs.push_back(std::move(abi));
+            fn->param_dirs.push_back(dir);
             if (!match(TokenKind::COMMA)) break;
         }
         // Normalizar: si ningun param declaro ABI custom, dejar el vector vacio
         // (== ABI estandar; el operator== de Type ya trata vacio == todo-"").
         if (!any_abi) fn->param_abi_regs.clear();
+        if (!any_dir) fn->param_dirs.clear();
         (void)expect(
             TokenKind::RPAREN,
             "se esperaba ')' al cerrar los parametros del tipo funcion");
@@ -3847,8 +3855,14 @@ bool Parser::try_parse_c_func_ptr_(std::unique_ptr<ast::TypeNode> &ret,
     if (!(current_.kind == TokenKind::KW_VOID &&
           ml.peek_at(0).kind == TokenKind::RPAREN)) {
         bool any_abi = false;
+        bool any_dir = false;
         while (current_.kind != TokenKind::RPAREN &&
                current_.kind != TokenKind::END_OF_FILE) {
+            /* La direccion tambien va DENTRO del tipo: `cfn(in T*) -> R`.
+             * Se lee antes que la ABI porque va delante, igual que en una
+             * declaracion. */
+            const ParamDir dir = parse_opt_param_dir_();
+            if (dir != ParamDir::None) any_dir = true;
             std::string abi = parse_opt_param_reg();
             if (!abi.empty()) any_abi = true;
             auto pt = parse_type_node();
@@ -3857,9 +3871,11 @@ bool Parser::try_parse_c_func_ptr_(std::unique_ptr<ast::TypeNode> &ret,
             if (current_.kind == TokenKind::IDENTIFIER) (void)consume();
             fn->param_types.push_back(std::move(pt));
             fn->param_abi_regs.push_back(std::move(abi));
+            fn->param_dirs.push_back(dir);
             if (!match(TokenKind::COMMA)) break;
         }
         if (!any_abi) fn->param_abi_regs.clear();
+        if (!any_dir) fn->param_dirs.clear();
     } else {
         (void)consume(); // 'void'
     }
@@ -5620,7 +5636,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
          * mismo tipo hace de tipo de campo o de tipo de RETORNO segun lo que
          * haya detras.  Si acaba siendo un metodo se rechaza mas abajo, porque
          * sobre un retorno la marca no tiene a quien dar el permiso. */
-        const ast::ParamDir campo_dir = parse_opt_param_dir_();
+        const ParamDir campo_dir = parse_opt_param_dir_();
         if (!starts_type()) {
             error_here("se esperaba un tipo de campo o metodo dentro del "
                        "struct");
@@ -5681,9 +5697,9 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             m->loc = mloc;
             m->name = std::move(member_name);
             m->return_type = std::move(type_node);
-            if (campo_dir != ast::ParamDir::None)
+            if (campo_dir != ParamDir::None)
                 diags_.diag(mloc, DiagLevel::ERR, "VXT010",
-                            {m->name, ast::param_dir_name(campo_dir)});
+                            {m->name, param_dir_name(campo_dir)});
             m->access = access;
             m->is_static = is_static; // `static`: factoria/constructor sin this
             m->is_comptime = is_comptime_member; // `comptime` metodo
@@ -6482,7 +6498,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         // la direccion, que va delante de el (ver la nota en el cuerpo del
         // struct: se lee ANTES de la puerta, o `in i64* p;` no la pasaria).
         const SourceLoc mloc = current_.loc;
-        const ast::ParamDir campo_dir = parse_opt_param_dir_();
+        const ParamDir campo_dir = parse_opt_param_dir_();
         if (!starts_type()) {
             error_here(
                 "se esperaba un tipo de campo o metodo dentro de la clase");
@@ -6525,9 +6541,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->loc = mloc;
             m->name = std::string("get_") + prop;
             m->return_type = std::move(type_node);
-            if (campo_dir != ast::ParamDir::None)
+            if (campo_dir != ParamDir::None)
                 diags_.diag(mloc, DiagLevel::ERR, "VXT010",
-                            {m->name, ast::param_dir_name(campo_dir)});
+                            {m->name, param_dir_name(campo_dir)});
             m->access = access;
             m->is_static = is_static;
             m->is_final = is_final;
@@ -6571,9 +6587,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->loc = mloc;
             m->name = std::move(member_name);
             m->return_type = std::move(type_node);
-            if (campo_dir != ast::ParamDir::None)
+            if (campo_dir != ParamDir::None)
                 diags_.diag(mloc, DiagLevel::ERR, "VXT010",
-                            {m->name, ast::param_dir_name(campo_dir)});
+                            {m->name, param_dir_name(campo_dir)});
             m->access = access;
             m->is_static = is_static;
             m->is_final = is_final;

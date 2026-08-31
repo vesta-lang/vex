@@ -363,25 +363,8 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
 
     // Bajar argumentos (con auto-promocion de string literales).
     std::vector<ir::IrValueId> arg_vals;
-    arg_vals.reserve(e->args.size());
-    for (size_t ai = 0; ai < e->args.size(); ++ai) {
-        auto &a = e->args[ai];
-        if (!a) return ir::IR_NO_VALUE;
-        const bool param_is_string =
-            ai < mtd->param_types.size() &&
-            mtd->param_types[ai].kind == PrimitiveKind::STRING;
-        if (param_is_string && a->kind == ast::NodeKind::StringLitExpr) {
-            auto *slit = static_cast<ast::StringLitExpr *>(a.get());
-            const ir::IrValueId av =
-                lower_string_literal_to_string_object(slit);
-            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            arg_vals.push_back(av);
-            continue;
-        }
-        const ir::IrValueId av = lower_expr(a.get());
-        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-        arg_vals.push_back(av);
-    }
+    if (!lower_method_call_args(e->args, *mtd, arg_vals))
+        return ir::IR_NO_VALUE;
 
     /* Si el ultimo parametro recoge los que sobren, los que sobran no van uno
      * por uno: se meten en un array y se pasa su direccion y cuantos son. */
@@ -824,7 +807,9 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         }
 
         // Resto de parametros declarados.
-        declare_params(fn, m->params, bindings, /*reserved_slots=*/1);
+        std::vector<ByRefParam> by_ref_params;
+        declare_params(fn, m->params, bindings, /*reserved_slots=*/1,
+                       &by_ref_params);
 
         // Configurar contexto del lowering para esta funcion.
         const ir::IrBlockId entry = fn.new_block("entry");
@@ -846,6 +831,13 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         current_fn_has_loops_ = false;
         current_fn_has_try_ = false;
         scan_address_taken(m->body.get());
+        /* Y los parametros de SALIDA, DESPUES del clear de arriba.
+         *
+         * Un metodo de struct se baja por aqui, que es un TERCER camino: sin
+         * esto `destino = this.v;` compilaba a un calculo MUERTO y el metodo
+         * devolvia CERO, sin error.  El de clase si lo tenia, asi que el mismo
+         * programa hacia una cosa con `struct` y otra con `class`. */
+        mark_by_ref_params_address_taken(by_ref_params);
         scan_escaping_locals(m->body.get());
 
         const bool saved_returns_str = current_fn_returns_string_;
@@ -984,6 +976,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         // `Struct____dtor`, y con prefijo `__macro_` si el constructor es
         // comptime.  Ninguna se puede deducir del nombre del metodo.
         note_emitted_symbol(fn.name, sd->name, m->name);
+        check_by_ref_params_written(by_ref_params, fn);
         out.add_function(std::move(fn));
         fn_ = nullptr;
     }

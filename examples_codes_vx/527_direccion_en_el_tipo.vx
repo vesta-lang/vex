@@ -1,0 +1,81 @@
+// La direccion FORMA PARTE del tipo de una funcion.
+//
+// Lo que el tipo de un puntero a funcion dice es todo lo que quien llama por
+// el va a saber: no hay firma que consultar.  Asi que si la marca no viaja en
+// el tipo, se BORRA justo al guardar la funcion en una variable -- y con ella
+// se van las dos cosas que la marca da: el `&` automatico en el sitio de
+// llamada y las reglas de prestamo --.
+//
+// Por eso dos tipos que difieran en las marcas son INCOMPATIBLES, igual que
+// dos que difieran en la ABI.  La salida es un cast, en las dos direcciones:
+// asi la renuncia queda ESCRITA en el fuente en vez de ocurrir sola.
+//
+// Y lo que NO cambia es como VIAJA el valor: un `out T` se convierte a `T*`,
+// que es lo que la otra forma ya es.  Los dos tipos llaman IGUAL; lo unico
+// distinto es la promesa.  Esa es la diferencia con la ABI de registro, donde
+// el tipo si lleva por donde entra cada argumento.
+
+namespace ejemplos.direccion_tipo;
+
+// -------------------------------------------------------------------------
+// 1. La marca viaja con la funcion
+// -------------------------------------------------------------------------
+
+void escribe(out i64 r) {
+	r = 7_i64;
+}
+
+i64 lee(in i64* p) {
+	return *p;
+}
+
+// -------------------------------------------------------------------------
+// 2. La misma operacion, escrita con el puntero a mano
+// -------------------------------------------------------------------------
+
+void por_puntero(i64* p) {
+	*p = 9_i64;
+}
+
+i64 main() {
+	i64 total = 0_i64;
+
+	// --- El tipo declara la marca: casa con `&escribe` ---------------------
+	cfn(out i64) -> void guardado = &escribe;
+	i64                  a        = 0_i64;
+	guardado(a); // el `&` lo pone el compilador, como en la llamada directa
+	println("out por puntero a funcion:      a = ${a}");
+	total = total + a; // 7
+
+	// --- Quitar la marca: renuncia explicita ------------------------------
+	// El cast dice "aqui dejo de comprobarlo".  La llamada es la MISMA, pero
+	// ahora la direccion la pone el usuario.
+	cfn(i64*) -> void crudo = (cfn(i64*) -> void) & escribe;
+	i64               b     = 0_i64;
+	crudo(&b);
+	println("marca quitada con un cast:      b = ${b}");
+	total = total + b; // 7
+
+	// --- Ponerla: un cfn sin restricciones pasa a tenerlas -----------------
+	// Tambien vale al reves.  `por_puntero` no promete nada, y el cast le
+	// pone la promesa: desde aqui el sitio de llamada toma la direccion.
+	cfn(out i64) -> void marcado = (cfn(out i64) -> void) & por_puntero;
+	i64                  c       = 0_i64;
+	marcado(c);
+	println("marca puesta con un cast:       c = ${c}");
+	total = total + c; // 9
+
+	// --- `in` sobre un puntero: por ahi solo se lee ------------------------
+	// Igual que en una declaracion, `in T*` marca const lo APUNTADO.  El tipo
+	// de la lambda lo lleva, asi que casa con el declarado.
+	cfn(in i64*) -> i64 solo_lee = &lee;
+	i64                 d        = 11_i64;
+	total = total + solo_lee(&d); // 11
+
+	fn(in i64*) -> i64 anonima = (in i64* p) => (*p);
+	total = total + anonima(&d); // 11
+
+	println("in por puntero a funcion:       ${solo_lee(&d)}");
+	println("total = ${total}");
+	return total; // 7 + 7 + 9 + 11 + 11 = 45
+}

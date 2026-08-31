@@ -248,6 +248,58 @@ enum class PrimitiveKind : uint8_t {
     // Sentinela para construir tablas planas.
     COUNT
 };
+/**
+ * @enum ParamDir
+ * @brief Direccion declarada: que puede hacerse con lo que algo APUNTA.
+ *
+ * `in T* p` = solo se lee;  `out T* p` = solo se escribe;  `inout T* p` = las
+ * dos cosas.  Sin marca, @c None: no se dice nada, que NO es lo mismo que
+ * decir que no toca nada.
+ *
+ * Habla de lo APUNTADO y no de lo declarado: un valor viaja por copia -- Vesta
+ * no tiene paso por referencia --, asi que `out i32 x` no significaria nada y
+ * el comprobador lo rechaza.  Por eso vive en la DECLARACION y no en el tipo.
+ *
+ * Es un eje DISTINTO de `const`, y compone con el.  `const` es un permiso por
+ * NIVEL sobre el tipo, igual que en C, donde `const T*` y `T* const` no son lo
+ * mismo; la direccion habla del nivel EXTERNO.  Por eso `in T const*` se puede
+ * escribir -- y es algo redundante -- y `out T const**` tambien: se escribe el
+ * puntero de fuera y lo de dentro sigue siendo const.  Colapsarlos haria el
+ * segundo inexpresable sin ganar nada.
+ *
+ * Y significa dos cosas segun donde este, a proposito:
+ *   - en un @c ExternFnDecl DEFINE, porque no hay cuerpo que mirar y lo unico
+ *     que hay es la palabra de quien lo escribe;
+ *   - en codigo Vesta es un CONTRATO, que el compilador COMPRUEBA.
+ * Una palabra, dos sitios; lo que cambia es quien responde por ella.
+ *
+ * Vive arriba del todo porque la llevan varias clases de declaracion -- el
+ * parametro, la variable local -- y tienen que verla todas.
+ */
+enum class ParamDir : uint8_t {
+    None = 0, ///< sin marca: no se afirma nada sobre lo apuntado.
+    In,       ///< `in`: solo se LEE lo apuntado.
+    Out,      ///< `out`: solo se ESCRIBE lo apuntado.
+    InOut,    ///< `inout`: se lee y se escribe.
+};
+
+/**
+ * @brief La palabra que el usuario escribio, para citarla en un diagnostico.
+ * @param d La direccion.
+ * @return "in" / "out" / "inout", o "" si no hay marca.
+ *
+ * En un sitio porque la citan el parser y el comprobador de tipos, y un
+ * mensaje que llame `out` a lo que el usuario escribio `inout` manda a mirar
+ * la linea equivocada.
+ */
+inline const char *param_dir_name(ParamDir d) noexcept {
+    switch (d) {
+    case ParamDir::In: return "in";
+    case ParamDir::Out: return "out";
+    case ParamDir::InOut: return "inout";
+    default: return "";
+    }
+}
 
 /**
  * @struct Type
@@ -343,6 +395,36 @@ struct Type {
     /// conoce la ABI en compile-time desde el tipo del puntero.  Vacio cuando
     /// ningun parametro tiene ABI custom (caso comun; no aloca heap).
     std::vector<std::string> fn_param_abi_regs;
+    /// Direccion declarada por parametro (`in`/`out`/`inout`), alineada con
+    /// @c fn_params.  Vacio = ninguno la lleva.
+    ///
+    /// FORMA PARTE DE LA IDENTIDAD DEL TIPO, igual que la ABI de arriba, y por
+    /// la misma razon de fondo: lo que el tipo de un puntero a funcion dice es
+    /// todo lo que quien llama por el va a saber.  Sin esto, al guardar la
+    /// funcion en una variable la marca se BORRABA -- `&escribe` sobre un
+    /// `out i64` salia como `cfn(i64*)` --, y con ella se iban las dos cosas
+    /// que la marca da: el `&` automatico en el sitio de llamada, y las reglas
+    /// de prestamo (dos `inout` al mismo dueno por un puntero no los veia
+    /// nadie).
+    ///
+    /// Lo que NO cambia es COMO VIAJA el valor: un `out T` se convierte a `T*`,
+    /// que es lo que la otra forma ya es.  Por eso dos tipos que solo difieran
+    /// en las marcas tienen la MISMA convencion de llamada, y forzar de uno a
+    /// otro con un cast es renunciar a una comprobacion -- no llamar de otra
+    /// manera.  Esa es justo la diferencia con la ABI de registro, donde el
+    /// tipo si lleva por donde entra cada argumento.
+    std::vector<ParamDir> fn_param_dirs;
+    /// Que parametros del tipo viajan POR REFERENCIA (bit i = parametro i).
+    ///
+    /// Hay que GUARDARLO, no se puede volver a deducir: tras la conversion,
+    /// un `out i64` (que la firma convirtio a `i64*`) y un `out i64*` escrito
+    /// a mano son el mismo tipo almacenado, y sin embargo el sitio de llamada
+    /// hace cosas DISTINTAS -- al primero le toma la direccion del hueco, al
+    /// segundo le pasa el puntero tal cual.  Es la misma razon por la que
+    /// @c FunctionSig::param_by_ref_mask existe, y aqui hace falta ademas
+    /// porque una llamada INDIRECTA no tiene firma a la que preguntar: lo
+    /// unico que tiene es el tipo del puntero.
+    uint64_t fn_param_by_ref_mask = 0;
 
     /// Solo para @c kind == FUNCTION: distingue el LAMBDA/closure (false,
     /// @c fn(...) -> R, fat-pointer de 16 bytes {fn_addr, env}) del PUNTERO
@@ -512,6 +594,23 @@ struct Type {
                                           : std::string();
                 if (a != b) return false;
             }
+            /* Y la direccion, por lo mismo y comparada igual: posicionalmente,
+             * con "vector vacio" == "ninguno la lleva".  Sin esto, un
+             * `cfn(in T*)` y un `cfn(T*)` eran el MISMO tipo y la marca se
+             * perdia al guardar la funcion en una variable.
+             *
+             * Que sean incompatibles no deja el caso sin salida: el cast
+             * explicito los convierte, y entonces la renuncia queda ESCRITA en
+             * el fuente en vez de ocurrir sola. */
+            for (size_t i = 0; i < fn_params.size(); ++i) {
+                const ParamDir a = i < fn_param_dirs.size() ? fn_param_dirs[i]
+                                                            : ParamDir::None;
+                const ParamDir b = i < o.fn_param_dirs.size()
+                                       ? o.fn_param_dirs[i]
+                                       : ParamDir::None;
+                if (a != b) return false;
+            }
+            if (fn_param_by_ref_mask != o.fn_param_by_ref_mask) return false;
         }
         return true;
     }
@@ -604,6 +703,36 @@ struct Type {
 
     bool operator!=(const Type &o) const noexcept { return !(*this == o); }
 };
+
+/**
+ * @brief Un `out T x` / `inout T x` que viaja POR REFERENCIA.
+ * @param d Direccion declarada.
+ * @param t Tipo escrito por el usuario.
+ * @return true si es un parametro de SALIDA por referencia.
+ *
+ * Es cierto cuando la marca promete ESCRIBIR y lo declarado no apunta a nada:
+ * escribir una copia no se ve desde fuera, asi que la unica lectura util es la
+ * de C# o Ada -- quien llama cede un hueco y el llamado lo escribe --, y para
+ * eso lo que viaja es la direccion del hueco.
+ *
+ * Sobre algo que YA apunta (`out T* p`) no hace falta: la direccion la esta
+ * dando el usuario.
+ *
+ * Vive en UN sitio porque lo preguntan CUATRO: la firma -- que convierte el
+ * tipo a puntero --, el cuerpo -- que lo ve como una `T` y accede por la
+ * direccion --, el sitio de llamada, que toma la direccion del argumento, y el
+ * TIPO de un puntero a funcion, que es lo unico que una llamada indirecta
+ * tiene para saberlo.  Si cada uno lo decidiera por su cuenta, bastaria que
+ * dos no coincidieran para pasar una cosa y leer otra, y eso no da un error:
+ * da OTRO VALOR.
+ *
+ * Por eso vive aqui y no junto a la firma: el TIPO ya habla de esto, y el
+ * predicado tiene que estar donde lo alcance quien compara dos tipos.
+ */
+inline bool is_by_ref_out_param(ParamDir d, const Type &t) noexcept {
+    if (d != ParamDir::Out && d != ParamDir::InOut) return false;
+    return t.kind != PrimitiveKind::PTR && t.kind != PrimitiveKind::ARRAY;
+}
 
 /**
  * @brief Convierte un TokenKind de palabra reservada de tipo a PrimitiveKind.
@@ -980,10 +1109,40 @@ inline std::string type_to_string(const Type &t) {
         std::string s = t.fn_is_raw ? "cfn(" : "fn(";
         for (size_t i = 0; i < t.fn_params.size(); ++i) {
             if (i) s += ", ";
+            // Y por lo mismo la direccion: sin ella, el error de asignar un
+            // `cfn(out i64)` a un `cfn(i64*)` enseñaba el MISMO texto en los
+            // dos lados y no se entendia que estaba mal.
+            if (i < t.fn_param_dirs.size() &&
+                t.fn_param_dirs[i] != ParamDir::None) {
+                s += param_dir_name(t.fn_param_dirs[i]);
+                s += ' ';
+            }
             if (i < t.fn_param_abi_regs.size() &&
                 !t.fn_param_abi_regs[i].empty())
                 s += "register(\"" + t.fn_param_abi_regs[i] + "\") ";
-            s += type_to_string(t.fn_params[i]);
+            // Un parametro por referencia se enseña como se ESCRIBIO (`out
+            // i64`), deshaciendo la conversion a puntero.  Enseñarlo como
+            // viaja daria el mismo texto que un `out i64*` escrito a mano, que
+            // es el OTRO tipo -- y el mensaje diria que dos cosas identicas
+            // son incompatibles.
+            const bool by_ref =
+                i < 64 && (t.fn_param_by_ref_mask & (1ull << i)) != 0;
+            if (by_ref && t.fn_params[i].pointee) {
+                s += type_to_string(*t.fn_params[i].pointee);
+            } else if (i < t.fn_param_dirs.size() &&
+                       t.fn_param_dirs[i] == ParamDir::In &&
+                       t.fn_params[i].kind == PrimitiveKind::PTR &&
+                       t.fn_params[i].pointee &&
+                       t.fn_params[i].pointee->is_const) {
+                // `in` SOBRE UN PUNTERO ES ese const, asi que enseñar los dos
+                // (`in const i64*`) es enseñar el mecanismo dos veces.  Se
+                // imprime como se escribio.
+                Type sin_const = *t.fn_params[i].pointee;
+                sin_const.is_const = false;
+                s += type_to_string(sin_const) + "*";
+            } else {
+                s += type_to_string(t.fn_params[i]);
+            }
         }
         s += ") -> ";
         s += t.pointee ? type_to_string(*t.pointee) : "?";

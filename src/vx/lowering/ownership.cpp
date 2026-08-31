@@ -818,6 +818,74 @@ uint64_t Lowering::method_by_ref_mask_(const ast::FieldAccessExpr *fa) const {
     return 0;
 }
 
+/**
+ * @copydoc vx::Lowering::ctor_by_ref_mask_
+ */
+uint64_t Lowering::ctor_by_ref_mask_(const std::string &type_name,
+                                     size_t argc) const {
+    // Una clase y un struct guardan sus constructores en sitios distintos,
+    // pero la ficha es la MISMA, asi que se busca en los dos.
+    const auto buscar =
+        [argc](const std::vector<ClassMethodInfo> &ms) -> uint64_t {
+        for (const ClassMethodInfo &m : ms)
+            if (m.is_constructor && m.param_types.size() == argc)
+                return m.param_by_ref_mask;
+        return 0;
+    };
+    const auto itc = tc_.class_layouts().find(type_name);
+    if (itc != tc_.class_layouts().end()) return buscar(itc->second.methods);
+    const auto its = tc_.struct_layouts().find(type_name);
+    if (its != tc_.struct_layouts().end()) return buscar(its->second.methods);
+    return 0;
+}
+
+/**
+ * @copydoc vx::Lowering::call_by_ref_mask_
+ */
+uint64_t Lowering::call_by_ref_mask_(const ast::CallExpr *c) const {
+    if (c == nullptr || !c->callee) return 0;
+    /* Por un PUNTERO a funcion la mascara la lleva el TIPO, que es lo unico
+     * que hay: no hay firma que buscar por nombre, y buscarla daba cero -- el
+     * argumento no se marcaba y el bajado le pedia la direccion a un local que
+     * vivia en un registro, asi que la escritura se perdia y la llamada no
+     * hacia NADA --.  Vale para cualquier forma de la llamada indirecta
+     * (variable, campo, expresion), porque todas tienen tipo. */
+    if (c->callee->result_type.kind == PrimitiveKind::FUNCTION)
+        return c->callee->result_type.fn_param_by_ref_mask;
+    /* Y si es directa da igual que sea una funcion suelta o un metodo: lo que
+     * importa es cuales de sus parametros son de salida, no como se la llame.
+     * Con solo el primer caso, `k.m(r)` no marcaba `r`. */
+    if (c->callee->kind == ast::NodeKind::IdentExpr) {
+        const auto *cid = static_cast<const ast::IdentExpr *>(c->callee.get());
+        if (const FunctionSig *sg = tc_.function_sig_by_name(cid->name))
+            return sg->param_by_ref_mask;
+        /* Un nombre que no es una funcion puede ser un TIPO: `Caja(4, r)` es
+         * su constructor escrito como una llamada -- la forma de construir un
+         * struct --, y sus parametros de salida son iguales de reales. */
+        return ctor_by_ref_mask_(cid->name, c->args.size());
+    }
+    if (c->callee->kind == ast::NodeKind::FieldAccessExpr)
+        return method_by_ref_mask_(
+            static_cast<const ast::FieldAccessExpr *>(c->callee.get()));
+    return 0;
+}
+
+/**
+ * @copydoc vx::Lowering::mark_out_args_address_taken_
+ */
+void Lowering::mark_out_args_address_taken_(
+    uint64_t mask, const std::vector<std::unique_ptr<ast::Expr>> &args) {
+    if (mask == 0) return;
+    const size_t n = std::min<size_t>(args.size(), 64);
+    for (size_t i = 0; i < n; ++i) {
+        if ((mask & (1ull << i)) == 0) continue;
+        const ast::Expr *a = args[i].get();
+        if (a && a->kind == ast::NodeKind::IdentExpr)
+            address_taken_locals_.insert(
+                static_cast<const ast::IdentExpr *>(a)->name);
+    }
+}
+
 void Lowering::scan_address_taken_expr(ast::Expr *e, int &depth) {
     if (!e) return;
     switch (e->kind) {
@@ -895,33 +963,21 @@ void Lowering::scan_address_taken_expr(ast::Expr *e, int &depth) {
          *
          * La condicion sale del MISMO predicado que uso la firma, sobre lo
          * apuntado por el parametro -- que es donde la firma dejo la `T`. */
-        {
-            /* La mascara se busca igual venga de una funcion suelta o de un
-             * metodo: lo que importa es cuales de sus parametros son de
-             * salida, no como se llame a la funcion.  Con solo el primer caso,
-             * `k.m(r)` no marcaba `r` y el bajado le pedia la direccion a un
-             * local que se habia quedado en un registro. */
-            uint64_t mask = 0;
-            if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr) {
-                auto *cid = static_cast<ast::IdentExpr *>(c->callee.get());
-                if (const FunctionSig *sg = tc_.function_sig_by_name(cid->name))
-                    mask = sg->param_by_ref_mask;
-            } else if (c->callee &&
-                       c->callee->kind == ast::NodeKind::FieldAccessExpr) {
-                mask = method_by_ref_mask_(
-                    static_cast<ast::FieldAccessExpr *>(c->callee.get()));
-            }
-            const size_t n = std::min<size_t>(c->args.size(), 64);
-            for (size_t i = 0; mask != 0 && i < n; ++i) {
-                if ((mask & (1ull << i)) == 0) continue;
-                ast::Expr *a = c->args[i].get();
-                if (a && a->kind == ast::NodeKind::IdentExpr)
-                    address_taken_locals_.insert(
-                        static_cast<ast::IdentExpr *>(a)->name);
-            }
-        }
+        mark_out_args_address_taken_(call_by_ref_mask_(c), c->args);
         scan_address_taken_expr(c->callee.get(), depth);
         for (auto &arg : c->args)
+            scan_address_taken_expr(arg.get(), depth);
+        return;
+    }
+    case ast::NodeKind::NewExpr: {
+        /* Un constructor tambien tiene parametros de salida, y `new K(x, r)`
+         * toma la direccion de `r` igual que cualquier otra llamada.  Sin esta
+         * rama el pre-pase ni miraba dentro de un `new`: ni marcaba sus
+         * argumentos ni recorria las expresiones que los forman. */
+        auto *nx = static_cast<ast::NewExpr *>(e);
+        mark_out_args_address_taken_(
+            ctor_by_ref_mask_(nx->class_name, nx->args.size()), nx->args);
+        for (auto &arg : nx->args)
             scan_address_taken_expr(arg.get(), depth);
         return;
     }

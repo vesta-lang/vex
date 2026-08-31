@@ -23,6 +23,7 @@
 #include "vx/lowering.h"
 #include "util/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
+#include "analysis/facts/definite_store.h" // si un `out` se escribe SIEMPRE
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -492,10 +493,11 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
      * metodo --.  Decidirlo en cada uno dejaba al metodo fuera: su parametro
      * se quedaba como un valor y la asignacion del cuerpo compilaba a un
      * calculo MUERTO, sin store y sin error. */
-    if (p.type && p.dir != ast::ParamDir::None &&
+    if (p.type && p.dir != ParamDir::None &&
         is_by_ref_out_param(p.dir, tc_.resolve_type_node(p.type.get()))) {
         abi.type = ir::IrType::PTR;
         abi.mem.is_host_ptr = true; // la direccion de un hueco del anfitrion
+        abi.by_ref = true;          // y quien lo declare tiene que saberlo
         return abi;
     }
 
@@ -554,7 +556,7 @@ std::vector<Lowering::DeclaredParam> Lowering::declare_params(
     ir::IrFunction &fn,
     const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
     std::vector<std::pair<std::string, ir::IrValueId>> &bindings,
-    size_t reserved_slots) {
+    size_t reserved_slots, std::vector<ByRefParam> *by_ref) {
     /* La maquina virtual pasa los argumentos en DOCE registros, y ese modelo se
      * queda: para un interprete es lo mas rapido que hay, y cambiarlo por una
      * pila lo haria mas lento en el caso comun, que es el de siempre -- pocos
@@ -586,6 +588,11 @@ std::vector<Lowering::DeclaredParam> Lowering::declare_params(
 
     std::vector<DeclaredParam> out;
     out.reserve(params.size() + 1);
+    /* Los de SALIDA se apuntan AQUI, que es por donde pasan los cuatro caminos
+     * que declaran parametros.  Cuando cada uno lo preguntaba por su cuenta,
+     * dos se quedaron sin preguntarlo -- y el metodo de un struct compilaba la
+     * escritura a un calculo MUERTO: cero, sin error. */
+    if (by_ref) by_ref->clear();
 
     for (const auto &p : params) {
         /* El `...` pelado NO declara nada: sus argumentos ocupan los registros
@@ -599,6 +606,8 @@ std::vector<Lowering::DeclaredParam> Lowering::declare_params(
         apply_type_memory(fn, vid, abi.mem);
         fn.params.push_back(vid);
         bindings.emplace_back(p->name, vid);
+        if (abi.by_ref && by_ref)
+            by_ref->push_back({p->name, vid, p->dir, p->loc});
         out.push_back({p.get(), vid, abi.type});
     }
 
@@ -614,6 +623,33 @@ std::vector<Lowering::DeclaredParam> Lowering::declare_params(
         out.push_back({nullptr, vcnt, ir::IrType::I64});
     }
     return out;
+}
+
+/**
+ * @copydoc vx::Lowering::mark_by_ref_params_address_taken
+ */
+void Lowering::mark_by_ref_params_address_taken(
+    const std::vector<ByRefParam> &ps) {
+    for (const ByRefParam &p : ps)
+        address_taken_locals_.insert(p.name);
+}
+
+/**
+ * @copydoc vx::Lowering::check_by_ref_params_written
+ */
+void Lowering::check_by_ref_params_written(const std::vector<ByRefParam> &ps,
+                                           const ir::IrFunction &fn) {
+    for (const ByRefParam &p : ps) {
+        if (p.dir != ParamDir::Out) continue;
+        const analysis::DefiniteStoreFacts d =
+            analysis::compute_definite_store(fn, p.value);
+        if (!d.proven_missing()) continue;
+        SourceLoc donde = p.loc;
+        // La linea del retorno por el que se sale sin escribir: es donde el
+        // programa incumple, y es la prueba del veredicto.
+        if (d.witness_line != 0) donde.line = d.witness_line;
+        diags_.diag(donde, DiagLevel::ERR, "VXT012", {p.name});
+    }
 }
 
 /**

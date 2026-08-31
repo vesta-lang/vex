@@ -244,6 +244,16 @@ class Lowering {
         /// que para cualquier otro valor, mas lo que es propio de un
         /// parametro: un agregado llega como la direccion de donde esta.
         TypeMemory mem;
+        /// Si entra como la DIRECCION de un hueco del llamante (`out T x`).
+        ///
+        /// Lo decide @ref param_abi -- el unico sitio que dice con que forma
+        /// entra un parametro -- y se DEVUELVE en vez de quedarse dentro: los
+        /// cuatro caminos que declaran parametros (funcion suelta, metodo de
+        /// clase, metodo de struct y lambda) tienen que marcarlo
+        /// address-taken, y cuando cada uno lo preguntaba por su cuenta, dos
+        /// se quedaron sin preguntarlo -- el metodo de un struct compilaba la
+        /// escritura a un calculo MUERTO y devolvia CERO, sin error --.
+        bool by_ref = false;
     };
 
     /**
@@ -268,6 +278,37 @@ class Lowering {
      * @return Su tipo y su naturaleza.
      */
     ParamAbi param_abi(const ast::ParamDecl &p) const;
+
+    /// @brief Un parametro de SALIDA que entra como la direccion de un hueco.
+    struct ByRefParam {
+        std::string name;    ///< Su nombre en el cuerpo.
+        ir::IrValueId value; ///< El valor SSA que trae la direccion.
+        ParamDir dir;        ///< `out` o `inout`.
+        SourceLoc loc;       ///< Donde se declaro.
+    };
+
+    /**
+     * @brief Marca los parametros de salida como address-taken.
+     * @param ps Los que @ref declare_params apunto para esta funcion.
+     *
+     * Va DESPUES del `clear()` de cada camino.  Sin la marca, `read_local`
+     * devuelve la DIRECCION en vez de leer el hueco: el cuerpo veria un
+     * puntero donde escribio una `T`.
+     */
+    void mark_by_ref_params_address_taken(const std::vector<ByRefParam> &ps);
+
+    /**
+     * @brief Comprueba que cada `out` se escriba en TODOS los caminos.
+     * @param ps Los que @ref declare_params apunto para esta funcion.
+     * @param fn La funcion ya bajada.
+     *
+     * `inout` no entra: alli ya llega un valor y no cambiarlo es legitimo.  Y
+     * cuando el analisis no puede demostrar que falta -- porque el puntero se
+     * pasa a otra funcion, que es una forma legitima de rellenarlo -- se
+     * calla: acusar a codigo correcto es peor que no avisar.
+     */
+    void check_by_ref_params_written(const std::vector<ByRefParam> &ps,
+                                     const ir::IrFunction &fn);
 
     /// @brief Un parametro ya declarado en la funcion que se construye.
     struct DeclaredParam {
@@ -565,7 +606,8 @@ class Lowering {
     declare_params(ir::IrFunction &fn,
                    const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
                    std::vector<std::pair<std::string, ir::IrValueId>> &bindings,
-                   size_t reserved_slots = 0);
+                   size_t reserved_slots = 0,
+                   std::vector<ByRefParam> *by_ref = nullptr);
 
     /**
      * @brief Cuantos huecos de argumento ocupa esta lista de parametros.
@@ -3396,6 +3438,46 @@ class Lowering {
     ir::IrValueId lower_addr_of_lvalue(ast::Expr *lvalue);
 
     /**
+     * @brief Baja los argumentos de una llamada INDIRECTA segun el tipo.
+     * @param e La llamada.
+     * @param fnty Tipo del puntero a funcion (cfn o lambda).
+     * @param out Donde se acumulan los valores SSA, en orden.
+     * @return false si algun argumento no se pudo bajar.
+     *
+     * Por esta via no hay firma: lo unico que dice como viaja cada argumento
+     * es el TIPO del puntero.  De ahi salen las dos cosas que no son un
+     * `lower_expr` a secas -- un parametro de SALIDA viaja como la direccion
+     * del hueco, y un literal en posicion `string` se promueve a
+     * StringObject --, y por eso vive en un sitio: hay DOS caminos indirectos
+     * (el cfn guardado en una variable y el generico) y cuando cada uno lo
+     * hacia por su cuenta, uno de los dos se quedaba sin la mitad.
+     */
+    bool lower_indirect_call_args(const ast::CallExpr *e, const Type &fnty,
+                                  std::vector<ir::IrValueId> &out);
+
+    /**
+     * @brief Baja los argumentos de una llamada a METODO segun su ficha.
+     * @param args Los argumentos escritos, en orden.
+     * @param mtd La ficha del metodo llamado.
+     * @param out Donde se acumulan los valores SSA, en orden.
+     * @return false si algun argumento no se pudo bajar.
+     *
+     * Un metodo de clase, uno de struct y un constructor se bajan por caminos
+     * distintos, pero lo que hay que hacerle a un argumento es lo MISMO: un
+     * parametro de SALIDA viaja como la direccion del hueco, y un literal en
+     * posicion `string` se promueve a StringObject.  Cuando cada camino lo
+     * hacia por su cuenta, dos se quedaron sin la primera mitad -- y la
+     * escritura no volvia, sin error: cero.
+     *
+     * Toma la LISTA y no la llamada porque un `new` no es un `CallExpr` y sus
+     * argumentos son los mismos.
+     */
+    bool
+    lower_method_call_args(const std::vector<std::unique_ptr<ast::Expr>> &args,
+                           const ClassMethodInfo &mtd,
+                           std::vector<ir::IrValueId> &out);
+
+    /**
      * @brief Que parametros de un METODO son de salida por referencia.
      * @param fa El acceso que nombra al metodo (`obj.m`).
      * @return La mascara, o 0 si no se resuelve o ninguno lo es.
@@ -3406,6 +3488,43 @@ class Lowering {
      * en un registro y el bajado le pedia una direccion que no tenia.
      */
     uint64_t method_by_ref_mask_(const ast::FieldAccessExpr *fa) const;
+
+    /**
+     * @brief Que parametros de LO QUE SE LLAMA son de salida por referencia.
+     * @param c La llamada.
+     * @return La mascara, o 0 si no se resuelve o ninguno lo es.
+     *
+     * Un solo sitio para las cuatro formas -- funcion suelta, metodo, puntero
+     * a funcion y cierre --, porque la pregunta es la misma: da igual COMO se
+     * llame, lo que importa es cuales de sus parametros son de salida.
+     */
+    uint64_t call_by_ref_mask_(const ast::CallExpr *c) const;
+
+    /**
+     * @brief Que parametros de un CONSTRUCTOR son de salida por referencia.
+     * @param type_name El tipo que se construye.
+     * @param argc Cuantos argumentos lleva la llamada (elige la sobrecarga).
+     * @return La mascara, o 0 si no se resuelve o ninguno lo es.
+     *
+     * Un constructor se escribe de dos formas -- `new K(...)` y `S(...)` -- y
+     * se baja por dos caminos, pero la pregunta es la misma que para cualquier
+     * otro metodo.
+     */
+    uint64_t ctor_by_ref_mask_(const std::string &type_name, size_t argc) const;
+
+    /**
+     * @brief Marca como address-taken los argumentos que van a un `out`.
+     * @param mask La mascara de @ref call_by_ref_mask_ o la de un constructor.
+     * @param args Los argumentos escritos.
+     *
+     * Un argumento que va a un parametro de SALIDA tiene su direccion tomada
+     * aunque en el fuente no haya ningun `&`: es justamente lo que la marca
+     * evita escribir.  Sin marcarlo, el bajado pide la direccion de un local
+     * que se quedo en un registro SSA y falla con "sobre variable no
+     * promocionada".
+     */
+    void mark_out_args_address_taken_(
+        uint64_t mask, const std::vector<std::unique_ptr<ast::Expr>> &args);
 
     /// Externs cuyo `&fn` (o promocion a cfn) se uso como function value.
     /// Para cada uno generamos un thunk Vesta `__cfnthunk_<fn>` que reenvia

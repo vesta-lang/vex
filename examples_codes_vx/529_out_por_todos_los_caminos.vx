@@ -1,0 +1,142 @@
+// Un `out` cumple lo mismo se llame COMO se llame.
+//
+// Hay ocho formas de llamar, y cada una se baja por un camino distinto.  Eso
+// no deberia notarse -- lo que la marca promete es lo mismo en las ocho --,
+// pero cuando cada camino decidia por su cuenta si tomar la direccion, cuatro
+// se quedaron sin hacerlo:
+//
+//   - el metodo de un STRUCT, que se baja por un camino propio (el de clase si
+//     lo hacia, asi que el mismo programa daba una cosa con `struct` y otra
+//     con `class`);
+//   - una lambda guardada en una variable, que escribia a traves de un numero
+//     que no es una direccion;
+//   - un metodo LIGADO (`&obj.metodo`), que ademas declaraba la envoltura con
+//     el tipo ya convertido y le pedia la direccion de una direccion;
+//   - un CONSTRUCTOR, que ni siquiera se podia llamar: se aceptaba declarar la
+//     marca y luego ninguna sobrecarga encajaba.
+//
+// Los tres primeros no daban un error: daban CERO, o morian escribiendo en
+// 0x0.  Ahora la respuesta sale de UN sitio -- el que dice con que forma entra
+// un parametro -- y los ocho caminos preguntan ahi.
+
+namespace ejemplos.out_todos_los_caminos;
+
+// -------------------------------------------------------------------------
+// 1. Funcion suelta
+// -------------------------------------------------------------------------
+
+void suelta(out i64 destino) {
+	destino = 1_i64;
+}
+
+// -------------------------------------------------------------------------
+// 2. Metodo de STRUCT (value type) y 3. metodo de CLASE
+// -------------------------------------------------------------------------
+
+struct Caja {
+	i64 v;
+
+	void poner(out i64 destino) {
+		destino = this.v;
+	}
+}
+
+class Kaja {
+	public i64 v;
+
+	public Kaja(i64 x) {
+		this.v = x;
+	}
+
+	public void poner(out i64 destino) {
+		destino = this.v;
+	}
+}
+
+// -------------------------------------------------------------------------
+// 4. Constructores, que son la septima forma de declarar la marca
+// -------------------------------------------------------------------------
+
+struct Cofre {
+	i64 v;
+
+	Cofre(i64 x, out i64 eco) {
+		this.v = x;
+		eco    = x;
+	}
+}
+
+class Kofre {
+	public i64 v;
+
+	public Kofre(i64 x, out i64 eco) {
+		this.v = x;
+		eco    = x;
+	}
+}
+
+i64 main() {
+	i64 total = 0_i64;
+
+	// --- 1. Funcion suelta -------------------------------------------------
+	i64 a = 0_i64;
+	suelta(a);
+	println("suelta:          ${a}");
+	total = total + a; // 1
+
+	// --- 2. Metodo de struct ----------------------------------------------
+	Caja c;
+	c.v = 2_i64;
+	i64 b = 0_i64;
+	c.poner(b);
+	println("metodo struct:   ${b}");
+	total = total + b; // 2
+
+	// --- 3. Metodo de clase ------------------------------------------------
+	Kaja k = new Kaja(3_i64);
+	i64  d = 0_i64;
+	k.poner(d);
+	println("metodo clase:    ${d}");
+	total = total + d; // 3
+
+	// --- 4. Por un puntero a funcion crudo ---------------------------------
+	cfn(out i64) -> void crudo = &suelta;
+	i64                  f     = 0_i64;
+	crudo(f);
+	println("cfn:             ${f}");
+	total = total + f; // 1
+
+	// --- 5. Por una lambda guardada en una variable ------------------------
+	// El nombre desnudo se promueve, y la marca tiene que viajar con el.
+	fn(out i64) -> void guardada = suelta;
+	i64                 g        = 0_i64;
+	guardada(g);
+	println("fn (variable):   ${g}");
+	total = total + g; // 1
+
+	// --- 6. Por un metodo LIGADO -------------------------------------------
+	// `&k.poner` captura el receptor: la envoltura tiene que declarar la MISMA
+	// firma que el metodo, marcas incluidas.
+	fn(out i64) -> void ligado = &k.poner;
+	i64                 h      = 0_i64;
+	ligado(h);
+	println("metodo ligado:   ${h}");
+	total = total + h; // 3
+
+	// --- 7. Desde un CONSTRUCTOR, en sus dos formas ------------------------
+	// Un constructor es uno de los siete contextos donde la marca se declara,
+	// asi que tambien se tiene que poder LLAMAR: se aceptaba declararlo y
+	// luego ninguna sobrecarga encajaba.
+	i64   eco_s = 0_i64;
+	Cofre cs    = Cofre(4_i64, eco_s);
+	println("ctor struct:     ${eco_s}");
+	total = total + eco_s; // 4
+
+	i64   eco_c = 0_i64;
+	Kofre ck    = new Kofre(6_i64, eco_c);
+	println("ctor clase:      ${eco_c}");
+	total = total + eco_c; // 6
+
+	println("total = ${total}");
+	return total; // 1 + 2 + 3 + 1 + 1 + 3 + 4 + 6 = 21
+}

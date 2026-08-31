@@ -163,7 +163,9 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         }
 
         // Resto de parametros declarados.
-        declare_params(fn, m->params, bindings, /*reserved_slots=*/1);
+        std::vector<ByRefParam> by_ref_params;
+        declare_params(fn, m->params, bindings, /*reserved_slots=*/1,
+                       &by_ref_params);
 
         // Configurar contexto del lowering para esta funcion.
         const ir::IrBlockId entry = fn.new_block("entry");
@@ -183,11 +185,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
          * esto la marca no le llegaba: el parametro se quedaba como un valor
          * corriente y `c = a / b;` compilaba a un calculo MUERTO -- ni store ni
          * error --, que es la peor forma de fallar. */
-        for (const auto &mp : m->params)
-            if (mp && mp->dir != ast::ParamDir::None && mp->type &&
-                is_by_ref_out_param(mp->dir,
-                                    tc_.resolve_type_node(mp->type.get())))
-                address_taken_locals_.insert(mp->name);
+        mark_by_ref_params_address_taken(by_ref_params);
         host_bearing_locals_.clear();
         // fix.cleanup-leak - limpiar el stack de cleanups entre
         // metodos de clase.  Sin esto, si un metodo anterior (e.g. el
@@ -552,6 +550,9 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         // constructor no es `Clase__nombre` sino `Clase__ctor`, y quien lo
         // adivinara desde fuera dejaria justo esos sin ligar sin decir nada.
         note_emitted_symbol(fn.name, cd->name, m->name);
+        // Y que cada `out` se escriba en TODOS los caminos: la promesa es la
+        // misma la haga una funcion suelta o un metodo.
+        check_by_ref_params_written(by_ref_params, fn);
         out.add_function(std::move(fn));
         fn_ = nullptr;
     }
@@ -1836,46 +1837,8 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     const ir::IrValueId obj = lower_expr(fa->base.get());
     if (obj == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
     std::vector<ir::IrValueId> arg_vals;
-    arg_vals.reserve(e->args.size());
-    for (size_t ai = 0; ai < e->args.size(); ++ai) {
-        auto &a = e->args[ai];
-        if (!a) return ir::IR_NO_VALUE;
-        /* Parametro de SALIDA por referencia: lo que viaja es la DIRECCION del
-         * hueco.  Un metodo no es un caso aparte -- lo mismo que en una
-         * funcion suelta --, y sin esto el argumento viajaba por VALOR donde el
-         * llamado espera una direccion: escribia a traves de un numero que no
-         * es una direccion, y el resultado no volvia. */
-        if (ai < 64 && (mtd->param_by_ref_mask & (1ull << ai)) != 0) {
-            const ir::IrValueId av = lower_addr_of_lvalue(a.get());
-            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            arg_vals.push_back(av);
-            continue;
-        }
-        // Auto-promocion literal -> StringObject cuando el parametro
-        // espera STRING y el arg es un StringLit no interpolado.
-        // Mismo patron que @c lower_call usa para funciones libres:
-        // sin esto, pasar @c helper("hola") a @c void helper(string s)
-        // pushearia la direccion cruda del literal como i64 (PTR) y
-        // el callee crashearia al hacer @c strraw s con ptr invalido.
-        // Sin esto, str_cstr/str_bytes dentro del metodo trataban el
-        // PTR del literal como GcHandle invalido y leian garbage.
-        const bool param_is_string =
-            ai < mtd->param_types.size() &&
-            mtd->param_types[ai].kind == PrimitiveKind::STRING;
-        if (param_is_string && a->kind == ast::NodeKind::StringLitExpr) {
-            auto *slit = static_cast<ast::StringLitExpr *>(a.get());
-            // Tanto literales puros como interpolados: el helper
-            // construye el StringObject correcto.
-            const ir::IrValueId av =
-                lower_string_literal_to_string_object(slit);
-            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            arg_vals.push_back(av);
-            continue;
-        }
-        const ir::IrValueId av = lower_expr(a.get());
-        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-        arg_vals.push_back(av);
-    }
+    if (!lower_method_call_args(e->args, *mtd, arg_vals))
+        return ir::IR_NO_VALUE;
     /* Si el ultimo parametro recoge los que sobren, los que sobran no van uno
      * por uno: se meten en un array y se pasa su direccion y cuantos son. */
     if (mtd->is_variadic && !mtd->param_types.empty() &&

@@ -1,0 +1,37 @@
+// NEGATIVO: la direccion forma parte del tipo, asi que perderla es un ERROR.
+//
+// Este fichero NO debe compilar.  Cada caso es una forma de que la marca se
+// caiga en silencio, que es justo lo que el tipo impide.
+//
+// La salida existe y esta en `527_direccion_en_el_tipo.vx`: un cast.  La
+// diferencia es que ahi la renuncia esta ESCRITA.
+
+namespace ejemplos.direccion_tipo_err;
+
+void escribe(out i64 r) {
+	r = 7_i64;
+}
+
+void por_puntero(i64* p) {
+	*p = 9_i64;
+}
+
+i64 lee(in i64* p) {
+	return *p;
+}
+
+i64 main() {
+	// 1. La marca se cae al guardar la funcion.
+	cfn(i64*) -> void perdida = &escribe;
+
+	// 2. Y al reves: el tipo promete algo que la funcion no dice.
+	cfn(out i64) -> void inventada = &por_puntero;
+
+	// 3. `in` tampoco: prometer que solo se lee no es gratis.
+	cfn(i64*) -> i64 sin_in = &lee;
+
+	// 4. Ni entre marcas distintas: `inout` promete mas que `out`.
+	cfn(inout i64) -> void otra = &escribe;
+
+	return 0_i64;
+}

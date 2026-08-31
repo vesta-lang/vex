@@ -371,9 +371,19 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
          * la forma -- `( TIPO *... )` --, y se exige al menos un `*`: sin el,
          * `(x)` es un parentesis normal y no hay nada que decidir. */
         if (k == TokenKind::LPAREN && i + 2 < pieces.size()) {
-            const TokenKind tipo = kind_of(pieces[i + 1]);
+            /* Lo que va DELANTE del tipo lo salta quien ya sabe cuales son.
+             *
+             * Aqui se daba por hecho que el tipo empezaba justo tras el `(`, y
+             * cualquier calificador rompia el reconocimiento: `(const u8*) p`,
+             * `cfn(nonnull i64*)` y `cfn(in i64*)` salian con la estrella
+             * suelta (`i64 *`) mientras `cfn(i64*)`, al lado, salia bien.
+             * Reusar el mismo salto los arregla los tres a la vez, y a los que
+             * se anadan despues. */
+            const size_t ini = skip_decl_qualifiers(pieces, i + 1);
+            const TokenKind tipo =
+                ini < pieces.size() ? kind_of(pieces[ini]) : TokenKind::RPAREN;
             if (is_type_keyword(tipo) || tipo == TokenKind::IDENTIFIER) {
-                size_t t = i + 2;
+                size_t t = ini + 1;
                 size_t estrellas = 0;
                 while (t < pieces.size()) {
                     const TokenKind tk = kind_of(pieces[t]);
@@ -618,6 +628,19 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
             // El `(` que sigue al nombre de una declaracion abre parametros.
             if (param_paren < 0 && i > 0 && decl_name == i - 1 &&
                 kind_of(pieces[i - 1]) == TokenKind::IDENTIFIER)
+                param_paren = depth_paren;
+
+            /* Y el de un TIPO funcion: `fn(...) -> R` / `cfn(...) -> R`.
+             *
+             * Lo de dentro son parametros igual que en cualquier otro sitio, y
+             * sin decirlo se quedaban sin el tratamiento comun -- la direccion
+             * (`in`/`out`) no se reconocia como calificador y `cfn(in i64*)`
+             * salia `cfn(in i64 *)`, con la estrella suelta --.  Se marca aqui
+             * en vez de anadir una regla propia: la lista de parametros de un
+             * tipo no es un caso distinto. */
+            if (param_paren < 0 && i > 0 &&
+                (kind_of(pieces[i - 1]) == TokenKind::KW_FN ||
+                 kind_of(pieces[i - 1]) == TokenKind::KW_CFN))
                 param_paren = depth_paren;
 
             /* Y el de una LAMBDA, que no lleva nombre delante.
