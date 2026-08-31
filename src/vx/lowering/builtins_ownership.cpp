@@ -918,26 +918,16 @@ bool Lowering::lower_owner_move(ast::CallExpr *e, ir::IrValueId &out_value) {
         (e->args[0]->result_type.kind == PrimitiveKind::UNIQUE_PTR);
     const uint32_t slot_bytes = static_cast<uint32_t>(smart_ptr_slot_bytes(
         is_unique ? PrimitiveKind::UNIQUE_PTR : PrimitiveKind::SHARED_PTR));
-    // bug3: si el resultado del move aterriza en un CAMPO owned
-    // (unique_slot_to_heap_ set por lower_assign), el slot destino debe
-    // vivir en HEAP (RAW_ALLOC) para sobrevivir al scope y ser liberado por
-    // el dtor del contenedor.  En cualquier otro caso (arg de funcion,
-    // var-decl local, return) sigue siendo un ALLOCA de stack.
-    const bool move_to_heap = unique_slot_to_heap_;
-    if (move_to_heap) unique_slot_to_heap_ = false;
+    /* La ranura de destino es SIEMPRE de la pila.
+     *
+     * Habia una segunda via que la reservaba en el monton cuando el resultado
+     * del traspaso iba a parar a un CAMPO, para que sobreviviera a quien lo
+     * creo.  Ya no hace falta -- un campo es su propia ranura --, y con ella se
+     * va la copia palabra a palabra que hacia falta porque `mvtake` no sabe
+     * escribir en memoria del anfitrion.  Quien guarda en el campo hace el
+     * traspaso alli. */
     const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::PTR);
-    if (move_to_heap) {
-        fn_->values[v_tmp].is_host_ptr = true;
-        const ir::IrValueId v_size =
-            emit_const(ir::IrType::I64, slot_bytes, e->loc.line);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::RAW_ALLOC;
-        al.type = ir::IrType::PTR;
-        al.dst = v_tmp;
-        al.operands = {v_size};
-        al.source_line = e->loc.line;
-        emit(current_block_, std::move(al));
-    } else {
+    {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
@@ -945,49 +935,6 @@ bool Lowering::lower_owner_move(ast::CallExpr *e, ir::IrValueId &out_value) {
         al.imm = slot_bytes;
         al.source_line = e->loc.line;
         emit(current_block_, std::move(al));
-    }
-    if (move_to_heap) {
-        // bug3: destino en HEAP (host_ptr).  `mvtake` (opcode 0x72) opera
-        // SIEMPRE sobre vm_mem, por lo que NO puede escribir un host_ptr en
-        // VM/JIT.  Emitimos el move explicito con addressing host-aware:
-        // LOAD [src+off] (vm_mem, el slot fuente es un ALLOCA local) ->
-        // STORE [tmp+off] (movh, host); luego STORE 0 [src+off] para
-        // invalidar el origen (evita double-free).  qword a qword.
-        const uint32_t qwords = slot_bytes / 8;
-        for (uint32_t i = 0; i < qwords; ++i) {
-            const ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, static_cast<int64_t>(i * 8), e->loc.line);
-            // src_p = v_src + off  (VM addr).
-            ir::IrValueId v_src_p = v_src;
-            ir::IrValueId v_dst_p = v_tmp;
-            if (i > 0) {
-                v_src_p = emit_ptr_add(v_src, v_off, e->loc.line);
-                v_dst_p = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_dst_p].is_host_ptr = true;
-                ir::IrInstr a2{};
-                a2.op = ir::IrOp::ADD;
-                a2.type = ir::IrType::I64;
-                a2.dst = v_dst_p;
-                a2.operands = {v_tmp, v_off};
-                a2.source_line = e->loc.line;
-                emit(current_block_, std::move(a2));
-            }
-            // word = LOAD [src_p]  (vm_mem).
-            const ir::IrValueId v_word =
-                emit_load_typed(v_src_p, ir::IrType::I64, e->loc.line);
-            // STORE word -> [dst_p]  (host, movh por is_host_ptr).
-            emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
-            // STORE 0 -> [src_p]  (zerifica origen, vm_mem).
-            {
-                const ir::IrValueId v_zero =
-                    emit_const(ir::IrType::I64, 0, e->loc.line);
-                emit_store_typed(v_src_p, v_zero,
-                                 ir::IrType::I64, e->loc.line);
-            }
-        }
-        fn_->values[v_tmp].pointee_is_host_ptr = true;
-        out_value = v_tmp;
-        return true;
     }
     // mvtake [tmp+0] <- [src+0]  (mueve el box-ptr + zerifica origen).
     emit_mvtake(v_tmp, v_src, e->loc.line);

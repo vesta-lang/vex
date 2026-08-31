@@ -1093,23 +1093,17 @@ ir::IrValueId Lowering::stack_alloc_buf(uint64_t bytes, uint32_t line,
  * @return El valor SSA con la direccion del hueco.
  */
 ir::IrValueId Lowering::unique_slot_buf(uint32_t line) {
-    // UNA palabra: solo el manejador.  Quien libera va en el tipo.
+    /* La PILA, siempre.  UNA palabra: solo el manejador; quien libera va en el
+     * tipo.
+     *
+     * Aqui habia una segunda via que reservaba la ranura en el MONTON cuando el
+     * `unique` iba a acabar en un campo, porque entonces tenia que sobrevivir a
+     * quien lo creo.  Ya no hace falta: un campo es su propia ranura, asi que
+     * lo que se guarda en el es el recurso y no la direccion de otra ranura.
+     * Esta de aqui solo tiene que durar lo que dura la expresion que la
+     * construye. */
     const uint64_t bytes = smart_ptr_slot_bytes(PrimitiveKind::UNIQUE_PTR);
-    if (!unique_slot_to_heap_)
-        return stack_alloc_buf(static_cast<size_t>(bytes), line);
-    unique_slot_to_heap_ = false;
-    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_buf].is_host_ptr = true;
-    const ir::IrValueId v_size =
-        emit_const(ir::IrType::I64, static_cast<int64_t>(bytes), line);
-    ir::IrInstr al{};
-    al.op = ir::IrOp::RAW_ALLOC;
-    al.type = ir::IrType::PTR;
-    al.dst = v_buf;
-    al.operands = {v_size};
-    al.source_line = line;
-    emit(current_block_, std::move(al));
-    return v_buf;
+    return stack_alloc_buf(static_cast<size_t>(bytes), line);
 }
 
 /**

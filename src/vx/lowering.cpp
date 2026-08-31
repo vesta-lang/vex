@@ -1552,10 +1552,20 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
                                       uint32_t field_offset,
                                       const std::string &deleter,
                                       uint32_t line) {
-    // El CAMPO vive en la memoria del CONTENEDOR: VM (struct en VM stack) o
-    // host (clase, o cualquiera en native_poo/AOT).  La carga del campo hereda
-    // la host-ness de @c this_vid (NO emit_field_addr, que la fuerza a host).
-    // El slot que el campo guarda es SIEMPRE un host_ptr (heap RAW_ALLOC).
+    /* La ranura de un campo ES el campo.
+     *
+     * Antes el campo guardaba la DIRECCION de una ranura de ocho bytes
+     * reservada aparte, asi que habia que cargarla para llegar al recurso: dos
+     * saltos de memoria y dos reservas donde el recurso es uno.  Como una
+     * ranura no es mas que un sitio donde cabe una palabra, y el campo lo es,
+     * la de en medio sobraba: es la misma decision que toma C++, donde un
+     * `unique_ptr` dentro de un objeto es un puntero dentro del objeto y nada
+     * mas.
+     *
+     * El CAMPO vive en la memoria del CONTENEDOR -- de la maquina virtual si es
+     * un struct en su pila, del anfitrion si es una clase -- y su direccion
+     * hereda eso de @c this_vid.  Por eso NO se usa @c emit_field_addr, que la
+     * forzaria a anfitriona y leeria de donde no es. */
     const bool container_host = fn_->values[this_vid].is_host_ptr;
     ir::IrValueId slot_addr = this_vid;
     if (field_offset != 0) {
@@ -1571,19 +1581,9 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
         ad.source_line = line;
         emit(current_block_, std::move(ad));
     }
-    // slot = LOAD [this + field_offset]  (mov/movh segun el contenedor).
-    const ir::IrValueId slot = fn_->new_value(ir::IrType::I64);
-    fn_->values[slot].is_host_ptr = true; // el slot es heap host
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = slot;
-        ld.operands = {slot_addr};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
-    emit_free_unique_slot(slot, deleter, line);
+    /* Y la ranura NO se suelta: no es una reserva propia, es un trozo del
+     * objeto y se va con el. */
+    emit_free_unique_slot(slot_addr, deleter, line, /*slot_is_owned=*/false);
 }
 
 void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,

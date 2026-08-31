@@ -1,0 +1,66 @@
+namespace ejemplos.unique_campo_sin_rodeo;
+
+// Un `unique<T>` dentro de un objeto es un puntero dentro del objeto.
+//
+// El campo ES la ranura: guarda el recurso, y punto.  Antes guardaba la
+// DIRECCION de otra ranura reservada aparte, o sea dos saltos de memoria y dos
+// reservas para un solo recurso; la de en medio no aportaba nada.  Es la misma
+// decision que toma C++, donde un `unique_ptr` miembro no es mas que el puntero.
+//
+// Y de paso arregla algo que el rodeo tapaba: la ranura reservada aparte estaba
+// SIEMPRE en la memoria del anfitrion, aunque el contenedor viviera en la de la
+// maquina virtual.  Ahora la ranura esta donde este el contenedor, asi que un
+// campo se comporta igual dentro de una clase que dentro de un struct -- que es
+// lo que este ejemplo comprueba, porque los dos viven en sitios distintos.
+
+class Cuenta {
+	public static i64 cierres;
+	public static i64 suma;
+}
+
+void cerrar(i64 h) {
+	Cuenta.cierres = Cuenta.cierres + 1;
+	Cuenta.suma    = Cuenta.suma + h;
+}
+
+// Contenedor en memoria del ANFITRION.
+class Conexion {
+	unique<i64, cerrar> asa;
+}
+
+// Contenedor en la pila de la MAQUINA VIRTUAL.  Mismo campo, otra memoria.
+struct Puerto {
+	unique<i64, cerrar> asa;
+}
+
+// Sacar el recurso de un campo lo deja vacio, asi que el destructor del
+// contenedor no vuelve a soltarlo: se cierra una vez, al salir de aqui.
+void vaciar() {
+	Conexion d = new Conexion();
+	d.asa = unique_with(3, cerrar);
+	unique<i64, cerrar> sacado = move(d.asa);
+}
+
+i32 main() {
+	Cuenta.cierres = 0;
+	Cuenta.suma    = 0;
+
+	// En una clase, reasignando: al reasignar se cierra el anterior.
+	Conexion c = new Conexion();
+	c.asa = unique_with(5, cerrar);
+	c.asa = unique_with(9, cerrar); // cierra el 5
+
+	// En un struct, que vive en otra memoria: exactamente igual.
+	Puerto p = Puerto { };
+	p.asa = unique_with(7, cerrar);
+
+	// Y sacar el recurso de un campo: se cierra una vez, no dos.
+	vaciar(); // cierra el 3
+
+	// Hasta aqui: el 5 al reasignar y el 3 al vaciar.
+	println("cierres=${Cuenta.cierres} suma=${Cuenta.suma}");
+
+	// Al salir se cierran los que quedan vivos: el 9 de la clase y el 7 del
+	// struct.  En total cuatro cierres y 5+3+9+7 = 24 sumado.
+	return (i32)(40 + Cuenta.cierres); // 40 + 2 = 42
+}

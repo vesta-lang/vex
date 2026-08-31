@@ -922,14 +922,14 @@ class Lowering {
                                   bool host_memory = false);
 
     /**
-     * @brief Reserva el hueco de un puntero inteligente, en la pila o en el
-     *        monton segun a donde vaya a parar.
+     * @brief Reserva el hueco de un puntero inteligente, en la pila.
      *
-     * Si es una variable local, la pila vale: muere con la funcion, que es
-     * cuando toca soltarlo.  Si se guarda en un CAMPO tiene que sobrevivir a
-     * quien lo creo, asi que va al monton y lo suelta el destructor del que lo
-     * contiene.  Lo decide @c unique_slot_to_heap_, que se CONSUME al leerla
-     * para que no la herede el siguiente.
+     * Siempre en la pila: muere con la funcion, que es cuando toca soltarlo.
+     *
+     * Habia una segunda via al monton para cuando el puntero acababa en un
+     * CAMPO, porque entonces tenia que sobrevivir a quien lo creo.  Ya no hace
+     * falta: un campo ES su propia ranura, asi que lo que se guarda en el es el
+     * recurso y esta de aqui solo dura lo que la expresion que la construye.
      *
      * @param line Linea fuente, para la depuracion.
      * @return El valor SSA con la direccion del hueco.
@@ -2667,31 +2667,20 @@ class Lowering {
     /// si cae a 0.  Lo usan el cleanup del scope y el dtor del contenedor
     /// (campo shared).  No-op si ctrl==0.
     void emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line);
-    /// Libera un slot Tier 1 (16B [ptr][deleter]) heap dado su VALOR (no via un
-    /// campo): null-guard, dispatch del deleter (slot+8) + RAW_FREE(slot).  Lo
-    /// usa @c emit_free_unique_field tras cargar el slot, y el reassign-free de
-    /// un campo unique (que captura el slot viejo antes de sobreescribir).
-    /// @param deleter  Nombre de quien libera (del TIPO).  Vacio = leerlo de
-    ///                 la ranura en ejecucion, que es lo que hace falta cuando
-    ///                 quien libera no se sabe al compilar: el finalizador del
-    ///                 recolector, que corre sin tipos.
+    /// Suelta el recurso que guarda la ranura de un `unique<T>`, dada la
+    /// DIRECCION de la ranura: comprobar que no es nula, comprobar que hay algo
+    /// dentro, y llamar a quien libera.
+    /// @param deleter  Nombre de quien libera (del TIPO).  Vacio = el de por
+    ///                 defecto.
+    /// @param slot_is_owned  Si la ranura es una reserva aparte que hay que
+    ///                 soltar tambien.  Falso para la de un campo, que es un
+    ///                 trozo del objeto, y para la de una variable local, que
+    ///                 vive en la pila.
     void emit_free_unique_slot(ir::IrValueId slot, const std::string &deleter,
-                               uint32_t line);
+                               uint32_t line, bool slot_is_owned = false);
     /// Genera los thunks Vesta `__cfnthunk_<fn>` para los externs cuya
     /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
     void generate_extern_cfn_thunks(ir::IrModule &out);
-    /// Sintetiza UNO POR LIBERADOR de los ayudantes que liberan la ranura de un
-    /// `unique<T>` (comprobar nulo + llamar a quien libera + soltar la ranura,
-    /// reusando @c emit_free_unique_slot).  Lo usa la reasignacion de un campo
-    /// como una sola llamada: el rombo del camino de liberar vive DENTRO del
-    /// ayudante y no se cruza con el salto final del destructor en el sitio de
-    /// la llamada.
-    ///
-    /// Uno por liberador y no uno compartido porque quien libera va en el TIPO
-    /// del campo: asi el ayudante lo llama por su nombre en vez de leerlo de la
-    /// ranura en ejecucion, que es lo que obligaba a que la ranura midiera dos
-    /// palabras.
-    void generate_free_uniq_helper(ir::IrModule &out);
     /// @c true si @p deleter es el liberador de POR DEFECTO.
     ///
     /// Vacio quiere decir "el de por defecto" -- es lo que trae un tipo que no
@@ -2701,14 +2690,6 @@ class Lowering {
     static bool is_default_deleter(const std::string &deleter) {
         return deleter.empty() || deleter == "free";
     }
-    /// Como se llama el ayudante que libera con @p deleter (vacio = el de por
-    /// defecto).  Solo nombra: no anota nada.
-    static std::string free_uniq_helper_name(const std::string &deleter);
-    /// Igual, pero ademas lo anota para que se sintetice.  Lo llama quien va a
-    /// emitir la llamada.
-    std::string free_uniq_helper_for(const std::string &deleter);
-    /// Los liberadores para los que hace falta un ayudante.  Vacio = ninguno.
-    std::set<std::string> free_uniq_helpers_;
     /// Devuelve el label a usar para `&fn` / promocion a cfn.  Si @c name es
     /// un extern, registra el thunk y devuelve `__cfnthunk_<fn>`; si no, el
     /// label mangled (o el nombre).
@@ -4557,7 +4538,6 @@ class Lowering {
     /// del contenedor libera el inner (via deleter) Y el slot heap.  Lo activa
     /// @c lower_assign antes de bajar el RHS; lo consumen
     /// unique_box/unique_with.
-    bool unique_slot_to_heap_ = false;
 
     /// Stack de targets de break/continue para los loops anidados.
     /// Cada vez que entramos a un while/for/do-while se hace push de

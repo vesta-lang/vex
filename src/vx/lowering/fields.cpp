@@ -695,11 +695,24 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     if (ftyp.kind == PrimitiveKind::STRUCT) {
         return addr;
     }
-    // Campo shared<T> (H5): el campo ES el slot que guarda el host_ptr al ctrl.
-    // Su "valor" como shared es la DIRECCION del campo (igual que un struct
-    // inline): use_count/ptr_of cargan el ctrl desde [field_addr].  NO hacer
-    // LOAD aqui (eso devolveria el ctrl ptr y ptr_of lo trataria como slot).
-    if (ftyp.kind == PrimitiveKind::SHARED_PTR) {
+    /* Campo `shared<T>` o `unique<T>`: LA RANURA ES EL CAMPO.
+     *
+     * Una ranura no es mas que un sitio donde cabe una palabra -- el bloque de
+     * cuentas en uno, el recurso en el otro --, y un campo lo es.  Asi que el
+     * valor del campo COMO puntero inteligente es su DIRECCION, y no hay nada
+     * que cargar aqui: quien lo use despues (`ptr_of`, `use_count`, indexar,
+     * soltar) lee de ella lo que necesite.  Cargar aqui devolveria el contenido
+     * y el siguiente lo tomaria por una ranura.
+     *
+     * `unique` no lo hacia asi: el campo guardaba la direccion de OTRA ranura
+     * reservada aparte, o sea dos saltos de memoria y dos reservas para un solo
+     * recurso.  La de en medio no aportaba nada -- es la misma decision que
+     * toma C++, donde un `unique_ptr` dentro de un objeto es un puntero dentro
+     * del objeto y nada mas --, y ademas la direccion que sale de aqui dice de
+     * que memoria es (la del contenedor), mientras que la reservada aparte era
+     * siempre del anfitrion aunque el contenedor no lo fuera. */
+    if (ftyp.kind == PrimitiveKind::SHARED_PTR ||
+        ftyp.kind == PrimitiveKind::UNIQUE_PTR) {
         return addr;
     }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
@@ -742,14 +755,6 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     // El cfn (fn_is_raw) es la direccion cruda de 8 bytes (CALLIND
     // directo, sin deref de slot), no necesita host-ness aqui.
     if (ftyp.kind == PrimitiveKind::FUNCTION && !ftyp.fn_is_raw) {
-        fn_->values[dst].is_host_ptr = true;
-    }
-    // Campo unique<T> (ownership): el campo guarda la direccion del slot Tier 1
-    // (16B) alocado en HEAP (RAW_ALLOC) cuando el unique va a un campo.  Marcar
-    // el valor cargado como host_ptr para que ptr_of/read/use_count emitan movh
-    // al deref-ear el slot (slot+0 ptr, slot+8 deleter); sin esto leerian
-    // vm_mem en una direccion host -> 0/garbage.
-    if (ftyp.kind == PrimitiveKind::UNIQUE_PTR) {
         fn_->values[dst].is_host_ptr = true;
     }
     // fix - field de tipo CLASS guarda un GcHandle (estable a
@@ -919,25 +924,10 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     }
     const ir::IrValueId addr =
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
-    // Reasignar un campo unique<T>: capturamos el slot ANTERIOR (el campo aun
-    // lo guarda) ANTES de sobreescribirlo; tras el store del nuevo lo liberamos
-    // llamando al ayudante que libera con SU liberador -- el que dice el tipo
-    // del campo --.  Va como una llamada y no en linea para que el rombo del
-    // camino de liberar no se cruce con el salto final del destructor aqui
-    // mismo, que hacia un bucle.  El slot nuevo ya se reservo, asi que es
-    // distinto del viejo y no hay doble liberacion.
-    ir::IrValueId uniq_old_slot = ir::IR_NO_VALUE;
-    if (ftyp.kind == PrimitiveKind::UNIQUE_PTR) {
-        uniq_old_slot = fn_->new_value(ir::IrType::I64);
-        fn_->values[uniq_old_slot].is_host_ptr = true;
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = uniq_old_slot;
-        ld.operands = {addr};
-        ld.source_line = loc.line;
-        emit(current_block_, std::move(ld));
-    }
+    /* Reasignar un campo unique<T> tiene que soltar lo que hubiera antes, y eso
+     * se hace en el propio manejo del campo (mas abajo), donde la ranura ES el
+     * campo.  Aqui habia que capturar la ranura ANTERIOR antes de pisarla,
+     * porque el campo guardaba la direccion de otra; ya no hay otra. */
     // Campo STRUCT value-type (Fase 2b/3): el campo es un struct inline; @c rhs
     // es la DIRECCION del struct origen.  Copiamos memberwise (qword-by-qword)
     // sus bytes al campo -- NO un STORE escalar (que pisaria el primer qword
@@ -1017,6 +1007,30 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         emit_shared_refcount_inc(addr, loc.line);
         return rhs;
     }
+    /* Campo unique<T>: el campo ES la ranura, asi que lo que se guarda es el
+     * RECURSO, no la direccion de otra ranura.  Tres pasos, y en este orden:
+     *
+     *   1. soltar lo que hubiera ANTES en el campo -- una reasignacion no debe
+     *      perder el recurso viejo --, que es el ayudante de siempre pero sin
+     *      soltar la ranura, porque la ranura es el campo;
+     *   2. leer el recurso de la ranura de origen y guardarlo en el campo;
+     *   3. VACIAR la de origen.  Esto es lo que hace que sea un traspaso y no
+     *      una copia: si no, al salir del ambito su limpieza soltaria el mismo
+     *      recurso que ahora tiene el campo.  (`shared` no lo hace porque ahi
+     *      SI hay dos duenos y para eso esta la cuenta.)
+     *
+     * Antes esto guardaba la direccion de una ranura reservada aparte y el paso
+     * 3 sobraba: cada uno tenia la suya.  Costaba una reserva y un salto de
+     * memoria de mas por cada campo. */
+    if (ftyp.kind == PrimitiveKind::UNIQUE_PTR) {
+        emit_free_unique_slot(addr, ftyp.deleter_name, loc.line,
+                              /*slot_is_owned=*/false);
+        const ir::IrValueId v_res = emit_load_host_ptr(rhs, loc.line);
+        emit_store_typed(addr, v_res, ir::IrType::I64, loc.line);
+        const ir::IrValueId cero = emit_const(ir::IrType::I64, 0, loc.line);
+        emit_store_typed(rhs, cero, ir::IrType::I64, loc.line);
+        return rhs;
+    }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
     const ir::IrValueId rhs_cast =
         cast_if_needed(rhs, fn_->values[rhs].type, ir_t, loc.line);
@@ -1053,22 +1067,6 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         wb.operands = {v_cont_handle};
         wb.source_line = loc.line;
         emit(current_block_, std::move(wb));
-    }
-    // Reassign-free del campo unique<T> via CALL al helper (1 instr, sin
-    // diamante en el call site).  El helper hace null-guard internamente -> el
-    // primer store (campo == 0) es un no-op.
-    if (uniq_old_slot != ir::IR_NO_VALUE) {
-        ir::IrInstr ci{};
-        ci.op = ir::IrOp::CALL;
-        ci.type = ir::IrType::VOID;
-        ci.dst = ir::IR_NO_VALUE;
-        // Quien libera lo dice el TIPO del campo, asi que se llama al ayudante
-        // que le toca en vez de a uno generico que tuviera que averiguarlo.
-        ci.func_name = free_uniq_helper_for(ftyp.deleter_name);
-        ci.operands = {uniq_old_slot};
-        ci.source_line = loc.line;
-        ci.is_call_site = true;
-        emit(current_block_, std::move(ci));
     }
     return rhs_cast;
 }

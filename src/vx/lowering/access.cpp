@@ -232,10 +232,10 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     }
     const Type bt = e->base->result_type;
     // unique/shared/borrow permiten indexar sin ptr_of.  OJO: el valor SSA de
-    // un unique<T>/shared<T> es la DIRECCION del slot Tier 1
-    // [data_ptr][deleter] (host), NO el puntero de datos -> mas abajo se extrae
-    // el payload con un LOAD (+16 para shared).  Un borrow SI es ya el puntero
-    // de datos.
+    // un unique<T>/shared<T> es la DIRECCION DE SU RANURA, no el puntero de
+    // datos -> mas abajo se extrae el recurso con un LOAD (+16 para shared,
+    // que ahi lo que hay es el bloque de cuentas).  Un borrow SI es ya el
+    // puntero de datos.
     const bool is_ptr_like =
         (bt.kind == PrimitiveKind::PTR || bt.kind == PrimitiveKind::ARRAY ||
          bt.kind == PrimitiveKind::UNIQUE_PTR ||
@@ -1072,10 +1072,13 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
         e->result_type.kind == PrimitiveKind::ARRAY ||
         e->result_type.kind == PrimitiveKind::OPTIONAL ||
         e->result_type.kind == PrimitiveKind::RESULT ||
-        // H5: un campo shared<T> ES el slot que guarda el ctrl ptr; su valor
-        // como shared es la DIRECCION del campo (use_count/ptr_of cargan el
-        // ctrl desde alli).  Pass-through con la host-ness de lower_field_addr.
-        e->result_type.kind == PrimitiveKind::SHARED_PTR) {
+        /* Un campo `shared<T>` o `unique<T>` ES la ranura: guarda el bloque de
+         * cuentas en uno y el recurso en el otro, y su valor COMO puntero
+         * inteligente es la DIRECCION del campo -- de ahi leen `ptr_of`,
+         * `use_count` y quien lo suelta --.  Se deja pasar con la anfitrionia
+         * que traiga @c lower_field_addr, que es la del contenedor. */
+        e->result_type.kind == PrimitiveKind::SHARED_PTR ||
+        e->result_type.kind == PrimitiveKind::UNIQUE_PTR) {
         return addr;
     }
 
@@ -1124,13 +1127,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     // necesitan emitir movh.  Sin esto, `(*vp).buf[i] = x` emite mov
     // (VM mem) en lugar de movh (host mem) -> escribe al lugar erroneo.
     if (e->result_type.kind == PrimitiveKind::PTR ||
-        e->result_type.kind == PrimitiveKind::ARRAY ||
-        // Un campo unique<T> guarda el puntero al slot Tier 1 (host, en heap
-        // via RAW_ALLOC).  El valor cargado ES ese host_ptr: sin marcarlo, el
-        // deref/index posterior (lower_index_addr) emitiria mov/loadz (VM mem)
-        // en vez de movh (host) -> lee/escribe fuera de vm_mem (0 en interp,
-        // segfault en AOT).  Mismo criterio que un campo `T* buf`.
-        e->result_type.kind == PrimitiveKind::UNIQUE_PTR) {
+        e->result_type.kind == PrimitiveKind::ARRAY) {
         if (!e->result_type.is_virtual) {
             fn_->values[dst].is_host_ptr = true;
         }

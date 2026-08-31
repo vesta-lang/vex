@@ -573,7 +573,6 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // Thunks para `&extern` usado como cfn (se rellenan durante el lowering).
     generate_extern_cfn_thunks(out_module);
     // Los ayudantes que liberan la ranura de un campo unique al reasignarlo, uno
-    generate_free_uniq_helper(out_module);
     //  AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
     // __module_init (las clases son layout estatico compile-time).
     if (!native_poo_) generate_module_init_function(out_module);

@@ -163,35 +163,11 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         current_lambda_store_escapes_,
         _val_is_lambda &&
             (_tgt_is_class_field || _tgt_is_escaping_struct_field));
-    // Ownership: si el target es un campo unique<T> y el RHS construye un
-    // unique (unique_box/unique_with), el slot Tier 1 debe ir a HEAP para
-    // sobrevivir al scope productor (el campo lo posee; el dtor del contenedor
-    // lo libera).  unique_slot_buf consume el flag al alocar el slot.
-    bool _tgt_is_unique_field = false;
-    if (e->target->kind == ast::NodeKind::FieldAccessExpr) {
-        auto *fa = static_cast<ast::FieldAccessExpr *>(e->target.get());
-        if (fa->result_type.kind == PrimitiveKind::UNIQUE_PTR && fa->base &&
-            (fa->base->result_type.kind == PrimitiveKind::CLASS ||
-             fa->base->result_type.kind == PrimitiveKind::STRUCT))
-            _tgt_is_unique_field = true;
-    }
-    bool _val_is_unique_ctor = false;
-    if (e->value && e->value->kind == ast::NodeKind::CallExpr) {
-        auto *cv = static_cast<ast::CallExpr *>(e->value.get());
-        if (cv->callee && cv->callee->kind == ast::NodeKind::IdentExpr) {
-            const std::string &n =
-                static_cast<ast::IdentExpr *>(cv->callee.get())->name;
-            // bug3: `move(local)` que aterriza en un CAMPO unique tambien debe
-            // materializar el slot movido en HEAP (no un ALLOCA de stack): el
-            // campo lo posee y el dtor del contenedor hace RAW_FREE del slot.
-            // Sin esto, el move dejaba el slot en la pila y el dtor liberaba
-            // una direccion de stack -> SIGSEGV en VM/JIT.
-            _val_is_unique_ctor =
-                (n == "unique_box" || n == "unique_with" || n == "move");
-        }
-    }
-    EscapeFlagGuard _uniq_guard(unique_slot_to_heap_,
-                                _tgt_is_unique_field && _val_is_unique_ctor);
+    /* Aqui se decidia si la ranura de un `unique` que va a parar a un CAMPO
+     * debia reservarse en el monton, mirando a la vez la forma del destino y el
+     * nombre de la funcion del lado derecho.  Ya no hay nada que decidir: un
+     * campo ES su propia ranura, asi que quien guarda en el traspasa el recurso
+     * y no hay ninguna reserva que tenga que sobrevivir a nadie. */
     // El destino manda: cada forma de lvalue tiene su camino.
     {
         ir::IrValueId v_lv = ir::IR_NO_VALUE;

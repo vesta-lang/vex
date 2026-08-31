@@ -5,9 +5,9 @@ namespace ejemplos.unique_en_campo;
 // Un contenedor (clase o struct) con un campo unique<T> se vuelve destructible:
 // al salir de scope, el destructor del contenedor libera el recurso del campo
 // invocando su deleter (el de por defecto, `free`, o uno personalizado dado a
-// unique_with).  El slot del unique vive en heap para sobrevivir junto al
-// contenedor; un unico free, deterministico, sin recolector de basura.
-// Ver doc/VMdoc//InteropC.md.
+// unique_with).  Un unico free, deterministico, sin recolector de basura.
+// El campo ES la ranura -- guarda el recurso, sin reservar nada aparte --, igual
+// que un `unique_ptr` miembro en C++.  Ver doc/VMdoc//InteropC.md.
 
 class Counter { public static i64 liberados; }
 

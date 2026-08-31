@@ -511,60 +511,6 @@ void Lowering::scan_escaping_locals(ast::Stmt *body) {
         }
     }
 }
-
-std::string Lowering::free_uniq_helper_name(const std::string &deleter) {
-    // El de por defecto no lleva sufijo; el resto, el nombre de quien libera.
-    return deleter.empty() ? std::string("__free_uniq")
-                           : ("__free_uniq__" + deleter);
-}
-
-std::string Lowering::free_uniq_helper_for(const std::string &deleter) {
-    free_uniq_helpers_.insert(deleter);
-    return free_uniq_helper_name(deleter);
-}
-
-void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
-    /* UNO POR LIBERADOR.  El cuerpo reusa @ref emit_free_unique_slot
-     * (comprobar nulo + llamar a quien libera + soltar la ranura); como es una
-     * funcion normal, el rombo de su camino interno no se cruza con el salto
-     * final del destructor en el sitio que la llama.
-     *
-     * Antes habia UNO solo que recibia una direccion y nada mas, sin tipo, y
-     * por eso tenia que leer quien libera de la propia ranura -- que es lo que
-     * obligaba a que la ranura midiera dos palabras --.  Ahora cada sitio llama
-     * al que le toca, porque su campo lo dice en el tipo. */
-    for (const std::string &deleter : free_uniq_helpers_) {
-        ir::IrFunction fn;
-        // El nombre se PREGUNTA, no se vuelve a componer aqui: dos sitios
-        // construyendo el mismo nombre es un sitio de mas donde separarse.
-        fn.name = free_uniq_helper_name(deleter);
-        fn.ret_type = ir::IrType::VOID;
-        const ir::IrValueId slot = fn.new_value(ir::IrType::I64, "%slot");
-        fn.values[slot].is_param = true;
-        fn.values[slot].is_host_ptr = true; // el slot es heap host
-        fn.params.push_back(slot);
-        const ir::IrBlockId entry = fn.new_block("entry");
-
-        // Activar el contexto del lowering para reusar emit_free_unique_slot.
-        /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
-        ChildFunctionScope parent(*this);
-        fn_ = &fn;
-        current_block_ = entry;
-        block_terminated_ = false;
-        emit_free_unique_slot(slot, deleter, 0);
-        // RET void al final (emit_free_unique_slot deja current_block_ en su
-        // bloque de salida).
-        {
-            ir::IrInstr ret{};
-            ret.op = ir::IrOp::RET;
-            ret.type = ir::IrType::VOID;
-            ret.source_line = 0;
-            fn.append(current_block_, std::move(ret));
-        }
-        out.add_function(std::move(fn));
-    }
-}
-
 void Lowering::store_slot_fields_prestado(ir::IrValueId v_slot,
                                           ir::IrValueId v_buf, uint64_t len,
                                           uint32_t source_line) {
@@ -750,8 +696,8 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
 }
 
 void Lowering::emit_free_unique_slot(ir::IrValueId slot,
-                                     const std::string &deleter,
-                                     uint32_t line) {
+                                     const std::string &deleter, uint32_t line,
+                                     bool slot_is_owned) {
     const ir::IrBlockId skip_bb = fn_->new_block("free_uniq_skip");
     const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
     // if (slot == 0) -> skip  (slot nulo / unique movido).
@@ -814,11 +760,15 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot,
         emit(current_block_, std::move(cv));
     }
     emit_br(solo_ranura, line);
-    /* Los dos caminos -- con recurso y sin el -- acaban soltando la ranura, que
-     * vive en el monton cuando es la de un campo.  Lo que cambia es si antes se
-     * llamo a quien libera. */
+    /* Los dos caminos -- con recurso y sin el -- se juntan aqui.  Lo que cambia
+     * es si antes se llamo a quien libera.
+     *
+     * Y la RANURA solo se suelta si es una reserva propia.  La de un campo no
+     * lo es: es un trozo del objeto que la contiene, y se va con el.  (Antes
+     * SIEMPRE se soltaba, porque siempre habia una reserva aparte que ya no se
+     * hace.)  La de una variable local tampoco: vive en la pila. */
     current_block_ = solo_ranura;
-    {
+    if (slot_is_owned) {
         ir::IrInstr rf{};
         rf.op = ir::IrOp::RAW_FREE;
         rf.type = ir::IrType::VOID;

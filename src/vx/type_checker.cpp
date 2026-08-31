@@ -5071,7 +5071,7 @@ void TypeChecker::collect_globals() {
             StructLayout &sl = kv.second;
             if (sl.has_destructible_field) continue;
             for (const auto &f : sl.fields) {
-                // Campo unique<T>: siempre heap-owned -> struct destructible.
+                // Campo unique<T>: posee un recurso -> struct destructible.
                 if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
                     sl.has_destructible_field = true;
                     changed = true;
@@ -5166,8 +5166,8 @@ void TypeChecker::collect_globals() {
                     }
                     continue;
                 }
-                // Un campo unique<T> es siempre heap-owned: el dtor del
-                // contenedor lo libera (deleter por defecto o custom).
+                // Un campo unique<T> POSEE un recurso: el dtor del contenedor
+                // lo libera (con el liberador de por defecto o con el suyo).
                 if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
                     cl.has_destructible_field = true;
                     changed = true;
