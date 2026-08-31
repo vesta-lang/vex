@@ -18,6 +18,16 @@ Valida la cadena completa: parser AR + pull + COMDAT + imports IAT + CRT
 autodetectado, sin g++/ld.
 
 Uso:  python tests/aot/gc_link_test.py <build_dir>
+
+# LADO: windows
+#
+# El escenario es PE de arriba abajo: `.obj`, `.exe`, y los simbolos de
+# libc resueltos como IMPORTS de ucrtbase.dll/kernel32.dll.  Lanzado en
+# Linux fallaba con una lista larguisima de simbolos sin resolver --
+# memcpy, malloc, write, mmap... todos de libc -- que parecia una
+# limitacion del enlazador y era estar del lado equivocado: alli lo
+# equivalente no son imports por IAT sino enlace dinamico contra
+# libc.so.6, que es otro mecanismo.
 """
 import os
 import subprocess

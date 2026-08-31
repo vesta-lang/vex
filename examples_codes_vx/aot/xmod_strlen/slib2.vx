@@ -1,1 +1,12 @@
-i32 slen2(string s) { return (i32) s.length(); }
+// El modulo que `m2.vx` importa para llamar a `slen2` cualificado.
+//
+// Antes esto era un fichero pelado -- sin `namespace` -- y el cualificador
+// salia del NOMBRE DEL FICHERO.  Con namespaces eso ya no vale: un fichero sin
+// declaracion va al espacio anonimo, asi que `slib2.slen2` no resolvia y el
+// ejemplo dejo de compilar.  Se declara, que es la forma de hoy, y el simbolo
+// se hace `public`: dentro de un namespace, lo que no lo es no sale de el.
+namespace slib2;
+
+public i32 slen2(string s) {
+	return (i32) s.length();
+}
