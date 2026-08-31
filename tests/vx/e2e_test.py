@@ -345,6 +345,48 @@ def h_verify_3modes(ctx, label, src, expected, out=None):
     ctx.ok("%s (-m aot) -> exit = %d" % (label, expected))
 
 
+def h_verify_3modes_agree(ctx, label, src, out=None):
+    """Los tres modos dan LO MISMO, sea lo que sea.
+
+    Para un programa cuyo resultado no se escribe a mano: un banco de pruebas
+    devuelve una suma de control que depende de su trabajo, y fijarla aqui seria
+    copiar un numero que nadie ha comprobado.  Lo que SI se puede afirmar es que
+    interpretarlo, compilarlo al vuelo y compilarlo a nativo tienen que coincidir
+    -- y eso es justo lo que se rompe cuando el codigo generado se desvia --.
+
+    El INTERPRETE es el oraculo: es el mas simple y el que menos transformaciones
+    aplica.  En nativo solo se puede comparar el byte bajo, que es todo lo que un
+    codigo de salida puede llevar.
+    """
+    out = out or ctx.tag
+    ctx.compile_vx(ctx.src(src), out)
+
+    _, log = ctx.run_velb(out, schedulers=1, mode="vm")
+    ref = get_r00(log)
+    if ref is None:
+        ctx.fail("%s (-m vm): no devolvio nada" % label, log)
+        return
+    ctx.ok("%s (-m vm) -> R0 = %s (oraculo)" % (label, ref))
+
+    _, log = ctx.run_velb(out, schedulers=1, mode="jit")
+    got = get_r00(log)
+    if got != ref:
+        ctx.fail("%s: el jit no coincide con el interprete: %s vs %s"
+                 % (label, got, ref), log)
+        return
+    ctx.ok("%s (-m jit) coincide" % label)
+
+    exe = aot_build(ctx, ctx.src(src), out + "_aot", label + " (-m aot)")
+    rc, _ = ctx.run([exe])
+    rc = exit_code(rc)
+    # Solo el byte bajo: es lo que cabe en un codigo de salida.
+    if rc != (int(ref) & 0xFF):
+        ctx.fail("%s: el nativo no coincide con el interprete: %d vs %d "
+                 "(byte bajo)" % (label, rc, int(ref) & 0xFF))
+        return
+    ctx.ok("%s (-m aot) coincide" % label)
+
+
 def h_verify_aot_only(ctx, label, src, expected, out=None):
     """Un programa que SOLO tiene sentido en nativo: se compila y se ejecuta.
 
@@ -699,6 +741,14 @@ def warns_r0_case(tag, label, src, pattern, expected, line=None):
 def const_reject_case(tag, label, body, line=None):
     def fn(ctx):
         h_verify_const_reject(ctx, label, body)
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
+def modes3_agree_case(tag, label, src, line=None):
+    """Registra un caso `verify_3modes_agree` (sin valor esperado a mano)."""
+    def fn(ctx):
+        h_verify_3modes_agree(ctx, label, src, out=tag)
     fn.__name__ = "case_" + tag
     _register(tag, fn, False, line)
 
@@ -3165,6 +3215,52 @@ modes3_case("resultgrande516", "un Result cuyo valor no cabe en una palabra: la 
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)
+
+# --- Los BANCOS DE PRUEBAS, en los tres modos ---------------------------------
+#
+# Tambien tienen que dar el mismo resultado interpretados, compilados al vuelo y
+# compilados a nativo, y no se comprobaba: solo se tocaban al MEDIR, que es algo
+# que se hace de vez en cuando.  Asi que un cambio del generador de codigo podia
+# dejarlos rotos y no se sabia hasta la siguiente medicion -- y eso paso: en
+# Linux casi todos morian y aqui la suite seguia verde, porque lo que rompia era
+# la reserva de memoria, que alli pasa por llamadas al sistema y aqui no.
+#
+# Sin valor esperado a mano: un banco devuelve una suma de control que depende
+# de su trabajo, y fijarla aqui seria copiar un numero que nadie ha comprobado.
+# Lo que se afirma es que los tres modos COINCIDEN, con el interprete de
+# oraculo.
+modes3_agree_case("bench_alloc_huge", "banco alloc_huge: los tres modos coinciden", "benchmark/alloc_huge/main.vx")
+modes3_agree_case("bench_alloc_large", "banco alloc_large: los tres modos coinciden", "benchmark/alloc_large/main.vx")
+modes3_agree_case("bench_alloc_medium", "banco alloc_medium: los tres modos coinciden", "benchmark/alloc_medium/main.vx")
+modes3_agree_case("bench_alloc_small", "banco alloc_small: los tres modos coinciden", "benchmark/alloc_small/main.vx")
+modes3_agree_case("bench_array_sum", "banco array_sum: los tres modos coinciden", "benchmark/array_sum/main.vx")
+modes3_agree_case("bench_bitops", "banco bitops: los tres modos coinciden", "benchmark/bitops/main.vx")
+modes3_agree_case("bench_branch_unpredict", "banco branch_unpredict: los tres modos coinciden", "benchmark/branch_unpredict/main.vx")
+modes3_agree_case("bench_callvirt", "banco callvirt: los tres modos coinciden", "benchmark/callvirt/main.vx")
+modes3_agree_case("bench_callvirt_hot", "banco callvirt_hot: los tres modos coinciden", "benchmark/callvirt_hot/main.vx")
+modes3_agree_case("bench_cmp_fusion", "banco cmp_fusion: los tres modos coinciden", "benchmark/cmp_fusion/main.vx")
+modes3_agree_case("bench_fib_recursive", "banco fib_recursive: los tres modos coinciden", "benchmark/fib_recursive/main.vx")
+modes3_agree_case("bench_fp_jit", "banco fp_jit: los tres modos coinciden", "benchmark/fp_jit/main.vx")
+modes3_agree_case("bench_hash_lookup", "banco hash_lookup: los tres modos coinciden", "benchmark/hash_lookup/main.vx")
+modes3_agree_case("bench_int_mixed", "banco int_mixed: los tres modos coinciden", "benchmark/int_mixed/main.vx")
+modes3_agree_case("bench_intops_jit", "banco intops_jit: los tres modos coinciden", "benchmark/intops_jit/main.vx")
+modes3_agree_case("bench_jit_method", "banco jit_method: los tres modos coinciden", "benchmark/jit_method/main.vx")
+modes3_agree_case("bench_mem_class", "banco mem_class: los tres modos coinciden", "benchmark/mem_class/main.vx")
+modes3_agree_case("bench_mem_malloc_free", "banco mem_malloc_free: los tres modos coinciden", "benchmark/mem_malloc_free/main.vx")
+modes3_agree_case("bench_mem_struct", "banco mem_struct: los tres modos coinciden", "benchmark/mem_struct/main.vx")
+modes3_agree_case("bench_memcpy_loop", "banco memcpy_loop: los tres modos coinciden", "benchmark/memcpy_loop/main.vx")
+modes3_agree_case("bench_nested_loops", "banco nested_loops: los tres modos coinciden", "benchmark/nested_loops/main.vx")
+modes3_agree_case("bench_obj_accum", "banco obj_accum: los tres modos coinciden", "benchmark/obj_accum/main.vx")
+modes3_agree_case("bench_pic_real", "banco pic_real: los tres modos coinciden", "benchmark/pic_real/main.vx")
+modes3_agree_case("bench_polymorphic", "banco polymorphic: los tres modos coinciden", "benchmark/polymorphic/main.vx")
+modes3_agree_case("bench_quicksort", "banco quicksort: los tres modos coinciden", "benchmark/quicksort/main.vx")
+modes3_agree_case("bench_rotops_jit", "banco rotops_jit: los tres modos coinciden", "benchmark/rotops_jit/main.vx")
+modes3_agree_case("bench_state_machine", "banco state_machine: los tres modos coinciden", "benchmark/state_machine/main.vx")
+modes3_agree_case("bench_string_hot", "banco string_hot: los tres modos coinciden", "benchmark/string_hot/main.vx")
+modes3_agree_case("bench_string_workout", "banco string_workout: los tres modos coinciden", "benchmark/string_workout/main.vx")
+modes3_agree_case("bench_struct_field", "banco struct_field: los tres modos coinciden", "benchmark/struct_field/main.vx")
+modes3_agree_case("bench_tight_loop", "banco tight_loop: los tres modos coinciden", "benchmark/tight_loop/main.vx")
+modes3_agree_case("bench_vec_axpy", "banco vec_axpy: los tres modos coinciden", "benchmark/vec_axpy/main.vx")
 const_reject_case("cneg_incdec", "++ sobre variable const", "const i32 x = 5; x++;", line=3753)
 const_reject_case("cneg_discard", "descartar const: i32* = const i32*", "const i32* cp; i32 c = 1; cp = &c; i32* m = cp;", line=3755)
 modes3_case("en284", "concepts+enums (is_enum, Enum, ValuedEnum, backing, concepto usuario)", "284_enum_concepts.vx", 42, line=3817)
