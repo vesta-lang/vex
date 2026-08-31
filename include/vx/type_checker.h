@@ -1893,6 +1893,19 @@ class TypeChecker {
     Type type_from_node_impl(const ast::TypeNode *tn) const;
 
     /**
+     * @brief Comprueba que la direccion declarada de un parametro
+     *        (`in`/`out`/`inout`) tenga sentido con su tipo.
+     * @param p  El parametro, tal cual lo escribio quien lo declaro.
+     * @param pt Su tipo ya resuelto.
+     *
+     * En UN solo sitio a proposito: la marca vale en los siete contextos donde
+     * se declaran parametros, asi que su comprobacion no puede vivir en uno de
+     * ellos -- si viviera, los otros seis aceptarian en silencio lo que este
+     * rechaza, y ese desajuste no lo nota nadie hasta que alguien lo sufre.
+     */
+    void check_param_dir_(const ast::ParamDecl &p, const Type &pt);
+
+    /**
      * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.
      *
      * Recorre punteros/arrays/optional hasta el @c NamedTypeNode base.  Si ese

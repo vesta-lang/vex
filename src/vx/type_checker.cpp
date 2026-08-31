@@ -2741,6 +2741,45 @@ Type TypeChecker::enum_type_of(const EnumLayout &lay,
     return Type{PrimitiveKind::STRUCT, en};
 }
 
+// ---------------------------------------------------------------------------
+// La direccion de un parametro contra su tipo.
+//
+// Dos comprobaciones, y las dos son sobre lo mismo: que la marca hable de algo
+// que existe.
+//
+//   1. Decir `in`/`out` de algo que no apunta a nada no dice nada.  La marca es
+//      sobre lo APUNTADO, y un `i32` por valor no apunta a nada -- el callee
+//      recibe una copia y lo que le haga no se ve fuera.
+//   2. `out`/`inout` prometen ESCRIBIR lo apuntado; si lo apuntado se declaro
+//      `const`, la promesa y la declaracion se contradicen.
+//
+// La segunda merece cuidado porque es facil pasarse de celo.  `const` es un
+// permiso POR NIVEL -- lo mismo que en C, donde `const T*` y `T* const` no son
+// lo mismo -- y la direccion habla del nivel EXTERNO.  Asi que solo choca
+// cuando la promesa de escribir cae JUSTO sobre el nivel declarado no
+// escribible: `out T const*` si, `out T const**` no, porque ahi se escribe el
+// puntero de fuera y lo de dentro sigue siendo const.  Colapsar los dos ejes
+// haria de `out T const**` algo inexpresable sin ganar nada.
+// ---------------------------------------------------------------------------
+void TypeChecker::check_param_dir_(const ast::ParamDecl &p, const Type &pt) {
+    if (p.dir == ast::ParamDir::None) return;
+    const char *marca = p.dir == ast::ParamDir::In      ? "in"
+                        : p.dir == ast::ParamDir::Out   ? "out"
+                                                        : "inout";
+    // Lo que apunta el parametro.  Un array nativo tambien apunta: el callee
+    // recibe la direccion del primer elemento, no una copia del bloque.
+    const bool apunta =
+        (pt.kind == PrimitiveKind::PTR || pt.kind == PrimitiveKind::ARRAY);
+    if (!apunta) {
+        diags_.diag(p.loc, DiagLevel::ERR, "VXT005",
+                    {p.name, marca, type_to_string(pt)});
+        return;
+    }
+    if (p.dir == ast::ParamDir::In) return; // leer nunca contradice a `const`
+    if (pt.pointee && pt.pointee->is_const)
+        diags_.diag(p.loc, DiagLevel::ERR, "VXT006", {p.name, marca});
+}
+
 Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
     if (!tn) return Type{};
     if (tn->kind == ast::NodeKind::PrimitiveTypeNode) {
@@ -5499,7 +5538,14 @@ void TypeChecker::collect_globals() {
             sig.return_type = type_from_node(efd->return_type.get());
             sig.param_types.reserve(efd->params.size());
             for (auto &p : efd->params) {
-                sig.param_types.push_back(type_from_node(p->type.get()));
+                const Type pt = type_from_node(p->type.get());
+                // Un extern no tiene cuerpo, asi que no pasa por
+                // declare_params_in_scope y hay que preguntarlo aqui.  Y es
+                // justo donde MAS importa: aqui la marca no es un contrato que
+                // alguien vaya a comprobar contra el codigo, es lo unico que se
+                // sabe de esa funcion.
+                check_param_dir_(*p, pt);
+                sig.param_types.push_back(pt);
             }
             sig.extern_lib = efd->lib;
             Symbol s;
@@ -5823,6 +5869,12 @@ void TypeChecker::declare_params_in_scope(
         sp.kind = SymbolKind::Param;
         const Type pt = type_from_node(p->type.get());
         sp.type = p->is_variadic ? Type::make_ptr(pt) : pt;
+        // La direccion se comprueba AQUI y no donde se construye cada firma:
+        // por aqui pasan la funcion suelta, el metodo y el constructor, asi que
+        // los tres reciben el mismo criterio sin repetirlo tres veces.  Se
+        // mira el tipo YA envuelto: en un variadico `in T... xs` el callee
+        // recibe el puntero al array, que si apunta a algo.
+        check_param_dir_(*p, sp.type);
         if (!declare(p->name, sp))
             diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
     }
@@ -9339,6 +9391,10 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
             lam_variadic = true;
             pt = Type::make_ptr(pt);
         }
+        // El cuerpo de una lambda no pasa por declare_params_in_scope, asi que
+        // sin esto seria el unico de los siete contextos donde la marca se
+        // aceptaria sin mirarla.
+        check_param_dir_(*p, pt);
         param_types.push_back(pt);
     }
 
