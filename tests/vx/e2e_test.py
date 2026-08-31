@@ -4998,5 +4998,12 @@ def _(ctx):
         ctx.ok("fmt check %s: todo formateado" % d)
 
 
+
+
+modes3_case("direccion_y_borrow",
+            "in/out y el borrow checker: la misma regla, dos notaciones",
+            "525_direccion_y_borrow.vx", 42)
+
+
 if __name__ == "__main__":
     main()

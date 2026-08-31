@@ -33,7 +33,7 @@ i64 worker(u64 param) {
 
 i64 main() {
 	cfn(u64) -> i64 fp = worker;
-	u64            h  = CreateThread(0, 0, (u64)fp, 0, 0, 0);
+	u64             h  = CreateThread(0, 0, (u64)fp, 0, 0, 0);
 	WaitForSingleObject(h, 4_294_967_295); // INFINITE
 	return t * 1000 + g_child;             // 11 (aislado) * 1000 + 99
 }

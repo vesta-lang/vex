@@ -1,0 +1,64 @@
+namespace ejemplos.direccion_y_borrow;
+
+// `in` / `out` y el borrow checker son LO MISMO dicho de dos formas.
+//
+// `borrow<T>` y `borrow_mut<T>` son TIPOS con sus reglas de aliasing.  `in` y
+// `out`/`inout` son marcas de declaracion.  Pero lo que dicen es lo mismo:
+// pasar algo a un `in` es prestarlo COMPARTIDO mientras dura la llamada, y
+// pasarlo a un `out`/`inout` es prestarlo EXCLUSIVO.
+//
+// Por eso lo comprueba el MISMO checker, y no una segunda idea de quien puede
+// aliasar a quien.  Dos ideas parecidas de lo mismo divergen, y la que se
+// quede corta no avisa a nadie: separadas, `f(x, x)` con dos `inout` no lo
+// veia NINGUNA -- el borrow checker no miraba la direccion, y la direccion no
+// sabia de aliasing --.
+//
+// Lo que sale de ahi, sin escribir ninguna regla nueva:
+//
+//   * varios `in` sobre el mismo dueno: VALEN (regla de los compartidos);
+//   * un `out`/`inout` mientras hay otro prestamo: NO (regla del exclusivo);
+//   * y las dos formas de escribirlo -- la marca y el tipo -- se mezclan en el
+//     mismo programa sin que haya que elegir una.
+//
+// Esperado: 42.
+
+// Presta COMPARTIDO lo que se le pasa: por aqui solo se lee.
+i32 sumar(in i32* a, in i32* b) {
+	return (*a) + (*b);
+}
+
+// Presta EXCLUSIVO: el hueco del llamante se escribe.
+void poner(out i32 destino, i32 v) {
+	destino = v;
+}
+
+// La marca y el tipo, en la misma firma.  Un `borrow<T>` que entra por
+// parametro y un `in` que presta: dicen lo mismo, cada uno a su manera.
+i32 leer_los_dos(borrow<i32> prestado, in i32* directo) {
+	return read_borrow(prestado) + (*directo);
+}
+
+i32 main() {
+	i32 x = 21_i32;
+
+	// Dos `in` sobre el MISMO dueno: son compartidos, y compartir es
+	// legitimo.  Una regla que rechazara esto seria inutilizable -- pasar la
+	// misma cosa dos veces para leerla es de lo mas normal -- y se aprenderia
+	// a desactivar.
+	const i32 dos_veces = sumar(&x, &x); // 42
+
+	// Un `out`: presta exclusivo mientras dura la llamada, y la suelta al
+	// volver, asi que despues se puede volver a prestar sin problema.
+	//   poner(y, 1); poner(y, 2);   <- dos llamadas, no dos prestamos a la vez
+	i32 y = 0_i32;
+	poner(y, 1_i32);
+	poner(y, 2_i32); // y = 2
+
+	// Y las dos notaciones conviviendo: un `unique` prestado con `lend` entra
+	// como `borrow<i32>`, y a la vez se presta `x` con la marca.
+	unique<i32> duenno = unique_box(19_i32);
+	const i32   mezcla = leer_los_dos(lend(duenno), &x); // 19 + 21 = 40
+
+	// 42 + 2 + 40 = 84, y la mitad es 42.
+	return (dos_veces + y + mezcla) / 2_i32;
+}
