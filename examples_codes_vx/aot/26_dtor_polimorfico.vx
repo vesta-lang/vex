@@ -1,22 +1,34 @@
-// AOT.2.d (4) -- dtor polimorfico: una referencia de tipo BASE que posee una
-// instancia DERIVADA ejecuta el destructor DERIVADO al salir de scope (RAII).
-// El cleanup despacha ~T() por la vtable de la instancia (no por el tipo
-// estatico) -- como un `virtual ~T()` de C++.
+// Destructor polimorfico: una referencia de tipo BASE que posee una instancia
+// DERIVADA ejecuta el destructor DERIVADO al salir de scope (RAII).  El
+// cleanup despacha `~T()` por la vtable de la INSTANCIA, no por el tipo
+// estatico -- como un `virtual ~T()` de C++.
+//
+// Y ademas ENCADENA hacia la base, tambien como en C++: al terminar `~Dog()` se
+// llama a `~Animal()`.  El orden es derivada primero, base despues -- el
+// inverso al de construccion -- y esa llamada es DIRECTA, nunca por la vtable:
+// por la vtable se volveria a encontrar `~Dog` y el destructor se llamaria a si
+// mismo sin fin.
+//
+// Por eso el harness ACUMULA (`g = g*10 + x`) en vez de sobrescribir: con
+// `g = x` solo sobrevive la ultima anotacion, y entonces "solo corrio ~Animal"
+// y "corrieron los dos" dan el mismo 1 -- justo la diferencia que este ejemplo
+// existe para ver.  Acumulando, la traza se lee entera:
+//
+//     2  -> solo corrio ~Dog          (faltaria el encadenado a la base)
+//     1  -> solo corrio ~Animal       (el despacho miro el tipo ESTATICO)
+//     21 -> ~Dog y despues ~Animal    <- lo correcto
 //
 // Compilar + enlazar + ejecutar (ELF):
-//   vm -m aot --vx examples_codes_vx/aot/26_dtor_polimorfico.vx \
+//   vm -m aot --vesta examples_codes_vx/aot/26_dtor_polimorfico.vx \
 //      -o poly.o --format elf --emit obj
-//   gcc -no-pie poly.o harness.c -o poly && ./poly ; echo $?   # -> 2
+//   gcc -no-pie poly.o harness.c -o poly && ./poly ; echo $?   # -> 21
 //
 // harness.c:
-//   static long g=0;
-//   void note(long x){ g=x; }
-//   long get_note(void){ return g; }
+//   static long g = 0;
+//   void note(long x) { g = g * 10 + x; }
+//   long get_note(void) { return g; }
 //
-// `Animal a = new Dog()` -> al cerrar run() el cleanup carga la vtable de obj[0]
-// (que __new_Dog dejo apuntando a la vtable de Dog), lee el slot del dtor y hace
-// CALLIND -> se ejecuta ~Dog (note(2)), no ~Animal (note(1)).  Luego free.  Sin
-// leaks (valgrind limpio).
+// Sin fugas (valgrind limpio).
 
 extern "h" {
 	fn note(i64 x) -> void;
@@ -31,9 +43,9 @@ class Dog : Animal { ~Dog() { note(2); } }
 
 void run() {
 	Animal a = new Dog(); // ref base, instancia derivada
-}                         // ~ aqui: dispatch virtual -> ~Dog
+}                         // ~ aqui: despacho virtual -> ~Dog -> ~Animal
 
 i64 main() {
 	run();
-	return get_note(); // 2 (se ejecuto ~Dog, no ~Animal)
+	return get_note(); // 21: ~Dog y despues ~Animal
 }

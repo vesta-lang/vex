@@ -31,6 +31,7 @@
 #include "runtime/runtime.h"
 #include "util/assembler_multiprocess.h"
 #include "vx/compiler.h"
+#include "vx/diag/diag_format.h" // render_diagnostics: el guion dice POR QUE no compila
 
 #include <atomic>
 #include <condition_variable>
@@ -132,9 +133,13 @@ const char *kPrelude =
     "    fn align_up(u64 v, u64 a) -> u64;\n"
     "    fn debug_build() -> bool;\n"
     "}\n"
-    "void entry(string s) { entry_raw(str_cstr(s)); }\n"
-    "void place_section(string nm, u64 a) { place_raw(str_cstr(nm), a); }\n"
-    "u64 section_bytes(string nm) { return secbytes_raw(str_cstr(nm)); }\n";
+    // Las operaciones de cadena son METODOS.  Esto decia `str_cstr(s)`, la
+    // forma de funcion libre que se retiro del lenguaje, y el guion de enlazado
+    // dejo de compilar sin que se notara: el error se tragaba y solo salia
+    // "error de compilacion Vesta".
+    "void entry(string s) { entry_raw(s.cstr()); }\n"
+    "void place_section(string nm, u64 a) { place_raw(nm.cstr(), a); }\n"
+    "u64 section_bytes(string nm) { return secbytes_raw(nm.cstr()); }\n";
 
 const char *kMainWrapper = "\ni32 main() { link(); return 0; }\n";
 
@@ -165,7 +170,15 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
     copts.module_name = "linkscript";
     vx::CompileResult cr = vx::compile_vx_source(src, "linkscript.vx", copts);
     if (!cr.ok || cr.diagnostics.has_errors()) {
-        err = "link-script: error de compilacion Vesta";
+        /* Se ENSENA lo que dijo el compilador.  Antes solo salia "error de
+         * compilacion Vesta", que dice que fallo y no dice nada de por que: un
+         * guion de enlazado con una linea mal quedaba sin enlazar y sin pista,
+         * y encima el fichero que se compila es una COMBINACION (el guion del
+         * usuario mas el preludio con `base`, `entry` y demas), asi que ni
+         * mirando su fuente se veian las lineas de verdad. */
+        std::ostringstream ds;
+        vx::render_diagnostics(ds, cr.diagnostics, vx::DiagFormat::Text);
+        err = "link-script: no compila\n" + ds.str();
         return false;
     }
     // Ensamblar el .vel a .velb via run_worker (opera sobre ficheros).

@@ -1827,6 +1827,15 @@ int main(int argc, char *argv[]) {
             std::cerr << "[link] error: " << lerr << "\n";
             return EXIT_FAILURE;
         }
+        /* Y se marca ejecutable.  Enlazar produce algo que se EJECUTA, pero el
+         * emisor abre el fichero con `fopen(path,"wb")`, que en POSIX lo crea
+         * sin ese bit: salia un ELF valido que daba `Permission denied` al
+         * lanzarlo, sin que nada hubiera fallado.  El compilador nativo ya lo
+         * hacia; este camino no, y en Windows no se ve porque ahi ese bit no
+         * existe -- por eso aguanto tanto sin que nadie lo notara. */
+        if (!fs::mark_executable(out_path))
+            std::cerr << "[link] aviso: no se pudo marcar '" << out_path
+                      << "' como ejecutable.\n";
         std::string entry_note =
             !lopts.entry.empty()
                 ? (", entry=" + lopts.entry)

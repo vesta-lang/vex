@@ -843,6 +843,43 @@ static bool read_file_bytes(const std::string &path,
     }
     return true;
 }
+
+/**
+ * @brief Le pone el bit de ejecucion a un artefacto recien escrito.
+ *
+ * Los emisores abren el fichero con @c fopen(path,"wb"), que en POSIX lo crea
+ * con 0666 & ~umask -- o sea 0644 -- y por tanto SIN permiso de ejecucion.  El
+ * resultado es un ELF perfectamente valido que NO se puede ejecutar:
+ * `Permission denied` al lanzarlo, sin que nada en la construccion haya
+ * fallado.  En Windows no se ve, porque ese bit no existe, asi que el fallo
+ * solo aparece en Linux y parece un problema de permisos del usuario.
+ *
+ * Quien decide es el LLAMANTE, no esta funcion: los mismos emisores escriben
+ * `.o` y binarios planos, que NO deben ser ejecutables, y solo arriba se sabe
+ * que clase de artefacto se pidio.  Aqui solo esta el COMO, en un sitio, para
+ * que los dos caminos que producen ejecutables -- el compilador nativo y el
+ * enlazador suelto -- no lo escriban cada uno por su cuenta.
+ *
+ * Anade el bit a los tres grupos respetando lo que ya haya (0644 -> 0755).  Un
+ * fallo no aborta nada: el fichero esta bien escrito, y avisar es mas util que
+ * tirar un build entero por un permiso.
+ *
+ * @param path Artefacto a marcar.  En Windows no hace nada.
+ * @return true si se marco (o si el sistema no tiene ese bit).
+ */
+static bool mark_executable(const std::string &path) {
+#ifndef _WIN32
+    std::error_code ec;
+    fs::permissions(path,
+                    fs::perms::owner_exec | fs::perms::group_exec |
+                        fs::perms::others_exec,
+                    fs::perm_options::add, ec);
+    return !ec;
+#else
+    (void)path;
+    return true;
+#endif
+}
 } // namespace fs
 
 #endif // FS_UTILS_H

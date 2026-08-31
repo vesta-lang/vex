@@ -229,39 +229,19 @@ static uint64_t mezclar_str_(uint64_t h, const std::string &s) {
 }
 
 /**
- * @brief Le pone el bit de ejecucion a un artefacto recien escrito.
+ * @brief Marca un artefacto como ejecutable y avisa si no se pudo.
  *
- * Los emisores abren el fichero con @c fopen(path,"wb"), que en POSIX lo crea
- * con 0666 & ~umask -- o sea 0644 -- y por tanto SIN permiso de ejecucion.  El
- * resultado era un ELF perfectamente valido que no se podia ejecutar:
- * `Permission denied` al lanzarlo, sin que nada en la compilacion hubiera
- * fallado.  En Windows no se veia porque no existe ese bit, asi que el fallo
- * solo aparecia en Linux y parecia un problema de permisos del usuario.
+ * El COMO vive en `util/fs_utils.h`, compartido con el enlazador suelto: los
+ * dos producen ejecutables y ninguno de los dos debe escribir su propia
+ * version de esto.  Aqui solo queda decidir CUALES se marcan -- los `.o` y los
+ * binarios planos no -- y contarlo si falla.
  *
- * Se hace aqui, en el toolchain, y no en cada emisor: los emisores tambien
- * escriben `.o` y binarios planos, que NO deben ser ejecutables, y este es el
- * unico sitio que sabe que clase de artefacto se pidio.
- *
- * Anade el bit a los tres grupos respetando lo que ya haya (0644 -> 0755).  Un
- * fallo no aborta la compilacion: el fichero esta bien escrito, y avisar es
- * mas util que tirar un build entero por un permiso.
- *
- * @param ruta Artefacto a marcar.  En Windows no hace nada.
+ * @param ruta Artefacto a marcar.
  */
 static void marcar_ejecutable_(const std::string &ruta) {
-#ifndef _WIN32
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::permissions(ruta,
-                    fs::perms::owner_exec | fs::perms::group_exec |
-                        fs::perms::others_exec,
-                    fs::perm_options::add, ec);
-    if (ec)
+    if (!fs::mark_executable(ruta))
         std::cerr << "[aot] aviso: no se pudo marcar '" << ruta
-                  << "' como ejecutable: " << ec.message() << "\n";
-#else
-    (void)ruta;
-#endif
+                  << "' como ejecutable.\n";
 }
 
 /**
@@ -1478,8 +1458,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
              * ajena seria cambiarle el comportamiento a quien la escribio. */
             if (!uncaught_hook_es_del_usuario) {
                 for (auto &af : aot_mod.functions) {
-                    if (af.name != "__uncaught" || af.blocks.empty())
-                        continue;
+                    if (af.name != "__uncaught" || af.blocks.empty()) continue;
                     ir::IrInstr rp{};
                     rp.op = ir::IrOp::CALL;
                     rp.dst = ir::IR_NO_VALUE;
