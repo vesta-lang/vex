@@ -1,0 +1,53 @@
+namespace ejemplos.direccion_campos;
+
+// La direccion en un CAMPO: struct, clase y overlay.
+//
+// En un parametro la marca dice dos cosas -- que puede hacerse con lo que
+// apunta, y que hace la funcion --.  En un campo solo queda la primera, que es
+// el PERMISO, igual que en una variable: por un `in` se lee y nada mas.
+//
+// Que signifique lo mismo en todos los sitios donde se puede escribir no es un
+// detalle: una marca que valiera en el parametro y no en el campo obligaria a
+// recordar donde vale, y lo que no se recuerda no se usa.
+//
+// Y los tres sitios pasan por el MISMO lector y la MISMA comprobacion, asi que
+// no pueden divergir.  Struct y overlay comparten hasta la funcion que lee su
+// cuerpo; la clase tiene la suya y llama a lo mismo.
+//
+// Esperado: 8 (7 leido por el campo `in` + 1).
+
+struct Caja {
+	in i64* vista; // por aqui solo se lee
+	i64 n;
+}
+
+class Nodo {
+	public in i64* mirada;
+	public i64 v;
+
+	public Nodo(in i64* m, i64 v) {
+		this.mirada = m;
+		this.v      = v;
+	}
+}
+
+// Un overlay es una VISTA sobre memoria ajena, que es justo donde mas se
+// agradece poder decir "por este campo no escribo".
+@overlay
+struct Cabecera {
+	in i64 *datos @0x00;
+	i64     largo @0x08;
+}
+
+i32 main() {
+	i64  a = 7_i64;
+	Caja c;
+	c.vista = &a;
+	c.n     = 1_i64;
+	// (*c.vista) = 0;  <- error: el campo es `in`, por ahi solo se lee
+
+	Nodo n = new Nodo(&a, 0_i64);
+	// (*n.mirada) = 0;  <- error, igual en una clase
+
+	return (i32)((*c.vista) + c.n);
+}

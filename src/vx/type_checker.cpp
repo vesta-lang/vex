@@ -2764,9 +2764,7 @@ Type TypeChecker::enum_type_of(const EnumLayout &lay,
 void TypeChecker::check_param_dir_(const std::string &name, ast::ParamDir dir,
                                    SourceLoc loc, Type &pt) {
     if (dir == ast::ParamDir::None) return;
-    const char *marca = dir == ast::ParamDir::In    ? "in"
-                        : dir == ast::ParamDir::Out ? "out"
-                                                    : "inout";
+    const char *marca = ast::param_dir_name(dir);
     // Lo que apunta.  Un array nativo tambien apunta: lo que viaja es la
     // direccion del primer elemento, no una copia del bloque.
     const bool apunta =
@@ -3879,6 +3877,10 @@ void TypeChecker::collect_globals() {
                     continue;
                 }
                 Type ft = type_from_node(f.type.get());
+                // La direccion del campo, por la MISMA puerta que la de un
+                // parametro o una variable.  Un struct y un overlay comparten
+                // este camino, asi que los dos la reciben a la vez.
+                check_param_dir_(f.name, f.dir, f.loc, ft);
                 if (ft.kind == PrimitiveKind::COUNT ||
                     ft.kind == PrimitiveKind::VOID) {
                     diags_.error(f.loc, "tipo invalido en campo '" + f.name +
@@ -4786,6 +4788,7 @@ void TypeChecker::collect_globals() {
                     continue;
                 }
                 Type ft = type_from_node(f.type.get());
+                check_param_dir_(f.name, f.dir, f.loc, ft);
                 if (ft.kind == PrimitiveKind::COUNT) {
                     diags_.error(f.loc, "tipo invalido en campo '" + f.name +
                                             "' de la clase '" + c->name + "'");

@@ -3923,6 +3923,10 @@ std::unique_ptr<ast::StructDecl> Parser::parse_inline_anon_aggregate_() {
         }
         ast::StructFieldDecl f;
         f.loc = current_.loc;
+        // La direccion va delante del tipo, con el MISMO lector que en un
+        // parametro o una variable: si tuviera uno propio, la marca acabaria
+        // significando una cosa aqui y otra alli.
+        f.dir = parse_opt_param_dir_();
         f.type = parse_type_node();
         if (!f.type) {
             synchronize();
@@ -5605,13 +5609,24 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             continue;
         }
 
+        const SourceLoc mloc = current_.loc;
+        /* La direccion se lee ANTES de comprobar que hay un tipo, porque va
+         * DELANTE de el: preguntando primero, `in i64* p;` no pasaria la puerta
+         * -- `starts_type()` mira el token de ahora, y ahora hay una marca --.
+         * Es el mismo caso que el enrutado de un statement con
+         * `register("reg")`.
+         *
+         * Y todavia no se sabe si lo que viene es un campo o un metodo: el
+         * mismo tipo hace de tipo de campo o de tipo de RETORNO segun lo que
+         * haya detras.  Si acaba siendo un metodo se rechaza mas abajo, porque
+         * sobre un retorno la marca no tiene a quien dar el permiso. */
+        const ast::ParamDir campo_dir = parse_opt_param_dir_();
         if (!starts_type()) {
             error_here("se esperaba un tipo de campo o metodo dentro del "
                        "struct");
             synchronize();
             continue;
         }
-        const SourceLoc mloc = current_.loc;
         auto type_node = parse_type_node();
         if (!type_node) {
             synchronize();
@@ -5624,6 +5639,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             if (try_parse_c_func_ptr_(type_node, fp_name, fp_type)) {
                 ast::StructFieldDecl f;
                 f.loc = mloc;
+                f.dir = campo_dir;
                 f.type = std::move(fp_type);
                 f.name = std::move(fp_name);
                 if (current_.kind == TokenKind::LBRACKET)
@@ -5665,6 +5681,9 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
             m->loc = mloc;
             m->name = std::move(member_name);
             m->return_type = std::move(type_node);
+            if (campo_dir != ast::ParamDir::None)
+                diags_.diag(mloc, DiagLevel::ERR, "VXT010",
+                            {m->name, ast::param_dir_name(campo_dir)});
             m->access = access;
             m->is_static = is_static; // `static`: factoria/constructor sin this
             m->is_comptime = is_comptime_member; // `comptime` metodo
@@ -5698,6 +5717,7 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
         // Campo.  Reusa el manejo de bit fields del codigo previo.
         ast::StructFieldDecl f;
         f.loc = mloc;
+        f.dir = campo_dir;
         f.is_static = is_static; // `static <T> nombre;` -> storage por-tipo
         f.is_comptime =
             is_comptime_member; // `comptime T campo` -> solo compile-time
@@ -6458,14 +6478,17 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             continue;
         }
 
-        // Caso 2: campo o metodo normal.  Ambos comienzan con un tipo.
+        // Caso 2: campo o metodo normal.  Ambos comienzan con un tipo -- o con
+        // la direccion, que va delante de el (ver la nota en el cuerpo del
+        // struct: se lee ANTES de la puerta, o `in i64* p;` no la pasaria).
+        const SourceLoc mloc = current_.loc;
+        const ast::ParamDir campo_dir = parse_opt_param_dir_();
         if (!starts_type()) {
             error_here(
                 "se esperaba un tipo de campo o metodo dentro de la clase");
             synchronize();
             continue;
         }
-        const SourceLoc mloc = current_.loc;
         auto type_node = parse_type_node();
         if (!type_node) {
             synchronize();
@@ -6502,6 +6525,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->loc = mloc;
             m->name = std::string("get_") + prop;
             m->return_type = std::move(type_node);
+            if (campo_dir != ast::ParamDir::None)
+                diags_.diag(mloc, DiagLevel::ERR, "VXT010",
+                            {m->name, ast::param_dir_name(campo_dir)});
             m->access = access;
             m->is_static = is_static;
             m->is_final = is_final;
@@ -6545,6 +6571,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->loc = mloc;
             m->name = std::move(member_name);
             m->return_type = std::move(type_node);
+            if (campo_dir != ast::ParamDir::None)
+                diags_.diag(mloc, DiagLevel::ERR, "VXT010",
+                            {m->name, ast::param_dir_name(campo_dir)});
             m->access = access;
             m->is_static = is_static;
             m->is_final = is_final;
@@ -6577,6 +6606,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             // Campo.  Init opcional con '='.
             ast::ClassFieldDecl f;
             f.loc = mloc;
+            f.dir = campo_dir;
             f.type = std::move(type_node);
             f.name = std::move(member_name);
             f.access = access;

@@ -4692,5 +4692,69 @@ for _t, _s, _p, _m, _f in DIR_NEG_CASES:
     _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
 
 
+
+
+modes3_case("direccion_campos",
+            "in/out en un CAMPO: struct, clase y overlay",
+            "523_direccion_campos.vx", 8)
+
+
+# La direccion en un campo tiene que INCUMPLIRSE igual que en un parametro.
+# Si el permiso solo valiera donde se declara y no donde se usa, la marca seria
+# documentacion: se leeria como una promesa y no obligaria a nada.
+DIR_CAMPO_NEG_CASES = [
+    ("dir_neg_campo_struct", """struct Caja {
+    in i64* p;
+}
+i32 main() {
+    i64 a = 1;
+    Caja c;
+    c.p = &a;
+    (*c.p) = 2;
+    return 0;
+}
+""", "lvalue 'const'",
+     "in en un campo de struct: escribir por ahi rechazado",
+     "in en un campo de struct: escribir por ahi debio fallar"),
+    ("dir_neg_campo_clase", """class C {
+    public in i64* p;
+}
+i32 main() {
+    return 0;
+}
+i64 romper(C c) {
+    (*c.p) = 2;
+    return 0;
+}
+""", "lvalue 'const'",
+     "in en un campo de clase: escribir por ahi rechazado",
+     "in en un campo de clase: escribir por ahi debio fallar"),
+    ("dir_neg_campo_overlay", """@overlay
+struct V {
+    out const i64* p @0x00;
+}
+i32 main() {
+    return 0;
+}
+""", "VXT006",
+     "la contradiccion con `const` se detecta tambien en un overlay",
+     "out sobre un pointee const en un overlay debio fallar"),
+    ("dir_neg_retorno", """class C {
+    public in i64* m() {
+        return null;
+    }
+}
+i32 main() {
+    return 0;
+}
+""", "VXT010",
+     "la marca en un tipo de RETORNO se rechaza: no hay a quien dar el permiso",
+     "in en un tipo de retorno debio fallar"),
+]
+
+for _t, _s, _p, _m, _f in DIR_CAMPO_NEG_CASES:
+    _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
+
+
 if __name__ == "__main__":
     main()

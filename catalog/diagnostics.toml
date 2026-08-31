@@ -1241,8 +1241,8 @@ es = "{0} funcion(es) de aqui no pueden demostrar sus efectos (@pure, @nothrow, 
 #     mal" sino "esto significa otra cosa y aun no esta conectada".
 
 [VXT006]
-en = "parameter '{0}' is marked '{1}' -- it promises to write what it points to -- but what it points to is declared 'const'"
-es = "el parametro '{0}' lleva '{1}' -- promete escribir lo que apunta -- pero lo que apunta esta declarado 'const'"
+en = "'{0}' is marked '{1}' -- it promises to write what it points to -- but what it points to is declared 'const'"
+es = "'{0}' lleva '{1}' -- promete escribir lo que apunta -- pero lo que apunta esta declarado 'const'"
 
 # --- dos definiciones de la misma nativa que no coinciden (VXT008) ---
 #
@@ -1273,5 +1273,19 @@ es = "'{0}:{1}' esta definida dos veces con efectos distintos ({2}); se sigue co
 # parece decir algo que no ocurre.
 
 [VXT009]
-en = "'{0}' is marked '{1}' on a value ('{2}'): that is the output-parameter form -- the caller yields a slot and the callee writes it -- and it is not wired yet; write it as a pointer ('{2}*') meanwhile"
-es = "'{0}' lleva '{1}' sobre un valor ('{2}'): esa es la forma de parametro de SALIDA -- quien llama cede un hueco y el llamado lo escribe -- y todavia no esta conectada; escribelo como puntero ('{2}*') mientras tanto"
+en = "'{0}' is marked '{1}' on a value ('{2}'): writing a copy is not visible from outside, so on a parameter this is the output-parameter form -- the caller yields a slot and the callee writes it -- and that is not wired yet; write it as a pointer ('{2}*') meanwhile"
+es = "'{0}' lleva '{1}' sobre un valor ('{2}'): escribir una copia no se ve desde fuera, asi que en un parametro esto es la forma de SALIDA -- quien llama cede un hueco y el llamado lo escribe -- y todavia no esta conectada; escribelo como puntero ('{2}*') mientras tanto"
+
+# --- la direccion sobre un tipo de RETORNO (VXT010) ---
+#
+# `in`/`out`/`inout` dan un PERMISO sobre lo que algo apunta, y un permiso se le
+# da a alguien: a un parametro, a una variable, a un campo.  Un tipo de retorno
+# no es nadie -- el valor sale y quien lo recibe ya decidira que declara --, asi
+# que la marca ahi no tiene a quien obligar.
+#
+# Se rechaza en vez de ignorarse: aceptarla y no hacer nada seria escribir algo
+# que parece decir una cosa y no ocurre, que es peor que no poder escribirlo.
+
+[VXT010]
+en = "'{0}' is marked '{1}' on its return type: the mark grants a permission over what something POINTS TO, and a return type is nobody to grant it to -- put it on the parameter, variable or field that receives the value"
+es = "'{0}' lleva '{1}' en su tipo de retorno: la marca da un permiso sobre lo que algo APUNTA, y un tipo de retorno no es nadie a quien darselo -- ponla en el parametro, la variable o el campo que recibe el valor"

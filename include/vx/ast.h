@@ -337,6 +337,24 @@ enum class ParamDir : uint8_t {
 };
 
 /**
+ * @brief La palabra que el usuario escribio, para citarla en un diagnostico.
+ * @param d La direccion.
+ * @return "in" / "out" / "inout", o "" si no hay marca.
+ *
+ * En un sitio porque la citan el parser y el comprobador de tipos, y un
+ * mensaje que llame `out` a lo que el usuario escribio `inout` manda a mirar
+ * la linea equivocada.
+ */
+inline const char *param_dir_name(ParamDir d) noexcept {
+    switch (d) {
+    case ParamDir::In: return "in";
+    case ParamDir::Out: return "out";
+    case ParamDir::InOut: return "inout";
+    default: return "";
+    }
+}
+
+/**
  * @struct PendingComplexity
  * @brief Un @c @complexity cuyo @c when: habla del PARAMETRO DE TIPO y por
  *        tanto no se puede resolver al parsear.
@@ -2301,6 +2319,13 @@ struct StructFieldDecl {
     std::unique_ptr<TypeNode> type;
     std::string name;
     SourceLoc loc;
+    /** Direccion declarada (`in i64* p;`), ver @c ParamDir.
+     *
+     * En un campo queda lo mismo que en una variable: el PERMISO.  Por un `in`
+     * solo se lee, y da igual quien lo tenga delante -- un parametro, un local
+     * o un campo --, que es justo lo que se le pide a una marca del lenguaje:
+     * que signifique lo mismo en todos los sitios donde se puede escribir. */
+    ParamDir dir = ParamDir::None;
     /// `static`: el campo NO vive en cada instancia sino una sola vez (storage
     /// global `<Struct>__<campo>`); habilita singletons y contadores por-tipo.
     /// Se accede via `Struct.campo` (lectura/escritura), no `instancia.campo`.
@@ -2557,6 +2582,9 @@ struct ClassFieldDecl {
     std::string name;
     std::unique_ptr<Expr> init; ///< null = sin valor por defecto
     SourceLoc loc;
+    /// Direccion declarada (`in i64* p;`), ver @c ParamDir y la nota en
+    /// @c StructFieldDecl::dir: en un campo queda el PERMISO.
+    ParamDir dir = ParamDir::None;
     uint8_t access = 0; ///< 0 = default/public, 1 = private, 2 = protected
     bool is_static = false;
     bool is_final = false;
