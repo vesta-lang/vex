@@ -2950,6 +2950,37 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
 }
 
 /**
+ * @brief Adelantar un valor a una lectura NO puede tirar DE QUE MEMORIA era.
+ *
+ * Quien LEE un campo sabe en que memoria vive lo que hay dentro -- se lo dice
+ * el TIPO del campo --, y quien lo ESCRIBIO puede no saberlo: una copia palabra
+ * a palabra de un struct mueve punteros sin enterarse de que lo son.  Al
+ * sustituir la lectura por el valor, esa marca se PASA al valor; borrarla deja
+ * el acceso leyendo de la memoria equivocada, y eso no da un error, da otro
+ * valor.
+ *
+ * NO se usa cuando la lectura pasa a ser una CONSTANTE.  Ahi el valor es un
+ * literal y no una direccion, asi que borrar la marca es lo correcto -- y por
+ * eso esos sitios NO llaman aqui, a proposito.
+ *
+ * Esta escrito una vez porque las tres reescrituras que adelantan un valor
+ * -- desde un argumento del constructor, desde una escritura previa, y la de
+ * @c sr_mem2reg_object -- tenian la misma linea copiada, y solo una se
+ * arreglo la primera vez.
+ *
+ * @param fn       Funcion.
+ * @param load_dst Destino de la lectura que se sustituye (el que SABE).
+ * @param fwd      Valor que pasa a ocupar su lugar.
+ */
+inline void sr_forward_mem_marks(IrFunction &fn, IrValueId load_dst,
+                                 IrValueId fwd) {
+    if (load_dst == IR_NO_VALUE || load_dst >= fn.values.size()) return;
+    if (fwd == IR_NO_VALUE || fwd >= fn.values.size()) return;
+    if (fn.values[load_dst].is_host_ptr) fn.values[fwd].is_host_ptr = true;
+    if (fn.values[load_dst].is_gc_object) fn.values[fwd].is_gc_object = true;
+}
+
+/**
  * @brief Reescribe (o solo valida) la instr @p ld (un LOAD) para producir el
  *        valor del campo a partir del arg/const con el que el ctor lo
  * inicializo.
@@ -2984,6 +3015,9 @@ bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
             if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size()) {
                 fn.values[ld.dst].is_const = true;
                 fn.values[ld.dst].const_val = v;
+                /* Aqui SI se borra, y es lo correcto: lo que queda es un
+                 * literal, no una direccion.  Los sitios que ADELANTAN un
+                 * valor no pueden hacer esto -- ver @c sr_forward_mem_marks. */
                 fn.values[ld.dst].is_host_ptr = false;
             }
         }
@@ -3009,10 +3043,12 @@ bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
         ld.operands.clear();
         ld.operands.push_back(arg);
         ld.func_name.clear();
-        if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size()) {
+        if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size())
             fn.values[ld.dst].is_const = false;
-            fn.values[ld.dst].is_host_ptr = false;
-        }
+        /* De que memoria era se PASA al argumento, no se borra.  Si hay que
+         * truncar, el campo mide menos de una palabra y no cabe una direccion,
+         * asi que la lectura no llevaba marca y esto no hace nada. */
+        sr_forward_mem_marks(fn, ld.dst, arg);
         /* szA > szT -> truncar; szA == szT -> copia directa. */
         ld.op = (szA > szT) ? IrOp::TRUNC : IrOp::MOV;
     }
@@ -3052,6 +3088,8 @@ bool sr_rewrite_load_zero(IrInstr &ld, IrFunction &fn, bool apply) {
         if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size()) {
             fn.values[ld.dst].is_const = true;
             fn.values[ld.dst].const_val = 0;
+            /* Un campo sin inicializar vale CERO, que no es una direccion:
+             * borrar la marca es lo correcto.  Ver @c sr_forward_mem_marks. */
             fn.values[ld.dst].is_host_ptr = false;
         }
     }
@@ -3662,29 +3700,11 @@ bool sr_mem2reg_object(
                 in.operands.clear();
                 in.operands.push_back(it->second);
                 in.func_name.clear();
-                if (in.dst < fn.values.size()) {
-                    fn.values[in.dst].is_const = false;
-                    /* De QUE MEMORIA es NO se borra: se PASA al valor
-                     * reenviado.
-                     *
-                     * Quien leia el campo lo sabia -- se lo dice el TIPO del
-                     * campo --, y quien lo escribio puede no saberlo: una copia
-                     * palabra a palabra de un struct mueve punteros sin
-                     * enterarse de que lo son.  Al adelantar el valor
-                     * almacenado a la lectura, borrar la marca tira lo unico
-                     * que distinguia las dos memorias, y despues el acceso sale
-                     * de donde no es.  Eso no da un error, da otro valor.
-                     *
-                     * Se vio en un campo `unique<T>`: el indice 0 de su buffer
-                     * salia a basura y el 1 bien, porque el 1 pasa por una suma
-                     * que si conservaba la marca. */
-                    if (it->second < fn.values.size()) {
-                        if (fn.values[in.dst].is_host_ptr)
-                            fn.values[it->second].is_host_ptr = true;
-                        if (fn.values[in.dst].is_gc_object)
-                            fn.values[it->second].is_gc_object = true;
-                    }
-                }
+                if (in.dst < fn.values.size()) fn.values[in.dst].is_const = false;
+                /* De que memoria era se PASA al valor adelantado, no se borra.
+                 * Ver  sr_forward_mem_marks: fue asi como el indice 0 de un
+                 * buffer salia a basura y el 1 bien. */
+                sr_forward_mem_marks(fn, in.dst, it->second);
             }
         }
     }
@@ -4282,10 +4302,9 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                     ld.operands.clear();
                     ld.operands.push_back(lp.stored);
                     ld.func_name.clear();
-                    if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size()) {
+                    if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size())
                         fn.values[ld.dst].is_const = false;
-                        fn.values[ld.dst].is_host_ptr = false;
-                    }
+                    sr_forward_mem_marks(fn, ld.dst, lp.stored);
                 } else if (lp.zero_init) {
                     sr_rewrite_load_zero(ld, fn, /*apply=*/true);
                 } else {
