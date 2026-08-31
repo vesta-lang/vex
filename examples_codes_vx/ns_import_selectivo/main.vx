@@ -1,0 +1,63 @@
+// Las formas SELECTIVAS del import.
+//
+// Un `import` puede traer un namespace entero, pero casi nunca se quiere todo:
+// lo normal es traer dos nombres y usarlos sin cualificar, y a veces
+// renombrarlos porque en este fichero el nombre corto ya significa otra cosa.
+// Hay tres formas de decirlo, y las tres se prueban aqui:
+//
+//   import a.b.{Uno, Otro};              trae solo esos, se usan pelados
+//   import a.b.{Uno as X, Otro as Y};    lo mismo, renombrando cada uno
+//   import a.b only Uno as X, Otro as Y; la forma con palabra, equivalente
+//
+// (La cuarta, `import a.b as alias`, trae el namespace entero detras de un
+// nombre corto y la cubre `ns_cobertura` en la suite.)
+//
+// Lo que de verdad se comprueba es que el nombre efectivo es el NUEVO: si el
+// renombrado no se aplicara, `x2` no existiria y esto no compilaria; si se
+// aplicara al simbolo equivocado, el resultado seria otro.  Por eso cada
+// modulo llega al mismo 42 por un CAMINO distinto -- doblar, renombrado en la
+// lista, y renombrado con `only` -- en vez de repetir la misma llamada.
+//
+// Y por eso cada fallo sale con SU codigo: el numero dice QUE se rompio, no
+// solo que algo se rompio.
+
+namespace calc.main;
+
+// (1) Selectiva sin renombrar: `doblar` se usa pelado, sin cualificar.
+import calc.ops.{doblar, triplicar};
+
+// (2) Selectiva CON renombrado por simbolo.
+import calc.ops.{restar as menos};
+
+// (3) La forma `only`, que debe significar exactamente lo mismo que (2).
+import calc.ops only doblar as x2;
+
+i32 main() {
+	// (1) sin cualificar, y los dos nombres traidos valen.
+	i64 uno = doblar(21);
+	if (uno != 42) {
+		println("(1) selectiva sin renombrar: ${uno}, esperaba 42");
+		return 1_i32;
+	}
+	if (triplicar(14) != 42) {
+		println("(1) el segundo nombre de la lista no se trajo");
+		return 2_i32;
+	}
+
+	// (2) el nombre NUEVO es el que existe.
+	i64 dos = menos(50, 8);
+	if (dos != 42) {
+		println("(2) renombrado en la lista: ${dos}, esperaba 42");
+		return 3_i32;
+	}
+
+	// (3) la forma con palabra, por otro camino, al mismo sitio.
+	i64 tres = x2(21);
+	if (tres != 42) {
+		println("(3) renombrado con only: ${tres}, esperaba 42");
+		return 4_i32;
+	}
+
+	println("import selectivo: las tres formas -> ${uno}");
+	return (i32) uno;
+}

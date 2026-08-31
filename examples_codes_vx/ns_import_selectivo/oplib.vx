@@ -1,0 +1,16 @@
+// Las operaciones que los tres modulos de `main.vx` van a importar de tres
+// maneras distintas.  Nada especial aqui: lo que se prueba es COMO se traen,
+// no que hacen.
+namespace calc.ops;
+
+public i64 doblar(i64 x) {
+	return x * 2;
+}
+
+public i64 triplicar(i64 x) {
+	return x * 3;
+}
+
+public i64 restar(i64 a, i64 b) {
+	return a - b;
+}

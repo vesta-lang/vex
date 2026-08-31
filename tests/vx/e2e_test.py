@@ -1931,6 +1931,55 @@ def _(ctx):
            "-> R0 = 42")
 
 
+def modulo_case(tag, carpeta, expected, line=None):
+    """Un ejemplo de VARIOS ficheros: se compila su `main.vx` y se ejecuta.
+
+    Estos viven en subcarpetas de `examples_codes_vx/` porque son modulos, no
+    ficheros sueltos, y por eso se les escapaban a las dos redes: la suite los
+    referenciaba por nombre y estos no tienen entrada propia, y el porton de
+    compilacion (`corpus_compila.py`) excluye las subcarpetas a proposito --
+    sus ficheros NO compilan por separado, solo a traves del `main.vx`.
+
+    Resultado: toda la superficie de namespaces y de modulos -- doce ejemplos
+    que funcionan -- no la guardaba nadie.  Funcionar hoy y no estar cubierto es
+    estar a un refactor de romperse en silencio.
+
+    Se comprueba en interprete Y en JIT: un modulo que resuelve bien al
+    interpretarlo puede resolver mal compilado.
+    """
+    def fn(ctx):
+        if not ctx.compile_vx(ctx.src(carpeta + "/main.vx"), tag):
+            return
+        for modo in ("vm", "jit"):
+            _, log = ctx.run_velb(tag, schedulers=1, mode=modo)
+            got = get_r00(log)
+            if got != expected:
+                ctx.fail("%s (-m %s): R00 == %s, se esperaba %d"
+                         % (carpeta, modo, got, expected), log)
+                return
+            ctx.ok("%s (-m %s) -> R0 = %d" % (carpeta, modo, expected))
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
+# Los ejemplos de VARIOS ficheros.  Todos llegan a 42 por caminos distintos --
+# es la convencion del corpus -- asi que el numero no es una casualidad que se
+# congela: es la respuesta que el ejemplo dice que va a dar.
+modulo_case("mod_import_selectivo", "ns_import_selectivo", 42)
+modulo_case("mod_import_by_namespace", "ns_import_by_namespace", 42)
+modulo_case("mod_ns_internal", "ns_internal", 42)
+modulo_case("mod_ns_stdlib", "ns_stdlib", 42)
+modulo_case("mod_ns_impl", "ns_impl", 42)
+modulo_case("mod_ns_impl_inherente", "ns_impl_inherente", 42)
+modulo_case("mod_ns_concept", "ns_concept", 42)
+modulo_case("mod_ns_comptime", "ns_comptime", 42)
+modulo_case("mod_ns_cross_types", "ns_cross_types", 42)
+modulo_case("mod_ns_interpolation", "ns_interpolation", 42)
+modulo_case("mod_ns_xmod_comptime", "ns_xmod_comptime", 42)
+modulo_case("mod_ns_xmod_concept", "ns_xmod_concept", 42)
+modulo_case("mod_generic_fn_infer", "generic_fn_infer", 42)
+
+
 @case("syscalls_linux_wsl")
 def _(ctx):
     """La rama LINUX de las syscalls, compilada a ELF y EJECUTADA en WSL.
@@ -4517,6 +4566,46 @@ def main():
         sys.exit(1)
     print("=== e2e: %d pasos OK, 0 fallidos (%d casos) ==="
           % (steps, len(entries)))
+
+
+modes3_case("direccion_parametros",
+            "in/out/inout: la marca vale en TODO lo que se declara",
+            "521_direccion_parametros.vx", 52)
+
+
+@case("efectos_extern_target")
+def _(ctx):
+    """Los efectos de una externa, y que dependan del OBJETIVO.
+
+    Las dos mitades importan por separado.  Que compile y corra prueba que lo
+    definido no estorba; lo que de verdad se fija aqui es la SEGUNDA: el mismo
+    fichero, la misma declaracion, un solo simbolo, y el veredicto cambia al
+    cambiar de objetivo.  Eso es lo que no se puede conseguir repitiendo la
+    declaracion con `@Target` -- alli lo que cambia es que simbolo existe --, y
+    por eso se comprueba mirando el error y no solo el codigo de salida.
+    """
+    src = "522_efectos_extern_target.vx"
+    ctx.compile_vx(ctx.src(src), "fxtgt")
+    _, log = ctx.run_velb("fxtgt", schedulers=1)
+    got = get_r00(log)
+    if got != 42:
+        ctx.fail("efectos extern: R00 == %s, se esperaba 42" % got, log)
+        return
+    if "Hola FFI!" not in log:
+        ctx.fail("efectos extern: no salio lo impreso por la nativa", log)
+        return
+    ctx.ok("efectos extern (windows) -> 42, y la nativa imprimio")
+    # Y para Linux la definicion dice que SI puede entrar en panico, asi que el
+    # `@nopanic` de quien la llama se incumple.  Se exige el codigo del
+    # catalogo: que falle no basta -- podria fallar por cualquier otra cosa --.
+    rc, log2 = ctx.run([VM_EXE, "-m", "aot", "--vesta", ctx.src(src),
+                        "--format", "elf", "--emit", "obj",
+                        "-o", ctx.path("fxtgt_l")])
+    if "VXT004" not in log2:
+        ctx.fail("efectos extern: apuntando a linux el @nopanic tenia que "
+                 "incumplirse (VXT004) y no salio", log2)
+        return
+    ctx.ok("efectos extern (linux) -> VXT004: el mismo fichero, otro veredicto")
 
 
 if __name__ == "__main__":
