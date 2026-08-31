@@ -29,7 +29,8 @@
  *
  * LO QUE NO SE SABE SE CUENTA.  Donde hay una instruccion que toca registros
  * sin decir cuales, este hecho no adivina: marca ese punto y ahi da TODO por
- * vivo.  @ref PhysLivenessFacts::opaco dice cuantos puntos asi hubo, para que
+ * vivo.  @ref PhysLivenessFacts::unknown_points dice cuantos puntos asi hubo,
+ * para que
  * quien mire un resultado pobre sepa por que lo es en vez de suponer que no
  * habia nada que sacar.
  */
@@ -78,7 +79,7 @@ struct PhysLivenessFacts {
     std::vector<uint32_t> off; ///< off[b]..off[b+1] = tramo del bloque b.
     /// Cuantos puntos habia donde no se sabia que se tocaba.  Cero = el
     /// resultado es tan preciso como el modelo permite.
-    uint32_t opaco = 0;
+    uint32_t unknown_points = 0;
 
     /// @brief Los vivos justo despues de la instruccion @p i del bloque @p b.
     PhysRegSet live_after(uint32_t b, uint32_t i) const noexcept {
@@ -99,7 +100,7 @@ struct PhysLivenessFacts {
  *
  * @param pf MachineIR fisico (despues de @c rewrite_to_physical).
  * @return El hecho.  Nunca falla: donde no se sabe, da todo por vivo y lo
- *         cuenta en @c opaco.
+ *         cuenta en @c unknown_points.
  */
 PhysLivenessFacts compute_phys_liveness(const jit::MFunction &pf);
 

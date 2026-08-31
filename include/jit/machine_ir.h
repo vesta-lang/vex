@@ -880,6 +880,24 @@ static constexpr uint16_t MI_FLAG_VX_SCALAR = 0x8000u;
  * con el stackmap-idx que CALL/SAFEPOINT guardan. */
 static constexpr uint16_t MI_FLAG_RET_EXPLICIT = 0x4000u;
 
+/** Este salto es la COLA DE UNA LLAMADA, no un salto normal.
+ *
+ * Al bajar un @c MOp::TAILCALL, el reescritor desmonta el marco y emite un
+ * `jmp` al destino.  Visto despues, ese `jmp` no se distingue de cualquier
+ * otro -- y la diferencia importa: una cola PASA ARGUMENTOS, asi que lee los
+ * registros de la convencion, mientras que un salto normal no lee nada.  Sin
+ * saberlo, las instrucciones que colocan esos argumentos parecen muertas y
+ * quien borra escrituras muertas se las lleva.
+ *
+ * Deducirlo mirando la forma del operando no vale: la cola puede ir a un label
+ * (a la propia funcion), a una direccion (a otra) o a traves de un registro, y
+ * las tres formas las usa tambien un salto que no es una cola.  El unico que lo
+ * sabe con certeza es quien lo emite, asi que lo dice aqui.
+ *
+ * Bit alto, como los de arriba -> no colisiona con el indice de stackmap que
+ * CALL/SAFEPOINT guardan en el mismo campo. */
+static constexpr uint16_t MI_FLAG_TAILCALL = 0x2000u;
+
 struct MInstr {
     MOp op = MOp::NOP;
     uint8_t variant = 0;
@@ -1661,6 +1679,29 @@ struct MFunction {
         MLabelId label;    ///< label del bloque destino (brazo o default)
     };
     std::vector<AddrTableFixup> addr_table_fixups;
+    /// Saltos RELATIVOS a una direccion absoluta que no se sabe al codificar.
+    ///
+    /// La cola de una llamada a otra funcion salta a donde el JIT compilo esa
+    /// funcion, que es una direccion de 64 bits.  Materializarla en un registro
+    /// y saltar a traves de el vale siempre, pero cuesta doce bytes, gasta un
+    /// registro y le esconde el destino al predictor de saltos.  Como el
+    /// destino se CONOCE, lo que toca es un salto relativo de cinco bytes.
+    ///
+    /// Lo que impide decidirlo al codificar es el orden: primero se codifica y
+    /// despues se pide sitio en la cima de codigo, asi que la distancia no se
+    /// sabe todavia.  Se resuelve igual que la tabla de saltos de arriba --
+    /// hueco al codificar, parcheo cuando ya hay direccion --, con una
+    /// diferencia: si la distancia NO cabe en los 32 bits del salto, el hueco
+    /// ya esta reservado y no se puede volver atras.  Entonces se ABANDONA la
+    /// compilacion de esa funcion y se ejecuta interpretada, que es mas lento
+    /// pero correcto.  Pasa practicamente nunca: la cima son trozos de un mega
+    /// que el sistema coloca juntos.
+    struct RelJumpFixup {
+        uint32_t patch_at;  ///< offset del hueco de 4 bytes
+        uint32_t instr_end; ///< offset del final del salto (base del relativo)
+        uint64_t target;    ///< direccion absoluta a la que se va
+    };
+    std::vector<RelJumpFixup> rel_jump_fixups;
     /// Tamano del frame stack (bytes) reservado por enter (sub rsp, N).
     /// Lo poblea el selector tras analizar locales/spills.
     uint32_t stack_frame_size = 0;

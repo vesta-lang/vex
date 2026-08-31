@@ -512,6 +512,53 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa, sched::SchedMode mode) {
                      tot_instr ? 100.0 * tot_moved / tot_instr : 0.0);
     }
 }
+
+/**
+ * @brief Rellena lo que solo se puede rellenar cuando ya se sabe DONDE va el
+ *        codigo.
+ *
+ * Se codifica antes de pedir sitio en la cima, asi que todo lo que dependa de
+ * la direccion propia queda en hueco y se completa aqui: entre el memcpy y el
+ * commit, que es la unica ventana en la que hay direccion y todavia no se
+ * ejecuta nada.
+ *
+ * Son dos cosas.  Las entradas de una tabla de saltos, que son direcciones
+ * absolutas de ocho bytes.  Y los saltos relativos a una direccion conocida --
+ * la cola de una llamada a otra funcion --, donde lo que se escribe es la
+ * DISTANCIA; si no cabe en los 32 bits del salto no hay vuelta atras, asi que
+ * se dice que no y la funcion se ejecuta interpretada.
+ *
+ * Estaba escrito TRES veces, una por cada camino que compila (normal, sin
+ * reparto de registros, y con reentrada a mitad de bucle).  Tres copias de un
+ * parcheo es donde una se queda sin lo que se le anade a las otras.
+ *
+ * @param pf   La funcion, con sus huecos pendientes.
+ * @param code Donde quedo, ya copiada.
+ * @return @c false si algun salto no alcanza; entonces no se puede usar.
+ */
+bool patch_after_alloc(const MFunction &pf, uint8_t *code) {
+    /* Tabla de saltos densa: la entrada guarda la direccion ABSOLUTA del brazo,
+     * que es la base mas el offset de su label. */
+    for (const auto &f : pf.addr_table_fixups) {
+        if (f.label < pf.label_offsets.size() &&
+            pf.label_offsets[f.label] != UINT32_MAX) {
+            const uint64_t target =
+                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
+            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
+        }
+    }
+    /* Saltos relativos a una direccion ya conocida.  Ver
+     * @c MFunction::rel_jump_fixups. */
+    for (const auto &f : pf.rel_jump_fixups) {
+        const int64_t from = static_cast<int64_t>(
+            reinterpret_cast<uint64_t>(code) + f.instr_end);
+        const int64_t delta = static_cast<int64_t>(f.target) - from;
+        if (delta < INT32_MIN || delta > INT32_MAX) return false;
+        const int32_t rel = static_cast<int32_t>(delta);
+        std::memcpy(code + f.patch_at, &rel, sizeof(int32_t));
+    }
+    return true;
+}
 } // namespace
 
 uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
@@ -649,14 +696,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     /* Jump table densa (SWITCH_DENSE): parchear cada entrada de 8 bytes con la
      * direccion nativa absoluta del brazo (base + label_offset).  POST-memcpy
      * (base = code) y PRE-commit (antes del flush icache). */
-    for (const auto &f : pf.addr_table_fixups) {
-        if (f.label < pf.label_offsets.size() &&
-            pf.label_offsets[f.label] != UINT32_MAX) {
-            const uint64_t target =
-                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
-            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
-        }
-    }
+    if (!patch_after_alloc(pf, code)) return nullptr;
     cc.commit(code, bytes.size());
     /* Y como se desenrolla, para que un fallo del procesador dentro de esta
      * funcion se pueda recoger y contar en vez de matar el proceso en
@@ -751,14 +791,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
     uint8_t *code = cc.alloc(bytes.size(), 16);
     if (!code) return nullptr;
     std::memcpy(code, bytes.data(), bytes.size());
-    for (const auto &f : pf.addr_table_fixups) {
-        if (f.label < pf.label_offsets.size() &&
-            pf.label_offsets[f.label] != UINT32_MAX) {
-            const uint64_t target =
-                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
-            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
-        }
-    }
+    if (!patch_after_alloc(pf, code)) return nullptr;
     cc.commit(code, bytes.size());
     /* Y como se desenrolla, para que un fallo del procesador dentro de esta
      * funcion se pueda recoger y contar en vez de matar el proceso en
@@ -977,14 +1010,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     std::memcpy(code, bytes.data(), bytes.size());
     /* Jump table densa (SWITCH_DENSE): parchear entradas con la direccion
      * nativa del brazo (base + label_offset).  POST-memcpy, PRE-commit. */
-    for (const auto &f : pf.addr_table_fixups) {
-        if (f.label < pf.label_offsets.size() &&
-            pf.label_offsets[f.label] != UINT32_MAX) {
-            const uint64_t target =
-                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
-            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
-        }
-    }
+    if (!patch_after_alloc(pf, code)) return nullptr;
     cc.commit(code, bytes.size());
     /* Y como se desenrolla, para que un fallo del procesador dentro de esta
      * funcion se pueda recoger y contar en vez de matar el proceso en

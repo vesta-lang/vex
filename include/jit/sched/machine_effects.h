@@ -72,6 +72,27 @@ struct MEffects {
 };
 
 /**
+ * @brief Anade @p k a @p v si no estaba ya.
+ *
+ * Las listas son cortisimas -- media docena de registros --, asi que buscar
+ * linealmente en un vector contiguo gana a cualquier conjunto: cabe en una
+ * linea de cache y no hay nada que reservar.
+ *
+ * Vive en la cabecera porque lo usan tanto el modulo comun como la tabla de
+ * cada ISA, y tener dos copias de algo tan pequeno es justo como se separan.
+ *
+ * @param v Lista de lecturas o de escrituras.
+ * @param k Clave de registro; @c UINT32_MAX quiere decir "no es un registro" y
+ *          no se anade.
+ */
+inline void add_reg(std::vector<uint32_t> &v, uint32_t k) {
+    if (k == UINT32_MAX) return;
+    for (const uint32_t x : v)
+        if (x == k) return;
+    v.push_back(k);
+}
+
+/**
  * @brief Calcula los efectos completos de @p mi consultando las DBs generadas.
  *
  * Los efectos de las instrucciones REALES de la ISA (add/mov/idiv/addsd/...) se

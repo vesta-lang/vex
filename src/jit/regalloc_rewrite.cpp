@@ -1488,21 +1488,44 @@ struct Lowerer {
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, reg(static_cast<MReg>(areg[0])), reg(MReg::RBX)));
             emit_epilogue(out);
-            if (in.src1.kind == MOperandKind::LABEL) {
-                /* self-tail-call: jmp rel32 a code+0 (label bloque 0). */
-                MInstr j;
-                j.op = MOp::JMP;
-                j.src1 = in.src1;
-                out.push_back(j);
-            } else {
-                /* cross-fn: mov scr0(), addr(imm64) + jmp scr0(). */
+            /* El salto es DIRECTO en los dos casos, porque en los dos se sabe
+             * a donde se va: a la propia funcion (un label) o a la direccion
+             * donde el JIT compilo la otra.  Cinco bytes, sin gastar un
+             * registro y con el destino a la vista del predictor de saltos.
+             *
+             * La direccion de la otra funcion son 64 bits y no cabe en el
+             * salto, pero la DISTANCIA si: el codificador deja el hueco y lo
+             * rellena quien ya conoce la direccion propia.  Antes se
+             * materializaba en un registro y se saltaba a traves de el -- doce
+             * bytes -- porque al codificar no se sabe la distancia; lo que
+             * faltaba no era la informacion, era esperar a tenerla. */
+            /* A una ETIQUETA se salta directo siempre: es un salto normal y
+             * cualquier objetivo lo sabe emitir.  A una DIRECCION solo si el
+             * objetivo dice que sabe -- lo PREGUNTA, porque este reescritor es
+             * comun a todos y saber emitirla es de cada uno --.  Quien no sepa,
+             * materializa la direccion en un registro y salta a traves de el,
+             * que es la forma de siempre y vale en cualquier parte. */
+            static const bool no_direct =
+                util::flag_on(util::FlagId::NoDirectTailJmp);
+            if ((no_direct || !tri.can_jump_to_abs_addr) &&
+                in.src1.kind != MOperandKind::LABEL) {
                 out.push_back(
                     MInstr::make_unary(MOp::MOV, reg(scr0()), in.src1));
-                MInstr j;
-                j.op = MOp::JMP;
-                j.src1 = reg(scr0());
-                out.push_back(j);
+                MInstr ji;
+                ji.op = MOp::JMP;
+                ji.src1 = reg(scr0());
+                ji.flags |= MI_FLAG_TAILCALL;
+                out.push_back(ji);
+                return true;
             }
+            MInstr j;
+            j.op = MOp::JMP;
+            j.src1 = in.src1; // LABEL (a si misma) o IMM64_IDX (a otra)
+            /* Y se DICE que es una cola.  Visto luego, este `jmp` no se
+             * distingue de uno normal, y la diferencia importa: una cola pasa
+             * argumentos.  Ver @c MI_FLAG_TAILCALL. */
+            j.flags |= MI_FLAG_TAILCALL;
+            out.push_back(j);
             return true;
         }
 

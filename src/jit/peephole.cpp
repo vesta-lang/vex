@@ -18,6 +18,7 @@
 #include <string>
 
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 namespace jit {
@@ -39,6 +40,62 @@ bool peephole_disabled() noexcept {
 bool deaddef_report(const std::string &fn) noexcept {
     const std::string &want = util::flag_text(util::FlagId::DeadDefReport);
     return !want.empty() && fn.find(want) != std::string::npos;
+}
+
+/// Desactiva SOLO el borrado de escrituras que nadie lee, dejando el resto
+/// activo.  Sirve para separar en dos si algo sale mal: con esto puesto, lo que
+/// siga fallando no es de esta regla.
+bool deaddef_disabled() noexcept {
+    static const bool off = util::flag_on(util::FlagId::NoDeadDef);
+    return off;
+}
+
+/// Aplica la regla SOLO en las funciones cuyo nombre contenga esto.
+///
+/// Es el segundo instrumento, y el que cierra el circulo.  El informe dice que
+/// SE BORRARIA; con esto se borra solo en una parte del programa y se bisecta
+/// por NOMBRE hasta dar con la funcion en la que borrar cambia el resultado.
+///
+/// Se bisecta por nombre y no por un contador de borrados porque el JIT compila
+/// desde varios hilos: un contador global sale distinto en cada ejecucion, asi
+/// que el numero al que se llega bisecando no vuelve a senalar lo mismo.  El
+/// nombre si es estable.
+/// Se escribe `<parte del nombre>` o `<parte del nombre>#<bloque>`, y con el
+/// bloque se llega hasta UN borrado concreto.
+bool deaddef_only(const std::string &fn, size_t block) noexcept {
+    const std::string &want = util::flag_text(util::FlagId::DeadDefOnly);
+    if (want.empty()) return true;
+    const size_t sep = want.find('#');
+    const std::string name = want.substr(0, sep);
+    if (!name.empty() && fn.find(name) == std::string::npos) return false;
+    if (sep == std::string::npos) return true;
+    return std::strtoul(want.c_str() + sep + 1, nullptr, 10) == block;
+}
+
+/// @brief Si @p in es una escritura que se puede borrar cuando nadie la lee.
+///
+/// El filtro es deliberadamente estrecho.  Solo un `mov` a un registro entero
+/// de 64 bits desde algo que no es memoria:
+///
+///   - de MEMORIA no, porque leer una direccion puede fallar, y una lectura que
+///     falla no es lo mismo que una que no hace falta;
+///   - de menos de 64 bits no, porque escribir la parte baja deja el resto del
+///     registro como estaba, asi que la escritura no es la unica duena de lo
+///     que hay dentro;
+///   - a memoria no (eso es un store, y quien lo lee no es un registro);
+///   - y nada que toque las banderas, que se miran aparte y este predicado no
+///     las mira.
+///
+/// Todo lo demas se queda.  Una regla que borra codigo tiene que equivocarse
+/// hacia el lado de no borrar.
+inline bool is_removable_def(const MInstr &in) noexcept {
+    if (in.op != MOp::MOV) return false;
+    if (in.dst.kind != MOperandKind::REG || in.dst.width != 8) return false;
+    if (in.src2.kind != MOperandKind::NONE) return false;
+    if (in.src1.kind == MOperandKind::MEM) return false;
+    return in.src1.kind == MOperandKind::REG ||
+           in.src1.kind == MOperandKind::IMM32 ||
+           in.src1.kind == MOperandKind::IMM64_IDX;
 }
 
 /// Desactiva SOLO el idiom xor-zeroing (bisection), dejando el resto activo.
@@ -172,38 +229,48 @@ uint32_t peephole_physical(MFunction &pf) {
     if (peephole_disabled()) return 0;
     const bool no_xz = xorzero_disabled();
     uint32_t removed = 0;
-    /* NO hay aqui una regla que borre ESCRITURAS QUE NADIE LEE, y no por no
-     * haberlo intentado: se probaron tres versiones y las tres rompieron algo.
+    /* La regla que borra ESCRITURAS QUE NADIE LEE se apoya entera en el hecho
+     * @c analysis::facts::compute_phys_liveness, que dice que sigue vivo tras
+     * cada instruccion leyendolo de la base de instrucciones.
      *
-     * La ultima ya preguntaba a @c analysis::facts::compute_phys_liveness --
-     * el hecho que dice que sigue vivo tras cada instruccion, sacado de la
-     * base -- y aun asi fallaban seis casos del recolector.  El modelo de "que
-     * hace VIVO a un registro" en este backend tiene mas fuentes de las que el
-     * hecho conoce hoy; mientras falte una, la regla borra algo que hacia
-     * falta.
+     * Y el modelo de "que hace VIVO a un registro" en este backend tiene mas
+     * fuentes de las que se ven mirando los operandos.  Cada una que faltaba
+     * hacia que la regla borrase algo que hacia falta, y ninguna avisaba: el
+     * codigo salia mas corto y con otro resultado.  Estan cerradas, una a una,
+     * y cada una tiene su caso en @c tests/jit/test_phys_liveness.cpp:
      *
-     * Lo que SI quedo de esos intentos, y vale por su cuenta: que un `ret` y
-     * una llamada DIGAN los registros que leen por convencion (estaban solo
-     * como "barrera", que basta para no reordenar y no para liveness -- una
-     * funcion que devolvia 42 empezaba a devolver 0, y un bucle se comia toda
-     * la memoria de la maquina), que un bloque de `asm` diga los registros que
-     * lee su cuerpo, y el hecho con sus pruebas.
+     *   1. Lo que lee un `ret` por convencion (el registro del retorno y los
+     *      que hay que devolver intactos).  Estaba solo como "barrera", que
+     *      basta para no reordenar y NO para liveness: una funcion que devolvia
+     *      42 empezaba a devolver 0.
+     *   2. Lo que lee una llamada por convencion (sus argumentos, que no
+     *      aparecen en sus operandos).  Sin esto un bucle se comia toda la
+     *      memoria de la maquina.
+     *   3. Sus PROPIOS operandos cuando la llamada es indirecta.
+     *   4. Que esas tres se apliquen ENCIMA de la base de instrucciones y no en
+     *      lugar de ella: viven en @c abi_overlay porque la base contesta
+     *      primero desde que aprendio `ret` y `call`, y mientras estuvieron
+     *      dentro del pseudo dejaron de aplicarse sin que nada fallara al
+     *      compilar.
+     *   5. Que un salto a traves de un REGISTRO lee ese registro y ademas es
+     *      una llamada de cola.  A la base se le pregunta por mnemonico, asi
+     *      que para `jmp` contesta lo del salto relativo.
      *
-     * COMO SE RETOMA, que es lo util: `VESTA_DEAD_DEF_REPORT=<parte del nombre
-     * de una funcion>` imprime que escrituras BORRARIA sin borrar ninguna.
-     * Cada linea sobre un programa que funciona es una escritura que el hecho
-     * da por muerta; basta con mirar UNA que no lo este para saber que fuente
-     * de liveness falta.  Asi salieron las tres que ya estan cerradas -- lo
-     * que lee un `ret`, lo que lee una llamada por convencion, y sus propios
-     * operandos cuando la llamada es indirecta --: en `252_gc_ref_field` el
-     * informe paso de diez lineas a una.
+     *   6. Que un bloque de `asm` diga los registros que lee su CUERPO, no solo
+     *      los que nombran sus operandos.
      *
-     * Lo que queda por encontrar no es poco: con la regla puesta, la suite
-     * ENTERA se cae -- POO, herencia, interfaces, polimorfismo, colas --, todo
-     * devolviendo 0.  El grupo del recolector solo, en cambio, pasa 22 de 23;
-     * mirar un subconjunto engana. */
+     * COMO SE BUSCA UNA QUE FALTE, que es lo util:
+     * `VESTA_DEAD_DEF_REPORT=<parte del nombre de una funcion>` imprime que
+     * escrituras borraria SIN borrar ninguna.  Cada linea sobre un programa que
+     * funciona es una escritura que el hecho da por muerta; basta con mirar UNA
+     * que no lo este para saber que fuente falta.  Asi salieron todas: en
+     * `252_gc_ref_field` el informe paso de diez lineas a una, y en
+     * `19_tco_basico` la unica que quedaba era el salto de la llamada de cola.
+     *
+     * Y se mide con la SUITE ENTERA: un subconjunto engana -- el grupo del
+     * recolector solo pasa 22 de 23 aun cuando faltaban tres fuentes --. */
     if (deaddef_report(pf.name)) {
-        const analysis::facts::PhysLivenessFacts vivos =
+        const analysis::facts::PhysLivenessFacts live =
             analysis::facts::compute_phys_liveness(pf);
         for (size_t bi = 0; bi < pf.blocks.size(); ++bi) {
             const MBlock &b = pf.blocks[bi];
@@ -213,19 +280,45 @@ uint32_t peephole_physical(MFunction &pf) {
                 if (in.dst.kind != MOperandKind::REG || in.dst.width != 8)
                     continue;
                 if (in.src2.kind != MOperandKind::NONE) continue;
-                if (vivos.is_live_after(static_cast<uint32_t>(bi),
+                if (live.is_live_after(static_cast<uint32_t>(bi),
                                         static_cast<uint32_t>(i), in.dst.reg))
                     continue;
+                /* Y con QUE sigue el bloque, que es lo que identifica el
+                 * hueco: si lo de after usa el registro, el que se equivoca
+                 * es el hecho, y el `op` de esa instruccion dice cual es la
+                 * fuente de liveness que falta. */
+                std::string after;
+                for (size_t k = i + 1; k < b.instrs.size() && k <= i + 3; ++k) {
+                    char buf[80];
+                    std::snprintf(buf, sizeof buf, " op%d(d%d:r%d,s%d:r%d)",
+                                  static_cast<int>(b.instrs[k].op),
+                                  static_cast<int>(b.instrs[k].dst.kind),
+                                  static_cast<int>(b.instrs[k].dst.reg),
+                                  static_cast<int>(b.instrs[k].src1.kind),
+                                  static_cast<int>(b.instrs[k].src1.reg));
+                    after += buf;
+                }
                 std::fprintf(stderr,
-                             "[deaddef] %s bloque %zu instr %zu: mov r%u <- "
-                             "(fuente kind %d) parece MUERTA%s\n",
-                             pf.name.c_str(), bi, i,
+                             "[deaddef] %s bloque %zu/%zu (succ %d,%d, "
+                             "termina en op%d) instr %zu: "
+                             "mov r%u <- (kind %d) MUERTA; after:%s%s\n",
+                             pf.name.c_str(), bi, pf.blocks.size(),
+                             static_cast<int>(b.succ_a),
+                             static_cast<int>(b.succ_b),
+                             static_cast<int>(b.instrs.back().op), i,
                              static_cast<unsigned>(in.dst.reg),
-                             static_cast<int>(in.src1.kind),
-                             vivos.opaco ? " [hay puntos sin saber]" : "");
+                             static_cast<int>(in.src1.kind), after.c_str(),
+                             live.unknown_points ? " [hay puntos sin saber]" : "");
             }
         }
     }
+    /* El hecho de liveness, UNA vez para toda la funcion: la regla de abajo lo
+     * consulta por indice.  Se calcula solo si esa regla esta encendida, que es
+     * lo unico que lo paga. */
+    const bool drop_dead_defs = !deaddef_disabled();
+    analysis::facts::PhysLivenessFacts live_regs;
+    if (drop_dead_defs) live_regs = analysis::facts::compute_phys_liveness(pf);
+
     for (size_t bi = 0; bi < pf.blocks.size(); ++bi) {
         MBlock &b = pf.blocks[bi];
         std::vector<MInstr> kept;
@@ -233,6 +326,75 @@ uint32_t peephole_physical(MFunction &pf) {
         bool changed = false;
         for (size_t i = 0; i < b.instrs.size(); ++i) {
             const MInstr &in = b.instrs[i];
+            /* Una escritura que NADIE lee.
+             *
+             * Lo que hace que esto sea correcto no es la regla, es el hecho:
+             * quien decide si el registro se lee despues mira lo que lee CADA
+             * instruccion segun la base -- incluidos los registros que no
+             * nombra --, lo que leen un `ret`, una llamada y un salto indirecto
+             * por convencion, y lo que lee el cuerpo de un bloque de `asm`. */
+            if (drop_dead_defs && is_removable_def(in) &&
+                !live_regs.is_live_after(static_cast<uint32_t>(bi),
+                                         static_cast<uint32_t>(i),
+                                         in.dst.reg)) {
+                if (deaddef_only(pf.name, bi)) {
+                    if (deaddef_report(pf.name)) {
+                        /* Y QUIEN MENCIONA ese registro en el resto de la
+                         * funcion, en cualquier operando.  Es un barrido tonto
+                         * -- sin flujo, sin orden --, y por eso vale: si el
+                         * hecho dice que nadie lo lee y esto encuentra a
+                         * alguien, el que se equivoca es el hecho, y esa linea
+                         * dice exactamente donde mirar. */
+                        std::string mentioned_by;
+                        const uint8_t r = in.dst.reg;
+                        const auto mentions = [r](const MOperand &o) {
+                            if (o.kind == MOperandKind::REG) return o.reg == r;
+                            if (o.kind == MOperandKind::MEM)
+                                return o.reg == r ||
+                                       ((o.width >> 2) & 0x3F) == r;
+                            return false;
+                        };
+                        for (size_t cb = 0;
+                             cb < pf.blocks.size() && mentioned_by.size() < 200; ++cb)
+                            for (size_t ci = 0; ci < pf.blocks[cb].instrs.size();
+                                 ++ci) {
+                                if (cb == bi && ci <= i) continue;
+                                const MInstr &c = pf.blocks[cb].instrs[ci];
+                                if (!mentions(c.dst) && !mentions(c.src1) &&
+                                    !mentions(c.src2))
+                                    continue;
+                                char buf[56];
+                                std::snprintf(
+                                    buf, sizeof buf, " b%zu:i%zu(op%d%s%s%s)",
+                                    cb, ci, static_cast<int>(c.op),
+                                    mentions(c.dst) ? ",d" : "",
+                                    mentions(c.src1) ? ",s1" : "",
+                                    mentions(c.src2) ? ",s2" : "");
+                                mentioned_by += buf;
+                            }
+                        /* Y con QUE sigue el bloque, para ver la forma que
+                         * tiene alrededor sin tener que volcarlo entero. */
+                        std::string around;
+                        for (size_t k = i; k < b.instrs.size() && k <= i + 8;
+                             ++k) {
+                            char bb[32];
+                            std::snprintf(bb, sizeof bb, " %zu:op%d", k,
+                                          static_cast<int>(b.instrs[k].op));
+                            around += bb;
+                        }
+                        std::fprintf(stderr,
+                                     "[deaddef] BORRA: %s bloque %zu "
+                                     "instr %zu, r%u; sigue:%s; lo menciona:%s\n",
+                                     pf.name.c_str(), bi, i,
+                                     static_cast<unsigned>(in.dst.reg),
+                                     around.c_str(),
+                                     mentioned_by.empty() ? " nadie" : mentioned_by.c_str());
+                    }
+                    ++removed;
+                    changed = true;
+                    continue;
+                }
+            }
             if (is_redundant_self_move(in)) {
                 ++removed;
                 changed = true;

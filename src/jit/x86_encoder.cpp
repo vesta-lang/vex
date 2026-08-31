@@ -2255,6 +2255,25 @@ void X86Encoder::emit_jmp(MFunction &fn, const MInstr &mi,
                                    patch_at, instr_end, 4});
         return;
     }
+    /* JMP a una direccion ABSOLUTA que se conoce: E9 + relativo de 32 bits,
+     * cinco bytes, sin gastar un registro y con el destino a la vista del
+     * predictor de saltos.  La distancia no se sabe aqui -- se codifica antes
+     * de pedir sitio en la cima de codigo --, asi que se deja el hueco y lo
+     * rellena quien ya tiene la direccion.  Ver @c MFunction::rel_jump_fixups,
+     * que explica tambien que pasa si no cabe. */
+    if (mi.src1.kind == MOperandKind::IMM64_IDX) {
+        const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
+        if (idx < fn.imm64_pool.size()) {
+            put8(out, 0xE9);
+            const uint32_t patch_at = static_cast<uint32_t>(out.size());
+            put32(out, 0); /* hueco para el relativo */
+            const uint32_t instr_end = static_cast<uint32_t>(out.size());
+            fn.rel_jump_fixups.push_back(
+                MFunction::RelJumpFixup{patch_at, instr_end,
+                                        fn.imm64_pool[idx]});
+            return;
+        }
+    }
     /* JMP reg INDIRECTO: FF /4 (mod=11).  Usado por el frame-swap del OSR
      * (salto C1->C2 a una direccion absoluta en un registro).  Mismo patron
      * que CALL reg (FF /2) pero con el campo reg del ModRM = 4. */

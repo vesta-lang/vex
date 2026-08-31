@@ -19,8 +19,12 @@
  */
 
 #include "jit/sched/machine_effects.h"
+#include "jit/sched/isa_effects.h" // lo que depende de la arquitectura
+#include "vx/asm/instr_db.h"       // isa_name: como se llama cada una
 #include "jit/target_reginfo.h" // los registros del ABI: se PREGUNTAN, por ISA
 
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace jit {
@@ -49,6 +53,42 @@ void add(std::vector<uint32_t> &v, uint32_t k) {
     v.push_back(k);
 }
 
+/// @brief Un pseudo llego a una ISA que no lo define.  Eso es un FALLO DEL
+///        COMPILADOR, y se dice.
+///
+/// No es una duda que se pueda resolver poniendo una barrera y siguiendo.  Una
+/// barrera dice "no se reordena por si acaso", y eso es exactamente lo que este
+/// modulo existe para no hacer: aqui se SABE lo que toca cada instruccion, y si
+/// una llega sin que nadie sepa contestar por ella, lo que hay es un objetivo al
+/// que se le olvido declarar algo suyo.  Seguir con una respuesta inventada
+/// significa que el codigo que salga sera correcto por casualidad o no lo sera,
+/// y en ninguno de los dos casos se enteraria nadie.
+///
+/// @param mi   La instruccion que nadie supo contestar.
+/// @param isa  Para quien se preguntaba.
+/// @param que  Como se llama lo que falta, para el mensaje.
+[[noreturn]] void isa_effects_bug(const MInstr &mi, EffIsa isa,
+                                  const char *que) {
+    std::fprintf(
+        stderr,
+        "\nfallo interno del compilador: %s (MOp %d) no dice que registros toca,"
+        "\n  y para %s no hay quien lo conteste.\n\n"
+        "  Los efectos de una instruccion no se adivinan: quien optimiza se fia"
+        "\n  de ellos para decidir que puede mover y que puede borrar.  Seguir"
+        "\n  con una respuesta inventada da un binario que funciona por"
+        "\n  casualidad o no funciona, y en los dos casos sin avisar.\n\n"
+        "  Se arregla declarandolo: si la instruccion existe en la ISA, se le\n"
+        "  pone su nombre en `mnemonic` de src/jit/sched/isa_effects_%s.cpp y la"
+        "\n  base de instrucciones contesta sola; si es un pseudo de VestaVM, se"
+        "\n  anade su caso en `pseudo` (el del mismo fichero si nombra registros"
+        "\n  de la arquitectura, o `generic_pseudo` de machine_effects.cpp si"
+        "\n  todo lo que toca esta en sus operandos).\n\n",
+        que, static_cast<int>(mi.op), vx::instr_db::isa_name(isa),
+        vx::instr_db::isa_name(isa));
+    std::fflush(stderr);
+    std::abort();
+}
+
 /// Registros de DIRECCION de un operando MEM (base + index) -> siempre LEIDOS.
 void add_mem_addr_reads(MEffects &e, const MOperand &o) {
     if (o.kind != MOperandKind::MEM) return;
@@ -57,104 +97,6 @@ void add_mem_addr_reads(MEffects &e, const MOperand &o) {
     if (index != static_cast<uint8_t>(MReg::NONE)) add(e.reads, index);
 }
 
-/// Base del espacio de claves para registros que NO estan en MReg (mascaras K,
-/// MMX/x87, segmento, control/debug, MSR/MXCSR, zmm16-31...): se rastrean por
-/// su indice de register_set en el pool de strings -> misma cadena, misma
-/// clave.
-constexpr uint32_t SPECIAL_BASE = 1u << 21;
-
-/// Sufijo numerico de un nombre de registro tras un prefijo de N letras
-/// (p.ej. "XMM12" -> 12, "R8" -> 8).  -1 si no hay digitos validos.
-int suffix_num(const std::string &s, size_t pref) {
-    if (s.size() <= pref) return -1;
-    int n = 0;
-    for (size_t i = pref; i < s.size(); ++i) {
-        if (s[i] < '0' || s[i] > '9') return -1;
-        n = n * 10 + (s[i] - '0');
-    }
-    return n;
-}
-
-/**
- * @brief Decodifica un @c register_set de la DB a una CLAVE de dependencia
- *        uniforme, cubriendo TODAS las clases de registro x86:
- *          - GP (A/C/D/B/SP/BP/SI/DI/R8..R15, cualquier ancho) -> id de MReg
- * 0-15 (aliasa los operandos GP explicitos).
- *          - vector XMM/YMM/ZMM 0-15 -> MReg XMM (16+n); YMMn/ZMMn aliasan
- * XMMn.
- *          - todo lo demas con NOMBRE fijo (mascaras K0-7, MMX MM0-7, x87
- * ST(n), segmento ES/CS/SS/DS/FS/GS, control CRn, debug DRn, MSR, MXCSR,
- *            ZMM16-31...) -> SPECIAL_BASE + @p regset_idx (clave estable por
- *            nombre; no esta en MReg pero se rastrea igual).
- * @return la clave, o UINT32_MAX si es una CLASE (varios regs, "GPR64", "-") o
- *         vacio -> no es un registro implicito fijo.
- */
-/**
- * @brief Decodifica un register_set ARM (AArch64) a la clave de dependencia,
- *        USANDO LA MISMA NUMERACION que el target arm64 del pipeline vreg
- *        (build_arm64_target): GP x/w n -> n (0-30); FP/SIMD v/q/d/s/h/b n ->
- *        32+n (32-63).  Asi un implicito de la DB aliasa el operando explicito
- *        con el mismo registro.  SP/XZR/WZR/sistema -> especial por nombre.
- */
-uint32_t regset_to_key_arm(const std::string &s, uint16_t regset_idx) {
-    if (s == "SP" || s == "WSP" || s == "XZR" || s == "WZR" || s == "PC")
-        return SPECIAL_BASE + regset_idx;
-    const char c = s[0];
-    const bool gp = (c == 'X' || c == 'W');
-    const bool fp =
-        (c == 'V' || c == 'Q' || c == 'D' || c == 'S' || c == 'H' || c == 'B');
-    if (gp || fp) {
-        const int n = suffix_num(s, 1);
-        if (gp && n >= 0 && n <= 30) return static_cast<uint32_t>(n);
-        if (fp && n >= 0 && n <= 31) return static_cast<uint32_t>(32 + n);
-    }
-    return SPECIAL_BASE + regset_idx; // NZCV/FPCR/FPSR/sistema/...
-}
-
-uint32_t regset_to_key(const char *rs, uint16_t regset_idx, EffIsa isa) {
-    if (rs == nullptr || rs[0] == '\0' || rs[0] == '-') return UINT32_MAX;
-    for (const char *p = rs; *p; ++p)
-        if (*p == '/') return UINT32_MAX; // clase (lista de regs)
-    const std::string s(rs);
-
-    if (isa != EffIsa::X86) return regset_to_key_arm(s, regset_idx);
-
-    // --- GP (familia de una letra o Rn, cualquier ancho) ---
-    struct Fam {
-        const char *k;
-        int reg;
-    };
-    static const Fam fam[] = {
-        {"AX", 0},  {"EAX", 0}, {"RAX", 0}, {"AL", 0},  {"AH", 0},  {"CX", 1},
-        {"ECX", 1}, {"RCX", 1}, {"CL", 1},  {"CH", 1},  {"DX", 2},  {"EDX", 2},
-        {"RDX", 2}, {"DL", 2},  {"DH", 2},  {"BX", 3},  {"EBX", 3}, {"RBX", 3},
-        {"BL", 3},  {"BH", 3},  {"SP", 4},  {"ESP", 4}, {"RSP", 4}, {"SPL", 4},
-        {"BP", 5},  {"EBP", 5}, {"RBP", 5}, {"BPL", 5}, {"SI", 6},  {"ESI", 6},
-        {"RSI", 6}, {"SIL", 6}, {"DI", 7},  {"EDI", 7}, {"RDI", 7}, {"DIL", 7},
-    };
-    for (const Fam &f : fam)
-        if (s == f.k) return static_cast<uint32_t>(f.reg);
-    if ((s[0] == 'R') && s.size() >= 2 && s[1] >= '8' && s[1] <= '9') {
-        // R8..R15 con sufijos D/W/B opcionales.
-        int n = s[1] - '0';
-        if (s.size() >= 3 && s[2] >= '0' && s[2] <= '5') n = 10 + (s[2] - '0');
-        if (n >= 8 && n <= 15) return static_cast<uint32_t>(n);
-    }
-
-    // --- vector XMM/YMM/ZMM (SSE/AVX/AVX512): 0-15 aliasan MReg XMM ---
-    if (s.size() >= 4 &&
-        (s.rfind("XMM", 0) == 0 || s.rfind("YMM", 0) == 0 ||
-         s.rfind("ZMM", 0) == 0)) {
-        const int n = suffix_num(s, 3);
-        if (n >= 0 && n <= 15)
-            return static_cast<uint32_t>(static_cast<int>(MReg::XMM0) + n);
-        // ZMM16..31 (AVX512): no estan en MReg -> clave especial por nombre.
-    }
-
-    // --- resto de clases con nombre fijo (K/MM/ST/seg/CR/DR/MSR/MXCSR/...) ---
-    // No estan en MReg; se rastrean por su indice de register_set (estable).
-    return SPECIAL_BASE + regset_idx;
-}
 
 /// El MInstr referencia N operandos explicitos (dst + src1 + src2 no-vacios).
 const MOperand &minstr_slot(const MInstr &mi, int slot) {
@@ -330,6 +272,11 @@ OpRoles mop_roles(MOp op) {
     case MOp::VFMADD231PS:
     case MOp::VFMSUB231PD: // FMSUB: dst = a*b - dst (tambien read+written)
     case MOp::VFMSUB231PS:
+    /* Y las ESCALARES, que son lo mismo sobre un solo carril.  Estaban sin
+     * declarar aqui igual que sin nombrar en la tabla de x86: las dos listas se
+     * escribieron a la vez y a las dos les falto la misma mitad. */
+    case MOp::VFMADD231SD:
+    case MOp::VFMADD231SS:
         r.dst_written = true;
         r.dst_read = true;
         break;
@@ -376,6 +323,7 @@ OpRoles mop_roles(MOp op) {
  *        (idiv/div/cqo) NO es ambiguo -> el match es fiable.
  */
 void add_div_implicit_from_db(const MInstr &mi, const char *mnem, Isa isa,
+                              const IsaEffects &t,
                               MEffects &e) {
     std::vector<ParsedOp> ops;
     const int nexp = explicit_operand_count(mi);
@@ -394,7 +342,7 @@ void add_div_implicit_from_db(const MInstr &mi, const char *mnem, Isa isa,
         if ((o.flags & 0x4) == 0) continue;           // solo implicitos
         if (o.kind != vx::instr_db::OP_REG) continue; // solo registros
         if (o.regset >= db.str_count) continue;
-        const uint32_t k = regset_to_key(db.str[o.regset], o.regset, isa);
+        const uint32_t k = t.regset_key(db.str[o.regset], o.regset);
         if (k == UINT32_MAX) continue;
         if (o.flags & 0x1) add(e.reads, k);
         if (o.flags & 0x2) add(e.writes, k);
@@ -405,7 +353,8 @@ void add_div_implicit_from_db(const MInstr &mi, const char *mnem, Isa isa,
  * @brief Efectos de una instruccion REAL: roles explicitos (definicion del MOp)
  *        + flags + los implicitos con nombre de la DB (familia div).
  */
-void real_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
+void real_effects(const MInstr &mi, const char *mnem, Isa isa,
+                  const IsaEffects &t, MEffects &e) {
     // CQO/CDQ: sign-extienden RAX en RDX:RAX (semantica FIJA, sin operandos):
     // LEEN RAX y ESCRIBEN RDX, SIN tocar flags.  Es IMPRESCINDIBLE modelar el
     // RDX escrito -- si no, un `mov rdx, imm` puede colarse entre el CQO y el
@@ -452,7 +401,7 @@ void real_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
             add(e.writes, static_cast<uint8_t>(MReg::RAX));
             add(e.writes, static_cast<uint8_t>(MReg::RDX));
         } else {
-            add_div_implicit_from_db(mi, mnem, isa, e);
+            add_div_implicit_from_db(mi, mnem, isa, t, e);
         }
     }
 }
@@ -466,35 +415,47 @@ void real_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
  *        llamada.
  *
  * @param isa     ISA del objetivo: de ella depende QUE registros son.
- * @param retorno true = un `ret` (valor de retorno + los que hay que devolver
- *                intactos); false = una llamada (los de argumentos).
+ * @param is_return true = un `ret` (el registro del valor de retorno + los que
+ *                  hay que devolver intactos); false = una llamada (los de
+ *                  argumentos).
  * @param e       Se le anaden las lecturas.
  *
  * Los registros se PREGUNTAN al descriptor del objetivo, que es quien los sabe
  * por ISA.  Escribirlos aqui a mano daria los de x86 tambien en arm64, que es
  * justo el fallo que este modulo existe para evitar.
  */
-void abi_reads(EffIsa isa, bool retorno, MEffects &e) {
-    const TargetRegInfo &t =
-        (isa == EffIsa::ARM64)
-            ? target_arm64()
-            : target_x86_64_vm_abi(/*vec_acc=*/false, /*fp_scratch=*/false);
-    const auto anade = [&e](uint8_t r) { add(e.reads, static_cast<uint32_t>(r)); };
+void abi_reads(const IsaEffects &isa, bool is_return, MEffects &e) {
+    const TargetRegInfo &t = isa.reg_info();
+    const auto anade = [&e](uint8_t r) {
+        add(e.reads, static_cast<uint32_t>(r));
+    };
     for (size_t c = 0; c < TargetRegInfo::NCLASS; ++c) {
-        if (retorno) {
+        if (is_return) {
             anade(t.ret_reg[c]);
             for (const uint8_t r : t.callee_saved[c]) anade(r);
         } else {
             for (const uint8_t r : t.arg_regs[c]) anade(r);
         }
     }
-    /* Y la pila, que la leen los dos en cualquier ISA.  No esta en el
-     * descriptor -- no es asignable, asi que no aparece en ninguna de sus
-     * listas -- y por eso se nombra aqui, por ISA. */
-    anade(static_cast<uint8_t>(isa == EffIsa::ARM64 ? 31 : (int)MReg::RSP));
+    /* Y la pila, que la leen los dos en cualquier arquitectura.  Tambien se
+     * PREGUNTA: no esta en las listas de asignables porque no lo es, pero el
+     * descriptor la declara aparte justo para esto. */
+    anade(t.stack_reg);
 }
 
-void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
+/**
+ * @brief Los pseudos de VestaVM cuya respuesta NO depende de la arquitectura.
+ *
+ * Marcar un argumento, definir una etiqueta, una carga generica, una barrera:
+ * todo eso se contesta mirando los operandos, que son los mismos en cualquier
+ * objetivo.  Lo que nombra un registro concreto -- la pila, el par de la
+ * division, las instrucciones de cadena -- NO esta aqui: lo contesta la tabla
+ * de la arquitectura.
+ *
+ * @return @c false si este pseudo no es de los genericos.  Entonces le toca a
+ *         la arquitectura, y si tampoco lo sabe es un fallo del compilador.
+ */
+bool generic_pseudo(const MInstr &mi, MEffects &e) {
     switch (mi.op) {
     /* Sin efecto de datos y movibles libremente. */
     case MOp::NOP:
@@ -512,22 +473,6 @@ void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
     case MOp::ARG: add(e.reads, reg_key(mi.src1)); break;
 
     /* PUSH src: lee src + rsp, escribe rsp + memoria. */
-    case MOp::PUSH:
-        add(e.reads, reg_key(mi.dst));  // el operando de PUSH viaja en dst
-        add(e.reads, reg_key(mi.src1)); // (o src1 segun el selector)
-        add(e.reads, static_cast<uint8_t>(MReg::RSP));
-        add(e.writes, static_cast<uint8_t>(MReg::RSP));
-        e.writes_mem = true;
-        break;
-    /* POP dst: escribe dst + rsp, lee rsp + memoria. */
-    case MOp::POP:
-        add(e.writes, reg_key(mi.dst));
-        add(e.reads, static_cast<uint8_t>(MReg::RSP));
-        add(e.writes, static_cast<uint8_t>(MReg::RSP));
-        e.reads_mem = true;
-        break;
-
-    /* Cargas pseudo: dst = [addr]. */
     case MOp::LOAD:    // dst, src1=addr
     case MOp::LOAD_VM: // dst, src1=addr, src2=imm64_idx (fallback)
         add(e.writes, reg_key(mi.dst));
@@ -543,34 +488,6 @@ void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
         break;
 
     /* ALLOCA: dst = puntero a espacio reservado del frame. */
-    case MOp::ALLOCA:
-    case MOp::ALLOCA_VM: add(e.writes, reg_key(mi.dst)); break;
-
-    /* Division/modulo en vregs (pre-rewrite): dst = src1 op src2; clobbea flags
-     * y (al bajar) RAX/RDX -> se declara ese clobber para que un uso posterior
-     * de RAX/RDX dependa de esta op. */
-    case MOp::DIVMOD_V:
-        add(e.writes, reg_key(mi.dst));
-        add(e.reads, reg_key(mi.src1));
-        add(e.reads, reg_key(mi.src2));
-        add(e.writes, static_cast<uint8_t>(MReg::RAX));
-        add(e.writes, static_cast<uint8_t>(MReg::RDX));
-        e.writes_flags = true;
-        break;
-
-    /* Atomicos en vregs: RMW sobre memoria + flags + (al bajar) RAX. */
-    case MOp::ATOMICCAS_V: // dst in/out (expected->old), src1=addr,
-                           // src2=desired
-        add(e.reads, reg_key(mi.dst));
-        add(e.writes, reg_key(mi.dst));
-        add(e.reads, reg_key(mi.src1));
-        add(e.reads, reg_key(mi.src2));
-        add(e.writes, static_cast<uint8_t>(MReg::RAX));
-        e.reads_mem = true;
-        e.writes_mem = true;
-        e.writes_flags = true;
-        break;
-    case MOp::ATOMICADD_V: // dst=old, src1=addr, src2=delta
         add(e.writes, reg_key(mi.dst));
         add(e.reads, reg_key(mi.src1));
         add(e.reads, reg_key(mi.src2));
@@ -579,16 +496,6 @@ void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
         e.writes_flags = true;
         break;
     /* Atomicos fisicos (post-rewrite): dst=mem[addr], src1=reg. */
-    case MOp::LOCK_CMPXCHG:
-        add(e.reads, reg_key(mi.src1));
-        add(e.reads, static_cast<uint8_t>(MReg::RAX));
-        add(e.writes, static_cast<uint8_t>(MReg::RAX));
-        add_mem_addr_reads(e, mi.dst);
-        e.reads_mem = true;
-        e.writes_mem = true;
-        e.writes_flags = true;
-        break;
-    case MOp::LOCK_XADD:
         add(e.reads, reg_key(mi.src1));
         add(e.writes, reg_key(mi.src1)); // xadd deja el valor viejo en el reg
         add_mem_addr_reads(e, mi.dst);
@@ -597,23 +504,7 @@ void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
         e.writes_flags = true;
         break;
 
-    /* memcpy nativo: opera sobre RSI/RDI/RCX + memoria. */
-    case MOp::REP_MOVSB:
-        add(e.reads, static_cast<uint8_t>(MReg::RSI));
-        add(e.reads, static_cast<uint8_t>(MReg::RDI));
-        add(e.reads, static_cast<uint8_t>(MReg::RCX));
-        add(e.writes, static_cast<uint8_t>(MReg::RSI));
-        add(e.writes, static_cast<uint8_t>(MReg::RDI));
-        add(e.writes, static_cast<uint8_t>(MReg::RCX));
-        e.reads_mem = true;
-        e.writes_mem = true;
-        break;
-
-    /* Carga del ProcessVM*: dst (RBX) = puntero; puede llamar al runtime. */
-    case MOp::LOAD_PROC:
-        add(e.writes, reg_key(mi.dst));
-        e.reads_mem = true; // TLS-direct: gs:[...]
-        break;
+    /* Las instrucciones de CADENA de x86 (`rep movsb`, `rep stosb`): copiar y
 
     /* Direcciones de simbolo/label/TLS: dst = &X (sin flags, sin memoria). */
     case MOp::MOV_SYM:
@@ -623,16 +514,6 @@ void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
     case MOp::TLS_PE_ADDR: add(e.writes, reg_key(mi.dst)); break;
 
     /* Salva/restaura proc->registers en la work-area del frame (usa R11). */
-    case MOp::CB_SAVE_REGS:
-        add(e.writes, static_cast<uint8_t>(MReg::R11));
-        e.reads_mem = true;
-        e.writes_mem = true;
-        break;
-    case MOp::CB_RESTORE_REGS:
-        add(e.writes, static_cast<uint8_t>(MReg::R11));
-        e.reads_mem = true;
-        e.writes_mem = true;
-        break;
 
     /* Barreras: control de flujo / puntos de sincronizacion / asm opaco. */
     case MOp::JMP: e.is_barrier = true; break;
@@ -640,22 +521,105 @@ void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
         e.reads_flags = true;
         e.is_barrier = true;
         break;
+    /* RET y la familia del CALL: lo que leen POR CONVENCION lo pone
+     * @c abi_overlay, que corre despues de esto y tambien despues de la base de
+     * instrucciones -- son dos capas distintas y la de arriba se aplica siempre
+     * (ver el comentario alli). */
     case MOp::RET:
-        /* Un `ret` LEE.  Es barrera -- eso ya estaba --, pero ademas lo que la
-         * convencion de llamada dice que el llamante puede seguir usando: el
-         * registro del VALOR DE RETORNO y los que hay que devolver intactos.
-         *
-         * Decir solo "barrera" basta para no reordenar a traves, y por eso
-         * nadie lo habia echado en falta.  Para LIVENESS no basta: sin esas
-         * lecturas, al llegar al `ret` no hay nada vivo, y quien busque
-         * escrituras que nadie lee borra la que pone el resultado.  Se vio
-         * asi: una funcion que devolvia 42 empezo a devolver 0.
-         *
-         * CUALES son se le PREGUNTA al descriptor del objetivo, que es quien
-         * lo sabe por ISA.  Escribirlos aqui seria dar los de x86 tambien en
-         * arm64 -- exactamente el fallo que este modulo existe para evitar, y
-         * por el que su ISA es obligatoria. */
-        abi_reads(isa, /*retorno=*/true, e);
+    case MOp::CALL:
+    case MOp::CALL_ABS:
+    case MOp::CALL_SYM:
+    case MOp::JMP_SYM:
+    case MOp::TAILCALL:
+    case MOp::SAFEPOINT:
+    case MOp::INT3:
+    case MOp::INLINE_ASM_RAW: e.is_barrier = true; break;
+
+    /* Cualquier otro pseudo no listado: barrera dura (nunca miscompilar). */
+    /* Reservar sitio en el marco: escribe el destino y nada mas. */
+    case MOp::ALLOCA:
+    case MOp::ALLOCA_VM: add(e.writes, reg_key(mi.dst)); break;
+
+    /* El puntero al proceso: lo lee de su sitio y lo deja en el destino. */
+    case MOp::LOAD_PROC:
+        add(e.writes, reg_key(mi.dst));
+        e.reads_mem = true; // esta en el area por hilo
+        break;
+
+    /* Sumar de forma atomica: todo lo que toca esta en sus operandos, asi que
+     * la respuesta no depende de la arquitectura.  Su primo el intercambio
+     * condicional SI depende -- baja a algo que compara contra un registro
+     * concreto -- y por eso vive en la tabla de x86. */
+    case MOp::ATOMICADD_V: // dst = lo que habia, src1 = donde, src2 = cuanto
+        add(e.writes, reg_key(mi.dst));
+        add(e.reads, reg_key(mi.src1));
+        add(e.reads, reg_key(mi.src2));
+        e.reads_mem = true;
+        e.writes_mem = true;
+        e.writes_flags = true;
+        break;
+    case MOp::LOCK_XADD:
+        add(e.reads, reg_key(mi.src1));
+        add(e.writes, reg_key(mi.src1)); // deja el valor viejo en el registro
+        add_mem_addr_reads(e, mi.dst);
+        e.reads_mem = true;
+        e.writes_mem = true;
+        e.writes_flags = true;
+        break;
+
+    /* Cualquier otro pseudo lo tiene que contestar la arquitectura, porque su
+     * respuesta nombra registros suyos.  Aqui NO hay caso por defecto a
+     * proposito: el que habia daba por leidos y escritos todos los operandos,
+     * la memoria y las banderas, mas barrera -- o sea, "no se sabe" con otro
+     * nombre --, y eso tapa exactamente lo que este modulo existe para saber. */
+    default: return false;
+    }
+    return true;
+}
+
+} // namespace
+
+
+/// @brief Una escritura ESTRECHA no se lleva por delante el registro entero.
+///
+/// Cuando la escritura deja intactos bits que ya estaban, lo que hubiera antes
+/// sigue ahi y sigue importando: para la liveness eso es una lectura ademas de
+/// una escritura.  Sin decirlo, el registro parece pisado y lo de antes muerto.
+///
+/// CUANDO es estrecha lo sabe cada arquitectura y se le PREGUNTA -- en x86
+/// escribir `al` conserva los demas bytes y un `setcc` escribe uno solo aunque
+/// nombre el registro entero; en arm64 no pasa ninguna de las dos cosas --.
+static void narrow_write_overlay(const MInstr &mi, const IsaEffects &t,
+                                 MEffects &e) {
+    const auto check = [&](const MOperand &o) {
+        if (!t.is_narrow_write(mi, o)) return;
+        const uint32_t k = reg_key(o);
+        for (const uint32_t w : e.writes)
+            if (w == k) {
+                add(e.reads, k);
+                return;
+            }
+    };
+    check(mi.dst);
+    check(mi.src1);
+    check(mi.src2);
+}
+
+static void abi_overlay(const MInstr &mi, const IsaEffects &t, MEffects &e) {
+    /* Sus PROPIOS operandos: en una llamada o un salto INDIRECTOS son a donde
+     * se va.  Una direccion de 64 bits no cabe como inmediato, asi que se
+     * materializa en un registro de apoyo y se salta a traves de el; sin
+     * contarlo como lectura, esa materializacion parece muerta.  @c reg_key
+     * ignora solo lo que no es un registro, asi que un salto relativo no suma
+     * nada por pasar por aqui. */
+    const auto reads_its_target = [&] {
+        add(e.reads, reg_key(mi.dst));
+        add(e.reads, reg_key(mi.src1));
+        add(e.reads, reg_key(mi.src2));
+    };
+    switch (mi.op) {
+    case MOp::RET:
+        abi_reads(t, /*is_return=*/true, e);
         e.is_barrier = true;
         break;
     case MOp::CALL:
@@ -663,214 +627,79 @@ void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
     case MOp::CALL_SYM:
     case MOp::JMP_SYM:
     case MOp::TAILCALL:
-        /* Una llamada LEE sus argumentos, y estos no aparecen en sus
-         * operandos: los coloco un pseudo-ARG antes.  Mismo caso que el `ret`
-         * de arriba -- decir solo "barrera" vale para no reordenar y no vale
-         * para liveness --: sin esto, la escritura que pone un argumento en su
-         * registro no la lee nadie y se borra.  Cuales, tambien por ISA. */
-        abi_reads(isa, /*retorno=*/false, e);
-        /* Y sus PROPIOS operandos, que en una llamada INDIRECTA son a donde se
-         * salta.  Una direccion de 64 bits no cabe como operando inmediato, asi
-         * que se materializa en un registro de apoyo y se llama a traves de el;
-         * sin contarlo como lectura, esa materializacion parece muerta.  Se vio
-         * en `__new_...` y en un `build`: media docena de `mov r10, <imm64>`
-         * seguidas dadas por muertas, todas justo antes de su llamada. */
-        add(e.reads, reg_key(mi.dst));
-        add(e.reads, reg_key(mi.src1));
-        add(e.reads, reg_key(mi.src2));
+        abi_reads(t, /*is_return=*/false, e);
+        reads_its_target();
         e.is_barrier = true;
         break;
-    case MOp::SAFEPOINT:
-    case MOp::INT3:
-    case MOp::INLINE_ASM_RAW: e.is_barrier = true; break;
-
-    /* Cualquier otro pseudo no listado: barrera dura (nunca miscompilar). */
-    default:
-        add(e.reads, reg_key(mi.dst));
-        add(e.reads, reg_key(mi.src1));
-        add(e.reads, reg_key(mi.src2));
-        e.reads_mem = true;
-        e.writes_mem = true;
-        e.writes_flags = true;
-        e.reads_flags = true;
+    case MOp::JMP:
+    case MOp::JCC:
+        /* Un salto a un LABEL no lee ningun registro y se queda como esta, que
+         * es el caso normal.  Los otros dos si leen, y por razones distintas:
+         *
+         *   - Si es la COLA DE UNA LLAMADA, pasa argumentos igual que un
+         *     `call`, y ademas lee su destino si va por registro.  Eso NO se
+         *     deduce de la forma del operando -- una cola puede ir a un label,
+         *     a una direccion o por registro, y las tres formas las usa tambien
+         *     un salto normal --: lo dice quien la emite, con
+         *     @c MI_FLAG_TAILCALL.  Visto en `19_tco_basico` y en
+         *     `210_unique_en_campo`: las instrucciones que colocaban los
+         *     argumentos salian muertas.
+         *
+         *   - A traves de MEMORIA es el despacho de una tabla de saltos, y lo
+         *     que lee son los registros de la DIRECCION -- la base y el indice
+         *     --, no lo que hay en ella.  No pasa argumentos: los brazos estan
+         *     en la misma funcion y su entrada llega por el grafo.  Visto en
+         *     `std.memory`: el `mov` que calculaba el indice salia muerto
+         *     porque `jmp [base + indice*8]` no lo nombra como registro. */
+        if ((mi.flags & MI_FLAG_TAILCALL) != 0) {
+            abi_reads(t, /*is_return=*/false, e);
+            reads_its_target();
+        }
+        if (mi.dst.kind == MOperandKind::MEM ||
+            mi.src1.kind == MOperandKind::MEM ||
+            mi.src2.kind == MOperandKind::MEM) {
+            add_mem_addr_reads(e, mi.dst);
+            add_mem_addr_reads(e, mi.src1);
+            add_mem_addr_reads(e, mi.src2);
+            e.reads_mem = true;
+        } else if (mi.dst.kind == MOperandKind::REG ||
+                   mi.src1.kind == MOperandKind::REG ||
+                   mi.src2.kind == MOperandKind::REG) {
+            /* Un salto indirecto que no viene marcado: al menos, su destino. */
+            reads_its_target();
+        }
         e.is_barrier = true;
         break;
+    default: break;
     }
 }
 
-} // namespace
-
 const char *mop_mnemonic(MOp op, EffIsa isa) {
-    // arm64: los MOp enteros genericos se comparten; los A64_* son propios. Los
-    // saltos/llamadas (b/bl/ret/cbz) NO se mapean -> pseudo (barrera), igual
-    // que en x86.  Se usa para los efectos DB (machine_effects) y el coste DB.
-    if (isa == EffIsa::ARM64) {
-        switch (op) {
-        case MOp::MOV: return "mov";
-        case MOp::ADD: return "add";
-        case MOp::SUB: return "sub";
-        case MOp::AND: return "and";
-        case MOp::OR: return "orr";
-        case MOp::XOR: return "eor";
-        case MOp::SHL: return "lsl";
-        case MOp::SHR: return "lsr";
-        case MOp::SAR: return "asr";
-        case MOp::NEG: return "neg";
-        case MOp::NOT: return "mvn";
-        case MOp::CMP: return "cmp";
-        case MOp::LOAD: return "ldr";
-        case MOp::STORE: return "str";
-        case MOp::A64_UDIV: return "udiv";
-        case MOp::A64_SDIV: return "sdiv";
-        case MOp::A64_MADD: return "madd";
-        case MOp::A64_MSUB: return "msub";
-        case MOp::A64_CSEL: return "csel";
-        case MOp::A64_CSET: return "cset";
-        case MOp::A64_MVN: return "mvn";
-        case MOp::A64_MOVZ: return "movz";
-        case MOp::A64_MOVK: return "movk";
-        case MOp::A64_SXTB: return "sxtb";
-        case MOp::A64_UXTB: return "uxtb";
-        case MOp::A64_FADD: return "fadd";
-        case MOp::A64_FSUB: return "fsub";
-        case MOp::A64_FMUL: return "fmul";
-        case MOp::A64_FDIV: return "fdiv";
-        case MOp::A64_FCMP: return "fcmp";
-        case MOp::A64_FMOV: return "fmov";
-        case MOp::A64_FNEG: return "fneg";
-        case MOp::A64_FABS: return "fabs";
-        case MOp::A64_FSQRT: return "fsqrt";
-        case MOp::A64_SCVTF: return "scvtf";
-        case MOp::A64_UCVTF: return "ucvtf";
-        case MOp::A64_FCVTZS: return "fcvtzs";
-        case MOp::A64_FCVTZU: return "fcvtzu";
-        case MOp::A64_FCVT: return "fcvt";
-        default: return nullptr; // pseudo / salto / no mapeado aun
-        }
-    }
-    if (isa != EffIsa::X86) return nullptr; // arm32/riscv: sin mapeo aun
-
-    switch (op) {
-    /* Movimiento / ALU entera. */
-    case MOp::MOV: return "mov";
-    case MOp::LEA: return "lea";
-    /* PUSH/POP: NO reales aqui -> pseudo (tocan rsp + memoria implicitos). */
-    case MOp::ADD: return "add";
-    case MOp::SUB: return "sub";
-    case MOp::IMUL: return "imul";
-    case MOp::AND: return "and";
-    case MOp::OR: return "or";
-    case MOp::XOR: return "xor";
-    case MOp::SHL: return "shl";
-    case MOp::SHR: return "shr";
-    case MOp::SAR: return "sar";
-    case MOp::NEG: return "neg";
-    case MOp::NOT: return "not";
-    case MOp::IDIV: return "idiv";
-    case MOp::CQO: return "cqo";
-    case MOp::DIV_U: return "div";
-    case MOp::MOVZX: return "movzx";
-    case MOp::MOVSX: return "movsx";
-    case MOp::INC: return "inc";
-    case MOp::DEC: return "dec";
-    case MOp::POPCNT: return "popcnt";
-    case MOp::LZCNT: return "lzcnt";
-    case MOp::TZCNT: return "tzcnt";
-    case MOp::CMP: return "cmp";
-    case MOp::TEST: return "test";
-    case MOp::SETCC:
-        return "setne"; // representante (mismos efectos: wr dst, rd flags)
-    case MOp::CMOVCC: return "cmovne"; // representante (r+w dst, rd flags)
-    case MOp::BSWAP: return "bswap";
-    case MOp::ROL: return "rol";
-    case MOp::ROR: return "ror";
-
-    /* FP escalar f64 / f32. */
-    case MOp::MOVQ_GP_XMM:
-    case MOp::MOVQ_XMM_GP: return "movq";
-    case MOp::SQRTSD: return "sqrtsd";
-    case MOp::MINSD: return "minsd";
-    case MOp::MAXSD: return "maxsd";
-    case MOp::ROUNDSD: return "roundsd";
-    case MOp::ADDSD: return "addsd";
-    case MOp::SUBSD: return "subsd";
-    case MOp::MULSD: return "mulsd";
-    case MOp::DIVSD: return "divsd";
-    case MOp::CVTSI2SD: return "cvtsi2sd";
-    case MOp::CVTTSD2SI: return "cvttsd2si";
-    case MOp::UCOMISD: return "ucomisd";
-    case MOp::CVTSS2SD: return "cvtss2sd";
-    case MOp::CVTSD2SS: return "cvtsd2ss";
-    case MOp::MOVSD: return "movsd";
-    case MOp::MOVSS: return "movss";
-    case MOp::ADDSS: return "addss";
-    case MOp::SUBSS: return "subss";
-    case MOp::MULSS: return "mulss";
-    case MOp::DIVSS: return "divss";
-    case MOp::SQRTSS: return "sqrtss";
-    case MOp::UCOMISS: return "ucomiss";
-    case MOp::CVTSI2SS: return "cvtsi2ss";
-    case MOp::CVTTSS2SI: return "cvttss2si";
-    case MOp::XORPS: return "xorps";
-    case MOp::ANDPS: return "andps";
-
-    /* Packed SSE2 (f64/f32/int). */
-    case MOp::ADDPD: return "addpd";
-    case MOp::SUBPD: return "subpd";
-    case MOp::MULPD: return "mulpd";
-    case MOp::DIVPD: return "divpd";
-    case MOp::MOVUPD: return "movupd";
-    case MOp::MOVAPD: return "movapd";
-    case MOp::SQRTPD: return "sqrtpd";
-    case MOp::XORPD: return "xorpd";
-    case MOp::ANDPD: return "andpd";
-    case MOp::UNPCKLPD: return "unpcklpd";
-    case MOp::ADDPS: return "addps";
-    case MOp::SUBPS: return "subps";
-    case MOp::MULPS: return "mulps";
-    case MOp::DIVPS: return "divps";
-    case MOp::PADDD: return "paddd";
-    case MOp::PSUBD: return "psubd";
-    case MOp::PADDQ: return "paddq";
-    case MOp::PSUBQ: return "psubq";
-    case MOp::PADDW: return "paddw";
-    case MOp::PSUBW: return "psubw";
-    case MOp::PMULLW: return "pmullw";
-    case MOp::PADDB: return "paddb";
-    case MOp::PSUBB: return "psubb";
-    case MOp::PMULLD: return "pmulld";
-
-    /* AVX 3-operandos no destructivos. */
-    case MOp::VADDSD: return "vaddsd";
-    case MOp::VSUBSD: return "vsubsd";
-    case MOp::VMULSD: return "vmulsd";
-    case MOp::VDIVSD: return "vdivsd";
-    case MOp::VADDSS: return "vaddss";
-    case MOp::VSUBSS: return "vsubss";
-    case MOp::VMULSS: return "vmulss";
-    case MOp::VDIVSS: return "vdivss";
-    case MOp::VXORPS: return "vxorps";
-    case MOp::VANDPS: return "vandps";
-    case MOp::VFMADD231PD: return "vfmadd231pd";
-    case MOp::VFMADD231PS: return "vfmadd231ps";
-    case MOp::VFMSUB231PD: return "vfmsub231pd";
-    case MOp::VFMSUB231PS: return "vfmsub231ps";
-    case MOp::VBROADCASTSD: return "vbroadcastsd";
-    case MOp::VBROADCASTSS: return "vbroadcastss";
-    case MOp::SHUFPS: return "shufps";
-
-    default: return nullptr; // pseudo de VestaVM
-    }
+    const IsaEffects *t = isa_effects(isa);
+    return t ? t->mnemonic(op) : nullptr;
 }
 
 MEffects machine_effects(const MInstr &mi, EffIsa isa) {
+    /* Lo primero: la tabla de esta arquitectura.  Sin ella no hay respuesta que
+     * dar, y dar una inventada es peor que no dar ninguna. */
+    const IsaEffects *t = isa_effects(isa);
+    if (t == nullptr) isa_effects_bug(mi, isa, "la arquitectura");
+
     MEffects e;
-    const Isa db_isa = (isa == EffIsa::X86) ? Isa::X86 : Isa::ARM64;
-    if (const char *mnem = mop_mnemonic(mi.op, isa)) {
-        real_effects(mi, mnem, db_isa, e);
-        return e;
+    if (const char *mnem = t->mnemonic(mi.op)) {
+        /* Es una instruccion de verdad: la base de instrucciones es la fuente
+         * de verdad, con sus registros implicitos incluidos. */
+        real_effects(mi, mnem, isa, *t, e);
+    } else if (!generic_pseudo(mi, e) && !t->pseudo(mi, e)) {
+        /* Ni el comun ni la arquitectura saben que hace este pseudo.  Eso no es
+         * una duda: es que falta declararlo. */
+        isa_effects_bug(mi, isa, "este pseudo");
     }
-    pseudo_effects(mi, isa, e);
+    /* Y encima, lo que la base no puede saber: la convencion de llamada y
+     * cuanto escribe de verdad una escritura estrecha.  SIEMPRE, sin depender
+     * de quien haya contestado antes. */
+    abi_overlay(mi, *t, e);
+    narrow_write_overlay(mi, *t, e);
     return e;
 }
 

@@ -50,6 +50,22 @@ struct TargetRegInfo {
     /// AArch64 y RISC-V son de tres operandos -> false.
     bool is_two_address = true;
 
+    /// True si el backend sabe emitir un salto DIRECTO a una direccion
+    /// absoluta que solo se conoce al colocar el codigo.
+    ///
+    /// Lo usa la cola de una llamada a otra funcion.  Poder hacerlo ahorra la
+    /// mitad de los bytes y un registro frente a materializar la direccion y
+    /// saltar a traves de el, pero exige que el codificador deje un hueco y
+    /// alguien lo rellene con la DISTANCIA cuando ya hay direccion.
+    ///
+    /// Se PREGUNTA en vez de darlo por hecho porque el reescritor que decide la
+    /// forma es COMUN a todos los objetivos, mientras que saber emitirla es de
+    /// cada uno.  Sin esta pregunta, el reescritor emitia una forma que solo el
+    /// codificador de x86 entiende, y el de arm64 -- que asume que el operando
+    /// de un salto es una etiqueta -- habria emitido un salto a un sitio
+    /// inventado.  Falso por defecto: quien lo sepa hacer, que lo diga.
+    bool can_jump_to_abs_addr = false;
+
     static constexpr size_t NCLASS = static_cast<size_t>(RegClass::COUNT);
 
     /// Registros ASIGNABLES por clase (excluye reservados).  El orden
@@ -75,6 +91,16 @@ struct TargetRegInfo {
     /// Registros reservados que el allocator NUNCA asigna (frame +
     /// punteros fijos del ABI de la VM).
     std::vector<uint8_t> reserved;
+
+    /// El registro de PILA.
+    ///
+    /// No aparece en ninguna de las listas de arriba -- no es asignable, asi
+    /// que no esta ni en @c allocatable ni en las particiones -- y sin embargo
+    /// hace falta nombrarlo: lo leen `push`, `pop`, `call` y `ret`.  Se declara
+    /// aqui para que se PREGUNTE en vez de adivinarlo, que es como acababa
+    /// escrito `isa == ARM64 ? 31 : RSP` -- una expresion que le da a arm32 y a
+    /// riscv el registro de otra arquitectura.
+    uint8_t stack_reg = 0;
 
     /** @brief True si @p r es asignable en la clase @p cls. */
     bool is_allocatable(RegClass cls, uint8_t r) const noexcept {
@@ -128,6 +154,10 @@ inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true,
     TargetRegInfo t;
     t.pointer_size = 8;
     t.is_two_address = true;
+    // El codificador de x86 sabe dejar el hueco de un `jmp rel32` y que se
+    // rellene luego con la distancia.  Ver @c can_jump_to_abs_addr.
+    t.can_jump_to_abs_addr = true;
+    t.stack_reg = reg_id(MReg::RSP);
 
     const size_t GP = static_cast<size_t>(RegClass::GP);
     const size_t FP = static_cast<size_t>(RegClass::FP);
@@ -233,6 +263,7 @@ inline TargetRegInfo build_x86_64_target(bool sysv, bool reserve_vec_acc = true,
 inline TargetRegInfo build_x86_32_target() {
     TargetRegInfo t;
     t.pointer_size = 4;
+    t.stack_reg = reg_id(MReg::RSP); // ESP: el mismo id, otro ancho
     t.is_two_address = true;
 
     const size_t GP = static_cast<size_t>(RegClass::GP);
@@ -367,6 +398,10 @@ inline TargetRegInfo build_arm64_target() {
     TargetRegInfo t;
     t.pointer_size = 8;
     t.is_two_address = false; // AArch64 es de 3 operandos: rd = rn OP rm.
+    t.stack_reg = A64_SP;
+    // El codificador de arm64 asume que el operando de un salto es una
+    // ETIQUETA, asi que NO sabe saltar a una direccion absoluta.  Ver
+    // @c can_jump_to_abs_addr: quien lo sepa hacer, que lo diga.
 
     const size_t GP = static_cast<size_t>(RegClass::GP);
     const size_t FP = static_cast<size_t>(RegClass::FP);
