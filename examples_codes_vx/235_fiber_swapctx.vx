@@ -81,8 +81,8 @@ void fiber_b() {
 
 i32 main() {
 	// Cima de cada pila VM = base + 512*8 (exclusiva; la pila crece hacia abajo).
-	i64 top_a = (i64)((u64) & __stk_a[0] + 4096);
-	i64 top_b = (i64)((u64) & __stk_b[0] + 4096);
+	i64 top_a = (i64)((u64)&__stk_a[0] + 4096);
+	i64 top_b = (i64)((u64)&__stk_b[0] + 4096);
 
 	// Modelo INTERP/AOT: contexto en los arrays globales (stores que se adaptan
 	// al backend: VM en interp, nativo en aot).  PC = fiber_entry(cuerpo),
@@ -93,9 +93,9 @@ i32 main() {
 	__ctx_b[0] = (i64) fiber_entry(fiber_b);
 	__ctx_b[1] = top_b;
 	__ctx_b[2] = top_b;
-	__h_sched  = (u64) & __ctx_sched[0];
-	__h_a      = (u64) & __ctx_a[0];
-	__h_b      = (u64) & __ctx_b[0];
+	__h_sched  = (u64)&__ctx_sched[0];
+	__h_a      = (u64)&__ctx_a[0];
+	__h_b      = (u64)&__ctx_b[0];
 
 	// Modelo JIT: override a contexto/pila HOST + trampolin + proc.  fiber_entry
 	// resuelve al jit_code nativo del cuerpo (compilado por el force-eager).

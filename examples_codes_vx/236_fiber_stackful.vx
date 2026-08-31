@@ -86,9 +86,9 @@ void fiber_c() {
 }
 
 i32 main() {
-	i64 top_a = (i64)((u64) & __stk_a[0] + 4096);
-	i64 top_b = (i64)((u64) & __stk_b[0] + 4096);
-	i64 top_c = (i64)((u64) & __stk_c[0] + 4096);
+	i64 top_a = (i64)((u64)&__stk_a[0] + 4096);
+	i64 top_b = (i64)((u64)&__stk_b[0] + 4096);
+	i64 top_c = (i64)((u64)&__stk_c[0] + 4096);
 
 	// Modelo interp/aot: contexto global.
 	__ctx_a[0] = (i64) fiber_entry(fiber_a);
@@ -100,10 +100,10 @@ i32 main() {
 	__ctx_c[0] = (i64) fiber_entry(fiber_c);
 	__ctx_c[1] = top_c;
 	__ctx_c[2] = top_c;
-	__h_sched  = (u64) & __ctx_sched[0];
-	__h_a      = (u64) & __ctx_a[0];
-	__h_b      = (u64) & __ctx_b[0];
-	__h_c      = (u64) & __ctx_c[0];
+	__h_sched  = (u64)&__ctx_sched[0];
+	__h_a      = (u64)&__ctx_a[0];
+	__h_b      = (u64)&__ctx_b[0];
+	__h_c      = (u64)&__ctx_c[0];
 
 	// Modelo JIT: override host + trampolin + proc.
 	if (jit_active()) {

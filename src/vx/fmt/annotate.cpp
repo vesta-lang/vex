@@ -253,6 +253,9 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
      * esta leyendo.  Mientras se esta dentro, un `*` es un puntero y un `<` una
      * lista de argumentos; fuera, son producto y comparacion. */
     size_t decl_until = 0;
+    /* Sitios que vienen justo detras del `)` de un CAST.  Ahi empieza un
+     * valor, asi que un `&`, un `*`, un `+` o un `-` son PREFIJOS. */
+    std::vector<uint8_t> tras_cast(pieces.size(), 0u);
     /* Profundidad de la lista de PARAMETROS en la que estamos, o -1.
      *
      * Dentro de ella cada elemento es una declaracion, asi que un `*` es un
@@ -383,6 +386,12 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
             const TokenKind tipo =
                 ini < pieces.size() ? kind_of(pieces[ini]) : TokenKind::RPAREN;
             if (is_type_keyword(tipo) || tipo == TokenKind::IDENTIFIER) {
+                /* Un TIPO con nombre propio ya delata el cast sin necesitar
+                 * estrella: `(i64) - 1` es negar, no restar.  Con un
+                 * IDENTIFICADOR no se puede decir lo mismo -- `(v) - 1` es una
+                 * resta corriente --, y por eso ahi se sigue exigiendo al
+                 * menos un `*`. */
+                const bool tipo_nombrado = is_type_keyword(tipo);
                 size_t t = ini + 1;
                 size_t estrellas = 0;
                 while (t < pieces.size()) {
@@ -399,9 +408,19 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                     }
                     break;
                 }
-                if (estrellas > 0 && t < pieces.size() &&
-                    kind_of(pieces[t]) == TokenKind::RPAREN && t > decl_until)
-                    decl_until = t;
+                const bool es_cast = (estrellas > 0 || tipo_nombrado) &&
+                                     t < pieces.size() &&
+                                     kind_of(pieces[t]) == TokenKind::RPAREN;
+                if (es_cast) {
+                    if (estrellas > 0 && t > decl_until) decl_until = t;
+                    /* Tras el `)` de un cast viene un VALOR, asi que lo que
+                     * haya ahi es un PREFIJO y no un operador binario:
+                     * `(u64)&v`, `(i64)*p`, `(i64)-1`.  Se apunta el sitio
+                     * porque quien lo decide solo mira el token de al lado, y
+                     * desde ahi un `)` de cast y uno de agrupacion se ven
+                     * igual -- `(v) - 1` SI es una resta --. */
+                    if (t + 1 < pieces.size()) tras_cast[t + 1] = 1u;
+                }
             }
         }
 
@@ -528,24 +547,42 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
             }
         }
 
+        /* Detras del `)` de un cast empieza un VALOR, asi que lo de antes no
+         * "termina un valor" por mucho que sea un `)`.  Sin esto, `(u64)&v`
+         * salia `(u64) & v` -- un `y` logico donde hay una direccion --, y lo
+         * mismo `(i64)*p` y `(i64)-1`. */
+        const bool sigue_a_valor =
+            i > 0 && ends_value(kind_of(pieces[i - 1])) && !tras_cast[i];
         switch (k) {
         case TokenKind::STAR:
-            if (i < decl_until) {
+            if (tras_cast[i]) {
+                roles[i] = Role::TightBoth; // `(i64)*p`
+            } else if (i < decl_until) {
                 roles[i] = Role::TightLeft; // `i64* p`
-            } else if (i > 0 && ends_value(kind_of(pieces[i - 1]))) {
+            } else if (sigue_a_valor) {
                 roles[i] = Role::Binary; // `a * b`
             } else {
                 roles[i] = Role::TightRight; // `*p`
             }
             break;
         case TokenKind::AMP:
-            if (i < decl_until) {
+            if (tras_cast[i]) {
+                roles[i] = Role::TightBoth; // `(u64)&v`
+            } else if (i < decl_until) {
                 roles[i] = Role::TightLeft;
-            } else if (i > 0 && ends_value(kind_of(pieces[i - 1]))) {
+            } else if (sigue_a_valor) {
                 roles[i] = Role::Binary; // `a & b`
             } else {
                 roles[i] = Role::TightRight; // `&x`
             }
+            break;
+        case TokenKind::PLUS:
+        case TokenKind::MINUS:
+            /* Normalmente lo decide el espaciador, que con mirar el token de
+             * al lado le basta.  Aqui NO: desde ahi un `)` de cast y uno de
+             * agrupacion se ven igual, y solo este pase tiene delante el
+             * fichero entero para distinguirlos. */
+            if (tras_cast[i]) roles[i] = Role::TightBoth; // `(i64)-1`
             break;
         case TokenKind::LT: {
             size_t close = 0;

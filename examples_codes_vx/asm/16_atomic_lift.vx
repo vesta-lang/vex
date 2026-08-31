@@ -16,7 +16,7 @@ i64 g = 100_i64;
 i64 h = 10_i64;
 i64 main() {
 	// compare-and-swap: si g==100 -> g=200, old=100 (valor viejo).
-	register("rdi") u64* p   = (u64*) & g;
+	register("rdi") u64* p   = (u64*)&g;
 	register("rsi") u64  des = 200_u64;
 	register("rax") u64  old = 100_u64; // in: expected ; out: old value
 	asm {
@@ -24,7 +24,7 @@ i64 main() {
 	} clobbers("flags");
 
 	// fetch-and-add: old2 = g_h ; h += 5.
-	register("rcx") u64* q    = (u64*) & h;
+	register("rcx") u64* q    = (u64*)&h;
 	register("rdx") u64  old2 = 5_u64; // in: delta ; out: old value
 	asm {
 		lock xadd [rcx], rdx

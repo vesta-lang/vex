@@ -240,6 +240,65 @@ void check_spacing() {
     check(signo.find("= -a;") != std::string::npos,
           "un signo va pegado a su operando");
 
+    /* El `&` de TOMAR UNA DIRECCION y el de un `y` logico se escriben igual, y
+     * el formateador tiene que distinguirlos: pegado a lo que sigue el
+     * primero, con un espacio a cada lado el segundo.  Es lo unico que separa
+     * `f(&v)` de `f(a & v)` al leerlo.
+     *
+     * Se comprueban los DOS en cada forma de lo que puede haber delante: si
+     * solo se mirara uno, "arreglarlo" rompe el otro sin que nadie lo note --
+     * que es exactamente lo que paso detras de un cast --. */
+    const std::string amp =
+        fmt("i32 f() { r = a&b; r = &a==&b; p = &arr[1]; r = arr[1]&3;\n"
+            "p = &s.f; r = s.f&3; r = g(1)&3; r = g(&a); r = *p&3;\n"
+            "r = (a)&b; r = a & &b; r &= 3; k = a==1&&b==2;\n"
+            "r = g(a, &b); if (a&1) { r = 0; } r = k ? a&b : a; }\n");
+    struct AmpCaso {
+        const char *espera;
+        const char *que;
+    };
+    static const AmpCaso amp_casos[] = {
+        {"a & b", "entre dos nombres es un `y` logico"},
+        {"&a == &b", "tras un `=` o un operador es una direccion"},
+        {"&arr[1]", "delante de un indexado es una direccion"},
+        {"arr[1] & 3", "detras de un indexado es un `y` logico"},
+        {"&s.f", "delante de un campo es una direccion"},
+        {"s.f & 3", "detras de un campo es un `y` logico"},
+        {"g(1) & 3", "detras de una llamada es un `y` logico"},
+        {"g(&a)", "como argumento es una direccion"},
+        {"*p & 3", "detras de un deref es un `y` logico"},
+        {"(a) & b", "detras de una AGRUPACION es un `y` logico"},
+        {"a & &b", "los dos seguidos: logico y luego direccion"},
+        {"r &= 3", "el compuesto no se parte"},
+        {"a == 1 && b == 2", "el `y` logico doble NO se parte en dos"},
+        {"g(a, &b)", "tras una coma es una direccion"},
+        {"if (a & 1)", "dentro de una condicion es un `y` logico"},
+        {"k ? a & b : a", "dentro de un ternario es un `y` logico"},
+    };
+    for (const AmpCaso &c : amp_casos)
+        check(amp.find(c.espera) != std::string::npos, c.que, c.espera);
+
+    /* Detras del `)` de un CAST empieza un valor, asi que lo que hay ahi es un
+     * PREFIJO -- `(u64)&v` es una direccion, no un `y` logico --.
+     *
+     * Es lo unico que no puede decidir el espaciador por su cuenta: desde ahi
+     * un `)` de cast y uno de agrupacion se ven igual, y `(v) - 1` SI es una
+     * resta.  Por eso se comprueban los dos, o "arreglar" el primero rompe el
+     * segundo sin que nadie lo note. */
+    const std::string cast_prefijo =
+        fmt("i32 f() { i64 v = 1; u64 b = (u64)&v; i64 c = (i64)*p;\n"
+            "i64 d = (i64)-1; i64 e = (v) - 1; i64 g = (v + 1) & 3; }\n");
+    check(cast_prefijo.find("(u64)&v") != std::string::npos,
+          "tras un cast, `&` toma una direccion");
+    check(cast_prefijo.find("(i64)*p") != std::string::npos,
+          "tras un cast, `*` es un deref");
+    check(cast_prefijo.find("(i64)-1") != std::string::npos,
+          "tras un cast, `-` niega");
+    check(cast_prefijo.find("(v) - 1") != std::string::npos,
+          "tras una AGRUPACION, `-` sigue siendo una resta");
+    check(cast_prefijo.find("(v + 1) & 3") != std::string::npos,
+          "tras una AGRUPACION, `&` sigue siendo un `y` logico");
+
     // `R4`: la llave de apertura lleva un espacio delante.
     const std::string llave = fmt("i32 f(){ return 0; }\n");
     check(llave.find("f() {") != std::string::npos,

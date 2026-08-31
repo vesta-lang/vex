@@ -108,7 +108,7 @@ i32 main() {
 	if (r3 != 30) { return 3; }
 
 	// === 2b. cfn por CAST de una direccion cruda (tablas, FFI, kernel) ===
-	cfn(i64) -> i64 g = (cfn(i64) -> i64)((u64) & doblar);
+	cfn(i64) -> i64 g = (cfn(i64) -> i64)((u64)&doblar);
 	if (g(21) != 42) { return 4; } // CALLIND -> doblar(21) = 42
 
 	// === 2c. cfn como PARAMETRO (callback) ===
@@ -118,9 +118,9 @@ i32 main() {
 	// La tabla guarda las DIRECCIONES como u64 (igual que una api-table de C o
 	// de un kernel); cada entrada se castea a cfn al invocarla.
 	u64[3] tabla;
-	tabla[0] = (u64) & doblar;
-	tabla[1] = (u64) & triplicar;
-	tabla[2] = (u64) & negar;
+	tabla[0] = (u64)&doblar;
+	tabla[1] = (u64)&triplicar;
+	tabla[2] = (u64)&negar;
 	i64 suma = 0_i64;
 	for (i64 i = 0_i64; i < 3; i = i + 1) {
 		suma = suma + ((cfn(i64) -> i64) tabla[i])(10); // doblar+triplicar+negar

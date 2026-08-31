@@ -546,7 +546,7 @@ void __vxp_resume(fiber fib) {
 	__vxp_cur_fiber  = fib;
 	Fiber(fib).state = FiberState.VXP_RUNNING;
 	// Salva el ctx del worker en su celda sched_ctx, carga el de la fibra.
-	__vxp_fiber_switch((u64)__vxp_my_sched(), (u64) & Fiber(fib).ctx);
+	__vxp_fiber_switch((u64)__vxp_my_sched(), (u64)&Fiber(fib).ctx);
 }
 
 /// Cede la CPU de la fibra actual al scheduler (queda RUNNABLE).  Publico.
@@ -557,7 +557,7 @@ public void vx_yield() {
 	}
 	Fiber(f).state = FiberState.VXP_READY;
 	// Salva el ctx de la fibra, vuelve al scheduler (dentro de resume()).
-	__vxp_fiber_switch((u64) & Fiber(f).ctx, (u64)__vxp_my_sched());
+	__vxp_fiber_switch((u64)&Fiber(f).ctx, (u64)__vxp_my_sched());
 // Al ser reanudada, la ejecucion continua aqui.
 }
 
@@ -577,7 +577,7 @@ public void vx_park(i64 parkfn, i64 parkarg) {
 	Fiber(f).parkfn  = parkfn;
 	Fiber(f).parkarg = parkarg;
 	Fiber(f).state   = FiberState.VXP_BLOCKED;
-	__vxp_fiber_switch((u64) & Fiber(f).ctx, (u64)__vxp_my_sched());
+	__vxp_fiber_switch((u64)&Fiber(f).ctx, (u64)__vxp_my_sched());
 // Reanudada por un wake: continua aqui.
 }
 
@@ -587,7 +587,7 @@ public void vx_park(i64 parkfn, i64 parkarg) {
 void __vxp_fiber_exit() {
 	fiber f = __vxp_cur_fiber;
 	Fiber(f).state = FiberState.VXP_TERMINATED;
-	__vxp_fiber_switch((u64) & Fiber(f).ctx, (u64)__vxp_my_sched());
+	__vxp_fiber_switch((u64)&Fiber(f).ctx, (u64)__vxp_my_sched());
 // inalcanzable (el scheduler no reanuda una fibra TERMINATED).
 }
 

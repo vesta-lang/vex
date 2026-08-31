@@ -59,7 +59,7 @@ void pump(i64 a) {
 			send_case         = nc;
 			nc += 1;
 		}
-		i64 idx = chan_select((i64) & cases[0], nc);
+		i64 idx = chan_select((i64)&cases[0], nc);
 		if (idx == recv_case) {
 			buf[tail] = cases[recv_case * 3 + 2]; // valor recibido (escrito por el select)
 			tail      = (tail + 1) % 2;

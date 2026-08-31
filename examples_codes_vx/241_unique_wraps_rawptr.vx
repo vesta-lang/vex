@@ -12,5 +12,5 @@ i32 main() {
 	*            raw = 42;
 	unique<i64*> u   = unique_box(raw);
 	i64*         got = *ptr_of(u);
-	return (i32) * got;
+	return (i32)*got;
 }

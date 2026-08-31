@@ -433,6 +433,9 @@ examples_codes_vx/523_direccion_campos.vx
 examples_codes_vx/524_parametros_salida.vx
 examples_codes_vx/525_direccion_y_borrow.vx
 examples_codes_vx/526_escritura_por_puntero_indirecto.vx
+examples_codes_vx/527_direccion_en_el_tipo.vx
+examples_codes_vx/528_direccion_tipo_err.vx
+examples_codes_vx/529_out_por_todos_los_caminos.vx
 examples_codes_vx/52_lambda_hof.vx
 examples_codes_vx/53_enum_simple.vx
 examples_codes_vx/54_enum_payload.vx

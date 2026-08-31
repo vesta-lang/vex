@@ -88,13 +88,13 @@ public Mutex mutex_new() {
 
 /// @return true si el handle no apunta a ningun bloque (OOM en mutex_new).
 public bool mutex_is_null(Mutex m) {
-	return (i64) & m.held == 0;
+	return (i64)&m.held == 0;
 }
 
 /// Libera el mutex (nadie debe poseerlo ni estar en espera).
 public void mutex_free(Mutex m) {
 	if (!mutex_is_null(m)) {
-		free((u8*) & m.held); // &m.held = base del bloque (held @0x00)
+		free((u8*)&m.held); // &m.held = base del bloque (held @0x00)
 	}
 }
 
@@ -125,7 +125,7 @@ public void mutex_lock(Mutex m) {
 			} else {
 				vx_wq_push((uintptr) & m.wq_h, (uintptr) & m.wq_t, self);
 				vx_park((i64)(cfn(i64, i64) -> void) __vxm_unlock_after_park,
-					(i64) & m.spin);
+					(i64)&m.spin);
 			// Reanudada: el que libero nos paso la propiedad (held sigue 1).
 			}
 		}

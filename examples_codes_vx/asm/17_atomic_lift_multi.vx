@@ -16,7 +16,7 @@ i64 g = 100_i64;
 i64 main() {
 	// compare-and-swap con el esperado en un registro DISTINTO de rax: el asm
 	// lo mueve a rax justo antes del cmpxchg (patron habitual del codigo real).
-	register("rdi") u64* p   = (u64*) & g;
+	register("rdi") u64* p   = (u64*)&g;
 	register("rsi") u64  des = 200_u64;
 	register("rdx") u64  exp = 100_u64; // expected (explicito, via mov rax, rdx)
 	register("rax") u64  old = 0_u64;   // out: old value

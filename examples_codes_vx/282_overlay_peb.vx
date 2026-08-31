@@ -214,7 +214,7 @@ struct PEB {
 				i32 j      = 0_i32;
 				i32 wchars = (i32)(m.NameLen / 2);
 				while (j < wchars && j < 128) {
-					print_char((char) * (u8*)(nb + (u64)j * 2));
+					print_char((char)*(u8*)(nb + (u64)j * 2));
 					j = j + 1;
 				}
 				println("  (base=${m.DllBase:hex} size=${m.SizeOfImage:hex})");

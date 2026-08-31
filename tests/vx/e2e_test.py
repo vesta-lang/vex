@@ -5149,9 +5149,49 @@ fails_case("direccion_tipo_err",
 # tomaban la direccion: el metodo de un struct, una lambda en una variable, un
 # metodo ligado y un constructor.  Ninguno daba un error -- daban CERO --, asi
 # que lo que hay que fijar es que las ocho coincidan.
-modes3_case("out_por_todos_los_caminos",
-            "un `out` cumple lo mismo se llame como se llame (8 caminos)",
-            "529_out_por_todos_los_caminos.vx", 21)
+#
+# Se comprueba CADA LINEA y no solo el total: si el total fuera lo unico, una
+# regresion diria "19 en vez de 21" y habria que ir a buscar cual de los ocho
+# se rompio.  Es la diferencia entre un test que avisa y uno que ademas dice
+# QUE pasa, que es lo que se le pide al resto del sistema.
+OUT_CAMINOS_LINEAS = [
+    r"suelta: +1",
+    r"metodo struct: +2",  # se bajaba por un camino propio -> daba CERO
+    r"metodo clase: +3",
+    r"cfn: +1",
+    r"fn \(variable\): +1",  # escribia a traves de un numero -> moria en 0x0
+    r"metodo ligado: +3",  # pedia la direccion de una direccion
+    r"ctor struct: +4",  # no habia forma de llamarlo
+    r"ctor clase: +6",
+    r"total = 21",
+]
+
+
+@case("out_por_todos_los_caminos", line=None)
+def _(ctx):
+    """Un `out` cumple lo mismo se llame como se llame, en los tres modos."""
+    etiqueta = "un `out` se llame como se llame (8 caminos)"
+    src = "529_out_por_todos_los_caminos.vx"
+    ctx.compile_vx(ctx.src(src), "e529")
+    # Las lineas ANTES del total: `fail` aborta el caso, asi que comprobar
+    # primero la suma dejaria el detalle sin llegar a mirarse -- y el detalle
+    # es justo lo que hace falta cuando algo se rompe.
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("e529", schedulers=1, mode=modo)
+        expect_lines(ctx, log, "%s (-m %s)" % (etiqueta, modo),
+                     OUT_CAMINOS_LINEAS)
+        got = get_r00(log)
+        if got != 21:
+            ctx.fail("%s (-m %s): R00 == %s, se esperaban 21"
+                     % (etiqueta, modo, got), log)
+        ctx.ok("%s (-m %s) -> los 8 caminos" % (etiqueta, modo))
+    exe = aot_build(ctx, ctx.src(src), "e529_aot", etiqueta + " (-m aot)")
+    rc, log = ctx.run([exe])
+    expect_lines(ctx, log, etiqueta + " (-m aot)", OUT_CAMINOS_LINEAS)
+    got = exit_code(rc)
+    if got != 21:
+        ctx.fail("%s (-m aot): sale %d, se esperaban 21" % (etiqueta, got), log)
+    ctx.ok("%s (-m aot) -> los 8 caminos" % etiqueta)
 
 
 if __name__ == "__main__":

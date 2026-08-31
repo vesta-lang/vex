@@ -35,7 +35,7 @@ i32 main() {
 
 	// (2) gc<f64>: box de un float.
 	gc<f64> b  = gc_box(2.0);
-	i64     vb = (i64) * b; // 2
+	i64     vb = (i64)*b; // 2
 
 	// (3) gc<unique<i64>>: cero fuga, del se invoca 1 vez.
 	Trace.frees = 0;
