@@ -1273,8 +1273,8 @@ es = "'{0}:{1}' esta definida dos veces con efectos distintos ({2}); se sigue co
 # parece decir algo que no ocurre.
 
 [VXT009]
-en = "'{0}' is marked '{1}' on a value ('{2}'): writing a copy is not visible from outside, so on a parameter this is the output-parameter form -- the caller yields a slot and the callee writes it -- and that is not wired yet; write it as a pointer ('{2}*') meanwhile"
-es = "'{0}' lleva '{1}' sobre un valor ('{2}'): escribir una copia no se ve desde fuera, asi que en un parametro esto es la forma de SALIDA -- quien llama cede un hueco y el llamado lo escribe -- y todavia no esta conectada; escribelo como puntero ('{2}*') mientras tanto"
+en = "'{0}' is marked '{1}' on a value ('{2}'), and there is no caller here to yield a slot: on a PARAMETER that mark is the output-parameter form -- the caller passes the place and the callee writes it -- but a variable or a field has nobody to receive from; if what you want is to write through it, declare it as a pointer ('{2}*')"
+es = "'{0}' lleva '{1}' sobre un valor ('{2}'), y aqui no hay ningun llamante que ceda un hueco: en un PARAMETRO esa marca es la forma de salida -- quien llama pasa el sitio y el llamado lo escribe -- pero una variable o un campo no tienen de quien recibirlo; si lo que quieres es escribir a traves de el, declaralo como puntero ('{2}*')"
 
 # --- la direccion sobre un tipo de RETORNO (VXT010) ---
 #
@@ -1289,3 +1289,13 @@ es = "'{0}' lleva '{1}' sobre un valor ('{2}'): escribir una copia no se ve desd
 [VXT010]
 en = "'{0}' is marked '{1}' on its return type: the mark grants a permission over what something POINTS TO, and a return type is nobody to grant it to -- put it on the parameter, variable or field that receives the value"
 es = "'{0}' lleva '{1}' en su tipo de retorno: la marca da un permiso sobre lo que algo APUNTA, y un tipo de retorno no es nadie a quien darselo -- ponla en el parametro, la variable o el campo que recibe el valor"
+
+# --- argumento de un parametro de SALIDA (VXT011) ---
+#
+# `out T x` es un hueco que el llamado escribe, asi que lo que se le pasa tiene
+# que ser un SITIO: un nombre, un campo, un elemento de array o un deref.  Una
+# expresion calculada no tiene donde recibir el resultado.
+
+[VXT011]
+en = "argument {0} is passed to an '{1}' parameter, which the callee writes: it needs somewhere to write to (a name, a field, an array element or a dereference), not a computed value"
+es = "el argumento {0} va a un parametro '{1}', que el llamado ESCRIBE: necesita un sitio donde escribir (un nombre, un campo, un elemento de array o un deref), no un valor calculado"

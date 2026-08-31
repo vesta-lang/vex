@@ -4662,13 +4662,26 @@ DIR_NEG_CASES = [
 """, "VXT006",
      "out sobre un pointee `const`: la contradiccion se detecta",
      "out sobre un pointee `const` debio fallar"),
-    ("dir_neg_out_valor", """i64 f(out i64 x) {
-    return x;
+    # `out` sobre un valor SI significa algo en un parametro -- es el parametro
+    # de salida, y funciona (ver `parametros_salida`) --, pero en una variable
+    # no: ahi no hay ningun llamante que ceda el hueco.
+    ("dir_neg_out_valor", """i32 main() {
+    out i64 x = 1;
+    return (i32) x;
 }
 """, "VXT009",
-     "out sobre un VALOR: se dice que es el parametro de salida y que no esta "
-     "conectado, en vez de aceptarlo sin cumplirlo",
-     "out sobre un valor debio dar VXT009"),
+     "out sobre una VARIABLE: no hay llamante que ceda un hueco",
+     "out sobre una variable debio dar VXT009"),
+    ("dir_neg_out_arg_no_lvalue", """void f(out i64 x) {
+    x = 1;
+}
+i32 main() {
+    f(3);
+    return 0;
+}
+""", "VXT011",
+     "el argumento de un `out` tiene que ser un SITIO donde escribir",
+     "pasar un literal a un `out` debio fallar"),
 ]
 
 
@@ -4754,6 +4767,13 @@ i32 main() {
 
 for _t, _s, _p, _m, _f in DIR_CAMPO_NEG_CASES:
     _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
+
+
+
+
+modes3_case("parametros_salida",
+            "out/inout sobre un valor: el parametro de SALIDA",
+            "524_parametros_salida.vx", 59)
 
 
 if __name__ == "__main__":

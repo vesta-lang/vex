@@ -864,6 +864,28 @@ void Lowering::scan_address_taken_expr(ast::Expr *e, int &depth) {
                 }
             }
         }
+        /* Un argumento que va a un parametro de SALIDA tambien tiene su
+         * direccion tomada, aunque en el fuente no haya ningun `&`: es
+         * justamente lo que la marca evita escribir.  Sin marcarlo aqui, el
+         * bajado pide la direccion de un local que se quedo en un registro SSA
+         * y falla con "sobre variable no promocionada".
+         *
+         * La condicion sale del MISMO predicado que uso la firma, sobre lo
+         * apuntado por el parametro -- que es donde la firma dejo la `T`. */
+        if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr) {
+            auto *cid = static_cast<ast::IdentExpr *>(c->callee.get());
+            const FunctionSig *sg = tc_.function_sig_by_name(cid->name);
+            if (sg != nullptr && sg->param_by_ref_mask != 0) {
+                const size_t n = std::min<size_t>(c->args.size(), 64);
+                for (size_t i = 0; i < n; ++i) {
+                    if ((sg->param_by_ref_mask & (1ull << i)) == 0) continue;
+                    ast::Expr *a = c->args[i].get();
+                    if (a && a->kind == ast::NodeKind::IdentExpr)
+                        address_taken_locals_.insert(
+                            static_cast<ast::IdentExpr *>(a)->name);
+                }
+            }
+        }
         scan_address_taken_expr(c->callee.get(), depth);
         for (auto &arg : c->args)
             scan_address_taken_expr(arg.get(), depth);

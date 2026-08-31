@@ -319,6 +319,22 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         p->dir == ast::ParamDir::InOut)
                         fx.writes_pointee |= bit;
                 }
+                // Y los ejes que hablan de la funcion entera, ya resueltos por
+                // el parser contra el objetivo activo.  `any` es lo que
+                // distingue "dijeron que no hace nada" de "nadie dijo nada":
+                // sin el, un `@pure` a secas -- que no pone ningun eje -- no se
+                // notaria, y es justo la forma mas util de describir una nativa
+                // inofensiva.
+                if (efd->effects.any) {
+                    fx.declared = true;
+                    fx.io = efd->effects.io;
+                    fx.may_throw = efd->effects.may_throw;
+                    fx.may_panic = efd->effects.may_panic;
+                    fx.allocates = efd->effects.allocates;
+                    fx.reads_global = efd->effects.reads_global;
+                    fx.writes_global = efd->effects.writes_global;
+                    fx.nondeterministic = efd->effects.nondeterministic;
+                }
                 if (fx.declared) extern_effects_by_fn_name_[efd->name] = fx;
             }
         }
@@ -1066,6 +1082,16 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         ir::IrType pt;
     };
     std::vector<CustomAbiParam> custom_abi_params;
+    /* Parametros de SALIDA por referencia (`out T x` sobre un valor).  Lo que
+     * llega es la DIRECCION de un hueco del llamante, y el cuerpo lo escribe
+     * como si fuera una `T`.  Eso es exactamente lo que hace un local cuya
+     * direccion se ha tomado, asi que se marcan como tales y `read_local` /
+     * `write_local` hacen el resto -- sin ALLOCA, porque la direccion ya
+     * viene --.
+     *
+     * Se guardan y se re-insertan mas abajo por la misma razon que los de ABI
+     * custom: `address_taken_locals_` se limpia despues de este punto. */
+    std::vector<std::string> by_ref_params;
     // Hidden retbuf param para sret (si aplica): primero en la lista.
     ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
     if (sret) {
@@ -1094,6 +1120,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         if (d.decl && !d.decl->abi_reg.empty())
             custom_abi_params.push_back(
                 {d.decl->name, d.value, d.decl->abi_reg, d.type});
+        // El tipo se resuelve del NODO -- lo que el usuario escribio -- y se
+        // pregunta al mismo predicado que uso la firma: si el bajado decidiera
+        // por su cuenta, bastaria que discrepara para pasar una direccion y
+        // leerla como valor, y eso no da un error sino OTRO VALOR.
+        if (d.decl && d.decl->dir != ast::ParamDir::None && d.decl->type &&
+            is_by_ref_out_param(d.decl->dir,
+                                tc_.resolve_type_node(d.decl->type.get())))
+            by_ref_params.push_back(d.decl->name);
     }
 
     // Bloque entry.
@@ -1215,6 +1249,11 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // pila).
     for (const auto &cp : custom_abi_params)
         address_taken_locals_.insert(cp.name);
+    // Y los de salida por referencia, por lo mismo: el clear() de arriba borra
+    // el marcado, y sin el `read_local` devolveria la DIRECCION en vez de leer
+    // el hueco -- el cuerpo veria un puntero donde escribio una `T`.
+    for (const std::string &n : by_ref_params)
+        address_taken_locals_.insert(n);
     // fix9 - eliminados los pre-pases scan_try / scan_loops.
     // Las flags `current_fn_has_try_` y `current_fn_has_loops_` solo
     // se usaban para decidir si emitir el cleanup RAW_ASM de fix

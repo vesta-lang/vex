@@ -1,0 +1,56 @@
+namespace ejemplos.parametros_salida;
+
+// `out` y `inout` sobre un VALOR: el parametro de SALIDA.
+//
+// Sobre algo que apunta, la marca da un permiso.  Sobre un valor no puede
+// significar eso -- escribir una copia no se ve desde fuera --, asi que
+// significa lo que significa en C# o en Ada: quien llama cede un HUECO y el
+// llamado lo escribe.
+//
+// Y baja a lo que ya existe: la firma convierte el parametro a `T*`, el sitio
+// de llamada toma la direccion del argumento y el cuerpo lo ve como una `T`.
+// No cuesta nada que no costara escribirlo con punteros a mano; lo que quita
+// es tener que escribirlo.
+//
+// Las tres piezas preguntan al MISMO predicado.  Si cada una lo decidiera por
+// su cuenta, bastaria que dos no coincidieran para pasar una direccion y
+// leerla como valor -- y eso no da un error, da otro numero.
+//
+// Esperado: 4 + 42 + 6 + 7 = 59.
+
+// Devolver DOS cosas sin inventar un struct para ellas.
+void dividir(i32 a, i32 b, out i32 coc, out i32 resto) {
+	coc   = a / b;
+	resto = a % b;
+}
+
+// `inout` lee lo que habia y lo deja cambiado.
+void doblar(inout i64 v) {
+	v = v * 2_i64;
+}
+
+// El argumento tiene que ser un SITIO donde escribir: un campo tambien lo es.
+struct Caja {
+	i64 n;
+}
+
+i32 main() {
+	i32 c;
+	i32 r;
+	dividir(7, 2, c, r); // sin `&`: la direccion la pone el compilador
+	// c = 3, r = 1
+
+	i64 v = 21_i64;
+	doblar(v); // v = 42
+
+	// Un CAMPO tambien es un sitio donde escribir.
+	Caja k;
+	k.n = 3_i64;
+	doblar(k.n); // k.n = 6
+
+	i64 s = 7_i64;
+
+	// 3 + 1 + 42 + 6 + 7 = 59.  Cada sumando sale de una forma distinta de
+	// usar la marca, asi que el numero dice CUALES funcionaron.
+	return (i32)((i64)(c + r) + v + k.n + s);
+}

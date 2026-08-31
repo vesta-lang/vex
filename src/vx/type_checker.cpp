@@ -2762,7 +2762,7 @@ Type TypeChecker::enum_type_of(const EnumLayout &lay,
 // haria de `out T const**` algo inexpresable sin ganar nada.
 // ---------------------------------------------------------------------------
 void TypeChecker::check_param_dir_(const std::string &name, ast::ParamDir dir,
-                                   SourceLoc loc, Type &pt) {
+                                   SourceLoc loc, Type &pt, DirSite site) {
     if (dir == ast::ParamDir::None) return;
     const char *marca = ast::param_dir_name(dir);
     // Lo que apunta.  Un array nativo tambien apunta: lo que viaja es la
@@ -2781,12 +2781,19 @@ void TypeChecker::check_param_dir_(const std::string &name, ast::ParamDir dir,
             pt.is_const = true;
             return;
         }
-        // `out`/`inout` sobre un valor es el parametro de SALIDA -- quien
-        // llama cede un hueco y el llamado lo escribe --.  Baja a lo que ya
-        // existe (un `T*` con `&` en el sitio de llamada), pero eso es
-        // reescribir la llamada y todavia no esta hecho.  Se dice: aceptar la
-        // marca sin cumplirla seria peor que rechazarla, porque el programa
-        // pareceria decir algo que no ocurre.
+        // `out`/`inout` sobre un valor es el parametro de SALIDA: quien llama
+        // cede un hueco y el llamado lo escribe.  Lo que viaja es la DIRECCION
+        // del hueco, asi que la firma lo convierte a puntero; el cuerpo lo
+        // sigue viendo como una `T`, y quien declara el simbolo lo marca.
+        switch (site) {
+        case DirSite::Signature: pt = Type::make_ptr(pt); return;
+        case DirSite::ParamBody: return; // el tipo se queda en T
+        case DirSite::Storage: break;    // no es un parametro: sigue abajo
+        }
+        // Una variable o un campo no tienen llamante que ceda nada, asi que
+        // aqui la marca no puede cumplirse.  Se dice en vez de ignorarla:
+        // aceptarla sin hacer nada seria escribir algo que parece decir una
+        // cosa y no ocurre.
         diags_.diag(loc, DiagLevel::ERR, "VXT009",
                     {name, marca, type_to_string(pt)});
         return;
@@ -5463,6 +5470,18 @@ void TypeChecker::collect_globals() {
                     continue; // no anñade param_type.
                 }
                 Type pt = type_from_node(p->type.get());
+                // La FIRMA es lo que ve quien llama, asi que aqui un `out T x`
+                // por referencia se convierte en `T*`: es la direccion lo que
+                // viaja.  El cuerpo lo sigue viendo como una `T`
+                // (declare_params_in_scope pregunta lo mismo con ParamBody).
+                //
+                // Se pregunta ANTES de convertir y se APUNTA: despues, un
+                // `out T*` escrito por el usuario y este son indistinguibles.
+                if (is_by_ref_out_param(p->dir, pt) &&
+                    sig.param_types.size() < 64)
+                    sig.param_by_ref_mask |= 1ull << sig.param_types.size();
+                check_param_dir_(p->name, p->dir, p->loc, pt,
+                                 DirSite::Signature);
                 // ABI custom (register("rXX") en el param): validar que el
                 // registro sea reconocido -> error temprano y claro.
                 if (!p->abi_reg.empty() &&
@@ -5500,6 +5519,10 @@ void TypeChecker::collect_globals() {
                     sig.param_types.push_back(pt);
                     sig.param_abi_regs.push_back(p_abi);
                 }
+                // Alineada con param_types, igual que param_abi_regs: la
+                // direccion la necesita quien LLAMA, y muchas veces llama
+                // desde otro fichero, donde la declaracion no se ve.
+                sig.param_dirs.push_back(p->dir);
             }
             // Normalizar: si ningun param declaro ABI custom, dejar el vector
             // vacio (== ABI estandar; consistente con el operator== de Type).
@@ -5579,8 +5602,13 @@ void TypeChecker::collect_globals() {
                 // justo donde MAS importa: aqui la marca no es un contrato que
                 // alguien vaya a comprobar contra el codigo, es lo unico que se
                 // sabe de esa funcion.
-                check_param_dir_(p->name, p->dir, p->loc, pt);
+                if (is_by_ref_out_param(p->dir, pt) &&
+                    sig.param_types.size() < 64)
+                    sig.param_by_ref_mask |= 1ull << sig.param_types.size();
+                check_param_dir_(p->name, p->dir, p->loc, pt,
+                                 DirSite::Signature);
                 sig.param_types.push_back(pt);
+                sig.param_dirs.push_back(p->dir);
             }
             sig.extern_lib = efd->lib;
             Symbol s;
@@ -5768,7 +5796,12 @@ void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
     mi.param_types.reserve(m.params.size());
     for (size_t pi = 0; pi < m.params.size(); ++pi) {
         const auto &p = m.params[pi];
-        const Type pt = type_from_node(p->type.get());
+        Type pt = type_from_node(p->type.get());
+        // Un metodo no es un caso aparte: misma pregunta y mismo sitio que en
+        // una funcion suelta, incluido apuntar cual se convirtio.
+        if (is_by_ref_out_param(p->dir, pt) && mi.param_types.size() < 64)
+            mi.param_by_ref_mask |= 1ull << mi.param_types.size();
+        check_param_dir_(p->name, p->dir, p->loc, pt, DirSite::Signature);
         if (p->is_variadic) {
             /* El que recoge los que sobren tiene que ser el ULTIMO: si no, no
              * habria forma de saber donde acaban los suyos y empiezan los del
@@ -5781,9 +5814,11 @@ void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
             /* Dentro del cuerpo `xs` es la direccion del array que monto quien
              * llamo, no un `T`. */
             mi.param_types.push_back(Type::make_ptr(pt));
+            mi.param_dirs.push_back(p->dir);
             continue;
         }
         mi.param_types.push_back(pt);
+        mi.param_dirs.push_back(p->dir);
     }
 }
 
@@ -5877,7 +5912,13 @@ void TypeChecker::check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
             continue;
         }
         const Type &tp = (i >= fixed) ? mi.variadic_elem : mi.param_types[i];
-        check_call_arg(e->args[i].get(), tp, i, "el metodo '" + name + "'");
+        const ast::ParamDir d = (i < mi.param_dirs.size())
+                                    ? mi.param_dirs[i]
+                                    : ast::ParamDir::None;
+        const bool by_ref =
+            i < 64 && (mi.param_by_ref_mask & (1ull << i)) != 0;
+        check_call_arg(e->args[i].get(), tp, i, "el metodo '" + name + "'", d,
+                       by_ref);
     }
 }
 
@@ -5904,12 +5945,18 @@ void TypeChecker::declare_params_in_scope(
         sp.kind = SymbolKind::Param;
         const Type pt = type_from_node(p->type.get());
         sp.type = p->is_variadic ? Type::make_ptr(pt) : pt;
-        // La direccion se comprueba AQUI y no donde se construye cada firma:
-        // por aqui pasan la funcion suelta, el metodo y el constructor, asi que
-        // los tres reciben el mismo criterio sin repetirlo tres veces.  Se
-        // mira el tipo YA envuelto: en un variadico `in T... xs` el callee
-        // recibe el puntero al array, que si apunta a algo.
-        check_param_dir_(p->name, p->dir, p->loc, sp.type);
+        // La vista del CUERPO.  Se mira el tipo YA envuelto: en un variadico
+        // `in T... xs` el callee recibe el puntero al array, que si apunta a
+        // algo.
+        //
+        // `ParamBody` es lo que hace que un `out T x` se quede en `T` aqui
+        // mientras la firma lo convierte a `T*`: el cuerpo escribe `x = ...` y
+        // lo que viaja es la direccion.  El puente entre las dos vistas es
+        // esta marca, y la condicion la contesta el MISMO predicado que uso la
+        // firma, para que no puedan discrepar.
+        sp.is_by_ref = is_by_ref_out_param(p->dir, sp.type);
+        check_param_dir_(p->name, p->dir, p->loc, sp.type,
+                         DirSite::ParamBody);
         if (!declare(p->name, sp))
             diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
     }
@@ -9434,7 +9481,7 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
         // El cuerpo de una lambda no pasa por declare_params_in_scope, asi que
         // sin esto seria el unico de los siete contextos donde la marca se
         // aceptaria sin mirarla.
-        check_param_dir_(p->name, p->dir, p->loc, pt);
+        check_param_dir_(p->name, p->dir, p->loc, pt, DirSite::Signature);
         param_types.push_back(pt);
     }
 
@@ -10853,9 +10900,39 @@ Type TypeChecker::check_variant_ctor(ast::CallExpr *e, ast::FieldAccessExpr *fa,
  * @copydoc vx::TypeChecker::check_call_arg
  */
 void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
-                                 const std::string &what) {
+                                 const std::string &what, ast::ParamDir dir,
+                                 bool by_ref) {
     if (!arg) return;
     Type ta = check_expr(arg);
+    /* Un parametro de SALIDA por referencia: el parametro es `T*` -- lo
+     * convirtio la firma -- pero quien llama escribe el HUECO, no su direccion.
+     *
+     * Asi que aqui se compara contra lo APUNTADO, y se exige que el argumento
+     * sea algo a lo que se pueda escribir: pasar `f(3)` no tendria donde dejar
+     * el resultado.  La direccion la pone el bajado.
+     *
+     * `by_ref` viene de la FIRMA y no se deduce del tipo: aqui un `out T*` que
+     * escribio el usuario y un `out T` convertido se ven identicos, y
+     * deducirlo trataba el primero como el segundo -- pedia la direccion de una
+     * direccion --.  */
+    if (by_ref && tp.kind == PrimitiveKind::PTR && tp.pointee) {
+        if (!is_lvalue_expr(arg)) {
+            diags_.diag(arg->loc, DiagLevel::ERR, "VXT011",
+                        {std::to_string(idx + 1), ast::param_dir_name(dir)});
+            return;
+        }
+        Type esperado = *tp.pointee;
+        esperado.is_const = false; // el hueco se escribe: su const no aplica
+        if (arg_fits_param(arg, esperado, ta)) return;
+        diags_.error(arg->loc,
+                     std::string("argumento ") + std::to_string(idx + 1) +
+                         (what.empty() ? std::string() : (" de " + what)) +
+                         ": tipo (" + type_to_string(ta) +
+                         ") incompatible con el parametro '" +
+                         ast::param_dir_name(dir) + " " +
+                         type_to_string(esperado) + "'");
+        return;
+    }
     if (arg_fits_param(arg, tp, ta)) return;
     diags_.error(arg->loc,
                  std::string("argumento ") + std::to_string(idx + 1) +
@@ -11679,13 +11756,8 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
         // (*p) como lvalues validos para ++/--.
         if (e->operand) {
             const auto k = e->operand->kind;
-            const bool is_lvalue =
-                k == ast::NodeKind::IdentExpr ||
-                k == ast::NodeKind::FieldAccessExpr ||
-                k == ast::NodeKind::IndexExpr ||
-                (k == ast::NodeKind::UnaryExpr &&
-                 static_cast<ast::UnaryExpr *>(e->operand.get())->op ==
-                     ast::UnOp::Deref);
+            (void)k;
+            const bool is_lvalue = ast::is_lvalue_expr(e->operand.get());
             if (!is_lvalue) {
                 diags_.error(e->loc, "++/-- requieren un lvalue");
             }
@@ -11729,13 +11801,7 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
             }
         }
         const auto kind = e->operand->kind;
-        const bool is_lvalue =
-            kind == ast::NodeKind::IdentExpr ||
-            kind == ast::NodeKind::FieldAccessExpr ||
-            kind == ast::NodeKind::IndexExpr ||
-            (kind == ast::NodeKind::UnaryExpr &&
-             static_cast<ast::UnaryExpr *>(e->operand.get())->op ==
-                 ast::UnOp::Deref);
+        const bool is_lvalue = ast::is_lvalue_expr(e->operand.get());
         if (!is_lvalue) {
             diags_.error(e->loc,
                          "'&' requiere un lvalue (variable, campo, p[i] o *p)");
@@ -17162,7 +17228,10 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // (equivalente a void*) y types_assignable acepta cualquier T*.
     const size_t n = std::min(e->args.size(), sig.param_types.size());
     for (size_t i = 0; i < n; ++i)
-        check_call_arg(e->args[i].get(), sig.param_types[i], i);
+        check_call_arg(e->args[i].get(), sig.param_types[i], i, std::string(),
+                       i < sig.param_dirs.size() ? sig.param_dirs[i]
+                                                 : ast::ParamDir::None,
+                       i < 64 && (sig.param_by_ref_mask & (1ull << i)) != 0);
     // Chequear los argumentos extra para sus efectos (si la aridad fallo).
     for (size_t i = n; i < e->args.size(); ++i)
         (void)check_expr(e->args[i].get());

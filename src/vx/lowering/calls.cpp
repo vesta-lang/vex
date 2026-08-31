@@ -567,6 +567,19 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     std::vector<std::pair<ir::IrValueId, std::string>> struct_clone_to_dtor;
     for (size_t i = 0; i < e->args.size(); ++i) {
         ast::Expr *ae = e->args[i].get();
+        /* Parametro de SALIDA por referencia: lo que viaja es la DIRECCION del
+         * hueco, no su valor.  El comprobador ya exigio que el argumento sea un
+         * sitio al que se pueda escribir, asi que aqui solo hay que tomar su
+         * direccion -- el mismo camino que un `&x` escrito a mano --.
+         *
+         * La condicion la contesta el predicado compartido sobre lo APUNTADO
+         * por el parametro: la firma lo convirtio a `T*`, asi que lo que hay
+         * que mirar es su pointee. */
+        if (callee_sig && i < 64 &&
+            (callee_sig->param_by_ref_mask & (1ull << i)) != 0) {
+            arg_ids.push_back(lower_addr_of_lvalue(ae));
+            continue;
+        }
         // Detectar (param STRING, arg StringLitExpr no interpolado) y
         // promover el literal a StringObject inline via STRMAKE.
         bool promote_to_string = false;
@@ -1712,6 +1725,28 @@ ir::IrValueId Lowering::emit_calln(const std::string &name,
     in.source_line = source_line;
     emit(current_block_, std::move(in));
     return dst;
+}
+
+/**
+ * @copydoc vx::Lowering::lower_addr_of_lvalue
+ */
+ir::IrValueId Lowering::lower_addr_of_lvalue(ast::Expr *lvalue) {
+    if (lvalue == nullptr) return ir::IR_NO_VALUE;
+    /* Se REUSA la bajada de `&` en vez de copiarla.  Son unas 125 lineas con
+     * todos sus casos (nombre, campo, indice, deref, global, register...), y
+     * una segunda copia se quedaria corta el dia que se anada uno: el
+     * argumento de un `out` se pasaria distinto que un `&x` escrito a mano, y
+     * eso no da un error, da otra direccion.
+     *
+     * El envoltorio NO es dueno del nodo: lo suelta antes de destruirse, asi
+     * que el `CallExpr` sigue siendo el unico que lo posee. */
+    ast::UnaryExpr envoltorio;
+    envoltorio.loc = lvalue->loc;
+    envoltorio.op = ast::UnOp::AddrOf;
+    envoltorio.operand.reset(lvalue);
+    const ir::IrValueId v = lower_unary(&envoltorio);
+    (void)envoltorio.operand.release();
+    return v;
 }
 
 /**

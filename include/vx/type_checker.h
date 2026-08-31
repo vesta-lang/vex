@@ -109,6 +109,31 @@ enum class SymbolKind : uint8_t {
 };
 
 /**
+ * @brief Un `out T x` / `inout T x` que viaja POR REFERENCIA.
+ * @param d Direccion declarada.
+ * @param t Tipo escrito por el usuario.
+ * @return true si es un parametro de SALIDA por referencia.
+ *
+ * Es cierto cuando la marca promete ESCRIBIR y lo declarado no apunta a nada:
+ * escribir una copia no se ve desde fuera, asi que la unica lectura util es la
+ * de C# o Ada -- quien llama cede un hueco y el llamado lo escribe --, y para
+ * eso lo que viaja es la direccion del hueco.
+ *
+ * Sobre algo que YA apunta (`out T* p`) no hace falta: la direccion la esta
+ * dando el usuario.
+ *
+ * Vive en UN sitio porque lo preguntan TRES: la firma -- que convierte el tipo
+ * a puntero --, el cuerpo -- que lo ve como una `T` y accede por la direccion
+ * -- y el sitio de llamada, que toma la direccion del argumento.  Si cada uno
+ * lo decidiera por su cuenta, bastaria que dos no coincidieran para pasar una
+ * cosa y leer otra, y eso no da un error: da OTRO VALOR.
+ */
+inline bool is_by_ref_out_param(ast::ParamDir d, const Type &t) noexcept {
+    if (d != ast::ParamDir::Out && d != ast::ParamDir::InOut) return false;
+    return t.kind != PrimitiveKind::PTR && t.kind != PrimitiveKind::ARRAY;
+}
+
+/**
  * @struct FunctionSig
  * @brief Firma de una funcion: tipo de retorno + tipos de parametros.
  */
@@ -121,6 +146,27 @@ struct FunctionSig {
     /// y (b) el tipado de `&funcion`, que construye un @c cfn cuyo @c
     /// fn_param_abi_regs hereda esta lista -> el tipo del puntero LLEVA la ABI.
     std::vector<std::string> param_abi_regs;
+    /// Direccion declarada por parametro (`in`/`out`/`inout`), alineada con
+    /// @c param_types.  Vacio = ninguno la lleva, que es el caso normal.
+    ///
+    /// Hace falta en la FIRMA y no solo en la declaracion porque quien la
+    /// necesita es el SITIO DE LLAMADA: un `out T x` sobre un valor viaja como
+    /// `T*`, asi que el caller tiene que tomar la direccion del argumento --
+    /// y para saberlo tiene que poder preguntarlo desde donde llama, que
+    /// muchas veces es otro fichero.
+    std::vector<ast::ParamDir> param_dirs;
+    /// Que parametros CONVIRTIO la firma a puntero por ser de salida por
+    /// referencia: bit i = el i-esimo.
+    ///
+    /// Hace falta registrarlo y no se puede re-deducir: en la firma, un
+    /// `out T* p` que escribio el usuario y un `out T x` convertido a `T*` se
+    /// ven EXACTAMENTE igual, y el tipo original ya no esta.  Deducirlo del
+    /// convertido trataba el primero como si fuera el segundo y pedia la
+    /// direccion de una direccion.
+    ///
+    /// Un entero y no un vector: son 12 parametros como mucho en la maquina
+    /// virtual, y en nativo tampoco se llega a 64.
+    uint64_t param_by_ref_mask = 0;
     ///  FFI extern: si no esta vacio, esta funcion es un import
     /// de una libreria nativa (ej. "user32.dll", "kernel32.dll" o
     /// "stdlib/native/io/vesta_io").  El lowering al ver una llamada a
@@ -251,6 +297,11 @@ struct ClassMethodInfo {
     std::string name;
     Type return_type;
     std::vector<Type> param_types;
+    /// Direccion por parametro, alineada con @c param_types.  Misma razon que
+    /// en @c FunctionSig::param_dirs: la necesita quien LLAMA.
+    std::vector<ast::ParamDir> param_dirs;
+    /// Ver @c FunctionSig::param_by_ref_mask.
+    uint64_t param_by_ref_mask = 0;
     /**
      * @name El ultimo parametro recoge los que sobren
      *
@@ -770,6 +821,15 @@ struct Symbol {
     uint32_t sig_index =
         0; ///< Indice en TypeChecker::function_sigs_, si kind==Function.
     bool is_const = false;
+    /// Parametro de SALIDA por referencia (`out T x` / `inout T x` con T un
+    /// valor).  El cuerpo lo ve como una `T` corriente -- @c type es T --,
+    /// pero lo que llega de verdad es la direccion de un hueco del llamante,
+    /// asi que leerlo y escribirlo pasan por ella.
+    ///
+    /// Se marca en el SIMBOLO y no en el tipo a proposito: el tipo es lo que
+    /// el usuario escribio y lo que los mensajes deben citar; esto es COMO
+    /// viaja, que es otra cosa.
+    bool is_by_ref = false;
     /// Nombre del alias de tipo cuando el simbolo se declaro con un alias
     /// "magico" como `Class`, `Method`, `Field`, `Object`.  El tipo
     /// subyacente es i64 (para reflexion: handles del ClassRegistry).
@@ -1791,7 +1851,9 @@ class TypeChecker {
     bool arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta);
 
     void check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
-                        const std::string &what = std::string());
+                        const std::string &what = std::string(),
+                        ast::ParamDir dir = ast::ParamDir::None,
+                        bool by_ref = false);
 
     void check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
                            const std::string &name);
@@ -1910,8 +1972,31 @@ class TypeChecker {
      * comprueba es la marca contra el tipo, y eso no depende de en que clase
      * de declaracion aparezca.
      */
+    /**
+     * @enum DirSite
+     * @brief Desde donde se pregunta por la direccion.
+     *
+     * La marca es la misma en todas partes; lo que cambia es que se hace con
+     * ella, y eso depende de quien pregunta.  Va como un dato y no como dos
+     * booleanos porque los tres casos son EXCLUYENTES y con banderas se puede
+     * escribir una combinacion que no existe.
+     */
+    enum class DirSite {
+        /// Construyendo la firma: un `out T x` por referencia CONVIERTE el
+        /// tipo a `T*`, que es lo que el caller tiene que pasar.
+        Signature,
+        /// Declarando el parametro dentro del cuerpo: el tipo se queda en `T`
+        /// -- el cuerpo lo ve como una `T` corriente -- y quien llama marca el
+        /// simbolo como por referencia.
+        ParamBody,
+        /// Una variable o un campo: ahi `out` sobre un valor no significa
+        /// nada, porque no hay ningun llamante que ceda un hueco.
+        Storage,
+    };
+
     void check_param_dir_(const std::string &name, ast::ParamDir dir,
-                          SourceLoc loc, Type &pt);
+                          SourceLoc loc, Type &pt,
+                          DirSite site = DirSite::Storage);
 
     /**
      * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.

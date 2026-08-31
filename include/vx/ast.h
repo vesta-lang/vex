@@ -354,6 +354,7 @@ inline const char *param_dir_name(ParamDir d) noexcept {
     }
 }
 
+
 /**
  * @struct PendingComplexity
  * @brief Un @c @complexity cuyo @c when: habla del PARAMETRO DE TIPO y por
@@ -797,6 +798,32 @@ struct UnaryExpr : Expr {
     std::unique_ptr<Expr> bound_recv_init;
     UnaryExpr() : Expr(NodeKind::UnaryExpr) {}
 };
+
+/**
+ * @brief La expresion nombra un SITIO al que se puede escribir.
+ * @param e Expresion, puede ser nula.
+ * @return true si es un lvalue.
+ *
+ * Es una pregunta de FORMA -- un nombre, un campo, un indice o un deref --,
+ * asi que se contesta sobre el AST y no necesita tipos.  Vive aqui, y no mas
+ * arriba con el resto de ayudas, porque necesita ver @c UnaryExpr.
+ *
+ * Estaba escrita DOS veces (las dos en el chequeo de `++`/`--`) y hacia falta
+ * una tercera para el argumento de un parametro de salida.  Tres copias de un
+ * criterio son tres sitios donde anadir una forma nueva de lvalue y acordarse
+ * solo de dos.
+ */
+inline bool is_lvalue_expr(const Expr *e) noexcept {
+    if (e == nullptr) return false;
+    switch (e->kind) {
+    case NodeKind::IdentExpr:
+    case NodeKind::FieldAccessExpr:
+    case NodeKind::IndexExpr: return true;
+    case NodeKind::UnaryExpr:
+        return static_cast<const UnaryExpr *>(e)->op == UnOp::Deref;
+    default: return false;
+    }
+}
 
 /**
  * @struct TernaryExpr
