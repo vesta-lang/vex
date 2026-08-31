@@ -28,8 +28,8 @@
  *     se llamaba a mano, y en la mirilla DOS VECES sobre la misma funcion --
  *     una para el informe y otra para la regla --, que es justo la duplicacion
  *     que este sistema existe para impedir.
- *   - **Sus dependencias se resuelven solas.**  Un hecho de maquina que necesite
- *     otro lo pide con `s.query<U>()` y el motor sabe producirlo.
+ *   - **Sus dependencias se resuelven solas.**  Un hecho de maquina que
+ * necesite otro lo pide con `s.query<U>()` y el motor sabe producirlo.
  *   - **Anadir uno no toca a nadie**: una celda mas y su productor.
  *
  * NO es thread-safe, igual que `FunctionSnapshot` y por lo mismo: el reparto de
@@ -75,7 +75,7 @@ struct MachineSnapshot {
             [&] { return QueryProducer<T, MachineSnapshot>::produce(*this); });
     }
 
-private:
+  private:
     // --- Celdas.  Una por hecho; el mapeo tipo -> celda se especializa abajo.
     mutable LazyFact<analysis::facts::PhysLivenessFacts> live_;
 
