@@ -660,6 +660,29 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
     }
     if (rhs == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
 
+    /* Campo `unique<T>` de un STRUCT: el campo ES la ranura, igual que en una
+     * clase, asi que lo que se guarda es el RECURSO y no la direccion de otra
+     * ranura.  Los mismos tres pasos que en la clase, y en el mismo orden:
+     * soltar lo que hubiera, traspasar, y VACIAR el origen -- si no, al salir
+     * del ambito su limpieza soltaria el mismo recurso que ahora tiene el
+     * campo --.
+     *
+     * Esta ruta se quedo sin cambiar cuando el campo dejo de guardar una
+     * direccion: entonces el struct seguia guardando una ranura mientras el
+     * lector ya esperaba el recurso, y leerlo devolvia una direccion en vez de
+     * un valor.  Se vio en `std.comptime.literal`, que tiene un `unique<u64>`
+     * dentro de un struct y lo indexa. */
+    if (fa->result_type.kind == PrimitiveKind::UNIQUE_PTR) {
+        emit_free_unique_slot(addr, fa->result_type.deleter_name, e->loc.line,
+                              /*slot_is_owned=*/false);
+        const ir::IrValueId v_res = emit_load_host_ptr(rhs, e->loc.line);
+        emit_store_typed(addr, v_res, ir::IrType::I64, e->loc.line);
+        const ir::IrValueId cero = emit_const(ir::IrType::I64, 0, e->loc.line);
+        emit_store_typed(rhs, cero, ir::IrType::I64, e->loc.line);
+        out = rhs;
+        return true;
+    }
+
     const ir::IrType ft = ir_type_from_primitive(fa->result_type.kind);
     // Compound assign: leer el valor actual del campo (con
     // extraccion de bit field si aplica), aplicar el operador,
