@@ -1,0 +1,65 @@
+namespace ejemplos.escritura_por_puntero_indirecto;
+
+// Lo que escribe una funcion llamada POR PUNTERO tiene que verse fuera.
+//
+// Parece obvio y no lo era: el mismo programa daba 7 sin optimizar y 0 con
+// `-O2`, que es el nivel por defecto.  Un valor equivocado y en silencio, en
+// los tres modos -- el fallo estaba en el `.velb`, asi que interprete, JIT y
+// nativo lo heredaban igual --.
+//
+// La causa: el pase que adelanta un `store` a un `load` trata las llamadas
+// como barrera -- dentro puede cambiar cualquier memoria --, pero el grupo de
+// las llamadas compartia cuerpo con el del `asm`, y lo primero que hace ese
+// cuerpo es preguntar si el bloque asm es PRECISO.  Ese predicado busca los
+// efectos por el NOMBRE de la funcion, y en una llamada indirecta el nombre
+// esta vacio: analizaba "el bloque asm sin nombre", lo encontraba sin accesos
+// y contestaba que si.  La llamada se saltaba la barrera y el `load` de
+// despues leia lo que habia ANTES de llamar.
+//
+// Una llamada no siempre tiene que ser barrera -- si se conoce el destino y
+// sus efectos, no lo es --; lo que no puede es dejar de serlo por haber pasado
+// por un predicado que responde a otra pregunta.
+//
+// Esperado: 7 + 9 + 5 = 21.
+
+void escribe(i64* p) {
+	(*p) = 7_i64;
+}
+
+void escribe_otro(i64* p) {
+	(*p) = 9_i64;
+}
+
+// Y por un parametro de SALIDA, que es lo mismo con la marca puesta.
+void pon_cinco(out i64 destino) {
+	destino = 5_i64;
+}
+
+// Global para que el compilador no pueda saber cual de las dos se elige: asi
+// se cubren los dos casos, el puntero constante y el que no lo es.
+i64 elige = 0_i64;
+
+i32 main() {
+	// (1) puntero CONSTANTE: el destino se conoce.
+	cfn(i64*) -> void f = &escribe;
+	i64               a = 0_i64;
+	f(&a); // a = 7
+
+	// (2) puntero que el compilador NO puede resolver.
+	cfn(i64*) -> void g = &escribe;
+	if (elige != 0_i64) {
+		g = &escribe_otro;
+	}
+	i64 b = 0_i64;
+	g(&b);
+	if (elige != 0_i64) {
+		b = 9_i64; // la rama que no se toma; deja b en 7
+	}
+	b = b + 2_i64; // 7 + 2 = 9
+
+	// (3) la marca de salida, por llamada directa.
+	i64 c = 0_i64;
+	pon_cinco(c); // c = 5
+
+	return (i32)(a + b + c);
+}

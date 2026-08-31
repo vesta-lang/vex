@@ -5005,5 +5005,12 @@ modes3_case("direccion_y_borrow",
             "525_direccion_y_borrow.vx", 42)
 
 
+
+
+modes3_case("escritura_por_puntero_indirecto",
+            "lo que escribe una funcion llamada por PUNTERO se ve fuera",
+            "526_escritura_por_puntero_indirecto.vx", 21)
+
+
 if __name__ == "__main__":
     main()

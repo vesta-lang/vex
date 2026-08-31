@@ -8436,13 +8436,36 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                 pending.clear();
                 last_store_val.clear();
                 break;
-            // Side-effects/calls: limpiar (memoria puede cambiar dentro).
+            /* Side-effects/calls: limpiar (memoria puede cambiar dentro).
+             *
+             * Estas NO comparten cuerpo con el `asm` de abajo, y no es un
+             * detalle de estilo: lo compartian, y lo primero que hace ese
+             * cuerpo es preguntar si el bloque asm es PRECISO.  Ese predicado
+             * busca los efectos por `ins.func_name`, que en una llamada
+             * INDIRECTA esta vacio -- el destino va en `func_ptr` --, asi que
+             * analizaba "el bloque asm sin nombre", lo encontraba sin accesos y
+             * contestaba que si.  La llamada se saltaba la barrera.
+             *
+             * Lo que salia de ahi era un valor EQUIVOCADO y en silencio: un
+             * `store` se adelantaba a un `load` a traves de una llamada a la
+             * que se le estaba pasando ese mismo puntero.  Siete lineas bastan
+             * para verlo -- `f(&v)` por un `cfn` que escribe `*p` --: daba 7 a
+             * -O0/-O1 y 0 a -O2, que es el nivel por defecto.
+             *
+             * Una llamada no SIEMPRE tiene que ser barrera -- si se conoce el
+             * destino y sus efectos, no lo es, y de eso se encarga el caso de
+             * CALL/TAILCALL de arriba con `is_pure_call` --.  Lo que no puede
+             * es dejar de serlo por haber pasado por un predicado que responde
+             * a otra pregunta. */
             case IrOp::CALLN:
             case IrOp::CALLVIRT:
             case IrOp::CALLIND:
             case IrOp::CALLM:
             case IrOp::CALLITF:
             case IrOp::CALLCLOSURE:
+                pending.clear();
+                last_store_val.clear();
+                break;
             /* Un `asm` puede decir QUE memoria toca, y entonces no tiene por
              * que ser una barrera para todo lo demas.  Si se sabe -- todos sus
              * accesos atribuidos a un operando ligado --, se trata como lo que
