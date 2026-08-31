@@ -203,7 +203,20 @@ enum class Fact : uint32_t {
  * mecanismo @c query<T>().  El primario NO tiene definicion: pedir un Fact no
  * registrado es un error de compilacion (no un fallo silencioso).
  */
-template <typename T> struct QueryProducer;
+/// El AMBITO va como segundo parametro para que el mecanismo sea UNO.
+///
+/// "Continuidad de escala" (ver la cabecera de este fichero) dice que el mismo
+/// @c query<T>() sirve a cualquier ambito y que solo cambia el alcance del
+/// conocimiento.  Con un solo parametro eso no se podia cumplir: un ambito
+/// nuevo -- la funcion ya seleccionada a instrucciones de maquina, el modulo,
+/// el programa -- necesitaba su PROPIA familia de productores, y con ella su
+/// propia copia de @c query<T>().  Dos copias del mismo mecanismo acaban
+/// respondiendo distinto.
+///
+/// El defecto conserva lo escrito: `QueryProducer<LoopFacts>` sigue nombrando
+/// al productor de una funcion IR.
+template <typename T, typename Scope = struct FunctionSnapshot>
+struct QueryProducer;
 
 /**
  * @struct FunctionSnapshot

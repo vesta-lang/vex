@@ -13,6 +13,7 @@
 #include "util/env_flags.h"
 #include "jit/peephole.h"
 #include "analysis/facts/phys_liveness.h" // diagnostico: ver el hecho en accion
+#include "codegen/rbank/machine_snapshot.h" // se PREGUNTA, no se calcula a mano
 
 #include <cstdio>
 #include <string>
@@ -229,6 +230,11 @@ uint32_t peephole_physical(MFunction &pf) {
     if (peephole_disabled()) return 0;
     const bool no_xz = xorzero_disabled();
     uint32_t removed = 0;
+    /* Lo que se sabe de esta funcion ya repartida, consultado a demanda: se
+     * calcula lo que se pregunte y una sola vez.  Vive aqui -- y no dentro de
+     * cada regla -- para que dos reglas que necesiten el mismo hecho lo
+     * compartan en vez de calcularlo cada una. */
+    const codegen::rbank::MachineSnapshot snap(pf);
     /* La regla que borra ESCRITURAS QUE NADIE LEE se apoya entera en el hecho
      * @c analysis::facts::compute_phys_liveness, que dice que sigue vivo tras
      * cada instruccion leyendolo de la base de instrucciones.
@@ -270,8 +276,7 @@ uint32_t peephole_physical(MFunction &pf) {
      * Y se mide con la SUITE ENTERA: un subconjunto engana -- el grupo del
      * recolector solo pasa 22 de 23 aun cuando faltaban tres fuentes --. */
     if (deaddef_report(pf.name)) {
-        const analysis::facts::PhysLivenessFacts live =
-            analysis::facts::compute_phys_liveness(pf);
+        const analysis::facts::PhysLivenessFacts &live = snap.phys_liveness();
         for (size_t bi = 0; bi < pf.blocks.size(); ++bi) {
             const MBlock &b = pf.blocks[bi];
             for (size_t i = 0; i < b.instrs.size(); ++i) {
@@ -312,12 +317,17 @@ uint32_t peephole_physical(MFunction &pf) {
             }
         }
     }
-    /* El hecho de liveness, UNA vez para toda la funcion: la regla de abajo lo
-     * consulta por indice.  Se calcula solo si esa regla esta encendida, que es
-     * lo unico que lo paga. */
+    /* El hecho de liveness, UNA vez para toda la funcion, y ahora de verdad: se
+     * pide al snapshot, que lo calcula la primera vez que alguien pregunta y lo
+     * guarda.  Antes se llamaba a mano aqui Y en el informe de arriba, asi que
+     * con el informe encendido se calculaba DOS veces sobre la misma funcion --
+     * la duplicacion que el query system existe para impedir --.
+     *
+     * Y sigue sin pagarlo quien no lo use: si la regla esta apagada no se
+     * pregunta, y sin preguntar no se calcula. */
     const bool drop_dead_defs = !deaddef_disabled();
-    analysis::facts::PhysLivenessFacts live_regs;
-    if (drop_dead_defs) live_regs = analysis::facts::compute_phys_liveness(pf);
+    const analysis::facts::PhysLivenessFacts *live_regs = nullptr;
+    if (drop_dead_defs) live_regs = &snap.phys_liveness();
 
     for (size_t bi = 0; bi < pf.blocks.size(); ++bi) {
         MBlock &b = pf.blocks[bi];
@@ -334,9 +344,9 @@ uint32_t peephole_physical(MFunction &pf) {
              * nombra --, lo que leen un `ret`, una llamada y un salto indirecto
              * por convencion, y lo que lee el cuerpo de un bloque de `asm`. */
             if (drop_dead_defs && is_removable_def(in) &&
-                !live_regs.is_live_after(static_cast<uint32_t>(bi),
-                                         static_cast<uint32_t>(i),
-                                         in.dst.reg)) {
+                !live_regs->is_live_after(static_cast<uint32_t>(bi),
+                                          static_cast<uint32_t>(i),
+                                          in.dst.reg)) {
                 if (deaddef_only(pf.name, bi)) {
                     if (deaddef_report(pf.name)) {
                         /* Y QUIEN MENCIONA ese registro en el resto de la
