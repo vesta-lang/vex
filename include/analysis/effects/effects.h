@@ -28,6 +28,8 @@
 #define ANALYSIS_EFFECTS_EFFECTS_H
 
 #include <cstdint>
+
+#include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -306,6 +308,22 @@ struct SemanticEffects {
     bool may_panic = false;
     bool may_allocate = false;  ///< aloca heap (GC/raw/newobj/closure-GC).
     bool may_block = false;     ///< puede bloquear (await/monenter/msgrecv).
+    /**
+     * @brief De QUIEN es lo que sale, cuando sale por lanzar o por abortar.
+     *
+     * `may_throw`/`may_panic` dicen QUE puede pasar; esto, de quien es el
+     * mecanismo.  Importa porque no se recogen igual: lo nuestro lo captura un
+     * `catch` y lo de fuera -- una excepcion de C++, un SEH, un `abort()` de
+     * la libreria -- no, y desenrollar a traves de nuestros marcos ni siquiera
+     * esta garantizado.
+     *
+     * Modelar solo el lenguaje dejaba fuera justo la frontera donde el
+     * lenguaje se acaba, que es donde vive el FFI.
+     */
+    ir::UnwindOrigin throw_origin = ir::UnwindOrigin::Any;
+    ir::UnwindOrigin panic_origin = ir::UnwindOrigin::Any;
+    /// Que fallos del PROCESADOR, si se acotaron.  Cero = cualquiera.
+    ir::TrapKinds trap_kinds = ir::TRAP_NONE;
     bool may_io = false;        ///< I/O observable.
     DeterminismSet determinism; ///< vacio = puro-determinista.
     TagSet tags;                ///< capabilities.

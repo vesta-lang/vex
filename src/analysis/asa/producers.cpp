@@ -155,7 +155,7 @@ std::string range_text(const ValueRange &r) {
         else
             o << "[" << lo << "," << hi << "]";
     } else {
-        o << "[" << r.lo_c << "," << r.hi_c << "] sin signo";
+        o << "[" << r.lo_c << "," << r.hi_c << "]u"; // `u`: sin signo, y no se traduce
     }
     o << " " << (r.t.sin_signo ? "u" : "i") << static_cast<int>(r.t.bits);
     return o.str();
@@ -177,11 +177,15 @@ void produce_structure(Production &p) {
         f.what.a = h.block_count;
         f.what.b = h.loop_count;
         std::ostringstream o;
-        o << "bloques=" << h.block_count << " bucles=" << h.loop_count
-          << " llamadas=" << h.static_callees.size()
-          << (h.has_dynamic_call ? " +dinamicas" : "")
-          << (h.recursive ? " recursiva" : "") << " params=" << fn.params.size()
-          << " valores=" << fn.values.size();
+        /* Clave=valor con claves en INGLES, que son identificadores y no se
+         * traducen.  Cinco numeros no caben en los dos del hecho, y meterlos
+         * como frase los volveria intraducibles; asi el dato sigue siendo dato
+         * y quien lo pinte puede componer la frase que quiera. */
+        o << "blocks=" << h.block_count << " loops=" << h.loop_count
+          << " calls=" << h.static_callees.size()
+          << (h.has_dynamic_call ? " +dynamic" : "")
+          << (h.recursive ? " recursive" : "") << " params=" << fn.params.size()
+          << " values=" << fn.values.size();
         f.what.detail = p.store.intern(o.str());
         f.about = function_subject(p, fn);
         f.seal = p.base.seal(kProducerStructure, fn);
@@ -205,7 +209,7 @@ void produce_ranges(Production &p) {
                 Fact f;
                 f.what.domain = kProducerRanges;
                 f.what.code = "range.unreachable";
-                f.what.detail = "este punto no se ejecuta";
+                /* Sin detalle: el texto lo pone el catalogo desde el CODIGO. */
                 f.about = value_subject(p, fn, v);
                 f.seal = s;
                 support_with_structure(p, fn, f, "data-flow");
@@ -450,7 +454,7 @@ void produce_asm_flow(Production &p) {
         if (seen == 0)
             p.say_unknown(function_subject(p, fn), UnknownReason::NothingToSay,
                           "asm_flow.no_asm", kProducerAsmFlow,
-                          "no tiene bloques asm cuyo flujo analizar");
+                          "");
     }
 }
 
@@ -498,9 +502,7 @@ void produce_layout(Production &p) {
      * resto. */
     if (!has_data) {
         p.say_unknown(subject, UnknownReason::NothingToSay,
-                      "layout.no_static_data", kProducerLayout,
-                      "el modulo no tiene datos estaticos en .data; no hay "
-                      "ninguna seccion cuya alineacion afirmar");
+                      "layout.no_static_data", kProducerLayout, "");
         return;
     }
 
@@ -539,9 +541,7 @@ void produce_layout(Production &p) {
      * motivo: cuando el guion llegue hasta aqui, este silencio se convierte en
      * el numero que toque. */
     p.say_unknown(subject, UnknownReason::OpaqueBoundary,
-                  "layout.placement_is_configurable", kProducerLayout,
-                  "en el nativo la seccion la coloca el guion de enlazado; "
-                  "sin verlo no se puede afirmar su alineacion");
+                  "layout.placement_is_configurable", kProducerLayout, "");
 }
 
 /// Memoria: a que se puede referir cada puntero.
@@ -638,7 +638,7 @@ void produce_loops(Production &p) {
         }
         if (seen == 0)
             p.say_unknown(function_subject(p, fn), UnknownReason::NothingToSay,
-                          "loop.none", kProducerLoops, "no tiene bucles");
+                          "loop.none", kProducerLoops, "");
     }
 }
 
@@ -656,6 +656,13 @@ void register_builtin_producers() {
      * podia consultarlos aunque quisiera. */
     register_value_shape_producer();
     register_definite_store_producer();
+    /* Estos dos ya se CALCULABAN y los consumia uno solo: el acceso a memoria
+     * lo preguntaban los pases sensibles a memoria, y uso-definicion el
+     * asignador de registros.  Al almacen llegan para que ademas se puedan
+     * CONSULTAR -- el editor, el linter --, que es la diferencia entre un
+     * analisis y conocimiento compartido. */
+    register_memory_access_producer();
+    register_use_def_producer();
 }
 
 } // namespace

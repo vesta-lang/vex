@@ -288,8 +288,27 @@ const CatEntry kEntries[] = {
     {"VXW904", {"Families:", "Familias:"}},
     {"VXW910", {"a declared bound looser than what was proven, and properties provable but not declared", "una cota declarada mas floja que la demostrada, y propiedades demostrables sin declarar"}},
     {"VXW911", {"what one boundary costs: how many functions cannot prove their effects because the closure leaves the program there", "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efectos porque el cierre sale del programa por ahi"}},
+    {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
+    {"definite_store.always", {"'{2}' is written on every path that returns", "'{2}' se escribe en todos los caminos que retornan"}},
+    {"definite_store.escapes", {"the pointer is handed to something else, so it cannot be told whether it gets written", "el puntero se le pasa a otro, asi que no se puede decir si se escribe"}},
+    {"definite_store.missing", {"'{2}' is not written on the path that returns at line {0}", "'{2}' no se escribe en el camino que retorna en la linea {0}"}},
+    {"definite_store.no_pointer_params", {"none of its parameters points at anything", "ninguno de sus parametros apunta a nada"}},
+    {"layout.no_static_data", {"the module has no static data in .data, so there is no section whose alignment to state", "el modulo no tiene datos estaticos en .data; no hay ninguna seccion cuya alineacion afirmar"}},
+    {"layout.placement_is_configurable", {"in native builds the linker script places the section; without seeing it, its alignment cannot be stated", "en el nativo la seccion la coloca el guion de enlazado; sin verlo no se puede afirmar su alineacion"}},
+    {"loop.none", {"it has no loops", "no tiene bucles"}},
+    {"memory_access.no_accesses", {"none of its instructions touch memory", "ninguna de sus instrucciones toca memoria"}},
+    {"memory_access.not_localizable", {"it touches memory but the location cannot be determined", "toca memoria pero no se puede localizar"}},
+    {"memory_access.read", {"reads {2}", "lee {2}"}},
+    {"memory_access.rw", {"reads and writes {2}", "lee y escribe {2}"}},
+    {"memory_access.write", {"writes {2}", "escribe {2}"}},
+    {"range.unreachable", {"this point is never executed", "este punto no se ejecuta"}},
+    {"use_def.multi_use", {"'{2}' is used {0} times, the last at position {1}", "'{2}' se usa {0} veces, la ultima en la posicion {1}"}},
+    {"use_def.no_values", {"it has no SSA values", "no tiene ningun valor SSA"}},
+    {"use_def.single_use", {"'{2}' is used once, at position {1}", "'{2}' se usa una vez, en la posicion {1}"}},
+    {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
+    {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 268;
+const int kEntryCount = 287;
 
 } // namespace
 

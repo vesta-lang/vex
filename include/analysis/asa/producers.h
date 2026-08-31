@@ -200,6 +200,26 @@ void register_value_shape_producer();
 void register_definite_store_producer();
 
 /**
+ * @brief Da de alta el dominio `asa.memory_access`.
+ *
+ * Que TOCA cada instruccion -- que lee, que escribe y donde --, apoyado en la
+ * tabla points-to que ya monta la base.  Distinto de `asa.memory`, que dice a
+ * que APUNTA un valor: son dos preguntas y la segunda se apoya en la primera.
+ */
+void register_memory_access_producer();
+
+/**
+ * @brief Da de alta el dominio `asa.use_def`.
+ *
+ * Cuantas veces se usa cada valor y donde esta su ultimo uso.  Lo consumia solo
+ * el asignador de registros -- que pregunta "cual es el proximo uso" para
+ * elegir victima --; al almacen llega para que tambien lo puedan preguntar el
+ * linter ("esto no se usa") y quien decida hundir un calculo hasta su unico
+ * uso.
+ */
+void register_use_def_producer();
+
+/**
  * @brief Corre los productores pedidos sobre @p mod y deposita en @p store.
  *
  * Monta UNA base de hechos para todos: el conocimiento comun se calcula una vez

@@ -213,6 +213,9 @@ bool SemanticEffects::operator==(const SemanticEffects &o) const {
            may_trap == o.may_trap && may_throw == o.may_throw &&
            may_panic == o.may_panic && may_allocate == o.may_allocate &&
            may_block == o.may_block && may_io == o.may_io &&
+           throw_origin == o.throw_origin &&
+           panic_origin == o.panic_origin &&
+           trap_kinds == o.trap_kinds &&
            determinism == o.determinism && tags == o.tags;
 }
 
@@ -238,6 +241,14 @@ SemanticEffects SemanticEffects::top() {
     e.may_allocate = true;
     e.may_block = true;
     e.may_io = true;
+    /* Y los refinamientos, en su valor CONSERVADOR: `Any` es "puede ser
+     * cualquiera de los dos" y el conjunto vacio de fallos vale por todos.
+     * Van explicitos aunque coincidan con el default por lo que dice el
+     * comentario de arriba -- cubrir CADA campo --: si manana el default
+     * cambia, el maximo no puede quedarse corto en silencio. */
+    e.throw_origin = ir::UnwindOrigin::Any;
+    e.panic_origin = ir::UnwindOrigin::Any;
+    e.trap_kinds = ir::TRAP_NONE;
     // No-determinismo total.
     e.determinism.add(DeterminismTag::ReadsClock);
     e.determinism.add(DeterminismTag::ReadsRandom);
@@ -287,6 +298,18 @@ SemanticEffects seq(const SemanticEffects &a, const SemanticEffects &b) {
     r.may_panic = a.may_panic || b.may_panic;
     r.may_allocate = a.may_allocate || b.may_allocate;
     r.may_block = a.may_block || b.may_block;
+    /* El origen se ENSANCHA al juntar: si uno lanza lo nuestro y el otro lo
+     * ajeno, lo que sale de los dos puede ser cualquiera de los dos, y eso es
+     * `Any`.  Estrecharlo aqui seria quedarse con una mitad. */
+    r.throw_origin = (a.throw_origin == b.throw_origin) ? a.throw_origin
+                                                        : ir::UnwindOrigin::Any;
+    r.panic_origin = (a.panic_origin == b.panic_origin) ? a.panic_origin
+                                                        : ir::UnwindOrigin::Any;
+    /* Y los fallos se SUMAN, salvo que alguno no acote: un conjunto vacio vale
+     * por todos, asi que absorbe. */
+    r.trap_kinds = (a.trap_kinds == ir::TRAP_NONE || b.trap_kinds == ir::TRAP_NONE)
+                       ? ir::TRAP_NONE
+                       : static_cast<ir::TrapKinds>(a.trap_kinds | b.trap_kinds);
     r.may_io = a.may_io || b.may_io;
     r.determinism = a.determinism;
     r.determinism.unite(b.determinism);
@@ -314,6 +337,18 @@ SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b) {
     r.may_panic = a.may_panic || b.may_panic;
     r.may_allocate = a.may_allocate || b.may_allocate;
     r.may_block = a.may_block || b.may_block;
+    /* El origen se ENSANCHA al juntar: si uno lanza lo nuestro y el otro lo
+     * ajeno, lo que sale de los dos puede ser cualquiera de los dos, y eso es
+     * `Any`.  Estrecharlo aqui seria quedarse con una mitad. */
+    r.throw_origin = (a.throw_origin == b.throw_origin) ? a.throw_origin
+                                                        : ir::UnwindOrigin::Any;
+    r.panic_origin = (a.panic_origin == b.panic_origin) ? a.panic_origin
+                                                        : ir::UnwindOrigin::Any;
+    /* Y los fallos se SUMAN, salvo que alguno no acote: un conjunto vacio vale
+     * por todos, asi que absorbe. */
+    r.trap_kinds = (a.trap_kinds == ir::TRAP_NONE || b.trap_kinds == ir::TRAP_NONE)
+                       ? ir::TRAP_NONE
+                       : static_cast<ir::TrapKinds>(a.trap_kinds | b.trap_kinds);
     r.may_io = a.may_io || b.may_io;
     r.determinism = a.determinism;
     r.determinism.unite(b.determinism);

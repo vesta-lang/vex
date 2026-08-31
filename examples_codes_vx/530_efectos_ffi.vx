@@ -1,0 +1,385 @@
+// Los EFECTOS de una funcion ajena: el vocabulario entero, palabra por palabra.
+//
+// Una externa es codigo que no esta en el programa: no hay cuerpo que leer.
+// Sin decir nada, lo unico honesto es suponer que hace cualquier cosa -- y eso
+// tumba todas las propiedades de quien la llame --.  El `extern` es la
+// frontera donde el lenguaje deja de ser nuestro, y por eso es donde se
+// DEFINEN.
+//
+// Definir NO es contratar, aunque se escriba igual.  En una funcion Vesta
+// `@nopanic` es un CONTRATO que el compilador comprueba contra el codigo; aqui
+// no hay codigo, asi que es la palabra de quien lo escribe.  Una palabra, dos
+// sitios; cambia quien responde por ella.
+//
+// Y es una descripcion COMPLETA: lo que no se escribe, NO OCURRE.  De ahi que
+// haya formas POSITIVAS, que un contrato no necesita -- un contrato ACOTA y le
+// bastan las negativas --.  Una descripcion tiene que poder decir que SI, o el
+// silencio se leeria como una demostracion.
+//
+// Y esto NO es solo el lenguaje.  Aqui abajo estan las tres capas de FFI que
+// hay de verdad: nuestro propio plugin, la API del sistema (NT/Win32) y las
+// llamadas al nucleo de Linux.  Las dos ultimas son donde los efectos importan
+// -- `ReadFile` bloquea, `NtAllocateVirtualMemory` reserva, `RaiseException`
+// lanza algo que NUESTRO `catch` no recoge --, y donde modelar solo el lenguaje
+// se queda corto.
+//
+// ==========================================================================
+// LO QUE PUEDE HACER, y que cuesta cada palabra
+// ==========================================================================
+//
+// La columna de la derecha es lo que QUITA a quien llama, medido contra el
+// caso en que no enciende nada.  No es una opinion: sale de `vesta --analyze`
+// sobre este mismo fichero, y el test lo comprueba.
+//
+//   @io             E/S observable: consola, fichero, puerto.
+//                   -> pure, mem_free, deterministic, freestanding
+//
+//   @throws         lanza.  Admite DE QUIEN es (ver abajo).
+//                   -> pure, mem_free, nothrow
+//
+//   @panics         ABORTA, que no es lanzar.  Tambien admite de quien.
+//                   -> pure, nopanic
+//
+//   @alloc          reserva memoria del monton.
+//                   -> pure, mem_free, heap_free, gc_free
+//
+//   @nondet         dos llamadas iguales pueden dar cosas distintas.
+//                   -> deterministic
+//
+//   @keeps_state    tiene estado SUYO que no se ve desde la llamada: `strtok`
+//                   recuerda, `errno` queda escrito, un manejador se cachea.
+//                   Lo que aporta es que dos llamadas INTERACTUAN, asi que no
+//                   se pueden fundir ni reordenar entre si.
+//                   -> pure, mem_free, readonly, deterministic
+//
+//   @reads_env(..)  lee el mundo de fuera.  Admite QUE PARTE (ver abajo).
+//                   -> mem_free, y `deterministic` solo si lo que lee CAMBIA
+//
+//   @writes_env(..) lo cambia.  Tambien admite que parte.
+//                   -> pure, mem_free, readonly, deterministic, freestanding
+//
+//   @blocks         puede quedarse ESPERANDO: a otro, a un cerrojo, a la E/S.
+//                   No cambia ningun valor, pero impide mover la llamada a
+//                   donde el que espera no pueda ser despertado, y en un
+//                   planificador cooperativo decide si hay que ceder el turno.
+//                   -> pure, mem_free
+//
+//   @traps          puede fallar en el PROCESADOR.  Admite CUAL (ver abajo).
+//                   -> pure, mem_free
+//
+// Lo NUESTRO no esta en esta lista, y no es un olvido: a nuestros datos una
+// externa solo llega por un puntero que le pasamos, y eso se dice en el
+// PARAMETRO con `in`/`out`/`inout` -- con su localizacion concreta, que es
+// mucho mas de lo que un booleano podria decir --.
+//
+// ==========================================================================
+// LAS SEIS QUE NO ENCIENDEN NADA, y como se relacionan
+// ==========================================================================
+//
+//   @pure @nothrow @nopanic @noblock @notrap @det
+//
+// Ninguna pone nada, y no funcionan como se espera de un conjunto de opciones.
+// Lo que cambia el juego es escribir la PRIMERA palabra, cualquiera:
+//
+//     nada escrito       -> nadie dijo nada: hace CUALQUIER COSA
+//     una palabra o mas  -> descripcion COMPLETA: lo que no se escribe, no pasa
+//
+// De ahi sale todo lo demas.  Las seis producen LO MISMO -- nada --, y no se
+// acumulan: `@nothrow @nopanic` no dice mas que `@nothrow` a solas, porque la
+// segunda ya la habia dicho el silencio.  Y `@pure` no es "la suma de las otras
+// cinco": no hay suma.  Es la que se lee mejor cuando la respuesta es "no hace
+// NADA", igual que las otras se leen mejor cuando se quiere subrayar una.
+//
+// LA TRAMPA, que es la razon de contar esto: escribir una sola negativa
+// describe la funcion ENTERA.
+//
+//     @nothrow                    // "solo digo que no lanza"...
+//     fn Sleep(u32 ms) -> void;   // ...pero tambien dijo que no bloquea,
+//                                 //    que no hace E/S y que es pura
+//
+// Ahi lo correcto es `@blocks`, y anadir `@nothrow` si ademas se quiere dejar
+// dicho que se miro.  Una descripcion incompleta NO es una descripcion
+// conservadora: es una descripcion equivocada.
+//
+// `@det` es el opuesto de `@nondet`: que dos llamadas iguales dan lo mismo.
+//
+// ==========================================================================
+// DE QUIEN es lo que sale, y QUE falla
+// ==========================================================================
+//
+//   @throws(vesta)   lo lanza NUESTRO runtime: un `catch` lo recoge.
+//   @throws(native)  lo lanza el OTRO LADO -- una excepcion de C++, un SEH de
+//                    Windows --.  Nuestro `catch` NO lo recoge, y desenrollar
+//                    a traves de nuestros marcos no esta garantizado: quien
+//                    llama tiene que tratarlo como una salida sin retorno.
+//   @throws          desnuda: no se dijo cual, se supone lo peor.
+//
+//   @panics(vesta)   nuestro gancho de panico.
+//   @panics(native)  un `abort()` de la libreria.
+//
+//   @traps(div0, access, align, illegal, stack_overflow, fp)
+//                    cuales, de los que hay.  Desnuda vale por todos.
+//
+//   @reads_env(file, net, clock, random, env, config, process, console, device)
+//   @writes_env(...)  QUE PARTE del mundo.  Desnuda vale por todo.
+//
+// Partir el mundo no es cosmetica: dos llamadas que tocan partes DISJUNTAS no
+// se estorban -- se pueden reordenar, y una que no se usa se puede quitar --,
+// y con una sola palabra cualquier par choca con cualquier par.  Ademas leer
+// el RELOJ o la ENTROPIA no da lo mismo dos veces y leer la CONFIGURACION si:
+//
+//     @reads_env(clock)    -> pierde `deterministic`
+//     @reads_env(config)   -> lo conserva
+//
+// Con un unico "lee el mundo" habia que suponer lo primero siempre, o sea
+// tratar a la mayoria por el peor caso.
+//
+// MULTI-ISA: cual de esos fallos existe DE VERDAD depende del juego de
+// instrucciones -- en x86-64 una division entera entre cero atrapa, y en
+// aarch64 NO: devuelve cero --.  Por eso no se deduce de la arquitectura, se
+// declara; y si varia con el objetivo, se dice con el `when:` que ya existe:
+//
+//     @traps(div0, when: arch == "x86-64")
+//
+// El `when:` se resuelve al compilar, asi que abajo llega un conjunto para EL
+// objetivo activo.  Es lo que distingue esto de repetir la declaracion con
+// `@Target`: alli lo que cambia es QUE SIMBOLO existe; aqui la funcion es una
+// sola y lo que varia es lo que hace.
+//
+// Para verlo:  vesta --analyze 530_efectos_ffi.vx
+
+namespace ejemplos.efectos_ffi;
+
+// ==========================================================================
+// CAPA 1.  Nuestro propio plugin.  Es el unico que se puede EJECUTAR en
+// cualquier objetivo, asi que es contra el que se mide la tabla de arriba: se
+// declara la misma clase de funcion con una palabra distinta cada vez, y lo
+// unico que cambia entre una y otra es esa palabra.
+// ==========================================================================
+
+extern "stdlib/native/math/vesta_math" {
+	@io
+	fn vmath_abs(u64 x) -> u64;
+
+	@throws(vesta)
+	fn vmath_trunc(u64 x) -> u64;
+
+	@panics(native)
+	fn vmath_ilog2(u64 x) -> u64;
+
+	@alloc
+	fn vmath_popcount(u64 x) -> u64;
+
+	@nondet
+	fn vmath_clz(u64 x) -> u64;
+
+	@keeps_state
+	fn vmath_ctz(u64 x) -> u64;
+
+	@reads_env(config)
+	fn vmath_bswap(u64 x) -> u64;
+
+	@writes_env(file)
+	fn vmath_rotl(u64 x, u64 n) -> u64;
+
+	// La misma palabra, otra parte del mundo, otro veredicto: el reloj cambia
+	// por su cuenta y la configuracion no.
+	@reads_env(clock)
+	fn vmath_rotr(u64 x, u64 n) -> u64;
+
+	@blocks
+	fn vmath_min(u64 a, u64 b) -> u64;
+
+	@traps(div0, access)
+	fn vmath_max(u64 a, u64 b) -> u64;
+}
+
+// Las cinco negativas se escriben JUNTAS porque asi es como se usan: describir
+// del todo una nativa inofensiva es decir las cinco.
+extern "stdlib/native/math/vesta_math" {
+	@pure
+	@nothrow
+	@nopanic
+	@noblock
+	@notrap
+	@det
+	fn vmath_minu(u64 a, u64 b) -> u64;
+}
+
+// Y una que varia con el objetivo: bloquea solo donde su implementacion espera.
+extern "stdlib/native/math/vesta_math" {
+	@pure
+	@blocks(when: os == "linux")
+	fn vmath_maxu(u64 a, u64 b) -> u64;
+}
+
+// ==========================================================================
+// CAPA 2.  La API del sistema.  Aqui es donde esto sirve de verdad: sin
+// declararlo, cada llamada a Win32 tumba las propiedades del que la hace.
+//
+// Y aqui se ve la otra mitad: lo que la funcion le hace a NUESTRA memoria no
+// se dice con un efecto, se dice en el PARAMETRO con `in`/`out`/`inout`.  Un
+// efecto habla de la funcion entera; la direccion habla de UN argumento, y por
+// eso puede decir mucho mas -- el analisis la resuelve a la localizacion
+// concreta del sitio de llamada --.
+//
+// Solo se DECLARAN, no se llaman: este fichero corre en los tres objetivos.
+// Declarar ya es util, porque el analisis las mira igual.
+// ==========================================================================
+
+extern "kernel32.dll" {
+	// Espera de verdad, y el manejador puede ser invalido.
+	@blocks
+	@reads_env(process)
+	@traps(access)
+	fn WaitForSingleObject(u64 h, u32 ms) -> u32;
+
+	// MAPEA, no asigna: reserva espacio de direcciones, y con las banderas
+	// adecuadas lo que devuelve puede ser un fichero o un dispositivo que otro
+	// tambien ve.  Decir `@allocator` aqui seria prometer que nadie mas lo
+	// apunta, y eso no da un error: da otro resultado en cuanto el optimizador
+	// se lo crea.
+	@maps
+	@traps(access)
+	fn VirtualAlloc(u64 addr, u64 size, u32 type, u32 prot) -> u64;
+
+	// Y su pareja: libera el primer argumento.  Tras la llamada, lo que
+	// apuntaba ya no vale.
+	@frees(0)
+	@writes_env(process)
+	@traps(access)
+	fn VirtualFree(inout u8* addr, u64 size, u32 type) -> u32;
+
+	// Lanza una excepcion ESTRUCTURADA de Windows.  Nuestro `catch` no la
+	// recoge: por eso `native` y no `vesta`.
+	@throws(native)
+	@nopanic
+	fn RaiseException(u32 code, u32 flags, u32 n, in u64* args) -> void;
+
+	// ASIGNADOR de verdad: lo que devuelve es fresco y nadie mas lo apunta.
+	// Esa es una GARANTIA, no un coste, y es lo que permite tratar el
+	// resultado como una localizacion propia.
+	@allocator
+	@blocks
+	@traps(access)
+	fn HeapAlloc(u64 heap, u32 flags, u64 size) -> u64;
+
+	@frees(2)
+	@blocks
+	fn HeapFree(u64 heap, u32 flags, inout u8* mem) -> u32;
+}
+
+extern "ntdll.dll" {
+	// La capa NT.  Los dos punteros son `inout`: entran con lo que se pide y
+	// salen con lo que se dio -- eso es lo que un efecto de funcion entera no
+	// puede decir --.
+	@maps
+	@blocks
+	@traps(access)
+	fn NtAllocateVirtualMemory(u64 proc, inout u64* base, u64 zero,
+		inout u64* size, u32 type, u32 prot) -> i32;
+}
+
+// ==========================================================================
+// CAPA 3.  El nucleo de Linux.  Una syscall no lanza ni aborta -- devuelve un
+// codigo --, pero bloquea, toca el mundo y puede fallar por un puntero malo.
+//
+// La direccion de cada puntero es la mitad util de la declaracion: `write` lee
+// el suyo y `read` escribe el suyo, y eso es lo que permite saber que una
+// lectura de ese buffer ya no vale antes de la llamada, o que lo que habia
+// despues si.
+// ==========================================================================
+
+extern "libc.so.6" {
+	@blocks
+	@writes_env(file, console)
+	@nothrow
+	@nopanic
+	@traps(access)
+	fn write(i32 fd, in u8* buf, u64 n) -> i64;
+
+	@blocks
+	@reads_env(file, console)
+	@nothrow
+	@nopanic
+	@traps(access)
+	fn read(i32 fd, out u8* buf, u64 n) -> i64;
+
+	// `mmap` es el caso de libro de por que MAPEAR no es ASIGNAR: con
+	// MAP_ANONYMOUS|MAP_PRIVATE se comporta como un asignador, y con
+	// MAP_SHARED sobre un fichero devuelve algo que otro proceso tambien ve.
+	// Eso se decide en la LLAMADA, no en la declaracion, asi que lo que se
+	// declara es lo conservador y quien conozca su caso envuelve.
+	@maps
+	@reads_env(file)
+	@nothrow
+	@nopanic
+	@traps(access)
+	fn mmap(u64 addr, u64 len, i32 prot, i32 flags, i32 fd, i64 off) -> u64;
+
+	@frees(0)
+	@writes_env(process)
+	@nothrow
+	@nopanic
+	fn munmap(inout u8* addr, u64 len) -> i32;
+
+	// El asignador de la libc: fresco, y su pareja lo libera.  Se declaran con
+	// los nombres de POSIX -- `calloc`/`reallocarray` -- porque `malloc` y
+	// `free` son intrinsecos del lenguaje y no se pueden redeclarar.
+	@allocator
+	@blocks
+	@nothrow
+	@nopanic
+	fn calloc(u64 n, u64 sz) -> u64;
+
+	// `realloc` es las DOS cosas a la vez: libera lo que le dan y devuelve
+	// algo fresco.  Se dice con las dos palabras, que es justo lo que permite
+	// decirlas por separado.
+	@allocator
+	@frees(0)
+	@blocks
+	@nothrow
+	@nopanic
+	fn reallocarray(inout u8* p, u64 n, u64 sz) -> u64;
+}
+
+// ==========================================================================
+// Un envoltorio por palabra.  El analisis se mira sobre ESTOS, no sobre las
+// externas: lo que importa es que le cuesta a quien llama.
+// ==========================================================================
+
+u64 con_io(u64 x) { return vmath_abs(x); }
+u64 con_throws(u64 x) { return vmath_trunc(x); }
+u64 con_panics(u64 x) { return vmath_ilog2(x); }
+u64 con_alloc(u64 x) { return vmath_popcount(x); }
+u64 con_nondet(u64 x) { return vmath_clz(x); }
+u64 con_keeps_state(u64 x) { return vmath_ctz(x); }
+u64 con_reads_env(u64 x) { return vmath_bswap(x); }
+u64 con_reloj(u64 x) { return vmath_rotr(x, 1_u64); }
+u64 con_writes_env(u64 x) { return vmath_rotl(x, 1_u64); }
+u64 con_blocks(u64 x) { return vmath_min(x, 1_u64); }
+u64 con_traps(u64 x) { return vmath_max(x, 1_u64); }
+u64 sin_nada(u64 x) { return vmath_minu(x, 99_u64); }
+u64 segun_objetivo(u64 x) { return vmath_maxu(x, 0_u64); }
+
+i64 main() {
+	// Lo que este fichero fija es lo que el COMPILADOR sabe de cada llamada.
+	// Aun asi se EJECUTAN todas las de la capa 1, porque una declaracion que
+	// no se puede llamar no describe nada.
+	u64 t = 0_u64;
+	t = t + con_io(21_u64);    // 21
+	t = t + con_throws(0_u64); // 0
+	t = t + con_panics(1_u64); // 0
+	t = t + con_alloc(0_u64);  // 0
+	t = t + con_nondet(0_u64) - con_nondet(0_u64);
+	t = t + con_keeps_state(0_u64) - con_keeps_state(0_u64);
+	t = t + con_reads_env(0_u64) - con_reads_env(0_u64);
+	t = t + con_reloj(0_u64) - con_reloj(0_u64);
+	t = t + con_writes_env(0_u64); // 0
+	t = t + con_blocks(21_u64) - con_blocks(21_u64);
+	t = t + con_traps(21_u64);     // 21
+	t = t + sin_nada(0_u64);       // 0
+	t = t + segun_objetivo(0_u64); // 0
+	println("total = ${t}");
+	return (i64)t; // 21 + 21 = 42
+}

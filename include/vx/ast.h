@@ -45,6 +45,8 @@
 
 #include <cstdint>
 #include <memory>
+
+#include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -2050,6 +2052,27 @@ struct ExternEffects {
     bool reads_global = false;
     bool writes_global = false;
     bool nondeterministic = false;
+    bool may_block = false; ///< puede esperar: a otro, a un cerrojo, a la E/S
+    bool may_trap = false;  ///< puede fallar en el PROCESADOR (div0, acceso)
+    /// De quien es lo que sale.  Refinan a los dos de arriba, no los sustituyen.
+    ir::UnwindOrigin throw_origin = ir::UnwindOrigin::Any;
+    ir::UnwindOrigin panic_origin = ir::UnwindOrigin::Any;
+    /// Que fallos del procesador se acotaron.  Cero = ninguno: vale por todos.
+    ir::TrapKinds trap_kinds = ir::TRAP_NONE;
+    /// Alguna linea escribio `@traps` SIN acotar, asi que no hay conjunto.
+    /// Se guarda para que el orden de las lineas no cambie el resultado.
+    bool traps_sin_acotar = false;
+    /// Que PARTES del mundo de fuera lee y escribe.  Cero = sin acotar.
+    ir::WorldKinds reads_world = ir::WORLD_NONE;
+    ir::WorldKinds writes_world = ir::WORLD_NONE;
+    /// Ya salio una linea de cada, para que la primera no se lea como "sin
+    /// acotar" y borre lo que ella misma acaba de decir.
+    bool reads_env_visto = false;
+    bool writes_env_visto = false;
+    /// Es un ASIGNADOR: lo que devuelve es memoria fresca que nadie mas apunta.
+    bool returns_fresh = false;
+    /// Que argumentos LIBERA (bit i = argumento i).
+    uint32_t frees_pointee = 0;
 };
 
 struct ExternFnDecl : Node {

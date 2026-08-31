@@ -17,6 +17,9 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
+
+#include "vx/diag/diag_catalog.h" // la frase de un hecho sale del catalogo
 #include <sstream>
 
 namespace analysis {
@@ -60,12 +63,37 @@ std::vector<FactId> sorted(const FactStore &a) {
     return ids;
 }
 
+/**
+ * @brief La frase de un hecho, en el idioma activo.
+ * @param f El hecho.
+ * @return El texto, o el detalle tal cual si el codigo no esta en el catalogo.
+ *
+ * Vive en UN sitio porque lo piden los tres consumidores -- el volcado, el
+ * linter y el editor -- y si cada uno lo compusiera por su cuenta, el mismo
+ * hecho se leeria distinto segun por donde se mirara.
+ *
+ * Los argumentos son SIEMPRE los mismos y en el mismo orden: `{0}` y `{1}` son
+ * los dos numeros del hecho, `{2}` su detalle.  Que sea fijo es lo que permite
+ * anadir un codigo al catalogo sin tocar codigo.
+ */
+std::string fact_text(const Fact &f) {
+    const char *det = f.what.detail != nullptr ? f.what.detail : "";
+    if (f.what.code == nullptr || !vx::diag::has_code(f.what.code)) return det;
+    return vx::diag::format(f.what.code, {std::to_string(f.what.a),
+                                          std::to_string(f.what.b), det});
+}
+
 void write_fact(const FactStore &a, FactId id, FILE *out) {
     const Fact &f = a.at(id);
     std::fprintf(out, "      %-12s %-24s", short_name(f.what.domain),
                  short_name(f.what.code));
-    if (f.what.detail != nullptr && f.what.detail[0] != '\0')
-        std::fprintf(out, " %s", f.what.detail);
+    /* La FRASE sale del catalogo, en el idioma activo, con los datos del hecho
+     * como argumentos.  Un productor nunca escribe una frase: guarda un CODIGO
+     * y dos numeros, y el texto se pone aqui.  Si el codigo aun no esta en el
+     * catalogo se cae al detalle tal cual, que es lo que habia -- asi la
+     * migracion es incremental y ninguna vista se queda muda por el camino. */
+    const std::string frase = fact_text(f);
+    if (!frase.empty()) std::fprintf(out, " %s", frase.c_str());
     /* Certeza, fuente y regla, en ese orden y siempre.  La certeza es lo que
      * decide al consumidor; la fuente y la regla son para entenderlo.  Cuando
      * entren los hechos observados en ejecucion o medidos en corridas

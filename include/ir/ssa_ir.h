@@ -48,6 +48,8 @@
 
 #include <cstdint>
 #include <cstddef>
+
+#include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
 #include <cstring>
 #include <string>
 #include <utility>
@@ -1795,6 +1797,67 @@ struct IrNativeEffects {
      * pasaba: el silencio se leia como una demostracion.
      */
     bool allocates = false;
+    /**
+     * @brief Puede BLOQUEAR: esperar a otro, a un cerrojo o a la E/S.
+     *
+     * Eje propio y no una variante de E/S porque lo que decide es distinto:
+     * bloquear no cambia ningun valor, pero impide mover la llamada a donde el
+     * que espera no pueda ser despertado, y en un planificador cooperativo
+     * decide si hay que ceder el turno.  El modelo interno lo tenia
+     * (@c SemanticEffects::may_block) y una `extern` no podia decirlo, asi que
+     * cualquier `WaitForSingleObject` entraba como "no bloquea".
+     */
+    bool may_block = false;
+    /**
+     * @brief De QUIEN es la excepcion, y de quien el aborto.
+     *
+     * Refinan a `may_throw` y `may_panic`; no los sustituyen.  Sin ellos, una
+     * externa que lanza una excepcion de C++ y una que lanza una de Vesta
+     * decian lo MISMO, y son cosas distintas: la segunda la recoge un `catch`
+     * y la primera no.  Modelar solo el lenguaje deja fuera justo la frontera
+     * donde el lenguaje se acaba.
+     */
+    UnwindOrigin throw_origin = UnwindOrigin::Any;
+    UnwindOrigin panic_origin = UnwindOrigin::Any;
+    /// Que fallos del PROCESADOR puede provocar.  Cero = no se acoto.
+    TrapKinds trap_kinds = TRAP_NONE;
+    /**
+     * @brief Que PARTES del mundo de fuera lee y escribe.
+     *
+     * Refinan a `reads_global`/`writes_global`.  Dos llamadas que tocan partes
+     * DISJUNTAS no se estorban; con un solo booleano, cualquier par choca.
+     */
+    WorldKinds reads_world = WORLD_NONE;
+    WorldKinds writes_world = WORLD_NONE;
+    /**
+     * @brief Es un ASIGNADOR: lo que devuelve es memoria FRESCA.
+     *
+     * Distinto de `allocates`, y la diferencia es la que hay entre un coste y
+     * una garantia.  `allocates` dice que PUEDE reservar -- y con eso se cae
+     * `heap_free` --; esto dice que lo que devuelve no lo apunta NADIE MAS y
+     * que quien llama se queda con ello.
+     *
+     * Lo que compra: el resultado deja de ser "puede apuntar a cualquier cosa"
+     * y pasa a ser una localizacion propia, como la de un `malloc` nuestro.  A
+     * partir de ahi, todo lo que el llamante haga con ese puntero deja de
+     * estorbar a lo demas.  Sin esto, describir `VirtualAlloc` no servia de
+     * nada: se sabia que costaba y no que daba.
+     */
+    bool returns_fresh = false;
+    /// Que argumentos LIBERA (bit i = argumento i).  Tras la llamada, lo que
+    /// apuntaban ya no vale: leerlo es un fallo, y quien lo sepa puede decirlo.
+    uint32_t frees_pointee = 0;
+    /**
+     * @brief Puede provocar un fallo del PROCESADOR: division entre cero,
+     *        acceso invalido.
+     *
+     * Distinto de lanzar y de abortar: un fallo del procesador no lo produce el
+     * programa, lo produce la maquina, y en nativo ni siquiera se convierte
+     * todavia en excepcion capturable.  Lo que aporta es que el optimizador no
+     * puede ADELANTAR la llamada a un camino donde antes no se ejecutaba --
+     * eso convertiria un programa que funciona en uno que revienta --.
+     */
+    bool may_trap = false;
     /// Corre AL COMPILAR, no en ejecucion.  Sus efectos son sobre la propia
     /// compilacion, no sobre el programa compilado.
     bool comptime = false;
@@ -1811,6 +1874,14 @@ struct IrNativeEffects {
                may_throw == o.may_throw &&
                nondeterministic == o.nondeterministic &&
                may_panic == o.may_panic && allocates == o.allocates &&
+               may_block == o.may_block && may_trap == o.may_trap &&
+               throw_origin == o.throw_origin &&
+               panic_origin == o.panic_origin &&
+               trap_kinds == o.trap_kinds &&
+               reads_world == o.reads_world &&
+               writes_world == o.writes_world &&
+               returns_fresh == o.returns_fresh &&
+               frees_pointee == o.frees_pointee &&
                comptime == o.comptime;
     }
     bool operator!=(const IrNativeEffects &o) const noexcept {

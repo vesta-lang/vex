@@ -1129,18 +1129,32 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
         write_u8(out, fx.declared ? 1u : 0u);
         write_u32(out, fx.reads_pointee);
         write_u32(out, fx.writes_pointee);
-        /* Los dos ultimos bits son NUEVOS (panic y reserva).  Caben en el mismo
-         * byte, asi que el formato no cambia de tamano; un fichero viejo los
-         * trae a cero, que es el valor conservador y no el permisivo -- lo
-         * contrario haria que una cache antigua aprobara contratos que no se
-         * han comprobado. */
-        write_u8(out, uint8_t((fx.reads_global ? 1u : 0u) |
-                              (fx.writes_global ? 2u : 0u) |
-                              (fx.io ? 4u : 0u) | (fx.may_throw ? 8u : 0u) |
-                              (fx.nondeterministic ? 16u : 0u) |
-                              (fx.comptime ? 32u : 0u) |
-                              (fx.may_panic ? 64u : 0u) |
-                              (fx.allocates ? 128u : 0u)));
+        /* Los efectos van BIT A BIT, asi que un eje nuevo que no se escriba
+         * aqui se PIERDE al pasar por el cache -- y no se nota: la nativa
+         * vuelve sin el, o sea mas inofensiva de lo que es.  Ya paso: `blocks`
+         * y `traps` se declaraban, se parseaban, y al leerlos de vuelta una
+         * funcion que bloquea salia PURA (mas limpia que no declarar nada,
+         * que es lo contrario de lo que tiene que pasar).
+         *
+         * El primer byte estaba LLENO, asi que los nuevos van en un segundo y
+         * el formato sube de version: un cache viejo se rechaza entero en vez
+         * de leerse a medias. */
+        write_u8(out,
+                 uint8_t((fx.reads_global ? 1u : 0u) |
+                         (fx.writes_global ? 2u : 0u) | (fx.io ? 4u : 0u) |
+                         (fx.may_throw ? 8u : 0u) |
+                         (fx.nondeterministic ? 16u : 0u) |
+                         (fx.comptime ? 32u : 0u) | (fx.may_panic ? 64u : 0u) |
+                         (fx.allocates ? 128u : 0u)));
+        write_u8(out, uint8_t((fx.may_block ? 1u : 0u) |
+                              (fx.may_trap ? 2u : 0u) |
+                              (uint8_t(fx.throw_origin) << 2) |
+                              (uint8_t(fx.panic_origin) << 4)));
+        write_u16(out, fx.trap_kinds);
+        write_u16(out, fx.reads_world);
+        write_u16(out, fx.writes_world);
+        write_u8(out, uint8_t(fx.returns_fresh ? 1u : 0u));
+        write_u32(out, fx.frees_pointee);
     }
     return out;
 }
@@ -1224,6 +1238,19 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out) {
             fx.comptime = (bits & 32u) != 0;
             fx.may_panic = (bits & 64u) != 0;
             fx.allocates = (bits & 128u) != 0;
+            uint8_t bits2 = 0;
+            if (!read_u8(data, off, bits2)) return false;
+            fx.may_block = (bits2 & 1u) != 0;
+            fx.may_trap = (bits2 & 2u) != 0;
+            fx.throw_origin = static_cast<ir::UnwindOrigin>((bits2 >> 2) & 3u);
+            fx.panic_origin = static_cast<ir::UnwindOrigin>((bits2 >> 4) & 3u);
+            if (!read_u16(data, off, fx.trap_kinds)) return false;
+            if (!read_u16(data, off, fx.reads_world)) return false;
+            if (!read_u16(data, off, fx.writes_world)) return false;
+            uint8_t fresco = 0;
+            if (!read_u8(data, off, fresco)) return false;
+            fx.returns_fresh = fresco != 0;
+            if (!read_u32(data, off, fx.frees_pointee)) return false;
             out.register_native_import(std::move(lib), std::move(name), fx);
         }
     }

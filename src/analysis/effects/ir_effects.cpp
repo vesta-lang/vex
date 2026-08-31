@@ -464,10 +464,15 @@ static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
         const uint32_t bit = uint32_t(1) << i;
         if (d.reads_pointee & bit) add_read(e, loc(ops[i], 0));
         if (d.writes_pointee & bit) add_write(e, loc(ops[i], 0));
+        /* Liberar es ESCRIBIR lo apuntado, y de la peor forma: lo que habia
+         * deja de valer.  Se dice como escritura para que los pases que ya
+         * miran eso no tengan que aprender nada nuevo; lo que APORTA de mas
+         * -- que despues ya no vale -- queda apuntado en `frees_pointee` para
+         * quien quiera avisar de un uso despues de liberar. */
+        if (d.frees_pointee & bit) add_write(e, loc(ops[i], 0));
     }
     if (d.reads_global) add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
-    if (d.writes_global)
-        add_write(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
+    if (d.writes_global) add_write(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
     if (d.io) {
         e.may_io = true;
         e.determinism.add(DeterminismTag::ExternalObservable);
@@ -478,6 +483,26 @@ static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
      * demostrado justo lo que nadie habia dicho. */
     if (d.may_panic) e.may_panic = true;
     if (d.allocates) e.may_allocate = true;
+    /* Y los dos que el modelo ya tenia y la `extern` no sabia decir.  Van por
+     * la misma razon: bajo descripcion completa, lo que nadie declara se lee
+     * como demostrado, asi que si no llegan aqui una nativa que espera pasa
+     * por no bloquear y una que divide por no fallar. */
+    if (d.may_block) e.may_block = true;
+    if (d.may_trap) e.may_trap = true;
+    /* Y los refinamientos, que solo se estrechan si NADIE los ha ensanchado
+     * ya: una funcion que llama a dos externas con origenes distintos tiene
+     * que salir con `Any`. */
+    if (d.may_throw && e.throw_origin == ir::UnwindOrigin::Any)
+        e.throw_origin = d.throw_origin;
+    if (d.may_panic && e.panic_origin == ir::UnwindOrigin::Any)
+        e.panic_origin = d.panic_origin;
+    if (d.may_trap) {
+        if (d.trap_kinds == ir::TRAP_NONE)
+            e.trap_kinds = ir::TRAP_NONE; // sin acotar: vale por todos
+        else if (e.trap_kinds != ir::TRAP_NONE || !e.may_trap)
+            e.trap_kinds =
+                static_cast<ir::TrapKinds>(e.trap_kinds | d.trap_kinds);
+    }
     if (d.nondeterministic)
         e.determinism.add(DeterminismTag::ExternalObservable);
 }

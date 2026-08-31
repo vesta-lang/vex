@@ -40,7 +40,6 @@
 #include "analysis/facts/definite_store.h"
 #include "ir/ssa_ir.h"
 
-#include <sstream>
 #include <string>
 
 namespace analysis {
@@ -80,8 +79,7 @@ void produce_definite_store(Production &p) {
             s.function = p.store.intern(fn.name);
             p.say_unknown(s, UnknownReason::NothingToSay,
                           "definite_store.no_pointer_params",
-                          kProducerDefiniteStore,
-                          "ningun parametro suyo apunta a nada");
+                          kProducerDefiniteStore, "");
             continue;
         }
         for (const auto &e : m.per_pointer) {
@@ -89,8 +87,7 @@ void produce_definite_store(Production &p) {
             const Subject about = pointer_subject(p, fn, e.first);
             if (d.verdict == DefiniteStoreFacts::Verdict::Unknown) {
                 p.say_unknown(about, d.reason, d.reason_code,
-                              kProducerDefiniteStore,
-                              "no se pudo decidir si se escribe siempre");
+                              kProducerDefiniteStore, "");
                 continue;
             }
             Fact f;
@@ -100,14 +97,11 @@ void produce_definite_store(Production &p) {
             f.what.code =
                 siempre ? "definite_store.always" : "definite_store.missing";
             f.what.a = static_cast<int64_t>(d.witness_line);
-            std::ostringstream o;
-            o << pointer_name(fn, e.first);
-            if (siempre)
-                o << " se escribe en todos los caminos que retornan";
-            else
-                o << " no se escribe en el camino que retorna en la linea "
-                  << d.witness_line;
-            f.what.detail = p.store.intern(o.str());
+            /* Solo el NOMBRE del puntero: la frase la pone el catalogo desde
+             * el codigo, y la linea testigo ya va en `what.a`.  Un productor
+             * que escribe frases obliga a todo el sistema a hablar su
+             * idioma. */
+            f.what.detail = p.store.intern(pointer_name(fn, e.first));
             f.about = about;
             /* DEMOSTRADO en los dos casos, y conviene entender por que tambien
              * el negativo: no es "no encontre la escritura", es que se

@@ -5171,6 +5171,91 @@ OUT_CAMINOS_LINEAS = [
 ]
 
 
+# La MATRIZ de efectos de una funcion externa: las catorce palabras, y que le
+# cuesta cada una a quien llama.
+#
+# Lo que hay que fijar NO es que compile -- eso lo hacia tambien cuando la
+# palabra se aceptaba y no llegaba a ningun sitio --, sino que CADA UNA cambie
+# el veredicto de la manera documentada.  El fallo que esto cierra era el peor
+# posible: declarar `@blocks` dejaba la funcion MAS limpia que no declarar
+# nada, porque encendia "alguien hablo" (que quita el efecto maximo) y luego el
+# eje se perdia al serializar el IR.
+#
+# La tabla es la del propio ejemplo, para que las dos no puedan divergir: si
+# alguien cambia una y no la otra, esto falla.
+EFECTOS_FFI_QUITAN = {
+    "con_io": ["pure", "mem_free", "deterministic", "freestanding"],
+    "con_throws": ["pure", "mem_free", "nothrow"],
+    "con_panics": ["pure", "nopanic"],
+    "con_alloc": ["pure", "mem_free", "heap_free", "gc_free"],
+    "con_nondet": ["deterministic"],
+    "con_keeps_state": ["pure", "mem_free", "readonly", "deterministic"],
+    # El mundo PARTIDO: la misma palabra con otra parte da otro veredicto.
+    # Es lo que se pierde si "lee el mundo" es una sola cosa.
+    "con_reads_env": ["mem_free"],                    # config: no cambia
+    "con_reloj": ["mem_free", "deterministic"],       # clock: si cambia
+    "con_writes_env": ["pure", "mem_free", "readonly", "deterministic",
+                       "freestanding"],
+    "con_blocks": ["pure", "mem_free"],
+    "con_traps": ["pure", "mem_free"],
+}
+# Lo que sale cuando NADA esta encendido, que es contra lo que se compara.
+EFECTOS_FFI_BASE = ["pure", "mem_free", "readonly", "leaf", "nothrow",
+                    "nopanic", "deterministic", "heap_free", "gc_free",
+                    "freestanding"]
+
+
+@case("efectos_ffi", line=None)
+def _(ctx):
+    """Las catorce palabras de efectos de una externa, una por una."""
+    src = ctx.src("530_efectos_ffi.vx")
+    _, log = ctx.run([VM_EXE, "--analyze", src])
+    # Los contratos de cada envoltorio: la linea `Contratos` que sigue a su
+    # nombre.  Se mira POR FUNCION y no en todo el volcado, porque las otras
+    # si son puras y darian un falso OK.
+    lineas = log.splitlines()
+    contratos = {}
+    for i, l in enumerate(lineas):
+        marca = l.strip()
+        for corto in list(EFECTOS_FFI_QUITAN) + ["sin_nada"]:
+            if marca.endswith("__" + corto):
+                for j in range(i + 1, min(i + 4, len(lineas))):
+                    if "Contratos" in lineas[j]:
+                        contratos[corto] = set(
+                            lineas[j].split(":", 1)[1].split())
+                        break
+    if "sin_nada" not in contratos:
+        ctx.fail("no se pudo leer el analisis de 530_efectos_ffi.vx", log)
+        return
+    # La base: con las cinco negativas, TODO se cumple.  Si esto falla, lo
+    # demas no significa nada -- se estaria comparando contra otra cosa --.
+    faltan = [c for c in EFECTOS_FFI_BASE if c not in contratos["sin_nada"]]
+    if faltan:
+        ctx.fail("con las cinco negativas faltan contratos: %s" % faltan, log)
+        return
+    ctx.ok("las cinco negativas no encienden nada (%d contratos)"
+           % len(EFECTOS_FFI_BASE))
+    for corto, quita in sorted(EFECTOS_FFI_QUITAN.items()):
+        got = contratos.get(corto)
+        if got is None:
+            ctx.fail("no se pudo leer el analisis de '%s'" % corto, log)
+            return
+        # Los que la palabra TIENE que quitar.
+        sobran = [c for c in quita if c in got]
+        if sobran:
+            ctx.fail("'%s' tenia que quitar %s y siguen ahi: %s"
+                     % (corto, quita, sobran), log)
+            return
+        # Y los que NO tiene que tocar: un efecto que se lleva por delante mas
+        # de lo suyo tambien es un fallo, y sin esto no se veria.
+        deberian = [c for c in EFECTOS_FFI_BASE if c not in quita]
+        perdidos = [c for c in deberian if c not in got]
+        if perdidos:
+            ctx.fail("'%s' no tenia que tocar %s" % (corto, perdidos), log)
+            return
+        ctx.ok("%s -> quita exactamente %s" % (corto, ",".join(quita)))
+
+
 @case("out_por_todos_los_caminos", line=None)
 def _(ctx):
     """Un `out` cumple lo mismo se llame como se llame, en los tres modos."""

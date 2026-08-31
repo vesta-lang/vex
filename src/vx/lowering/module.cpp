@@ -333,6 +333,15 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                     fx.reads_global = efd->effects.reads_global;
                     fx.writes_global = efd->effects.writes_global;
                     fx.nondeterministic = efd->effects.nondeterministic;
+                    fx.may_block = efd->effects.may_block;
+                    fx.may_trap = efd->effects.may_trap;
+                    fx.throw_origin = efd->effects.throw_origin;
+                    fx.panic_origin = efd->effects.panic_origin;
+                    fx.trap_kinds = efd->effects.trap_kinds;
+                    fx.reads_world = efd->effects.reads_world;
+                    fx.writes_world = efd->effects.writes_world;
+                    fx.returns_fresh = efd->effects.returns_fresh;
+                    fx.frees_pointee = efd->effects.frees_pointee;
                 }
                 if (fx.declared) extern_effects_by_fn_name_[efd->name] = fx;
             }

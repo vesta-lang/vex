@@ -3226,15 +3226,93 @@ void Parser::parse_extern_effects_(ast::ExternEffects &out) {
         // la maneja quien ya la manejaba.
         const bool conocido =
             (nm == "pure" || nm == "io" || nm == "throws" || nm == "panics" ||
-             nm == "alloc" || nm == "nondet" || nm == "reads_global" ||
-             nm == "writes_global" || nm == "nothrow" || nm == "nopanic");
+             nm == "alloc" || nm == "nondet" || nm == "keeps_state" ||
+             nm == "reads_env" || nm == "writes_env" || nm == "nothrow" ||
+             nm == "nopanic" || nm == "det" || nm == "allocator" ||
+             nm == "maps" || nm == "frees" || nm == "blocks" || nm == "traps" ||
+             nm == "noblock" || nm == "notrap");
         if (!conocido) return;
         (void)consume(); // '@'
         (void)consume(); // el nombre
+        /* Los parentesis llevan DOS cosas que se mezclan: el `when:` que ya
+         * existia, y el REFINAMIENTO de la palabra -- de quien es lo que sale
+         * (`@throws(native)`) y que puede fallar (`@traps(div0, access)`) --.
+         *
+         * Van en la misma palabra y no en palabras aparte porque son la MISMA
+         * afirmacion mas precisa, no otra distinta: `@throws(native)` sigue
+         * siendo "puede lanzar".  Y asi el vocabulario de dentro crece sin
+         * tocar la gramatica. */
         std::string when;
+        ir::UnwindOrigin origen = ir::UnwindOrigin::Any;
+        ir::TrapKinds traps = ir::TRAP_NONE;
+        ir::WorldKinds mundo = ir::WORLD_NONE;
+        uint32_t libera = 0;
         if (current_.kind == TokenKind::LPAREN) {
             (void)consume(); // '('
-            when = read_footprint_when_();
+            for (;;) {
+                if (current_.kind == TokenKind::IDENTIFIER &&
+                    current_.lexeme == "when") {
+                    when = read_footprint_when_();
+                } else if (current_.kind == TokenKind::IDENTIFIER) {
+                    const std::string w = current_.lexeme;
+                    if (nm == "traps") {
+                        const ir::TrapKinds b =
+                            ir::trap_kind_from_name(w.c_str());
+                        if (b == ir::TRAP_NONE)
+                            error_here(
+                                ("`@traps(...)` no conoce '" + w +
+                                 "'; los que hay son div0, access, align, "
+                                 "illegal, stack_overflow y fp")
+                                    .c_str());
+                        traps = static_cast<ir::TrapKinds>(traps | b);
+                    } else if (nm == "reads_env" || nm == "writes_env") {
+                        const ir::WorldKinds b =
+                            ir::world_kind_from_name(w.c_str());
+                        if (b == ir::WORLD_NONE)
+                            error_here(
+                                ("`@" + nm + "(...)` no conoce '" + w +
+                                 "'; los que hay son file, net, clock, "
+                                 "random, env, config, process, console y "
+                                 "device")
+                                    .c_str());
+                        mundo = static_cast<ir::WorldKinds>(mundo | b);
+                    } else if (nm == "throws" || nm == "panics") {
+                        if (w == "vesta")
+                            origen = ir::UnwindOrigin::Vesta;
+                        else if (w == "native")
+                            origen = ir::UnwindOrigin::Native;
+                        else
+                            error_here(("`@" + nm +
+                                        "(...)` espera `vesta` o `native`, "
+                                        "no '" +
+                                        w + "'")
+                                           .c_str());
+                    } else {
+                        error_here(("`@" + nm +
+                                    "` no admite argumentos aparte del "
+                                    "`when:`")
+                                       .c_str());
+                    }
+                    (void)consume();
+                } else if (current_.kind == TokenKind::INT_LIT &&
+                           nm == "frees") {
+                    /* `@frees(0)` toma la POSICION y no el nombre: los
+                     * parametros aun no se han leido cuando se parsea esto, y
+                     * inventar un segundo pase para poder escribir el nombre
+                     * seria pagar mucho por poco. */
+                    const long long i = current_.int_val;
+                    if (i < 0 || i >= 32)
+                        error_here("`@frees(...)` toma la POSICION de un "
+                                   "argumento, de 0 a 31");
+                    else
+                        libera |= (1u << static_cast<unsigned>(i));
+                    (void)consume();
+                } else {
+                    break;
+                }
+                if (current_.kind != TokenKind::COMMA) break;
+                (void)consume(); // ','
+            }
             (void)expect(TokenKind::RPAREN, "se esperaba ')' tras el `when:`");
         }
         out.any = true; // alguien hablo, aunque su `when:` no case aqui
@@ -3246,18 +3324,143 @@ void Parser::parse_extern_effects_(ast::ExternEffects &out) {
         // las palabras que el usuario ya conoce.
         if (nm == "io")
             out.io = true;
-        else if (nm == "throws")
+        else if (nm == "throws") {
             out.may_throw = true;
-        else if (nm == "panics")
+            /* El origen se ESTRECHA, nunca se ensancha: dos `@throws` con
+             * origenes distintos dejan `Any`, que es lo conservador.  Al reves
+             * -- quedarse con el ultimo -- dejaria que una segunda linea
+             * borrara la advertencia de la primera. */
+            out.throw_origin = (out.throw_origin == ir::UnwindOrigin::Any ||
+                                out.throw_origin == origen)
+                                   ? origen
+                                   : ir::UnwindOrigin::Any;
+        } else if (nm == "panics") {
             out.may_panic = true;
-        else if (nm == "alloc")
+            out.panic_origin = (out.panic_origin == ir::UnwindOrigin::Any ||
+                                out.panic_origin == origen)
+                                   ? origen
+                                   : ir::UnwindOrigin::Any;
+        } else if (nm == "alloc")
             out.allocates = true;
-        else if (nm == "nondet")
+        /* RESERVAR y MAPEAR se parecen y NO son lo mismo, y confundirlos
+         * cuesta caro en las dos direcciones.
+         *
+         *   - `allocator` da memoria FRESCA: nadie mas la apunta y quien llama
+         *     se queda con ella.  Eso es una GARANTIA, no un coste, y es lo
+         *     que permite tratar el resultado como una localizacion propia --
+         *     igual que la de un `malloc` nuestro -- en vez de como "puede
+         *     apuntar a cualquier cosa".
+         *
+         *   - `maps` reserva ESPACIO DE DIRECCIONES, que es otro recurso.  Un
+         *     `mmap` o un `MapViewOfFile` pueden mapear algo que YA EXISTE y
+         *     esta COMPARTIDO -- un fichero, un dispositivo, la memoria de
+         *     otro proceso --, asi que lo que devuelven puede aliasar el mundo
+         *     de fuera.  Decir `allocator` de un `mmap` seria prometer que no,
+         *     y eso no da un error: da otro resultado cuando el optimizador se
+         *     lo crea.
+         *
+         * El mismo `mmap` ES un asignador si se le pasa anonimo y privado.  Eso
+         * se decide en la LLAMADA y no en la declaracion, asi que lo que se
+         * declara es lo conservador y quien conozca su caso envuelve. */
+        else if (nm == "allocator") {
+            out.allocates = true;
+            out.returns_fresh = true;
+        } else if (nm == "maps") {
+            out.allocates = true;     // consume memoria del sistema
+            out.writes_global = true; // el espacio de direcciones es del SO
+            out.writes_world =
+                ir::WORLD_NONE; // sin acotar: puede ser cualquiera
+            out.writes_env_visto = true;
+            out.io = true;
+        } else if (nm == "frees") {
+            /* Liberar es ESCRIBIR lo apuntado, y de la peor forma: lo que
+             * habia deja de valer.  Se dice como escritura para que los pases
+             * que ya miran eso no tengan que aprender nada nuevo, y ademas se
+             * apunta cual, que es lo que hace falta para poder avisar de un uso
+             * despues de liberar. */
+            out.frees_pointee |= libera;
+        } else if (nm == "nondet")
             out.nondeterministic = true;
-        else if (nm == "reads_global")
+        /* Las tres formas de tener estado que no se ve desde la llamada.
+         *
+         * Antes esto eran `@reads_global` y `@writes_global`, y decian "estado
+         * global del PROCESO" -- que no es lo mismo en la maquina virtual,
+         * donde el proceso es uno de los nuestros, que en un binario nativo,
+         * donde es el del sistema --.  Una palabra cuyo significado cambia con
+         * el modo no describe nada, asi que se dividieron por DE QUIEN es el
+         * estado, que es una frontera y no depende del modo:
+         *
+         *   - `keeps_state`: suyo.  `strtok` recuerda entre llamadas, `errno`
+         *     queda escrito, un manejador se cachea.  Lo que aporta es que dos
+         *     llamadas INTERACTUAN: no se pueden fundir ni reordenar entre si.
+         *   - `reads_env` / `writes_env`: el mundo del SO.  Ficheros, registro,
+         *     variables de entorno, reloj.
+         *
+         * Lo NUESTRO no esta: a nuestros datos una externa solo llega por un
+         * puntero que le pasamos, y eso ya lo dice `in`/`out` en el parametro
+         * -- con su localizacion concreta, que es mucho mas de lo que un
+         * booleano podria decir --. */
+        else if (nm == "keeps_state") {
             out.reads_global = true;
-        else if (nm == "writes_global")
             out.writes_global = true;
+            out.nondeterministic = true; // dos llamadas iguales interactuan
+        } else if (nm == "reads_env") {
+            out.reads_global = true;
+            out.reads_world = static_cast<ir::WorldKinds>(
+                (mundo == ir::WORLD_NONE || out.reads_world == ir::WORLD_NONE)
+                    ? ir::WORLD_NONE
+                    : (out.reads_world | mundo));
+            if (out.reads_world == ir::WORLD_NONE && mundo != ir::WORLD_NONE &&
+                !out.reads_env_visto)
+                out.reads_world = mundo;
+            out.reads_env_visto = true;
+            /* Solo lo que CAMBIA por su cuenta hace no-determinista: leer el
+             * reloj o la entropia no da lo mismo dos veces, leer la
+             * configuracion si.  Con un unico "lee el mundo" habia que suponer
+             * lo primero SIEMPRE, o sea tratar a la mayoria por el peor caso.
+             *
+             * Sin acotar tambien lo hace: quien no dice que lee, no se
+             * beneficia de haberlo acotado. */
+            if (mundo == ir::WORLD_NONE || (mundo & ir::WORLD_CAMBIANTE) != 0)
+                out.nondeterministic = true;
+        } else if (nm == "writes_env") {
+            out.writes_global = true;
+            out.writes_world = static_cast<ir::WorldKinds>(
+                (mundo == ir::WORLD_NONE || out.writes_world == ir::WORLD_NONE)
+                    ? ir::WORLD_NONE
+                    : (out.writes_world | mundo));
+            if (out.writes_world == ir::WORLD_NONE && mundo != ir::WORLD_NONE &&
+                !out.writes_env_visto)
+                out.writes_world = mundo;
+            out.writes_env_visto = true;
+            out.io = true; // cambiar el mundo se ve desde fuera
+        }
+        /* Los dos ejes que el modelo interno ya tenia y una `extern` no podia
+         * decir.  Sin ellos, un `WaitForSingleObject` entraba como "no
+         * bloquea" y una division nativa como "no falla", que bajo DESCRIPCION
+         * COMPLETA no es no saberlo: es afirmar que no pasa. */
+        else if (nm == "blocks")
+            out.may_block = true;
+        else if (nm == "traps") {
+            out.may_trap = true;
+            /* Los fallos se SUMAN entre lineas: `@traps(div0)` y
+             * `@traps(access, when: ...)` describen la misma funcion en dos
+             * frases.
+             *
+             * Pero un `@traps` SIN acotar vale por todos, y entonces ya no hay
+             * conjunto que valga: una linea que no acota se lleva por delante
+             * lo que acotaron las otras.  Al reves seria peor -- acotar de
+             * menos hace creer que un fallo no puede pasar --. */
+            if (traps == ir::TRAP_NONE)
+                out.traps_sin_acotar = true;
+            else
+                out.trap_kinds =
+                    static_cast<ir::TrapKinds>(out.trap_kinds | traps);
+            if (out.traps_sin_acotar) out.trap_kinds = ir::TRAP_NONE;
+        }
+        /* `noblock` y `notrap` no ponen nada, como `nothrow` y `nopanic`: bajo
+         * descripcion completa el default ya es que no pasa.  Se aceptan porque
+         * escribirlo dice que se penso, y dejarlo en blanco no. */
     }
 }
 

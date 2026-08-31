@@ -52,6 +52,12 @@ static ContractCheck p_pure(const FunctionSummary &s, ContractProfile profile) {
     si(k, c.may_allocate, R::Aloca);
     si(k, c.may_io, R::HaceIO);
     si(k, c.may_block, R::Bloquea);
+    /* Y fallar en el PROCESADOR cuenta salvo en Relaxed, que es lo que la
+     * cabecera de aqui arriba lleva diciendo desde el principio -- y no se
+     * miraba en NINGuN perfil, asi que `Relaxed` no se distinguia de `Default`
+     * en el unico eje que lo separaba, y una funcion que puede reventar salia
+     * pura.  Como siempre: lo que nadie comprueba se lee como demostrado. */
+    si(k, profile != ContractProfile::Relaxed && c.may_trap, R::PuedeAtrapar);
     si(k, !c.tags.empty(), R::TieneEtiquetas);
     si(k, profile == ContractProfile::Strict && !c.determinism.empty(),
        R::NoDeterminista);

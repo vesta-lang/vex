@@ -902,6 +902,100 @@ en = "the function '{2}' does not say which target it is compiled for, so its ca
 es = "la funcion '{2}' no dice para que objetivo se compila, asi que su convencion de llamada se desconoce -- quien la construye tiene que poner MFunction::target"
 
 # ===========================================================================
+# HECHOS DEL ASA -- el texto de lo que se sabe
+# ===========================================================================
+#
+# La clave es el CODIGO del hecho tal cual, no un VXNNNN: el productor ya
+# guarda un vocabulario estable por dominio (`use_def.unused`) y darle ademas
+# un numero seria una segunda identidad para lo mismo, con su forma de
+# desincronizarse.
+#
+# Los argumentos son SIEMPRE los mismos y en el mismo orden: {0} y {1} son los
+# dos numeros del hecho, {2} su detalle -- el nombre de un valor, de una
+# localizacion --.  Que sea fijo es lo que permite anadir un codigo aqui sin
+# tocar ni una linea de C++.
+#
+# Un productor NO escribe frases.  Guarda codigo y datos; el texto sale de
+# aqui, en el idioma del usuario, y lo pone quien lo pinta -- el volcado, el
+# linter, el editor --.
+
+["use_def.unused"]
+en = "'{2}' is never used"
+es = "'{2}' no se usa en ningun sitio"
+
+["use_def.single_use"]
+en = "'{2}' is used once, at position {1}"
+es = "'{2}' se usa una vez, en la posicion {1}"
+
+["use_def.multi_use"]
+en = "'{2}' is used {0} times, the last at position {1}"
+es = "'{2}' se usa {0} veces, la ultima en la posicion {1}"
+
+["use_def.no_values"]
+en = "it has no SSA values"
+es = "no tiene ningun valor SSA"
+
+["memory_access.read"]
+en = "reads {2}"
+es = "lee {2}"
+
+["memory_access.write"]
+en = "writes {2}"
+es = "escribe {2}"
+
+["memory_access.rw"]
+en = "reads and writes {2}"
+es = "lee y escribe {2}"
+
+["memory_access.not_localizable"]
+en = "it touches memory but the location cannot be determined"
+es = "toca memoria pero no se puede localizar"
+
+["memory_access.no_accesses"]
+en = "none of its instructions touch memory"
+es = "ninguna de sus instrucciones toca memoria"
+
+["range.unreachable"]
+en = "this point is never executed"
+es = "este punto no se ejecuta"
+
+["asm_flow.no_asm"]
+en = "it has no asm blocks whose control flow to analyse"
+es = "no tiene bloques asm cuyo flujo analizar"
+
+["layout.no_static_data"]
+en = "the module has no static data in .data, so there is no section whose alignment to state"
+es = "el modulo no tiene datos estaticos en .data; no hay ninguna seccion cuya alineacion afirmar"
+
+["layout.placement_is_configurable"]
+en = "in native builds the linker script places the section; without seeing it, its alignment cannot be stated"
+es = "en el nativo la seccion la coloca el guion de enlazado; sin verlo no se puede afirmar su alineacion"
+
+["loop.none"]
+en = "it has no loops"
+es = "no tiene bucles"
+
+["value_shape.none"]
+en = "it has no values with components"
+es = "no tiene valores con componentes"
+
+["definite_store.always"]
+en = "'{2}' is written on every path that returns"
+es = "'{2}' se escribe en todos los caminos que retornan"
+
+["definite_store.missing"]
+en = "'{2}' is not written on the path that returns at line {0}"
+es = "'{2}' no se escribe en el camino que retorna en la linea {0}"
+
+["definite_store.no_pointer_params"]
+en = "none of its parameters points at anything"
+es = "ninguno de sus parametros apunta a nada"
+
+["definite_store.escapes"]
+en = "the pointer is handed to something else, so it cannot be told whether it gets written"
+es = "el puntero se le pasa a otro, asi que no se puede decir si se escribe"
+
+# ===========================================================================
 # VXW -- HALLAZGOS DEL LINTER
 # ===========================================================================
 #
