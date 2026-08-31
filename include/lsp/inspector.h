@@ -367,7 +367,8 @@ class Inspector {
     nlohmann::json targets();
 
     /**
-     * @brief @c vesta/instruction: lo que el compilador sabe de UNA instruccion.
+     * @brief @c vesta/instruction: lo que el compilador sabe de UNA
+     * instruccion.
      *
      * Lo mismo que consulta el planificador para decidir si puede mover una
      * instruccion respecto de otra: cuanto tarda, cuanto ocupa, por que puertos
@@ -402,8 +403,7 @@ class Inspector {
      *         no es una instruccion (etiqueta, comentario, vacia).
      */
     nlohmann::json instruction(const std::string &uri, uint32_t line,
-                               const std::string &cpu,
-                               const std::string &arch);
+                               const std::string &cpu, const std::string &arch);
 
     /**
      * @brief @c vesta/asmBlock: un bloque de ensamblador entero, con su FLUJO.

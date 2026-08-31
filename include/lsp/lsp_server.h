@@ -112,6 +112,8 @@ class LspServer {
      *
      * @param msg Mensaje completo (lleva @c id y @c params.position).
      */
+    /// @brief `textDocument/formatting`: da formato al documento entero.
+    void handle_formatting(const nlohmann::json &msg);
     void handle_hover(const nlohmann::json &msg);
 
     /**
@@ -238,7 +240,17 @@ class LspServer {
     Inspector inspector_{engine_,
                          docs_}; ///< Inspector del ecosistema (Fase 3).
     WorkspaceIndex workspace_;   ///< Indice de simbolos del workspace (Fase 4).
-    bool initialized_ = false;   ///< true tras un initialize correcto.
+    /**
+     * Nombres de las funciones que capturan el TEXTO de su argumento (`R110`),
+     * sacados de todo el workspace.
+     *
+     * Se guardan porque no cambian de un guardado al siguiente y sacarlos
+     * cuesta leer el proyecto entero: hacerlo en cada formateo convertiria una
+     * operacion instantanea en una espera.  Vacio = aun no se han buscado.
+     */
+    std::vector<std::string> capture_names_;
+    bool capture_names_listos_ = false;
+    bool initialized_ = false; ///< true tras un initialize correcto.
     /// true tras @c shutdown (espera @c exit).  Atomico porque lo escribe el
     /// hilo que despacha y lo lee el que lee la entrada.
     std::atomic<bool> shutdown_requested_{false};

@@ -55,32 +55,31 @@
  * la lista.
  */
 
-
 /* --- Bloques: abren llaves y no llevan argumento -------------------------- */
-VX_DIRECTIVE(SECTION,      "Section", Block)
-VX_DIRECTIVE(IMPORT_BLOCK, "Import",  Block)
+VX_DIRECTIVE(SECTION, "Section", Block)
+VX_DIRECTIVE(IMPORT_BLOCK, "Import", Block)
 
 /* --- Argumento entre comillas -------------------------------------------- */
 VX_DIRECTIVE(SPACE_ADDRESS, "SpaceAddress", Quoted)
-VX_DIRECTIVE(NAME,          "Name",         Quoted)
-VX_DIRECTIVE(FORMAT,        "Format",       Quoted)
-VX_DIRECTIVE(LIB,           "Lib",          Quoted)
+VX_DIRECTIVE(NAME, "Name", Quoted)
+VX_DIRECTIVE(FORMAT, "Format", Quoted)
+VX_DIRECTIVE(LIB, "Lib", Quoted)
 /* ABS_REF / REL_REF y no ABSOLUTE / RELATIVE: los dos nombres obvios son
  * MACROS de `windows.h` (wingdi.h los define para los modos de relleno), y una
  * macro no respeta el ambito de un `enum class` -- el preprocesador sustituye
  * antes de que exista el enum.  El sintoma es un error de sintaxis dentro de
  * esta lista, en la linea de la entrada, sin nada que apunte a windows.h. */
-VX_DIRECTIVE(ABS_REF,       "Absolute",     Quoted)
-VX_DIRECTIVE(REL_REF,       "Relative",     Quoted)
-VX_DIRECTIVE(METHOD,        "Method",       Quoted)
+VX_DIRECTIVE(ABS_REF, "Absolute", Quoted)
+VX_DIRECTIVE(REL_REF, "Relative", Quoted)
+VX_DIRECTIVE(METHOD, "Method", Quoted)
 
 /* --- Argumento identificador, sin comillas ------------------------------- */
-VX_DIRECTIVE(MODULE,  "Module",  Bare)
-VX_DIRECTIVE(EXPORT,  "Export",  Bare)
-VX_DIRECTIVE(INIT_PC, "InitPc",  Bare)
+VX_DIRECTIVE(MODULE, "Module", Bare)
+VX_DIRECTIVE(EXPORT, "Export", Bare)
+VX_DIRECTIVE(INIT_PC, "InitPc", Bare)
 VX_DIRECTIVE(GENERIC, "Generic", Bare)
 
 /* --- Argumento numerico, en hexadecimal ---------------------------------- */
 VX_DIRECTIVE(INI_ADDRESS, "IniAddress", Numeric)
 VX_DIRECTIVE(END_ADDRESS, "EndAddress", Numeric)
-VX_DIRECTIVE(ALIGN,       "Align",      Numeric)
+VX_DIRECTIVE(ALIGN, "Align", Numeric)

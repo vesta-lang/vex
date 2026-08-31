@@ -151,7 +151,8 @@ int main() {
                                            "mov r8, .top\n"
                                            "lea rax, [r8 + 16]\n"
                                            "jmp rax\n");
-        CHECK(f.has_indirect, "lea [reg + N]: dentro de la etiqueta, no se sabe");
+        CHECK(f.has_indirect,
+              "lea [reg + N]: dentro de la etiqueta, no se sabe");
 
         // Pisar el registro borra lo que se sabia de el.
         AsmCfg g = build_asm_cfg(Isa::X86, ".top:\n"

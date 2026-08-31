@@ -57,9 +57,7 @@ MemoryAccessKind memory_access_kind(ir::IrOp op) {
     case Op::VEC_FMA_S:
     case Op::VEC_ACC_ADD:
     case Op::VEC_ACC_FMA:
-    case Op::VEC_ACC_COMBINE:
-        k.touches = k.is_load = k.is_store = true;
-        break;
+    case Op::VEC_ACC_COMBINE: k.touches = k.is_load = k.is_store = true; break;
     // --- No toca memoria ---
     // VEC_BCAST difunde un ESCALAR a un registro vectorial: no hay acceso.
     default: break;

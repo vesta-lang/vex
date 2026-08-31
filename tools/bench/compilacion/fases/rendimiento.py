@@ -83,13 +83,44 @@ def recta(puntos: list):
     tot = sum((y - my) ** 2 for _, y in utiles)
     res = sum((y - (a + b * x)) ** 2 for x, y in utiles)
     r2 = 1.0 - (res / tot) if tot > 0 else 1.0
+    # Una pendiente positiva no basta: tiene que DESTACAR del ruido.  Con la
+    # cache caliente, Go devuelve el artefacto ya hecho y tarda lo mismo a los
+    # tres tamanos; entre 1.5k y 24k lineas la diferencia era de centesimas de
+    # milisegundo, o sea ruido con signo.  La pendiente salia positiva pero
+    # minuscula, y `1000/b` la convertia en 595.3M lineas/s -- un numero que
+    # parece un resultado espectacular y solo dice que ahi no se compilo nada.
+    #
+    # El criterio no puede ser el residuo: con tres puntos y dos parametros el
+    # ajuste tiene un solo grado de libertad, tres medidas casi identicas
+    # quedan casi colineales y el residuo sale minusculo -- daba R2=0.96 para
+    # una "tendencia" de cuatro centesimas de milisegundo.
+    #
+    # Se compara contra lo que se esta midiendo: el tiempo que la recta
+    # atribuye al TAMANO a lo largo del rango tiene que ser una parte
+    # apreciable del tiempo medido.  Una herramienta que de verdad compila
+    # crece con el codigo -- entre 1.5k y 24k lineas hay un factor 16 --, asi
+    # que si dieciseis veces mas codigo mueve el reloj menos de un 5%, lo que
+    # se esta cronometrando es un coste FIJO y la pendiente es su resto.
+    xs = [x for x, _ in utiles]
+    ys = [y for _, y in utiles]
+    crecimiento = b * (max(xs) - min(xs))    # ms atribuibles al tamano
+    ruido = (res / n) ** 0.5                 # dispersion residual, en ms
+    if crecimiento <= ruido or crecimiento < 0.05 * max(ys):
+        return None
     return (1000.0 / b, a, r2)
 
 
 def _fmt(v) -> str:
-    """El caudal en la unidad que se lea de un vistazo."""
+    """El caudal en la unidad que se lea de un vistazo.
+
+    @c None es "no se pudo ajustar", que NO es lo mismo que un caudal
+    proximo a cero: decia `~0` y se leia como "este compilador no digiere
+    codigo", cuando lo que pasa es que la recta no describe lo medido -- en Go
+    con la cache caliente, porque no compila nada.  Se dice `n/d`, igual que
+    hace el pico de memoria cuando no se puede medir.
+    """
     if v is None:
-        return "~0"
+        return "n/d"
     if v >= 1000000:
         return "%.1fM" % (v / 1000000.0)
     if v >= 1000:
@@ -241,6 +272,11 @@ def fase(ctx: Ctx) -> None:
               f"si baja, el coste NO es lineal y la pendiente deja de "
               f"significar 'por linea'.  Con solo dos tamanos no se puede "
               f"juzgar: sale `n/d`.{C.RESET}")
+        print(f"{C.DIM}  Un caudal `n/d` es que la recta no describe lo "
+              f"medido: o el tiempo no crece con el tamano, o lo que crece no "
+              f"se separa del ruido.  Pasa cuando la herramienta devuelve un "
+              f"artefacto cacheado en vez de compilar, y entonces no hay "
+              f"caudal que medir -- no es un caudal de cero.{C.RESET}")
         ctx.resultados["caudal"] = [
             {"lang": ln,
              "lineas_por_segundo": (rf[0] if rf else None),

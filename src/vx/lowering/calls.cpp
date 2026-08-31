@@ -58,16 +58,14 @@ namespace vx {
  * @return @c false si alguno de los argumentos no se pudo bajar.
  */
 bool Lowering::emit_naked_dispatch(const std::string &label, ast::CallExpr *e,
-                                   ir::IrType ret_ir,
-                                   ir::IrValueId &out_dst) {
+                                   ir::IrType ret_ir, ir::IrValueId &out_dst) {
     out_mod_->register_native_import("vrt", "naked_dispatch");
 
     std::vector<ir::IrValueId> arg_ids;
     arg_ids.reserve(e->args.size() + 3);
     arg_ids.push_back(emit_getproc(e->loc.line));
-    arg_ids.push_back(emit_const(ir::IrType::I64,
-                                 jit::fnv1a64_name(label.c_str()),
-                                 e->loc.line));
+    arg_ids.push_back(emit_const(
+        ir::IrType::I64, jit::fnv1a64_name(label.c_str()), e->loc.line));
     arg_ids.push_back(emit_const(
         ir::IrType::I64, static_cast<uint64_t>(e->args.size()), e->loc.line));
 
@@ -80,9 +78,8 @@ bool Lowering::emit_naked_dispatch(const std::string &label, ast::CallExpr *e,
         arg_ids.push_back(av);
     }
 
-    out_dst = (ret_ir == ir::IrType::VOID)
-                  ? ir::IR_NO_VALUE
-                  : fn_->new_value(ret_ir);
+    out_dst =
+        (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(ret_ir);
     ir::IrInstr ins{};
     ins.op = ir::IrOp::CALLN;
     ins.type = ret_ir;
@@ -248,7 +245,6 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         if (try_lower_indirect_call(e, v_ind)) return v_ind;
     }
 
-
     {
         ir::IrValueId v_ns = ir::IR_NO_VALUE;
         if (try_lower_namespaced_call(e, v_ns)) return v_ns;
@@ -258,7 +254,6 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         ir::IrValueId v_ct = ir::IR_NO_VALUE;
         if (try_lower_comptime_fn_call(e, v_ct)) return v_ct;
     }
-
 
     {
         ir::IrValueId v_enum = ir::IR_NO_VALUE;
@@ -723,9 +718,10 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     if (callee_sig && callee_sig->is_variadic && !callee_sig->is_raw_variadic &&
         !callee_is_sret &&
         arg_ids.size() >= callee_sig->param_types.size() - 1) {
-        pack_variadic_args(arg_ids, callee_sig->param_types.size() - 1,
-                           ir_type_from_primitive(callee_sig->variadic_elem.kind),
-                           e->loc.line);
+        pack_variadic_args(
+            arg_ids, callee_sig->param_types.size() - 1,
+            ir_type_from_primitive(callee_sig->variadic_elem.kind),
+            e->loc.line);
     }
 
     // Para sret la "firma" de retorno es VOID; el dst SSA visible al
@@ -1722,9 +1718,9 @@ ir::IrValueId Lowering::emit_native_call(const std::string &lib,
                                          const std::string &fn,
                                          std::vector<ir::IrValueId> args,
                                          ir::IrType ret, uint32_t source_line,
-                                         const ir::IrNativeEffects *efectos) {
-    if (efectos)
-        out_mod_->register_native_import(lib, fn, *efectos);
+                                         const ir::IrNativeEffects *effects) {
+    if (effects)
+        out_mod_->register_native_import(lib, fn, *effects);
     else
         out_mod_->register_native_import(lib, fn);
     return emit_calln(lib + ":" + fn, std::move(args), ret, source_line);
@@ -1805,8 +1801,7 @@ bool Lowering::try_lower_struct_default_ctor(ast::CallExpr *e,
         if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
             const std::string &bn =
                 static_cast<ast::IdentExpr *>(fa->base.get())->name;
-            if (lookup(bn) == ir::IR_NO_VALUE &&
-                tc_.struct_layouts().count(bn))
+            if (lookup(bn) == ir::IR_NO_VALUE && tc_.struct_layouts().count(bn))
                 is_static = true;
         }
         ir::IrValueId addr;
@@ -1835,8 +1830,7 @@ bool Lowering::try_lower_struct_default_ctor(ast::CallExpr *e,
             // emit_struct_init_fields ya aplica los defaults + el
             // override; evita duplicar los defaults.
             emit_struct_init_fields(
-                addr, lay,
-                static_cast<ast::InitListExpr *>(e->args[0].get()),
+                addr, lay, static_cast<ast::InitListExpr *>(e->args[0].get()),
                 e->loc.line);
         } else {
             emit_struct_field_defaults(addr, lay, e->loc.line);
@@ -1867,8 +1861,7 @@ bool Lowering::try_lower_struct_default_ctor(ast::CallExpr *e,
  * @param out Donde dejar el valor que la llamada produce.
  * @return @c true si el callee era de un namespace y quedo bajado.
  */
-bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
-                                         ir::IrValueId &out) {
+bool Lowering::try_lower_namespaced_call(ast::CallExpr *e, ir::IrValueId &out) {
     //  M.7: llamada a funcion de namespace importado, ej.
     // `lib_a.valor_a(args)`.  El TypeChecker marca el FieldAccessExpr
     // callee con property_kind=4 y resuelve la firma del simbolo en
@@ -1886,10 +1879,9 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
         (fa->base->kind != ast::NodeKind::IdentExpr &&
          fa->base->kind != ast::NodeKind::FieldAccessExpr))
         return false;
-    ast::IdentExpr *idb =
-        (fa->base->kind == ast::NodeKind::IdentExpr)
-            ? static_cast<ast::IdentExpr *>(fa->base.get())
-            : nullptr;
+    ast::IdentExpr *idb = (fa->base->kind == ast::NodeKind::IdentExpr)
+                              ? static_cast<ast::IdentExpr *>(fa->base.get())
+                              : nullptr;
     // Localizar el namespace EXACTO via ns_index que el
     // TypeChecker dejo en el FieldAccessExpr.  Sentinel
     // UINT32_MAX significa no resuelto (defensivo).
@@ -1924,14 +1916,12 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
                 const FunctionSig *real_sig =
                     tc_.function_sig_by_name(mangled_label);
                 if (real_sig) {
-                    ret_ir = ir_type_from_primitive(
-                        real_sig->return_type.kind);
+                    ret_ir = ir_type_from_primitive(real_sig->return_type.kind);
                     callee_kind_ns = real_sig->return_type.kind;
                     callee_ret_type_ns = real_sig->return_type;
                     ns_param_types = real_sig->param_types;
                 } else {
-                    ret_ir = ir_type_from_primitive(
-                        sym.sig.return_type.kind);
+                    ret_ir = ir_type_from_primitive(sym.sig.return_type.kind);
                     callee_kind_ns = sym.sig.return_type.kind;
                     callee_ret_type_ns = sym.sig.return_type;
                     ns_param_types = sym.sig.param_types;
@@ -1953,8 +1943,8 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
         auto it_cls = tc_.class_layouts().find(idb->name);
         const bool en_clases = it_cls != tc_.class_layouts().end();
         auto it_str = tc_.struct_layouts().find(idb->name);
-        const bool en_structs = !en_clases &&
-                                it_str != tc_.struct_layouts().end();
+        const bool en_structs =
+            !en_clases && it_str != tc_.struct_layouts().end();
         if (en_clases || en_structs) {
             const auto &metodos =
                 en_clases ? it_cls->second.methods : it_str->second.methods;
@@ -2010,8 +2000,7 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
                 auto it2 = ns2.by_name.find(fa->field_name);
                 if (it2 != ns2.by_name.end()) {
                     const auto &sig2 = ns2.symbols[it2->second].sig;
-                    ns_is_naked =
-                        sig2.is_naked && sig2.extern_lib.empty();
+                    ns_is_naked = sig2.is_naked && sig2.extern_lib.empty();
                 }
             }
         }
@@ -2082,14 +2071,13 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
             if (native_poo_) {
                 // Vesta Embed cross-module: value-string nativo (24B),
                 // no StringObject GC (mismo fix que el path regular).
-                ir::IrValueId v_lit = build_native_string_from_literal(
-                    slit, slit->loc.line);
+                ir::IrValueId v_lit =
+                    build_native_string_from_literal(slit, slit->loc.line);
                 arg_vals.push_back(v_lit);
                 if (v_lit != ir::IR_NO_VALUE)
                     ns_tmp_str_to_free.push_back(v_lit);
             } else {
-                arg_vals.push_back(
-                    lower_string_literal_to_string_object(slit));
+                arg_vals.push_back(lower_string_literal_to_string_object(slit));
             }
             promote = true;
         }
@@ -2359,11 +2347,10 @@ bool Lowering::try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out) {
             for (auto &a : e->args) {
                 arg_ids.push_back(lower_expr(a.get()));
             }
-            const char *fn_name =
-                gc_aware ? cm->native_fn_gc : cm->native_fn;
+            const char *fn_name = gc_aware ? cm->native_fn_gc : cm->native_fn;
             const ir::IrType ret_ir = ir_type_from_primitive(cm->ret);
-            out = emit_native_call(COL_NATIVE_LIB, fn_name,
-                                   std::move(arg_ids), ret_ir, e->loc.line);
+            out = emit_native_call(COL_NATIVE_LIB, fn_name, std::move(arg_ids),
+                                   ret_ir, e->loc.line);
             return true;
         }
     }
@@ -2393,8 +2380,8 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
     {
         ast::Expr *inner = nullptr;
         if (e->callee->kind == ast::NodeKind::CastExpr)
-            inner = static_cast<ast::CastExpr *>(e->callee.get())
-                        ->operand.get();
+            inner =
+                static_cast<ast::CastExpr *>(e->callee.get())->operand.get();
         else if (e->callee->kind == ast::NodeKind::UnaryExpr) {
             auto *u = static_cast<ast::UnaryExpr *>(e->callee.get());
             if (u->op == ast::UnOp::AddrOf) inner = u->operand.get();
@@ -2528,8 +2515,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
         ni.op = ir::IrOp::CALLN;
         ni.type = rt;
         ni.dst = dst;
-        ni.func_name =
-            "__callni__:"; // prefijo que el emitter baja a CALLNI
+        ni.func_name = "__callni__:"; // prefijo que el emitter baja a CALLNI
         ni.operands.reserve(args.size() + 1);
         ni.operands.push_back(fnp); // operando 0 = puntero a la funcion
         for (const auto &a : args)
@@ -2576,8 +2562,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
  */
 bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
                                           ir::IrValueId &out) {
-    if (!e->callee || e->callee->kind != ast::NodeKind::IdentExpr)
-        return false;
+    if (!e->callee || e->callee->kind != ast::NodeKind::IdentExpr) return false;
     auto *cid = static_cast<ast::IdentExpr *>(e->callee.get());
     const auto &cfns = tc_.comptime_fns();
     auto cit = cfns.find(cid->name);
@@ -2611,7 +2596,7 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
              * intentar comptime eval aqui.  El rewrite del
              * nombre callee_name -> __macro_<name> se hace al
              * emitir el IrInstr::CALL al final de lower_call. */
-                return false;
+            return false;
         }
         /* Solo-LSP: cuando bajamos comptime fns a IR para inspeccion
          * (emit_comptime_fns_), una llamada con args runtime -- p.ej. la
@@ -2620,7 +2605,7 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
          * (la callee ya esta en el IR como funcion regular). */
         ComptimeEvalResult r = comptime_eval_expr(tc_, e);
         if (!r.ok && emit_comptime_fns_) {
-                return false;
+            return false;
         }
         /* F1: comptime fn con asm -> ejecutar en el ComptimeVM (JIT +
          * interp fallback).  Con el two- (.velb y AOT), pass 2
@@ -2632,8 +2617,7 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
             const uint32_t src_line_asm = e->loc.line;
             ir::IrType t_asm = ir::IrType::I64;
             if (cit->second->return_type) {
-                Type rt =
-                    tc_.resolve_type_node(cit->second->return_type.get());
+                Type rt = tc_.resolve_type_node(cit->second->return_type.get());
                 t_asm = ir_type_from_primitive(rt.kind);
             }
             std::vector<uint64_t> vm_args;
@@ -2650,8 +2634,7 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
             if (args_ok) {
                 (void)const_cast<TypeChecker &>(tc_)
                     .comptime_runtime()
-                    .invoke_simple_macro("__macro_" + cid->name, vm_args,
-                                         r0);
+                    .invoke_simple_macro("__macro_" + cid->name, vm_args, r0);
             }
             out = emit_const(t_asm, r0, src_line_asm);
             return true;
@@ -2674,7 +2657,7 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
              * ejecuta al INVOCAR el macro (cuando el helper ya existe). Sin
              * esto, un @Macro que llama a un helper comptime devolvia "".
              */
-                return false;
+            return false;
         }
         if (!r.ok) {
             error_at(e->loc,
@@ -2695,11 +2678,10 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
         if (r.is_str) {
             /* Construir StringObject inline. */
             std::vector<uint8_t> bytes(r.str.begin(), r.str.end());
-            const uint64_t idx =
-                out_mod_->intern_static_data(std::move(bytes));
+            const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
             ir::IrValueId v_addr = emit_str_lit_addr(idx, src_line);
-            ir::IrValueId v_len = emit_const(
-                ir::IrType::I64, (uint64_t)r.str.size(), src_line);
+            ir::IrValueId v_len =
+                emit_const(ir::IrType::I64, (uint64_t)r.str.size(), src_line);
             ir::IrValueId v_str =
                 emit_string_literal_repr(v_addr, v_len, -1, src_line);
             out = v_str;
@@ -2715,12 +2697,11 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
                 const Type rt =
                     tc_.resolve_type_node(fn_decl_s->return_type.get());
                 auto it_sl = tc_.struct_layouts().find(rt.struct_name);
-                if (it_sl != tc_.struct_layouts().end())
-                    {
-                        out = materialize_comptime_struct(r, it_sl->second,
-                                                          src_line);
-                        return true;
-                    }
+                if (it_sl != tc_.struct_layouts().end()) {
+                    out =
+                        materialize_comptime_struct(r, it_sl->second, src_line);
+                    return true;
+                }
             }
         }
         /* Tipo de retorno declarado por la fn. */

@@ -103,9 +103,9 @@ bool to_nt_path(const std::string &path, std::wstring &out) {
     for (const char c : path) {
         // Las barras normales valen en la API de Win32 pero NO en la del
         // nucleo, que las trata como parte del nombre.
-        out.push_back(c == '/' ? L'\\'
-                               : static_cast<wchar_t>(
-                                     static_cast<unsigned char>(c)));
+        out.push_back(
+            c == '/' ? L'\\'
+                     : static_cast<wchar_t>(static_cast<unsigned char>(c)));
     }
     return true;
 }
@@ -139,19 +139,18 @@ bool read_all_from(HANDLE handle, uint64_t size, std::vector<uint8_t> &out) {
 bool open_and_read(POBJECT_ATTRIBUTES attrs, std::vector<uint8_t> &out) {
     IO_STATUS_BLOCK io;
     HANDLE handle = nullptr;
-    const NTSTATUS st =
-        NtOpenFile(&handle, kFileReadData | SYNCHRONIZE, attrs, &io,
-                   FILE_SHARE_READ | FILE_SHARE_WRITE,
-                   kSynchronousIoNonAlert | kNonDirectoryFile);
+    const NTSTATUS st = NtOpenFile(&handle, kFileReadData | SYNCHRONIZE, attrs,
+                                   &io, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                   kSynchronousIoNonAlert | kNonDirectoryFile);
     if (st < 0 || handle == nullptr) return false;
 
     StandardInformation info = {};
     bool ok = false;
-    if (NtQueryInformationFile(
-            handle, &io, &info, sizeof(info),
-            static_cast<FILE_INFORMATION_CLASS>(kFileStandardInformation)) >= 0) {
-        ok = read_all_from(handle,
-                           static_cast<uint64_t>(info.end_of_file.QuadPart), out);
+    if (NtQueryInformationFile(handle, &io, &info, sizeof(info),
+                               static_cast<FILE_INFORMATION_CLASS>(
+                                   kFileStandardInformation)) >= 0) {
+        ok = read_all_from(
+            handle, static_cast<uint64_t>(info.end_of_file.QuadPart), out);
     }
     NtClose(handle);
     return ok;
@@ -173,8 +172,8 @@ bool open_and_read_range(POBJECT_ATTRIBUTES attrs, uint64_t offset,
     bool ok = true;
     while (done < count) {
         const size_t left = count - done;
-        const ULONG chunk = left > 0x40000000u ? 0x40000000u
-                                               : static_cast<ULONG>(left);
+        const ULONG chunk =
+            left > 0x40000000u ? 0x40000000u : static_cast<ULONG>(left);
         LARGE_INTEGER pos;
         pos.QuadPart = static_cast<LONGLONG>(offset + done);
         if (NtReadFile(handle, nullptr, nullptr, nullptr, &io,
@@ -213,10 +212,9 @@ bool read_via_nt(const std::wstring &nt_path, std::vector<uint8_t> &out) {
 
 /// Respaldo para lo que la traduccion no cubre: relativas, UNC, rutas raras.
 bool read_via_win32(const std::string &path, std::vector<uint8_t> &out) {
-    HANDLE handle =
-        CreateFileA(path.c_str(), GENERIC_READ,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE handle = CreateFileA(path.c_str(), GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (handle == INVALID_HANDLE_VALUE) return false;
 
     LARGE_INTEGER size;
@@ -253,10 +251,9 @@ bool read_file_range(const std::string &path, uint64_t offset, size_t count,
     }
 
     // Respaldo por el camino largo, igual que en read_whole_file.
-    HANDLE handle =
-        CreateFileA(path.c_str(), GENERIC_READ,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE handle = CreateFileA(path.c_str(), GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (handle == INVALID_HANDLE_VALUE) return false;
     out.resize(count);
     OVERLAPPED ov;
@@ -264,8 +261,8 @@ bool read_file_range(const std::string &path, uint64_t offset, size_t count,
     ov.Offset = static_cast<DWORD>(offset & 0xFFFFFFFFull);
     ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
     DWORD got = 0;
-    const bool ok = ReadFile(handle, out.data(),
-                             static_cast<DWORD>(count), &got, &ov) != 0 &&
+    const bool ok = ReadFile(handle, out.data(), static_cast<DWORD>(count),
+                             &got, &ov) != 0 &&
                     got == count;
     CloseHandle(handle);
     if (!ok) out.clear();
@@ -329,9 +326,8 @@ bool write_whole_file(const std::string &path,
 
     // Respaldo por el camino largo, igual que al leer: rutas que la traduccion
     // no cubre.
-    HANDLE handle =
-        CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE handle = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (handle == INVALID_HANDLE_VALUE) return false;
     size_t done = 0;
     bool ok = true;
@@ -374,7 +370,9 @@ DirectoryReader::~DirectoryReader() {
     if (handle_ != nullptr) NtClose(static_cast<HANDLE>(handle_));
 }
 
-bool DirectoryReader::ok() const { return handle_ != nullptr; }
+bool DirectoryReader::ok() const {
+    return handle_ != nullptr;
+}
 
 bool DirectoryReader::read_file(const std::string &leaf_name,
                                 std::vector<uint8_t> &out) const {
@@ -505,7 +503,9 @@ DirectoryReader::~DirectoryReader() {
     if (fd_ >= 0) ::close(fd_);
 }
 
-bool DirectoryReader::ok() const { return fd_ >= 0; }
+bool DirectoryReader::ok() const {
+    return fd_ >= 0;
+}
 
 bool DirectoryReader::read_file(const std::string &leaf_name,
                                 std::vector<uint8_t> &out) const {

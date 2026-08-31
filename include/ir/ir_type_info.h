@@ -28,11 +28,12 @@
  * necesitaba.  De ahi que aqui cada eje tenga nombre propio y no se pueda coger
  * el que no es:
  *
- * | eje                    | que mide                          | HANDLE | VOID |
- * | :--------------------- | :-------------------------------- | :----: | :--: |
- * | @c type_access_bytes   | bytes TOCADOS en memoria          |   4    |  8   |
- * | @c type_slot_bytes     | ranura / registro / paso de array |   8    |  8   |
- * | @c type_storage_bytes  | ocupacion en el marco de pila     |   4    |  0   |
+ * | eje                    | que mide                          | HANDLE | VOID
+ * | | :--------------------- | :-------------------------------- | :----: |
+ * :--: | | @c type_access_bytes   | bytes TOCADOS en memoria          |   4 |
+ * 8   | | @c type_slot_bytes     | ranura / registro / paso de array |   8    |
+ * 8   | | @c type_storage_bytes  | ocupacion en el marco de pila     |   4    |
+ * 0   |
  *
  * SWITCH EXHAUSTIVO, SIN @c default.  Es deliberado y es la red de seguridad
  * del modulo: anadir un @c IrType nuevo dispara @c -Wswitch AQUI, en un unico

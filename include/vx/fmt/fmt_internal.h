@@ -23,6 +23,7 @@
 #define VX_FMT_FMT_INTERNAL_H
 
 #include "vx/fmt/fmt.h"
+#include "vx/token.h" // TokenKind, que aparece en las firmas de abajo
 
 namespace vx {
 namespace fmt {
@@ -88,7 +89,64 @@ enum class Role : uint8_t {
  * @param pieces Piezas del fuente.
  * @return Un papel por pieza, en el mismo orden.
  */
+/**
+ * @brief Aplica las reglas que cambian tokens y declara lo que hizo.
+ *
+ * @param pieces [in,out] piezas del fuente; se les pone @c drop y @c glued.
+ * @return Las reescrituras hechas, para que la comprobacion de `P2` sepa que
+ *         diferencias esperar.
+ */
+std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces);
+
 std::vector<Role> annotate_roles(const std::vector<Piece> &pieces);
+
+/**
+ * @brief Indica si la categoria de token nombra un tipo del lenguaje.
+ * @param k Categoria del token.
+ * @return Cierto si es una palabra clave de tipo (`i64`, `bool`, `string`...).
+ */
+/**
+ * @brief Convierte el campo @c kind de una pieza a su enum.
+ *
+ * La pieza guarda un `int` para no arrastrar `token.h` por todo el
+ * formateador; esto lo devuelve a su tipo.
+ *
+ * @param p Pieza.
+ * @return Su categoria de token.
+ */
+inline TokenKind kind_of(const Piece &p) {
+    return static_cast<TokenKind>(p.kind);
+}
+
+bool is_type_keyword(TokenKind k);
+
+/**
+ * @brief Indica si el token es un modificador de declaracion (`R42`).
+ *
+ * Los que ese reparto REORDENA: acceso, `static`, `final`, `const`.  Es la
+ * pregunta estrecha; para saber si algo puede ir DELANTE de un tipo esta
+ * @ref precedes_type, que ademas cuenta `typedef` y `using`.  Eran la misma
+ * funcion copiada tres veces, y al separarlas se vio que respondian a dos
+ * preguntas distintas: reordenar un `typedef` no significa nada.
+ *
+ * @param k Categoria del token.
+ * @return Cierto si es `public`, `private`, `protected`, `static`, `final` o
+ *         `const`.
+ */
+bool is_modifier(TokenKind k);
+
+/**
+ * @brief Indica si el token puede aparecer DELANTE del tipo de una declaracion.
+ *
+ * Los modificadores de @ref is_modifier mas `typedef` y `using`.  Quien busca
+ * donde empieza el tipo tiene que saltarlos todos: sin contar el `typedef`,
+ * `typedef LONG *PLONG;` no se leia como declaracion y su `*` acababa de
+ * producto.
+ *
+ * @param k Categoria del token.
+ * @return Cierto si puede preceder al tipo.
+ */
+bool precedes_type(TokenKind k);
 
 /**
  * @brief Que separacion pide el estandar entre dos tokens.
@@ -116,35 +174,6 @@ Spacing space_between(const Piece *before, const Piece &prev, const Piece &cur,
                       Role prev_role, Role cur_role);
 
 /**
- * @brief Una reescritura que el formateador declara haber hecho.
- *
- * `P2` se comprueba comparando la lista de TOKENS, que es una aproximacion
- * conservadora a "el programa no cambia" y no necesita el parser.  El precio
- * es que prohibe cualquier regla que anada, quite o mueva un token, aunque el
- * programa siga siendo el mismo -- y eso dejaba fuera cinco reglas del
- * estandar (ver `D0`).
- *
- * La salida no es relajar la comprobacion, sino hacerla por INTENCION: el
- * formateador apunta cada transformacion que aplica, y la comprobacion exige
- * que la diferencia entre el antes y el despues sea EXACTAMENTE la declarada.
- * Una diferencia que nadie declaro sigue siendo un fallo, aunque caiga en una
- * regla conocida.  La red se queda igual de fina; solo se abren las puertas
- * que se han medido una a una.
- */
-enum class RewriteKind : uint8_t {
-    GlueGenericClose, ///< `R29`: dos `>` de cierre pasan a ser un `>>`
-    DropEmptyParens,  ///< `R74`: `@X()` pierde sus parentesis vacios
-    SwapModifiers,    ///< `R42`: dos modificadores cambian de orden
-    AddBraces,        ///< `R6`: un cuerpo suelto recibe sus llaves
-};
-
-/// @brief Una reescritura, anclada al token del texto ORIGINAL donde ocurre.
-struct Rewrite {
-    RewriteKind kind = RewriteKind::DropEmptyParens;
-    size_t at = 0; ///< indice del token en el original
-};
-
-/**
  * @brief Indica si dos textos son el MISMO programa escrito distinto.
  *
  * Es LA definicion de `P2`, y vive en un solo sitio a proposito: el test tenia
@@ -157,17 +186,6 @@ struct Rewrite {
  * @param after  Texto formateado.
  * @return Cierto si los dos dan la misma tira de tokens.
  */
-/**
- * @brief Aplica las reglas que cambian tokens y declara lo que hizo.
- *
- * @param pieces [in,out] piezas del fuente; se les pone @c drop y @c glued.
- * @return Las reescrituras hechas, para que la comprobacion de `P2` sepa que
- *         diferencias esperar.
- */
-std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces);
-
-bool same_program(std::string_view before, std::string_view after,
-                  const std::vector<Rewrite> &rewrites = {});
 
 /**
  * @brief Donde acabo cada pieza al emitirla.
@@ -190,10 +208,23 @@ struct Layout {
      * delante.
      */
     std::vector<uint32_t> comment_column;
+    /**
+     * @brief Linea donde CAE ese comentario de fin de linea.
+     *
+     * No es la de la pieza que lo lleva: esa es la primera de la linea
+     * SIGUIENTE, y entre las dos puede haber lineas en blanco y comentarios
+     * sueltos.  Alinear los comentarios de lineas seguidas (`R20`) pregunta si
+     * dos van uno detras de otro, y preguntandoselo a la pieza el bloque se
+     * partia en cuanto debajo habia un hueco -- el ultimo comentario se
+     * quedaba fuera de la columna de sus hermanos --.
+     */
+    std::vector<uint32_t> comment_line;
     /// Linea logica en la que cae cada pieza, contando desde cero.
     std::vector<uint32_t> line;
     /// Nivel de indentacion de cada pieza.
     std::vector<uint32_t> level;
+    /// Niveles de CONTINUACION (listas abiertas) de cada pieza.
+    std::vector<uint32_t> cont;
 };
 
 /**
@@ -277,9 +308,9 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
  * @param options Ajustes del estandar.
  * @return Espacios extra delante de cada comentario de fin de linea.
  */
-std::vector<uint32_t> compute_comment_alignment(
-    const std::vector<Piece> &pieces, const Layout &layout,
-    const FormatOptions &options);
+std::vector<uint32_t>
+compute_comment_alignment(const std::vector<Piece> &pieces,
+                          const Layout &layout, const FormatOptions &options);
 
 /**
  * @brief Forma canonica de un literal numerico (`R106`, `R107`).
@@ -292,6 +323,17 @@ std::vector<uint32_t> compute_comment_alignment(
  * @return El texto canonico, o vacio si el literal ya lo esta.
  */
 std::string canonical_literal(std::string_view text);
+
+/**
+ * @brief Pone a cada literal el sufijo de tipo de su declaracion (`R108`).
+ *
+ * Solo donde el tipo se puede saber sin compilar: `TIPO nombre = <literal>;`.
+ *
+ * @param pieces [in,out] las piezas.
+ * @param textos [in,out] almacen de los textos nuevos que las piezas apuntan.
+ */
+std::vector<Rewrite> add_type_suffixes(std::vector<Piece> &pieces,
+                                       std::vector<std::string> &textos);
 
 /**
  * @brief Marca como literal el interior de las llamadas que capturan texto.

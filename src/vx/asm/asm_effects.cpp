@@ -356,7 +356,9 @@ std::string asm_arch_actual() {
     return arch;
 }
 
-instr_db::Isa isa_host() { return isa_of_arch(arch_host()); }
+instr_db::Isa isa_host() {
+    return isa_of_arch(arch_host());
+}
 
 std::string asm_canonical_reg(const std::string &raw) {
     return asm_canonical_reg(raw, asm_arch_actual());
@@ -1424,9 +1426,8 @@ AsmEffects asm_effects_for(const std::string &mnemonic,
      * quedarse con el valor de antes. */
     bool es_repeticion = false;
     if (is_x86(arch)) {
-        for (const char *p :
-             {"rep_", "repe_", "repne_", "repz_", "repnz_", "rep ", "repe ",
-              "repne ", "repz ", "repnz "})
+        for (const char *p : {"rep_", "repe_", "repne_", "repz_", "repnz_",
+                              "rep ", "repe ", "repne ", "repz ", "repnz "})
             if (m.compare(0, std::strlen(p), p) == 0) {
                 es_repeticion = true;
                 break;

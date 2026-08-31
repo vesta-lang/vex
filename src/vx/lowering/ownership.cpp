@@ -58,8 +58,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 // DIRECTO -> mas rapido (sin vtable lookup) y compilable en
                 // AOT --target=bare.  El regalloc lo trata como CALL y
                 // preserva los regs vivos del scope (incluido v_ret).
-                emit_call(it->func_name,
-                          std::move(opnds), ir::IrType::VOID, it->source_line);
+                emit_call(it->func_name, std::move(opnds), ir::IrType::VOID,
+                          it->source_line);
                 break;
             }
             // Dtor polimorfico (herencia/interfaz): emitir CALLVIRT real
@@ -82,8 +82,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // call nativo en AOT; el inliner puede inlinearlo (dtor trivial =
             // coste ~0).  El regalloc lo trata como CALL y preserva los regs
             // vivos del scope (incluido el reg de v_ret en lower_return).
-            emit_call(it->func_name,
-                      std::move(opnds), ir::IrType::VOID, it->source_line);
+            emit_call(it->func_name, std::move(opnds), ir::IrType::VOID,
+                      it->source_line);
             break;
         }
         case CleanupAction::Kind::CLOSURE_ENV_FREE: {
@@ -173,8 +173,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // se popea con __vx_pop_frame (no TRYLEAVE op, que el backend
             // nativo no soporta); el monitor se libera con __vx_monexit.
             if (native_poo_) {
-                emit_call("__vx_pop_frame",
-                          {}, ir::IrType::VOID, it->source_line);
+                emit_call("__vx_pop_frame", {}, ir::IrType::VOID,
+                          it->source_line);
             } else {
                 ir::IrInstr tl{};
                 tl.op = ir::IrOp::TRYLEAVE;
@@ -203,8 +203,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             }
             for (auto vid : opnds)
                 args.push_back(vid);
-            emit_calln(it->func_name,
-                      std::move(args), ir::IrType::VOID, it->source_line);
+            emit_calln(it->func_name, std::move(args), ir::IrType::VOID,
+                       it->source_line);
             break;
         }
         case CleanupAction::Kind::SMARTPTR_FREE: {
@@ -310,8 +310,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 const ir::IrBlockId bb_do = fn_->new_block("sp_do");
                 const ir::IrBlockId bb_skip = fn_->new_block("sp_skip");
                 const ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, ln);
-                const ir::IrValueId v_cond =
-                    emit_ir_binop(ir::IrOp::CMP_NE, v_ptr, v_z, ir::IrType::BOOL, ln);
+                const ir::IrValueId v_cond = emit_ir_binop(
+                    ir::IrOp::CMP_NE, v_ptr, v_z, ir::IrType::BOOL, ln);
                 {
                     emit_br_cond(v_cond, bb_do, bb_skip, ln);
                 }
@@ -431,11 +431,10 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 emit_load_typed(v_ctrl, ir::IrType::I64, it->source_line);
             const ir::IrValueId v_one =
                 emit_const(ir::IrType::I64, 1, it->source_line);
-            const ir::IrValueId v_rc_dec =
-                emit_ir_binop(ir::IrOp::SUB, v_rc, v_one,
-                              ir::IrType::I64, it->source_line);
-            emit_store_typed(v_ctrl, v_rc_dec,
-                             ir::IrType::I64, it->source_line);
+            const ir::IrValueId v_rc_dec = emit_ir_binop(
+                ir::IrOp::SUB, v_rc, v_one, ir::IrType::I64, it->source_line);
+            emit_store_typed(v_ctrl, v_rc_dec, ir::IrType::I64,
+                             it->source_line);
             // H3 no-GC: si el refcount cayo a 0, liberar el bloque de control
             // (RAW_FREE).  Refcount puro determinista -> sin GC.  cmp rc==0.
             const ir::IrValueId v_zero2 =
@@ -782,7 +781,6 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot,
     block_terminated_ = false;
 }
 
-
 /**
  * @copydoc vx::Lowering::mark_loop_assigned_vars
  */
@@ -1000,7 +998,8 @@ void Lowering::scan_address_taken_stmt(ast::Stmt *st, int &depth) {
         scan_address_taken_stmt(ts->body.get(), depth);
         for (auto &cc : ts->catches)
             scan_address_taken_stmt(cc.body.get(), depth);
-        if (ts->finally_body) scan_address_taken_stmt(ts->finally_body.get(), depth);
+        if (ts->finally_body)
+            scan_address_taken_stmt(ts->finally_body.get(), depth);
         --depth;
         return;
     }
@@ -1084,10 +1083,8 @@ void Lowering::scan_escaping_expr(ast::Expr *e, AliasGraph &alias) {
                 // apunta aqui, que es el unico sitio que ya recorre el
                 // cuerpo entero.
                 reassigned_locals_.insert(id_t->name);
-                if (a->value &&
-                    a->value->kind == ast::NodeKind::IdentExpr) {
-                    auto *id_v =
-                        static_cast<ast::IdentExpr *>(a->value.get());
+                if (a->value && a->value->kind == ast::NodeKind::IdentExpr) {
+                    auto *id_v = static_cast<ast::IdentExpr *>(a->value.get());
                     alias[id_t->name].push_back(id_v->name);
                 }
                 break;

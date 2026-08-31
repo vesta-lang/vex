@@ -11,6 +11,14 @@
  *   - Profile summary ordenado por total_ns desc al @c atexit
  */
 
+/* Reloj monotono y `gettid` son de POSIX, no del C estandar, y este fichero se
+ * compila con `-std=c11`, que es ISO ESTRICTO: sin pedir la extension, glibc no
+ * declara `clock_gettime` ni `CLOCK_MONOTONIC` y el plugin no compila en Linux.
+ * Se pide antes de la primera cabecera, que es donde se decide. */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>

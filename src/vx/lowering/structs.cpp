@@ -27,7 +27,7 @@
 #include "vx/lowering.h"
 #include "vx/comptime/comptime_introspect.h"
 #include "util/thread_slot.h" // el estado por hilo NO va en thread_local
-#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -261,7 +261,7 @@ void Lowering::emit_struct_method_on_host_field(ir::IrValueId field_addr,
         emit_store_typed(dst_at, word, ir::IrType::I64, line);
     }
     // CALL method_label(tmp).
-        emit_call(method_label, {tmp}, ir::IrType::VOID, line);
+    emit_call(method_label, {tmp}, ir::IrType::VOID, line);
 }
 
 ir::IrValueId Lowering::emit_struct_arg_copy_clone(
@@ -658,7 +658,6 @@ ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {
     emit(current_block_, std::move(cs));
     return ir::IR_NO_VALUE;
 }
-
 
 void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
     // Cada metodo de struct se baja a una IrFunction libre con nombre

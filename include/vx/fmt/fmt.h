@@ -87,6 +87,47 @@ struct FormatOptions {
  * un editor, y ahi un fuente a medio escribir es lo NORMAL, no algo
  * excepcional.  Y viaja como CODIGO del catalogo, nunca como frase.
  */
+/**
+ * @brief Una reescritura que el formateador declara haber hecho.
+ *
+ * `P2` se comprueba comparando la lista de TOKENS, que es una aproximacion
+ * conservadora a "el programa no cambia" y no necesita el parser.  El precio
+ * es que prohibe cualquier regla que anada, quite o mueva un token, aunque el
+ * programa siga siendo el mismo -- y eso dejaba fuera cinco reglas del
+ * estandar (ver `D0`).
+ *
+ * La salida no es relajar la comprobacion, sino hacerla por INTENCION: el
+ * formateador apunta cada transformacion que aplica, y la comprobacion exige
+ * que la diferencia entre el antes y el despues sea EXACTAMENTE la declarada.
+ * Una diferencia que nadie declaro sigue siendo un fallo, aunque caiga en una
+ * regla conocida.  La red se queda igual de fina; solo se abren las puertas
+ * que se han medido una a una.
+ */
+
+enum class RewriteKind : uint8_t {
+    GlueGenericClose, ///< `R29`: dos `>` de cierre pasan a ser un `>>`
+    DropEmptyParens,  ///< `R74`: `@X()` pierde sus parentesis vacios
+    SwapModifiers,    ///< `R42`: dos modificadores cambian de orden
+    AddBraces,        ///< `R6`: un cuerpo suelto recibe sus llaves
+    AddTypeSuffix,    ///< `R108`: un literal recibe el sufijo de su tipo
+};
+
+/// @brief Una reescritura, anclada al token del texto ORIGINAL donde ocurre.
+struct Rewrite {
+    RewriteKind kind = RewriteKind::DropEmptyParens;
+    /**
+     * @brief Offset en BYTES del token dentro del fuente original.
+     *
+     * No el indice de la pieza.  Las piezas y los tokens no van a la par: una
+     * cadena interpolada llega como una tira de piezas y sus marcadores de
+     * apertura y cierre son SINTETICOS -- el lexer los fabrica y no aparecen
+     * entre las piezas --, asi que a partir de la primera interpolacion los
+     * dos indices se separan y la reescritura quedaba anclada donde no era.
+     * El offset SI significa lo mismo en los dos lados.
+     */
+    size_t at = 0;
+};
+
 struct FormatResult {
     /// El texto formateado.  Si @c ok es falso, el original sin tocar.
     std::string text;
@@ -98,7 +139,21 @@ struct FormatResult {
     std::vector<std::string> args;
     /// Cierto si el texto de salida difiere del de entrada.
     bool changed = false;
+    /**
+     * @brief Lo que el formateador DECLARA haber cambiado del programa.
+     *
+     * Casi todo lo que hace es mover texto, y eso no cambia la tira de tokens.
+     * Unas pocas reglas SI la cambian -- juntar dos `>`, quitar unos
+     * parentesis vacios, poner unas llaves, poner el sufijo de tipo a un
+     * literal --, y cada una se anota aqui.  Comprobar que el programa no
+     * cambio es entonces exigir que la unica diferencia entre las dos tiras
+     * sea la que esta lista dice, ni una mas.
+     */
+    std::vector<Rewrite> rewrites;
 };
+
+bool same_program(std::string_view before, std::string_view after,
+                  const std::vector<Rewrite> &rewrites = {});
 
 /**
  * @brief Un token con la trivia que lo precede.

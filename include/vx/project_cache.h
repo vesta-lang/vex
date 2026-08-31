@@ -199,7 +199,7 @@ bool project_cache_validate(const std::vector<ProjectCacheDep> &cached_deps,
  */
 bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
                               const std::vector<Diagnostic> &diags,
-                              const analysis::asa::Ambito &donde);
+                              const analysis::asa::Scope &donde);
 
 /**
  * @brief Recupera lo guardado por @ref project_cache_save_diags.
@@ -213,7 +213,7 @@ bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
  */
 bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
                               std::vector<Diagnostic> &out,
-                              const analysis::asa::Ambito &aqui);
+                              const analysis::asa::Scope &aqui);
 
 /**
  * @brief Guarda con que se vuelve a publicar la raiz de diagnostico.

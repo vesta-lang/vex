@@ -1990,7 +1990,8 @@ static state_err_thread fatal_to_thread_err(uint32_t kind) noexcept {
 
 void report_uncaught_exception(ProcessVM *vm, const char *class_name) {
     /* Sale con codigo distinto de cero por la misma razon que `panic`: el
-     * programa se rindio.  Sin esto el proceso afirmaba haber terminado bien. */
+     * programa se rindio.  Sin esto el proceso afirmaba haber terminado bien.
+     */
     g_last_fatal_kind.store(FATAL_USER_ABORT, std::memory_order_relaxed);
     /* Con el nombre ESCRITO, no el aplanado: la traza de al lado dice
      * `atr.hondo`, y decir aqui `atr__MiExc` obliga a traducir a mano. */

@@ -1365,13 +1365,13 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         } else {
             const ir::IrType pt = fn_->values[v_payload].type;
             if (pt == ir::IrType::F64) {
-                ir::IrValueId v_bits =
-                    emit_ir_unop(ir::IrOp::BITCAST, v_payload, ir::IrType::I64, s->loc.line);
+                ir::IrValueId v_bits = emit_ir_unop(
+                    ir::IrOp::BITCAST, v_payload, ir::IrType::I64, s->loc.line);
                 v_payload = v_bits;
             } else if (pt == ir::IrType::F32) {
                 // f32 -> bits i32 -> zero-extend a i64.
-                ir::IrValueId v_i32 =
-                    emit_ir_unop(ir::IrOp::BITCAST, v_payload, ir::IrType::I32, s->loc.line);
+                ir::IrValueId v_i32 = emit_ir_unop(
+                    ir::IrOp::BITCAST, v_payload, ir::IrType::I32, s->loc.line);
                 v_payload = cast_if_needed(v_i32, ir::IrType::I32,
                                            ir::IrType::I64, s->loc.line);
             } else if (pt != ir::IrType::I64 && pt != ir::IrType::U64 &&
@@ -1386,8 +1386,8 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         // -> CALL __vx_fulfill(fut, val) + RET (la tarea retorna al pump, no
         // hay HLT del scheduler de la VM).
         if (native_poo_) {
-            emit_call("__vx_fulfill",
-                      {async_fut_id_, v_payload}, ir::IrType::VOID, s->loc.line);
+            emit_call("__vx_fulfill", {async_fut_id_, v_payload},
+                      ir::IrType::VOID, s->loc.line);
             emit_ret_void(s->loc.line);
             return;
         }
@@ -1432,7 +1432,8 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
     if (is_spawn_body_) {
         /* Devolver un VALOR desde aqui no llega: el comprobador de tipos ya lo
          * rechaza antes -- para el, el cuerpo es void -- y con mejor mensaje
-         * del que se daria aqui.  Asi que esto solo atiende al `return;` seco. */
+         * del que se daria aqui.  Asi que esto solo atiende al `return;` seco.
+         */
         emit_cleanups_all();
         emit_process_body_end(s->loc.line);
         return;

@@ -20,6 +20,7 @@
 #include "util/env_flags.h"
 
 #include <algorithm>
+#include <functional> // std::function, para el recorrido recursivo de abajo
 #include <unordered_map>
 #include <unordered_set>
 
@@ -88,8 +89,8 @@ uint32_t inicio_real_de_decl(const std::string &src, uint32_t off) {
             prev == "private comptime";
         /* Y la CONTINUACION: una declaracion partida en varias lineas.
          *
-         * Para un `const`, `loc.offset` apunta al INICIALIZADOR, no al tipo, asi
-         * que con
+         * Para un `const`, `loc.offset` apunta al INICIALIZADOR, no al tipo,
+         * asi que con
          *
          *     const string VX_LITERAL_VACIO =
          *         "literal entero sin digitos: ...";
@@ -106,12 +107,12 @@ uint32_t inicio_real_de_decl(const std::string &src, uint32_t off) {
          * Cenido a esas formas A PROPOSITO.  La regla ancha -- "cualquier linea
          * que no acabe en `;`, `{` o `}`" -- parece equivalente y NO lo es: se
          * mete dentro del CUERPO de la funcion anterior y lo parte, y entonces
-         * lo extraido falla con "se esperaba '}' al cerrar bloque".  Probado. */
+         * lo extraido falla con "se esperaba '}' al cerrar bloque".  Probado.
+         */
         const char ultimo = prev.back();
         const bool es_continuacion =
-            ultimo == '=' || ultimo == ',' || ultimo == '(' ||
-            ultimo == '[' || ultimo == '<' || ultimo == '+' ||
-            ultimo == '|' || ultimo == '&';
+            ultimo == '=' || ultimo == ',' || ultimo == '(' || ultimo == '[' ||
+            ultimo == '<' || ultimo == '+' || ultimo == '|' || ultimo == '&';
         if (!es_anotacion && !es_doc && !es_modificador && !es_continuacion)
             break;
         ini = ini_prev;
@@ -231,10 +232,9 @@ void collect_calls_stmt(const ast::Stmt *s,
 
 } // namespace
 
-ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
-                                   const std::string &source,
-                                   const std::unordered_set<std::string>
-                                       *tambien) {
+ComptimeUnit
+collect_comptime_unit(const ast::ModuleNode &mod, const std::string &source,
+                      const std::unordered_set<std::string> *tambien) {
     ComptimeUnit u;
 
     /* Las decls, incluidas las que estan DENTRO de un `namespace`.
@@ -252,19 +252,21 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
     decls.reserve(mod.decls.size());
     {
         std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)>
-            recoger = [&](const std::vector<std::unique_ptr<ast::Node>> &lista) {
-                for (const auto &d : lista) {
-                    if (!d) continue;
-                    if (d->kind == ast::NodeKind::NamespaceDecl) {
-                        const auto *nd =
-                            static_cast<const ast::NamespaceDecl *>(d.get());
-                        decls.push_back(d.get()); // el propio `namespace`
-                        recoger(nd->decls);
-                        continue;
+            recoger =
+                [&](const std::vector<std::unique_ptr<ast::Node>> &lista) {
+                    for (const auto &d : lista) {
+                        if (!d) continue;
+                        if (d->kind == ast::NodeKind::NamespaceDecl) {
+                            const auto *nd =
+                                static_cast<const ast::NamespaceDecl *>(
+                                    d.get());
+                            decls.push_back(d.get()); // el propio `namespace`
+                            recoger(nd->decls);
+                            continue;
+                        }
+                        decls.push_back(d.get());
                     }
-                    decls.push_back(d.get());
-                }
-            };
+                };
         recoger(mod.decls);
     }
 
@@ -298,8 +300,7 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             }
         } else if (d->kind == ast::NodeKind::ComptimeBlockStmt) {
             // Bloque comptime a nivel modulo: su cuerpo tambien es comptime.
-            collect_calls_stmt(static_cast<const ast::Stmt *>(d),
-                               seed_calls);
+            collect_calls_stmt(static_cast<const ast::Stmt *>(d), seed_calls);
         } else if (d->kind == ast::NodeKind::StructDecl ||
                    d->kind == ast::NodeKind::ClassDecl) {
             /* Lo comptime que vive DENTRO de un tipo.  Este recolector recoge
@@ -415,7 +416,7 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             unit_names.insert(n);
 
         struct Span {
-            uint32_t off;   ///< primer byte de la decl.
+            uint32_t off; ///< primer byte de la decl.
             /// Un byte DESPUES del ultimo, tal como lo dio el parser.  Cero si
             /// no lo dio (decl sintetizada): entonces se usa el inicio de la
             /// siguiente, que es lo que se hacia siempre.
@@ -429,14 +430,11 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             if (!d) continue;
             bool in = false;
             if (d->kind == ast::NodeKind::FunctionDecl)
-                in =
-                    unit_names.count(
-                        static_cast<const ast::FunctionDecl *>(d)->name) >
-                    0;
+                in = unit_names.count(
+                         static_cast<const ast::FunctionDecl *>(d)->name) > 0;
             else if (d->kind == ast::NodeKind::GlobalVarDecl)
                 in = unit_names.count(
-                         static_cast<const ast::GlobalVarDecl *>(d)
-                             ->name) > 0;
+                         static_cast<const ast::GlobalVarDecl *>(d)->name) > 0;
             else if (d->kind == ast::NodeKind::ComptimeBlockStmt)
                 in = true; // el bloque comptime es parte del conjunto.
             else if (d->kind == ast::NodeKind::ImportDecl)
@@ -522,10 +520,10 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
              * haya en medio (lineas en blanco, comentarios sueltos) y, si el
              * inicio de la siguiente se calculo mal, corta esta por donde no
              * es.  Con el span del parser eso no puede pasar. */
-            uint32_t end = spans[i].end != 0
-                               ? spans[i].end
-                               : ((i + 1 < spans.size()) ? spans[i + 1].off
-                                                         : src_len);
+            uint32_t end =
+                spans[i].end != 0
+                    ? spans[i].end
+                    : ((i + 1 < spans.size()) ? spans[i + 1].off : src_len);
             if (start > src_len) start = src_len;
             if (end > src_len) end = src_len;
             /* Y nunca al reves: un `end` menor que `start` daria una longitud

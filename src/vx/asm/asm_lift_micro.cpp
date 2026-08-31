@@ -757,8 +757,8 @@ bool asm_lift_micro(
         instr_db::AsmInsnSem sem =
             instr_db::asm_insn_sem(isa, consulta, (uint32_t)ua);
         if (sem.form_id < 0 && consulta_sin_prefijo != consulta)
-            sem = instr_db::asm_insn_sem(isa, consulta_sin_prefijo,
-                                         (uint32_t)ua);
+            sem =
+                instr_db::asm_insn_sem(isa, consulta_sin_prefijo, (uint32_t)ua);
         if (sem.form_id < 0) { // desconocida por la DB
             anotar_hueco_db(insn, "la base de datos no conoce esta forma");
             return AsmMotivoOpaco::anotar(motivo, insn, "VXA029");
@@ -774,9 +774,9 @@ bool asm_lift_micro(
             /* Se pregunta por la LINEA, no por su primera palabra.  Cortando
              * por el primer espacio, `rep movsb` preguntaba por `rep` -- que no
              * es una instruccion y no tiene efectos --, asi que no se veia que
-             * toca `rsi`, `rdi` y `rcx`: se micro-elevaba, las ligaduras de esos
-             * tres se quedaban sin nadie que las leyera y el optimizador las
-             * borraba.  El bloque arrancaba con lo que hubiera en los
+             * toca `rsi`, `rdi` y `rcx`: se micro-elevaba, las ligaduras de
+             * esos tres se quedaban sin nadie que las leyera y el optimizador
+             * las borraba.  El bloque arrancaba con lo que hubiera en los
              * registros.
              *
              * Y se miran las CUATRO listas.  Un registro por el que se accede a
@@ -786,7 +786,8 @@ bool asm_lift_micro(
             std::string mnem_ef;
             {
                 const size_t sp1 = insn.find_first_of(" \t");
-                mnem_ef = (sp1 == std::string::npos) ? insn : insn.substr(0, sp1);
+                mnem_ef =
+                    (sp1 == std::string::npos) ? insn : insn.substr(0, sp1);
                 /* Un prefijo de repeticion no es la instruccion: se une con la
                  * que viene detras, que es como la nombra la base. */
                 if (sp1 != std::string::npos && es_prefijo(trim(mnem_ef))) {

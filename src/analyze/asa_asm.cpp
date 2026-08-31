@@ -33,7 +33,7 @@
 #include "vx/asm/asm_lift_registro.h"
 #include "vx/asm/instr_db.h"
 
-#include "analysis/asa/productores.h"
+#include "analysis/asa/producers.h"
 #include "ir/ssa_ir.h"
 
 #include <sstream>
@@ -43,11 +43,11 @@ namespace analyze {
 
 namespace {
 
-using analysis::asa::Certeza;
+using analysis::asa::Certainty;
 using analysis::asa::Fact;
 using analysis::asa::FactId;
-using analysis::asa::Produccion;
-using analysis::asa::Sujeto;
+using analysis::asa::Production;
+using analysis::asa::Subject;
 
 const char *const kProductorAsm = "asa.asm";
 
@@ -172,13 +172,13 @@ EfectosMicro efectos_de(const ir::AsmMicro &m) {
     return r;
 }
 
-void producir_asm(Produccion &p) {
+void produce_asm(Production &p) {
     /* 1. Lo que se quedo como MICRO ASM: sigue siendo asm, pero dentro del IR y
      *    con sus efectos consultables.  El optimizador lo reordena y el backend
      *    lo re-emite verbatim. */
     std::unordered_map<std::string, uint32_t> micros_por_funcion;
     for (const ir::IrFunction &fn : p.mod.functions) {
-        if (!p.interesa(fn)) continue;
+        if (!p.is_interesting(fn)) continue;
         uint32_t n = 0;
         for (const ir::IrBlock &b : fn.blocks)
             for (const ir::IrInstr &in : b.instrs) {
@@ -189,23 +189,23 @@ void producir_asm(Produccion &p) {
                 ++n;
                 const EfectosMicro ef = efectos_de(m);
                 Fact f;
-                f.que.dominio = kProductorAsm;
-                f.que.codigo = "asm.micro";
-                f.que.a = m.isa;
-                f.que.b = m.form_id;
+                f.what.domain = kProductorAsm;
+                f.what.code = "asm.micro";
+                f.what.a = m.isa;
+                f.what.b = m.form_id;
                 std::ostringstream o;
                 o << mnemonico(m.tmpl) << " -- " << ef.texto;
-                f.que.detalle = p.almacen.internar(o.str());
-                f.de_quien.clase = Sujeto::Clase::Instruccion;
-                f.de_quien.funcion = p.almacen.internar(fn.name);
-                f.de_quien.id = static_cast<uint32_t>(idx);
+                f.what.detail = p.store.intern(o.str());
+                f.about.kind = Subject::Kind::Instruction;
+                f.about.function = p.store.intern(fn.name);
+                f.about.id = static_cast<uint32_t>(idx);
                 /* La identidad esta en la base de datos y de ahi salen los
                  * efectos: no es una suposicion sobre lo que hara. */
-                f.sello.certeza = Certeza::Demostrada;
-                f.sello.origen.productor = kProductorAsm;
-                f.sello.origen.funcion = f.de_quien.funcion;
-                f.prueba.regla = "base-de-datos-de-instrucciones";
-                const FactId id_micro = p.afirmar(std::move(f));
+                f.seal.certainty = Certainty::Proven;
+                f.seal.origin.producer = kProductorAsm;
+                f.seal.origin.function = f.about.function;
+                f.proof.rule = "instruction-database";
+                const FactId id_micro = p.assert_fact(std::move(f));
 
                 /* Si el atajo cacheado en el IR no dice lo mismo que la DB, eso
                  * es un fallo de modelado NUESTRO, y hay que verlo: el resto
@@ -213,21 +213,21 @@ void producir_asm(Produccion &p) {
                  * propio compilador. */
                 if (!ef.discrepa) continue;
                 Fact g;
-                g.que.dominio = kProductorAsm;
-                g.que.codigo = "asm.efectos_discrepan";
-                g.que.a = m.isa;
-                g.que.b = m.form_id;
-                g.que.detalle = p.almacen.internar(
+                g.what.domain = kProductorAsm;
+                g.what.code = "asm.effects_disagree";
+                g.what.a = m.isa;
+                g.what.b = m.form_id;
+                g.what.detail = p.store.intern(
                     "el atajo del IR no coincide con la DB:" + ef.discrepancia);
-                g.de_quien = f.de_quien;
+                g.about = f.about;
                 /* Que discrepan esta VISTO, no supuesto: son dos numeros y no
                  * coinciden.  Lo que no se afirma es cual de los dos miente. */
-                g.sello.certeza = Certeza::Demostrada;
-                g.sello.origen.productor = kProductorAsm;
-                g.sello.origen.funcion = g.de_quien.funcion;
-                g.prueba.regla = "contraste-ir-contra-db";
-                g.prueba.de.push_back(id_micro);
-                p.afirmar(std::move(g));
+                g.seal.certainty = Certainty::Proven;
+                g.seal.origin.producer = kProductorAsm;
+                g.seal.origin.function = g.about.function;
+                g.proof.rule = "ir-vs-database";
+                g.proof.from.push_back(id_micro);
+                p.assert_fact(std::move(g));
             }
         micros_por_funcion[fn.name] = n;
     }
@@ -242,11 +242,11 @@ void producir_asm(Produccion &p) {
     for (const AsmBlockReport &b : bloques) {
         ++bloques_en_ir_por_funcion[b.funcion];
         Fact f;
-        f.que.dominio = kProductorAsm;
-        f.que.codigo =
-            b.opacidad_pedida ? "asm.bloque_opacidad_pedida" : "asm.bloque";
-        f.que.a = b.instrucciones;
-        f.que.b = b.desconocidas;
+        f.what.domain = kProductorAsm;
+        f.what.code =
+            b.opacidad_pedida ? "asm.block_opacity_requested" : "asm.block";
+        f.what.a = b.instrucciones;
+        f.what.b = b.desconocidas;
         std::ostringstream o;
         o << "linea " << b.linea << ": " << b.instrucciones
           << " instrucciones, " << b.conocidas << " entendidas";
@@ -261,19 +261,19 @@ void producir_asm(Produccion &p) {
             for (const std::string &r : b.rasgos)
                 o << " " << r;
         }
-        f.que.detalle = p.almacen.internar(o.str());
-        f.de_quien.clase = Sujeto::Clase::Funcion;
-        f.de_quien.funcion = p.almacen.internar(b.funcion);
+        f.what.detail = p.store.intern(o.str());
+        f.about.kind = Subject::Kind::Function;
+        f.about.function = p.store.intern(b.funcion);
         /* Si la base entiende TODAS sus instrucciones, lo que se dice de sus
          * efectos esta visto entero.  Si queda alguna sin entender, la
          * evidencia apunta pero pudo quedarse algo fuera: eso es inferido, no
          * demostrado. */
-        f.sello.certeza =
-            b.desconocidas == 0 ? Certeza::Demostrada : Certeza::Inferida;
-        f.sello.origen.productor = kProductorAsm;
-        f.sello.origen.funcion = f.de_quien.funcion;
-        f.prueba.regla = "lectura-del-bloque-asm";
-        p.afirmar(std::move(f));
+        f.seal.certainty =
+            b.desconocidas == 0 ? Certainty::Proven : Certainty::Inferred;
+        f.seal.origin.producer = kProductorAsm;
+        f.seal.origin.function = f.about.function;
+        f.proof.rule = "asm-block-read";
+        p.assert_fact(std::move(f));
     }
 
     /* 3. LO QUE SE ELEVO A IR.  No se puede sacar del IR -- una instruccion
@@ -301,31 +301,31 @@ void producir_asm(Produccion &p) {
         else if (b.destino == vx::DestinoAsm::SinElevar)
             ++sin_elevar_por_funcion[b.funcion];
         Fact f;
-        f.que.dominio = kProductorAsm;
-        f.que.codigo = b.destino == vx::DestinoAsm::ElevadoAIr ? "asm.elevado"
-                       : b.destino == vx::DestinoAsm::MicroAsm ? "asm.a_micro"
-                                                               : "asm.opaco";
-        f.que.a = b.instrucciones;
-        f.que.b = b.linea;
+        f.what.domain = kProductorAsm;
+        f.what.code = b.destino == vx::DestinoAsm::ElevadoAIr ? "asm.lifted"
+                      : b.destino == vx::DestinoAsm::MicroAsm ? "asm.to_micro"
+                                                              : "asm.opaque";
+        f.what.a = b.instrucciones;
+        f.what.b = b.linea;
         std::ostringstream o;
         o << "linea " << b.linea << ": " << b.instrucciones
           << " instrucciones del fuente -> "
           << vx::nombre_destino_asm(b.destino);
-        f.que.detalle = p.almacen.internar(o.str());
-        f.de_quien.clase = Sujeto::Clase::Funcion;
-        f.de_quien.funcion = p.almacen.internar(b.funcion);
+        f.what.detail = p.store.intern(o.str());
+        f.about.kind = Subject::Kind::Function;
+        f.about.function = p.store.intern(b.funcion);
         /* Lo anoto quien lo hizo, en el momento de hacerlo: esta visto, no
          * deducido. */
-        f.sello.certeza = Certeza::Demostrada;
-        f.sello.origen.productor = kProductorAsm;
-        f.sello.origen.funcion = f.de_quien.funcion;
-        f.prueba.regla = "anotado-al-elevar";
-        p.afirmar(std::move(f));
+        f.seal.certainty = Certainty::Proven;
+        f.seal.origin.producer = kProductorAsm;
+        f.seal.origin.function = f.about.function;
+        f.proof.rule = "recorded-while-lifting";
+        p.assert_fact(std::move(f));
     }
 
     /* 4. El resumen por funcion, que es lo que uno mira primero. */
     for (const ir::IrFunction &fn : p.mod.functions) {
-        if (!p.interesa(fn)) continue;
+        if (!p.is_interesting(fn)) continue;
         const uint32_t micros = micros_por_funcion[fn.name];
         auto it = sin_elevar_por_funcion.find(fn.name);
         const uint32_t opacos =
@@ -336,34 +336,39 @@ void producir_asm(Produccion &p) {
         const bool hubo_asm = bloques_por_funcion.count(fn.name) != 0;
         if (micros == 0 && !hubo_asm &&
             bloques_en_ir_por_funcion.count(fn.name) == 0) {
-            p.callar({Sujeto::Clase::Funcion, p.almacen.internar(fn.name), 0},
-                     "asm.ninguno", kProductorAsm, "no tiene asm");
+            /* No es ignorancia: se sabe perfectamente que no tiene asm. */
+            p.say_unknown({Subject::Kind::Function, p.store.intern(fn.name), 0},
+                          analysis::asa::UnknownReason::NothingToSay,
+                          "asm.none", kProductorAsm, "no tiene asm");
             continue;
         }
         Fact f;
-        f.que.dominio = kProductorAsm;
-        f.que.codigo = "asm.resumen";
-        f.que.a = elevadas;
-        f.que.b = micros;
+        f.what.domain = kProductorAsm;
+        f.what.code = "asm.summary";
+        f.what.a = elevadas;
+        f.what.b = micros;
         std::ostringstream o;
         o << elevadas << " instrucciones elevadas a IR, " << micros
           << " como micro asm, " << opacos << " bloques sin elevar";
-        f.que.detalle = p.almacen.internar(o.str());
-        f.de_quien.clase = Sujeto::Clase::Funcion;
-        f.de_quien.funcion = p.almacen.internar(fn.name);
-        f.sello.certeza = Certeza::Demostrada;
-        f.sello.origen.productor = kProductorAsm;
-        f.sello.origen.funcion = f.de_quien.funcion;
-        f.prueba.regla = "recuento-sobre-el-ir-y-lo-anotado-al-elevar";
-        p.afirmar(std::move(f));
+        f.what.detail = p.store.intern(o.str());
+        f.about.kind = Subject::Kind::Function;
+        f.about.function = p.store.intern(fn.name);
+        f.seal.certainty = Certainty::Proven;
+        f.seal.origin.producer = kProductorAsm;
+        f.seal.origin.function = f.about.function;
+        f.proof.rule = "ir-count-plus-lift-record";
+        p.assert_fact(std::move(f));
 
         /* Si el IR no se genero en este proceso -- viene de la cache -- el
          * elevado no corrio y no hay nada anotado.  Se dice: "no consta" no es
          * "no hubo". */
         if (!hubo_asm)
-            p.callar(
-                {Sujeto::Clase::Funcion, f.de_quien.funcion, 0},
-                "asm.elevado_no_consta", kProductorAsm,
+            /* Y este es el caso puro de "ni se miro": el analisis no llego a
+             * correr, asi que no falta conocimiento -- falta haberlo pedido. */
+            p.say_unknown(
+                {Subject::Kind::Function, f.about.function, 0},
+                analysis::asa::UnknownReason::NotAsked, "asm.lift_not_recorded",
+                kProductorAsm,
                 "su IR vino de cache: el elevado no corrio en este proceso "
                 "y no consta que hizo (purga la cache para verlo)");
     }
@@ -371,8 +376,8 @@ void producir_asm(Produccion &p) {
 
 } // namespace
 
-void registrar_productor_asm() {
-    analysis::asa::registrar_productor(kProductorAsm, &producir_asm);
+void register_asm_producer() {
+    analysis::asa::register_producer(kProductorAsm, &produce_asm);
 }
 
 } // namespace analyze

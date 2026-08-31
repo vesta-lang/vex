@@ -203,8 +203,10 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
         int d = 0;
         for (size_t k = from + 1; k <= to; ++k) {
             const TokenKind kk = kind_of(pieces[k]);
-            if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET) ++d;
-            else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET) --d;
+            if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET)
+                ++d;
+            else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET)
+                --d;
             else if (d == 0 && kk == TokenKind::FAT_ARROW) {
                 line.shape = Shape::Case;
                 line.anchors = {k}; // el `=>`
@@ -338,8 +340,10 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
     int prof = 0;
     for (size_t k = i; k <= to; ++k) {
         const TokenKind kk = kind_of(pieces[k]);
-        if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET) ++prof;
-        else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET) --prof;
+        if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET)
+            ++prof;
+        else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET)
+            --prof;
         else if (kk == TokenKind::ASSIGN && prof == 0) {
             assign = k;
             found = true;

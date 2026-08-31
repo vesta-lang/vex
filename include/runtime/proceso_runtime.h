@@ -342,18 +342,48 @@ typedef enum state_err_thread {
 static constexpr uint32_t ICACHE_SIZE = 1024;
 
 /**
- * @brief Calcula el indice en la tabla icache para una direccion PC dada.
+ * @brief Vias (asociatividad) de la icache.  1 = mapeo directo, como siempre.
  *
- * Usa una mascara AND (valida solo si ICACHE_SIZE es potencia de dos) para
- * mapear cualquier PC a un indice dentro del array icache[] del proceso.
+ * Con mapeo directo, dos instrucciones cuyas direcciones difieren en un
+ * multiplo de ICACHE_SIZE caen en la misma ranura y se desalojan la una a la
+ * otra en CADA vuelta del bucle.  Medido sobre el corpus de benchmarks
+ * (tests/coste/test_icache_conflictos.cpp): 15 de 32 programas tienen un
+ * bucle que se pisa a si mismo, y en el peor -- 488 instrucciones en 2821
+ * bytes -- el 28.9% de sus instrucciones falla en cada vuelta.  Cada fallo
+ * obliga a redescodificar, que cuesta entre 15 y 25 veces mas que ejecutar.
+ *
+ * La misma simulacion dice que 2 vias quitan el 36% de esos conflictos SIN
+ * cambiar la huella de memoria (importa: la tabla son 64 KB y no cabe en una
+ * L1 de 32, asi que crecerla mueve una segunda variable).
+ *
+ * Se queda en 1 POR DEFECTO: con este valor el codigo generado es el de
+ * siempre.  Ponerlo a 2 es el experimento, y hay que MEDIRLO con el banco
+ * antes de dejarlo: la simulacion cuenta conflictos, no tiempo.
+ */
+#ifndef ICACHE_WAYS
+#define ICACHE_WAYS 1
+#endif
+
+/// Conjuntos = entradas / vias.  Con 1 via es la tabla entera, como antes.
+static constexpr uint32_t ICACHE_SETS = ICACHE_SIZE / ICACHE_WAYS;
+
+static_assert(
+    (ICACHE_SIZE & (ICACHE_SIZE - 1)) == 0,
+    "ICACHE_SIZE debe ser potencia de dos: el indice usa mascara AND");
+static_assert((ICACHE_SETS & (ICACHE_SETS - 1)) == 0,
+              "ICACHE_SETS debe ser potencia de dos");
+
+/**
+ * @brief Conjunto de la icache al que va una direccion PC.
+ *
+ * Mascara AND, valida porque ICACHE_SETS es potencia de dos.  Con una via
+ * esto es exactamente el indice de siempre.
  *
  * @param pc Direccion del contador de programa de la instruccion.
- * @return   Indice en el array icache[] (0 .. ICACHE_SIZE-1).
+ * @return   Conjunto (0 .. ICACHE_SETS-1).
  */
 inline uint32_t icache_index(uint64_t pc) {
-    return pc &
-           (ICACHE_SIZE -
-            1); // mascara AND aprovechando que ICACHE_SIZE es potencia de 2
+    return static_cast<uint32_t>(pc & (ICACHE_SETS - 1));
 }
 
 /**
@@ -610,7 +640,16 @@ class ProcessVM {
     // --- Cache de instrucciones descodificadas (icache) ---
     DecodedInstr icache[ICACHE_SIZE] =
         {}; ///< Tabla de instrucciones descodificadas indexada por
-            ///< icache_index(PC)
+            ///< icache_index(PC).  Con varias vias, el conjunto `s` ocupa las
+            ///< entradas [s*ICACHE_WAYS, s*ICACHE_WAYS + ICACHE_WAYS).
+
+#if ICACHE_WAYS > 1
+    /// A que via toca desalojar en cada conjunto.  Reemplazo FIFO, no LRU: con
+    /// dos vias basta para el caso que se quiere arreglar -- dos direcciones
+    /// alternandose en el mismo conjunto, que con FIFO caben las dos y dejan
+    /// de fallar -- y cuesta un byte por conjunto en vez de bits de edad.
+    uint8_t icache_way[ICACHE_SETS] = {};
+#endif
 
     DecodedInstr *decoded_ptr =
         nullptr; ///< Puntero a la entrada icache activa durante DECODE/EXECUTE
@@ -1014,6 +1053,53 @@ class ProcessVM {
 
   private:
 };
+
+/**
+ * @brief Busca @p pc en la icache.  Devuelve la entrada, o nullptr si falla.
+ *
+ * Un solo sitio para el chequeo de acierto.  Estaba copiado en cuatro -- el
+ * descodificador y tres macros del scheduler -- y con varias vias habria que
+ * mantener la misma logica en los cuatro, que es como se separan.
+ *
+ * Con ICACHE_WAYS == 1 esto es exactamente el codigo de antes: una mascara,
+ * una comparacion y el puntero.  El bucle de vias desaparece en compilacion.
+ *
+ * @param p  Proceso cuyo icache se consulta.
+ * @param pc Direccion buscada.
+ * @return   La entrada valida, o nullptr si no esta (hay que descodificar).
+ */
+inline DecodedInstr *icache_lookup(ProcessVM *p, uint64_t pc) {
+    DecodedInstr *v = &p->icache[icache_index(pc) * ICACHE_WAYS];
+    // La via 0 primero y sin bucle: es el caso comun y tiene que costar una
+    // sola comparacion, igual que antes.
+    if (v[0].pc == pc) return &v[0];
+#if ICACHE_WAYS > 1
+    for (uint32_t i = 1; i < ICACHE_WAYS; ++i)
+        if (v[i].pc == pc) return &v[i];
+#endif
+    return nullptr;
+}
+
+/**
+ * @brief La entrada donde guardar una instruccion recien descodificada.
+ *
+ * Reemplazo FIFO por conjunto.  Solo se llama en el camino de FALLO, que ya
+ * paga la descodificacion entera: el coste de elegir via es irrelevante ahi.
+ *
+ * @param p  Proceso cuyo icache se escribe.
+ * @param pc Direccion de la instruccion que se va a guardar.
+ * @return   Entrada a sobrescribir.
+ */
+inline DecodedInstr *icache_victim(ProcessVM *p, uint64_t pc) {
+    const uint32_t s = icache_index(pc);
+#if ICACHE_WAYS > 1
+    const uint8_t v = p->icache_way[s];
+    p->icache_way[s] = static_cast<uint8_t>((v + 1u) % ICACHE_WAYS);
+    return &p->icache[s * ICACHE_WAYS + v];
+#else
+    return &p->icache[s];
+#endif
+}
 
 /**
  * @brief Fase: hook opcional para auto-JIT trigger desde

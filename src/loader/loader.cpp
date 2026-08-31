@@ -29,9 +29,9 @@
 #include "runtime/decode_instruction.h" // InstrFormat para size_from_mode
 #include "ffi/vesta_plugin.h"
 #include "cli/sync_io.h"
-#include "jit/auto_jit.h"     // eager-compile main + jit_entry_fn
+#include "jit/auto_jit.h"            // eager-compile main + jit_entry_fn
 #include "jit/jit_compile_options.h" // CompileResult
-#include "jit/jit_facts.h"    // base de hechos compartida por el modulo
+#include "jit/jit_facts.h"           // base de hechos compartida por el modulo
 #include "jit/inline_asm_trampoline.h" // inc.6: trampolines de inline-asm para interp
 
 /*
@@ -760,7 +760,8 @@ runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
      * 14,9 en `memcpy` -- de unos 55 ms de CPU de toda la ejecucion.
      *
      * Aqui el tamano se sabe de antemano, se reserva una vez y se lee de una
-     * tacada.  Es lo mismo que ya se hace para leer los paquetes del almacen. */
+     * tacada.  Es lo mismo que ya se hace para leer los paquetes del almacen.
+     */
     std::vector<uint8_t> bytecode;
     if (!util::read_whole_file(path, bytecode)) {
         throw std::runtime_error("No se pudo abrir el ejecutable: " + path);

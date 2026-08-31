@@ -35,8 +35,10 @@ no se supo.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -115,7 +117,20 @@ def _pico_windows(cmd: list, env: dict, cwd: Path,
 
 def _pico_posix(cmd: list, env: dict, cwd: Path,
                 timeout: float) -> Optional[int]:
-    """Pico del hijo, en KiB, via `os.wait4`."""
+    """Pico del hijo, en KiB, via `os.wait4`, sin pasar de @p timeout.
+
+    El @p timeout se respeta de verdad: antes se llamaba a `os.wait4(pid, 0)`,
+    que bloquea SIN LiMITE, asi que un compilador colgado colgaba la tanda
+    entera -- y solo en POSIX, porque el camino de Windows si lo respetaba via
+    el Job Object.  Se espera con @c WNOHANG hasta la fecha limite y, pasada,
+    se mata al hijo y se recoge para no dejar un zombi.
+
+    Sondear aqui no contamina nada: esta pasada NO cronometra -- el tiempo se
+    mide en su propia serie, aparte y por el mismo motivo -- asi que lo que
+    cuesta mirar cada dos milisegundos da igual.
+    """
+    if not cmd:
+        return None
     try:
         pid = os.fork()
     except OSError:
@@ -129,7 +144,27 @@ def _pico_posix(cmd: list, env: dict, cwd: Path,
             os.execvpe(cmd[0], list(cmd), env)
         except Exception:  # noqa: BLE001
             os._exit(127)
-    _, estado, uso = os.wait4(pid, 0)
+    fin = time.monotonic() + max(0.0, timeout)
+    estado, uso = None, None
+    while True:
+        hijo, est, us = os.wait4(pid, os.WNOHANG)
+        if hijo == pid:
+            estado, uso = est, us
+            break
+        if time.monotonic() >= fin:
+            # Se pasó del limite: se mata y se recoge.  No se devuelve un pico
+            # a medias, que se leeria como una medida buena de un caso que no
+            # llego a terminar.
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                os.wait4(pid, 0)
+            except OSError:
+                pass
+            return None
+        time.sleep(0.002)
     if estado != 0:
         return None
     # En Linux `ru_maxrss` viene en KiB; en macOS, en bytes.

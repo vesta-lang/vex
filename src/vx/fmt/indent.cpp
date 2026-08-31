@@ -331,8 +331,8 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                 abiertas.pop_back();
                 bool multilinea = false;
                 for (size_t j = open + 1; j <= k && !multilinea; ++j)
-                    multilinea = pieces[j].trivia.find(kSalto) !=
-                                 std::string_view::npos;
+                    multilinea =
+                        pieces[j].trivia.find(kSalto) != std::string_view::npos;
                 if (multilinea) {
                     llave_partida[open] = 1;
                     llave_partida[k] = 1;
@@ -407,7 +407,8 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                 put_indent(nivel_cuerpo);
                 text.push_back('}');
                 if (added != nullptr)
-                    added->push_back({RewriteKind::AddBraces, pieces[idx].offset});
+                    added->push_back(
+                        {RewriteKind::AddBraces, pieces[idx].offset});
                 at_line_start = false;
             }
         }
@@ -437,7 +438,8 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                 uint32_t saltos = 0;
                 for (const char c : p.trivia)
                     if (c == '\n') ++saltos;
-                cur_line += emit_newlines(text, saltos, options.blank_lines_inside);
+                cur_line +=
+                    emit_newlines(text, saltos, options.blank_lines_inside);
                 put_indent(level);
                 // Lo que esta linea iba MAS adentro que la primera del cuerpo.
                 for (uint32_t k = asm_base; k < col; ++k)
@@ -533,13 +535,13 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
         };
 
         int continuacion = 0;
-        if (idx > 0 && cont == 0 && p.trivia.find('\n') != std::string_view::npos) {
+        if (idx > 0 && cont == 0 &&
+            p.trivia.find('\n') != std::string_view::npos) {
             const TokenKind ant = static_cast<TokenKind>(pieces[idx - 1].kind);
-            const bool cierra = ant == TokenKind::SEMICOLON ||
-                                ant == TokenKind::LBRACE ||
-                                ant == TokenKind::RBRACE ||
-                                ant == TokenKind::COMMA ||
-                                ant == TokenKind::COLON;
+            const bool cierra =
+                ant == TokenKind::SEMICOLON || ant == TokenKind::LBRACE ||
+                ant == TokenKind::RBRACE || ant == TokenKind::COMMA ||
+                ant == TokenKind::COLON;
             /* Una ANOTACION es una unidad entera, no media sentencia.
              *
              * `@Target("...")` acaba en `)`, que no cierra sentencia, asi que
@@ -644,10 +646,10 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                  * seguidas (`R83`) -- veia pegado lo que tenia un comentario
                  * en medio: una declaracion de mas abajo se metia en un bloque
                  * al que no pertenece y le robaba una columna a las que si. */
-                cur_line += emit_newlines(text, chunk.newlines_before,
-                                          level == 0
-                                              ? options.blank_lines_between
-                                              : options.blank_lines_inside);
+                cur_line +=
+                    emit_newlines(text, chunk.newlines_before,
+                                  level == 0 ? options.blank_lines_between
+                                             : options.blank_lines_inside);
                 put_indent(level + cont + cuerpo_suelto + continuacion);
             }
             // Y las que ocupe el comentario mismo, si es de varias lineas.
@@ -745,7 +747,8 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                     text.insert(nl, " {");
                     line_start += 2;
                     if (added != nullptr)
-                        added->push_back({RewriteKind::AddBraces, pieces[idx].offset});
+                        added->push_back(
+                            {RewriteKind::AddBraces, pieces[idx].offset});
                     cierra_cuerpo = true;
                     nivel_cuerpo = level + cont + cuerpo_suelto - 1;
                 }
@@ -800,7 +803,8 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                 asm_base = UINT32_MAX;
                 int d = 0;
                 for (size_t k = idx; k < pieces.size(); ++k) {
-                    if (is(pieces[k], TokenKind::LBRACE)) ++d;
+                    if (is(pieces[k], TokenKind::LBRACE))
+                        ++d;
                     else if (is(pieces[k], TokenKind::RBRACE)) {
                         if (--d == 0) break;
                     }

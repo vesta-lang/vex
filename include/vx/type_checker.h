@@ -41,6 +41,7 @@
 #include "util/env_flags.h"
 #include <algorithm>
 #include <cstdint>
+#include <functional> // std::function, en la firma de un parametro de abajo
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -50,6 +51,7 @@
 #include "vx/ast.h"
 #include "vx/borrow_checker.h"
 #include "vx/comptime/comptime_vm.h"
+#include "vx/diag/diag_catalog.h"
 #include "vx/diagnostic.h"
 
 namespace vx {
@@ -1710,8 +1712,7 @@ class TypeChecker {
      * @param out Donde dejar las palabras; a medias si devuelve @c false.
      * @return @c true si TODOS se pudieron escribir.
      */
-    bool marshal_const_args(const ast::CallExpr &e,
-                            std::vector<uint64_t> &out);
+    bool marshal_const_args(const ast::CallExpr &e, std::vector<uint64_t> &out);
 
     /**
      * @brief La REGLA: si un argumento de tipo @p ta encaja con un parametro
@@ -3010,6 +3011,26 @@ class TypeChecker {
         template_only_fns_.insert(mangled);
     }
     void register_imported_function(const std::string &name, FunctionSig sig) {
+        /* Dos imports que traen el MISMO nombre.
+         *
+         * `emplace` no sobrescribe, asi que gana el primero -- y hasta aqui
+         * eso pasaba en silencio: el mismo programa daba un resultado u otro
+         * segun el orden de dos lineas que nadie mira.
+         *
+         * Que sea un conflicto o no lo dice la etiqueta manglada, que lleva el
+         * modulo de origen.  Si coincide es la MISMA funcion llegando por dos
+         * caminos -- una re-exportacion, que es un patron corriente en la
+         * stdlib y tiene que seguir funcionando --; si difiere son dos
+         * funciones distintas peleandose por un nombre. */
+        const auto ya = sig_by_name_.find(name);
+        if (ya != sig_by_name_.end() && ya->second < function_sigs_.size()) {
+            const std::string &antes = function_sigs_[ya->second].mangled_label;
+            if (!antes.empty() && !sig.mangled_label.empty() &&
+                antes != sig.mangled_label)
+                diags_.error(
+                    {}, vx::diag::format("VXT003",
+                                         {name, antes, sig.mangled_label}));
+        }
         const uint32_t idx = static_cast<uint32_t>(function_sigs_.size());
         function_sigs_.push_back(std::move(sig));
         sig_by_name_.emplace(name, idx);

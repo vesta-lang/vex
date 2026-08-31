@@ -925,8 +925,8 @@ es = "la funcion '{2}' no dice para que objetivo se compila, asi que su convenci
 # construye encima algo que da por hecho que no lanza.
 
 [VXW001]
-en = "the contracts of '{0}' ({1}) are NOT being verified: {2} -- declare the effects of what it calls, or drop the contract: one nobody checks is worse than none"
-es = "los contratos de '{0}' ({1}) NO se estan verificando: {2} -- declara los efectos de lo que llama, o quita el contrato: uno que nadie comprueba es peor que ninguno"
+en = "the contracts of '{0}' ({1}) are NOT being verified: {2} -- a contract is a CHECK, so one that cannot be checked promises without guarding anything: keep it as documented intent, or drop it, but do not read it as proven"
+es = "los contratos de '{0}' ({1}) NO se estan verificando: {2} -- un contrato es una COMPROBACION, asi que uno que no se puede comprobar promete sin guardar nada: dejalo como intencion documentada, o quitalo, pero no lo leas como demostrado"
 
 # --- una cota mas floja que la demostrada (VXW002) ---
 #
@@ -978,3 +978,269 @@ es = "sin hallazgos: el linter solo habla de lo que puede demostrar"
 [VXT004]
 en = "'{0}' declares {1} and provably breaks it: {2}"
 es = "'{0}' declara {1} y esta demostrado que no lo cumple: {2}"
+
+# --- lo que cuesta una frontera (VXW004) ---
+#
+# La unica familia del linter que puede CUANTIFICAR lo que pierdes: cuantas
+# funciones se quedan sin demostrar sus efectos por UNA frontera, y cual es.
+# El compilador lo sabe -- lo acaba de decidir al componer el cierre --, y
+# nombrarla es lo que evita que el aviso sea un callejon sin salida.
+#
+# OJO CON EL VERBO.  Esto NO le pide al usuario que declare nada: los efectos
+# del codigo Vesta los DEDUCE el compilador, y esa es la promesa del lenguaje.
+# Lo que pasa aqui es que el cierre SALE del programa -- una funcion del
+# sistema o por FFI -- y ahi no hay codigo que leer; poder declararlos para ese
+# caso es algo que aun no existe.  Redactarlo como "declara los efectos" seria
+# mandar al usuario a hacer un trabajo que no le toca y que hoy no puede hacer.
+#
+# Y no se calla ninguna frontera, ni las de la stdlib.  Que la frontera sea
+# NUESTRA es la informacion mas util de todas: dice que declarar los efectos de
+# la stdlib desbloquearia a todo el mundo a la vez.
+
+[VXW004]
+en = "{0} function(s) here cannot prove their effects (@pure, @nothrow, @nopanic, @alloc, @stack) because their call closure leaves the program at '{1}' -- the compiler derives effects from Vesta code, and there is none to read there; a contract would not help, since a contract CHECKS what was derived and never feeds it (first one: '{2}')"
+es = "{0} funcion(es) de aqui no pueden demostrar sus efectos (@pure, @nothrow, @nopanic, @alloc, @stack) porque su cierre de llamadas sale del programa por '{1}' -- el compilador deduce los efectos del codigo Vesta, y ahi no hay codigo que leer; un contrato no ayudaria, porque un contrato COMPRUEBA lo deducido y nunca lo alimenta (la primera: '{2}')"
+
+# --- test_icache_real: medida de la icache ejecutando (VX92xx) ---
+#
+# Texto de una herramienta de medida.  Va al catalogo por lo mismo que el
+# resto: los numeros y los nombres de fichero viajan como ARGS, las palabras
+# las pone el idioma activo.
+
+[VX9200]
+en = "Icache measured by RUNNING it (not simulated)"
+es = "Icache medida EJECUTANDO (no simulada)"
+
+[VX9201]
+en = "table: {0} entries, {1} ways, {2} sets"
+es = "tabla: {0} entradas, {1} vias, {2} conjuntos"
+
+[VX9202]
+en = "bench"
+es = "bench"
+
+[VX9203]
+en = "instr"
+es = "instr"
+
+[VX9204]
+en = "miss%"
+es = "fallos%"
+
+[VX9205]
+en = "redecodes"
+es = "redecod."
+
+[VX9206]
+en = "distinct PC"
+es = "PC dist."
+
+[VX9207]
+en = "fits?"
+es = "cabe?"
+
+[VX9208]
+en = "yes"
+es = "si"
+
+[VX9209]
+en = "NO"
+es = "NO"
+
+[VX9210]
+en = "(CRASHED)"
+es = "(REVENTO)"
+
+[VX9211]
+en = "<-- short"
+es = "<-- corto"
+
+[VX9212]
+en = "stopped: {0}"
+es = "se paro: {0}"
+
+[VX9213]
+en = "TOTAL: {0} instructions, {1} misses ({2}), {3} redecodes ({4})"
+es = "TOTAL: {0} instrucciones, {1} fallos ({2}), {3} redescodificaciones ({4})"
+
+[VX9214]
+en = "The same real trace, with other icaches:"
+es = "La misma traza real, con otras icaches:"
+
+[VX9215]
+en = "config"
+es = "config"
+
+[VX9216]
+en = "evictions"
+es = "expulsiones"
+
+[VX9217]
+en = "vs today"
+es = "vs hoy"
+
+[VX9218]
+en = "{0} entries, {1} ways"
+es = "{0} entradas, {1} vias"
+
+[VX9219]
+en = "{0} entries, {1} ways, hashed"
+es = "{0} entradas, {1} vias, con hash"
+
+[VX9220]
+en = "current"
+es = "actual"
+
+[VX9221]
+en = "SIGSEGV (invalid access)"
+es = "SIGSEGV (acceso invalido)"
+
+[VX9222]
+en = "SIGILL (illegal instruction)"
+es = "SIGILL (instruccion ilegal)"
+
+[VX9223]
+en = "SIGFPE (arithmetic error)"
+es = "SIGFPE (error aritmetico)"
+
+[VX9224]
+en = "SIGABRT (abort)"
+es = "SIGABRT (abort)"
+
+[VX9225]
+en = "fatal signal"
+es = "senal fatal"
+
+[VX9226]
+en = "{0} crashed"
+es = "{0} reviento"
+
+[VX9227]
+en = "after {0} instructions, pc={1}, state={2}"
+es = "tras {0} instrucciones, pc={1}, estado={2}"
+
+[VX9228]
+en = "last decoded: pc={0} opcode={1} size={2}"
+es = "ultima descodificada: pc={0} opcode={1} tam={2}"
+
+[VX9229]
+en = "stack:"
+es = "pila:"
+
+[VX9230]
+en = "stack: not available"
+es = "pila: no disponible"
+
+[VX9231]
+en = "unidentified exception"
+es = "excepcion no identificada"
+
+[VX9232]
+en = "the thread was left flagged with an error"
+es = "el hilo quedo marcado con error"
+
+[VX9233]
+en = "the process requested HALT"
+es = "el proceso pidio HALT"
+
+[VX9234]
+en = "the instruction returned EVT_ERROR"
+es = "la instruccion devolvio EVT_ERROR"
+
+[VX9235]
+en = "the instruction blocked waiting for I/O"
+es = "la instruccion se bloqueo esperando E/S"
+
+[VX9236]
+en = "reached the program's final hlt"
+es = "llego al hlt final del programa"
+
+[VX9237]
+en = "hit the instruction cap"
+es = "toco el tope de instrucciones"
+
+[VX9238]
+en = "the process ended in HALT/DEAD"
+es = "el proceso quedo en HALT/DEAD"
+
+[VX9239]
+en = "there was no decoded instruction"
+es = "no habia instruccion descodificada"
+
+[VX9240]
+en = "{0} file(s) did not load"
+es = "{0} fichero(s) no cargaron"
+
+[VX9241]
+en = "does not load: {0}"
+es = "no carga: {0}"
+
+[VX9242]
+en = "usage: test_icache_real <file.velb> [...] [--tope N]"
+es = "uso: test_icache_real <fichero.velb> [...] [--tope N]"
+
+[VX9243]
+en = "before the process started"
+es = "antes de arrancar el proceso"
+
+# --- la ayuda del propio subcomando y las familias (VXW903-VXW911) ---
+#
+# El NOMBRE de una familia no se traduce nunca: es lo que se escribe en
+# `vx.toml` para apagarla, y traducirlo haria que la configuracion de un
+# proyecto dependiera del idioma de quien lo compile.  Lo que se LEE -- que
+# hace cada una -- si.
+
+[VXW903]
+en = "vesta lint <file.vx> [--only <family>]..."
+es = "vesta lint <fichero.vx> [--only <familia>]..."
+
+[VXW904]
+en = "Families:"
+es = "Familias:"
+
+[VXW910]
+en = "a declared bound looser than what was proven, and properties provable but not declared"
+es = "una cota declarada mas floja que la demostrada, y propiedades demostrables sin declarar"
+
+[VXW911]
+en = "what one boundary costs: how many functions cannot prove their effects because the closure leaves the program there"
+es = "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efectos porque el cierre sale del programa por ahi"
+
+# --- el mismo coste, pero por una llamada que no se resuelve (VXW005) ---
+#
+# Se separa de VXW004 porque se arregla de otra forma: alli el destino se sabe
+# y esta fuera del programa; aqui el destino ni se sabe.  Lo segundo SI puede
+# mejorar con el analisis -- resolver el puntero a funcion -- y lo primero no.
+
+[VXW005]
+en = "{0} function(s) here cannot prove their effects (@pure, @nothrow, @nopanic, @alloc, @stack) because their call closure reaches a call whose target is not resolved -- unlike a boundary that leaves the program, this one is the analysis falling short: resolve the target and all {0} follow (first one: '{2}')"
+es = "{0} funcion(es) de aqui no pueden demostrar sus efectos (@pure, @nothrow, @nopanic, @alloc, @stack) porque su cierre de llamadas llega a una llamada cuyo destino no se resuelve -- a diferencia de una frontera que sale del programa, esta es el analisis quedandose corto: si el destino se resuelve, las {0} salen con el (la primera: '{2}')"
+
+# --- la direccion de un parametro (VXT005-VXT007) ---
+#
+# `in`/`out`/`inout` habla de lo que la funcion hace con lo que el parametro
+# APUNTA, asi que sobre algo que no apunta a nada no dice nada (VXT005).
+#
+# VXT006 es la contradiccion con `const`, y merece la pena entender por que NO
+# sobra: los dos ejes son distintos y a proposito.  `const` es un permiso POR
+# NIVEL sobre el tipo -- lo mismo que en C, donde `const T*` y `T* const` no
+# son lo mismo --, mientras que la direccion habla del nivel EXTERNO y de lo
+# que hace la funcion.  Por eso `in T const*` es correcto (y algo redundante),
+# `out T const**` tambien lo es -- se escribe el nivel de fuera y lo de dentro
+# sigue siendo const --, y solo choca cuando la promesa de escribir cae justo
+# sobre el nivel declarado no escribible.
+#
+# VXT007 es lo que hace que `in` VALGA para algo: prohibe escribir por ahi sin
+# tener que pedir `const`.
+
+[VXT005]
+en = "parameter '{0}' is marked '{1}', which says what the function does with what it POINTS TO -- but its type '{2}' does not point to anything"
+es = "el parametro '{0}' lleva '{1}', que dice lo que la funcion hace con lo que APUNTA -- pero su tipo '{2}' no apunta a nada"
+
+[VXT006]
+en = "parameter '{0}' is marked '{1}' -- it promises to write what it points to -- but what it points to is declared 'const'"
+es = "el parametro '{0}' lleva '{1}' -- promete escribir lo que apunta -- pero lo que apunta esta declarado 'const'"
+
+[VXT007]
+en = "writing through '{0}', which is marked 'in': through an 'in' parameter the function only reads"
+es = "escritura a traves de '{0}', que lleva 'in': por un parametro 'in' la funcion solo lee"

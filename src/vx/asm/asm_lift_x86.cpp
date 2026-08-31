@@ -727,7 +727,8 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
                     int w = mem_hint_width(ops[0]);
                     if (w == 0) w = srw; // ancho del store = registro fuente
                     if (w == 0)
-                        return lift_no(insn, __LINE__); // sin size-hint: ambiguo
+                        return lift_no(insn,
+                                       __LINE__); // sin size-hint: ambiguo
                     const ir::IrValueId a = mem_addr_of(ma, ok);
                     if (!ok) return lift_no(insn, __LINE__);
                     const ir::IrValueId v = read_op(ops[1], w, false, ok);
@@ -785,8 +786,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
                 if (rw == 0) return lift_no(insn, __LINE__);
                 int sw = mem_hint_width(ops[1]);
                 if (sw == 0 && m == "movsxd") sw = 32; // movsxd implica dword
-                if (sw == 0)
-                    return lift_no(insn, __LINE__); // sin size-hint
+                if (sw == 0) return lift_no(insn, __LINE__); // sin size-hint
                 const MemAddr ma = parse_mem(ops[1]);
                 if (!ma.ok) return lift_no(insn, __LINE__);
                 const ir::IrValueId a = mem_addr_of(ma, ok);
@@ -1004,8 +1004,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
                 std::string rc;
                 bool rh = false;
                 const int rw = reg_info(ops[0], rc, rh);
-                if (rw != 64)
-                    return lift_no(insn, __LINE__); // solo 64 bits
+                if (rw != 64) return lift_no(insn, __LINE__); // solo 64 bits
                 const ir::IrValueId a = read_reg(rc, 64, rh, false, ok);
                 if (!ok) return lift_no(insn, __LINE__);
                 const ir::IrValueId cnt = read_op(ops[1], 64, false, ok);
@@ -1066,7 +1065,8 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
                     setup_ok = (p0 == "rdx" && p1 == "rdx");
                 }
                 if (!setup_ok)
-                    return lift_no(insn, __LINE__); // dividendo alto desconocido
+                    return lift_no(insn,
+                                   __LINE__); // dividendo alto desconocido
                 const ir::IrValueId dvd = read_reg("rax", 64, false, false, ok);
                 if (!ok) return lift_no(insn, __LINE__);
                 const ir::IrValueId dsr = read_reg(dc, 64, dh, false, ok);

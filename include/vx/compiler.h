@@ -37,6 +37,15 @@
 #include "analyze/fingerprint.h" // FunctionContracts
 #include "vxdbg/ids.h"           // huella del mapa de simbolos
 
+/// El almacen de hechos del ASA viaja por referencia; no hace falta su
+/// definicion aqui, y traerla obligaria a todo el que incluya esto a compilar
+/// el nucleo del ASA.
+namespace analysis {
+namespace asa {
+class FactStore;
+} // namespace asa
+} // namespace analysis
+
 namespace ir {
 struct IrModule;
 }
@@ -139,8 +148,9 @@ struct CompileOptions {
      * Sirve para no morderse la cola: el conjunto comptime SE CONTIENE A Si
      * MISMO -- `inject` es un `@Macro`, o sea que forma parte del conjunto --,
      * asi que compilarlo vuelve a entrar por el mismo sitio y construye el
-     * artefacto DEL artefacto.  Se llego a observar con tres niveles, encogiendo
-     * en cada uno.  Con esto puesto no se recolecta ni se construye nada.
+     * artefacto DEL artefacto.  Se llego a observar con tres niveles,
+     * encogiendo en cada uno.  Con esto puesto no se recolecta ni se construye
+     * nada.
      */
     bool building_comptime_artifact = false;
 
@@ -809,10 +819,17 @@ bool vx_source_declara_namespace(const std::string &source);
  * @param mod Modulo ya bajado.
  * @param diags Donde reportar.
  * @param file Fichero al que atribuir la posicion.
+ * @param facts Almacen del ASA de ESTA compilacion.  Se recibe, no se crea:
+ *               el conocimiento es de la compilacion y no de quien pregunta, y
+ *               fabricarse uno propio haria que dos consumidores del mismo
+ *               dominio pagaran el calculo dos veces.  Aqui dentro se pide
+ *               unicamente el dominio que se va a consultar, y pedirlo es
+ *               idempotente: si otro ya lo produjo, no se vuelve a correr.
  */
 void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                                  const std::string &file, bool programa_cerrado,
-                                 bool decir_lo_no_acotado, const char *backend);
+                                 bool decir_lo_no_acotado, const char *backend,
+                                 analysis::asa::FactStore &facts);
 
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
                       const std::string &file);

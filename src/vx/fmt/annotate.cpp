@@ -317,7 +317,8 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                 int prof = 0;
                 for (size_t j = t + 1; j < pieces.size(); ++j) {
                     const TokenKind jk = kind_of(pieces[j]);
-                    if (jk == TokenKind::LPAREN) ++prof;
+                    if (jk == TokenKind::LPAREN)
+                        ++prof;
                     else if (jk == TokenKind::RPAREN && --prof == 0) {
                         t = j;
                         break;
@@ -346,7 +347,8 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                         ++t;
                         continue;
                     }
-                    if (tk == TokenKind::LBRACKET || tk == TokenKind::RBRACKET) {
+                    if (tk == TokenKind::LBRACKET ||
+                        tk == TokenKind::RBRACKET) {
                         ++t;
                         continue;
                     }
@@ -385,8 +387,10 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                 size_t t = j + 1;
                 for (; t < pieces.size(); ++t) {
                     const TokenKind tk = kind_of(pieces[t]);
-                    if (tk == TokenKind::LPAREN) ++prof;
-                    else if (tk == TokenKind::RPAREN && --prof == 0) break;
+                    if (tk == TokenKind::LPAREN)
+                        ++prof;
+                    else if (tk == TokenKind::RPAREN && --prof == 0)
+                        break;
                 }
                 if (t + 1 < pieces.size() &&
                     (is_type_keyword(kind_of(pieces[t + 1])) ||
@@ -418,8 +422,10 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                     size_t c = j + 1;
                     for (; c < pieces.size(); ++c) {
                         const TokenKind ck = kind_of(pieces[c]);
-                        if (ck == TokenKind::LPAREN) ++prof;
-                        else if (ck == TokenKind::RPAREN && --prof == 0) break;
+                        if (ck == TokenKind::LPAREN)
+                            ++prof;
+                        else if (ck == TokenKind::RPAREN && --prof == 0)
+                            break;
                     }
                     if (c + 1 < pieces.size() &&
                         (kind_of(pieces[c + 1]) == TokenKind::LBRACE ||
@@ -604,8 +610,10 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                 size_t c = i;
                 for (; c < pieces.size(); ++c) {
                     const TokenKind ck = kind_of(pieces[c]);
-                    if (ck == TokenKind::LPAREN) ++prof;
-                    else if (ck == TokenKind::RPAREN && --prof == 0) break;
+                    if (ck == TokenKind::LPAREN)
+                        ++prof;
+                    else if (ck == TokenKind::RPAREN && --prof == 0)
+                        break;
                 }
                 if (c + 1 < pieces.size() &&
                     kind_of(pieces[c + 1]) == TokenKind::FAT_ARROW)

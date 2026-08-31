@@ -768,8 +768,8 @@ void Linker::build_header() {
      * que pone quien empaqueta -- se sella lo que diga; sin el, cero.  El campo
      * se queda en la cabecera: el formato no cambia y volver a poner una fecha
      * es una linea. */
-    final_header.timestamp = static_cast<uint64_t>(
-        util::flag_int(util::FlagId::SourceDateEpoch, 0));
+    final_header.timestamp =
+        static_cast<uint64_t>(util::flag_int(util::FlagId::SourceDateEpoch, 0));
     final_header.arch = 1; // debo definir las arch posibles
 
     final_header.count = static_cast<section_count>(final_sections.size());

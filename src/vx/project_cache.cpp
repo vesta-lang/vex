@@ -9,7 +9,7 @@
  * cacheado al output.
  */
 
-#include "util/fnv.h" // la semilla y el primo, en UN sitio
+#include "util/fnv.h"       // la semilla y el primo, en UN sitio
 #include "util/env_flags.h" // los mandos que cambian lo emitido
 #include "vx/project_cache.h"
 
@@ -203,8 +203,8 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key) {
         * `.exe` de x86-64 con uno de aarch64. */
        << "|aot=" << (key.aot ? 1 : 0) << "|arch=" << key.aot_arch
        << "|fmt=" << key.aot_format << "|emit=" << key.aot_emit
-       << "|tgt=" << key.aot_target << "|tier=" << key.aot_tier
-       << "|perfil=" << key.aot_perfil
+       << "|tgt=" << key.aot_target << "|tier=" << key.aot_tier << "|perfil="
+       << key.aot_perfil
        /* Y los mandos del entorno que cambian lo EMITIDO.  Es la tercera lista
         * escrita a mano de "que cambia el artefacto", y ninguna de las tres
         * consultaba la huella que existe para justo eso.  Sin ella, compilar
@@ -236,8 +236,7 @@ uint32_t project_cache_diag_hash(const ProjectCacheKey &key) {
         * para proteger lo poco que de verdad es especifico.  El nivel de
         * runtime SI entra, porque cambia que codigo se baja, no donde vale lo
         * sabido. */
-       << "|tier=" << key.aot_tier
-       << "|env=" << util::emitted_fingerprint();
+       << "|tier=" << key.aot_tier << "|env=" << util::emitted_fingerprint();
     return fnv1a32_str(os.str());
 }
 
@@ -410,47 +409,52 @@ bool project_cache_load_vxdbg(const std::string &cache_path,
 
 bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
                               const std::vector<Diagnostic> &diags,
-                              const analysis::asa::Ambito &donde) {
+                              const analysis::asa::Scope &donde) {
     if (diags.empty()) return false;
     analysis::asa::register_canonical_name(kDominioDiag);
     analysis::asa::FactStore almacen;
-    almacen.reservar(diags.size());
+    almacen.reserve(diags.size());
     for (const Diagnostic &d : diags) {
         analysis::asa::Fact f;
-        f.que.dominio = kDominioDiag;
+        f.what.domain = kDominioDiag;
         /* El CODIGO del catalogo, no el texto: es lo que permite volver a
          * formatearlo en el idioma de quien compile despues. */
-        f.que.codigo = almacen.internar(d.code);
+        f.what.code = almacen.intern(d.code);
         /* Los cuatro numeros de la posicion en los dos campos que un hecho
          * tiene para ellos.  Empaquetados y no en el texto: son datos, y
          * meterlos en la cadena obligaria a parsearlos para volver a usarlos.
          * Hacen falta los cuatro -- sin el desplazamiento y la longitud, al
          * rehacer el aviso no se puede subrayar el trozo de codigo. */
-        f.que.a = static_cast<int64_t>(
+        f.what.a = static_cast<int64_t>(
             (static_cast<uint64_t>(d.loc.offset) << 32) | d.loc.line);
-        f.que.b = static_cast<int64_t>(
+        f.what.b = static_cast<int64_t>(
             (static_cast<uint64_t>(d.loc.length) << 32) | d.loc.column);
         std::string junto = d.message;
         for (const std::string &a : d.args) {
             junto.push_back(kSep);
             junto += a;
         }
-        f.que.detalle = almacen.internar(junto);
-        f.de_quien.clase = analysis::asa::Sujeto::Clase::Simbolo;
-        f.de_quien.funcion = almacen.internar(d.loc.file);
-        f.de_quien.id = static_cast<uint32_t>(d.level);
+        f.what.detail = almacen.intern(junto);
+        f.about.kind = analysis::asa::Subject::Kind::Symbol;
+        f.about.function = almacen.intern(d.loc.file);
+        f.about.id = static_cast<uint32_t>(d.level);
         /* Certeza demostrada: no es una suposicion sobre el programa, es lo que
          * el compilador dijo.  Y la fuente es lo que lo distingue de un hecho
          * que alguien deduzca despues. */
-        f.sello.certeza = analysis::asa::Certeza::Demostrada;
-        f.sello.origen.productor = kDominioDiag;
+        f.seal.certainty = analysis::asa::Certainty::Proven;
+        f.seal.origin.producer = kDominioDiag;
         /* Donde vale.  Las cadenas se internan en el almacen: el ambito viaja
          * con el hecho, que es justo lo que permite que un solo fichero sirva a
          * todos los objetivos. */
-        f.donde.isa = almacen.internar(donde.isa);
-        f.donde.sistema = almacen.internar(donde.sistema);
-        f.donde.backend = almacen.internar(donde.backend);
-        almacen.anadir(std::move(f));
+        f.scope.isa = almacen.intern(donde.isa);
+        f.scope.os = almacen.intern(donde.os);
+        f.scope.backend = almacen.intern(donde.backend);
+        /* Y por que se restringe, cuando se restringe: un diagnostico depende
+         * del objetivo porque `@Target` descarta declaraciones segun el, asi
+         * que lo que se avisa de un programa no tiene por que ser lo mismo en
+         * otra arquitectura o en otro sistema. */
+        if (!f.scope.universal()) f.scope.why = "diag.depende_del_objetivo";
+        almacen.add(std::move(f));
     }
     /* Nivel maximo a proposito: esto NO se puede recalcular sin recompilar, que
      * es justo lo que el acierto de cache se ahorra. */
@@ -463,7 +467,7 @@ bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
 
 bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
                               std::vector<Diagnostic> &out,
-                              const analysis::asa::Ambito &aqui) {
+                              const analysis::asa::Scope &aqui) {
     out.clear();
     analysis::asa::register_canonical_name(kDominioDiag);
     analysis::asa::FactStore almacen;
@@ -475,16 +479,16 @@ bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
     for (analysis::asa::FactId i = 0; i < almacen.size(); ++i) {
         const analysis::asa::Fact &f = almacen.at(i);
         Diagnostic d;
-        d.level = static_cast<DiagLevel>(f.de_quien.id);
-        d.loc.file = f.de_quien.funcion;
-        const uint64_t pa = static_cast<uint64_t>(f.que.a);
-        const uint64_t pb = static_cast<uint64_t>(f.que.b);
+        d.level = static_cast<DiagLevel>(f.about.id);
+        d.loc.file = f.about.function;
+        const uint64_t pa = static_cast<uint64_t>(f.what.a);
+        const uint64_t pb = static_cast<uint64_t>(f.what.b);
         d.loc.line = static_cast<uint32_t>(pa & 0xFFFFFFFFu);
         d.loc.offset = static_cast<uint32_t>(pa >> 32);
         d.loc.column = static_cast<uint32_t>(pb & 0xFFFFFFFFu);
         d.loc.length = static_cast<uint32_t>(pb >> 32);
-        d.code = f.que.codigo;
-        const std::string junto = f.que.detalle;
+        d.code = f.what.code;
+        const std::string junto = f.what.detail;
         size_t ini = junto.find(kSep);
         d.message = junto.substr(0, ini);
         while (ini != std::string::npos) {

@@ -29,26 +29,30 @@ def fase(ctx: Ctx) -> None:
     filas_multi: list[tuple] = []
     filas_inc: list[tuple] = []
     prep_multi = []
-    for n in tamanos:
+    for eje in ctx.ejes:
+      for n in tamanos:
         for ln in langs:
-            d = base_tmp / ("multi_%s_%d" % (ln, n))
+            # Un directorio por EJE: los dos escriben objetos y caches en el
+            # sitio del caso, y compartirlo dejaria al segundo eje midiendo
+            # sobre lo que construyo el primero.
+            d = base_tmp / ("multi_%s_%s_%d" % (eje, ln, n))
             ficheros = escribir_multi(ln, n, args.ficheros, d)
             if not ficheros:
                 continue
-            cmd = orden_multi(ln, ficheros, d / "out", vm)
+            cmd = orden_multi(ln, ficheros, d / "out", vm, eje, ctx.nucleos)
             if not cmd:
                 continue
-            env = entorno_cache(ln, dir_cache, entorno_base)
+            env = entorno_cache(ln, dir_cache, entorno_base, eje)
             # El TAMANO va en la etiqueta.  Sin el, dos tamanos distintos daban
             # filas identicas -- `c  21 ficheros` dos veces -- y lo que parecia
             # una tabla eran dos pegadas.  Peor que feo: la comparacion contra
             # la base empareja por etiqueta, asi que las filas de un tamano se
             # dividian entre la referencia del OTRO, y las razones publicadas
             # no significaban nada.
-            etiqueta = "%s  %d ficheros, %dk lineas" % (
-                ln, len(ficheros), max(1, round(n / 1000)))
-            prep_multi.append(((ln, n), ln, cmd, env, d, d / "out",
-                               etiqueta, ficheros))
+            etiqueta = "%s  %d ficheros, %dk lineas [%s]" % (
+                ln, len(ficheros), max(1, round(n / 1000)), eje)
+            prep_multi.append(((ln, n, eje), ln, cmd, env, d, d / "out",
+                               etiqueta, ficheros, eje))
     with Spinner("verificando los proyectos multi-fichero", color=C.DIM):
         vered_multi = verificar_en_paralelo(
             [(c[0], c[1], c[2], c[3], c[4], c[5]) for c in prep_multi],
@@ -56,7 +60,7 @@ def fase(ctx: Ctx) -> None:
 
     with Spinner("", color=C.DIM) as spin:
       for hechos, (clave, ln, cmd, env, d, salida, etiqueta,
-                   ficheros) in enumerate(prep_multi):
+                   ficheros, eje) in enumerate(prep_multi):
             n = clave[1]
             spin.etiqueta(f"multi-fichero  {barra(hechos, len(prep_multi))}  "
                           f"{C.BOLD}{etiqueta}{C.RESET}")
@@ -101,15 +105,21 @@ def fase(ctx: Ctx) -> None:
                     if t >= 0:
                         serie.append(t)
                 s_i = _stats_summary(serie) if serie else {}
-                filas_inc.append((ln, "%s  %s, %dk lineas" % (
-                    ln, nombre_caso, max(1, round(n / 1000))), s_i))
+                filas_inc.append((ln, "%s  %s, %dk lineas [%s]" % (
+                    ln, nombre_caso, max(1, round(n / 1000)), eje), s_i))
                 resultados["casos"].append({
                     "lang": ln, "fase": "2b", "funciones": n, "ficheros": len(ficheros),
-                    "regimen": nombre_caso, "stats": s_i,
+                    "regimen": nombre_caso, "stats": s_i, "paralelismo": eje,
                 })
             resultados["casos"].append({
                 "lang": ln, "fase": "2b", "funciones": n, "ficheros": len(ficheros),
-                "regimen": "de cero", "stats": s_cero,
+                "regimen": "de cero", "stats": s_cero, "paralelismo": eje,
+                # `make -j` es la unica via de paralelizar C aqui.  Si no habia
+                # `make`, la orden cayo a la invocacion secuencial y esta fila
+                # NO es del eje que dice su etiqueta; queda apuntado para que
+                # nadie la lea como tal.
+                "paralelizado": not (eje == "maquina" and ln in ("c", "cpp")
+                                     and cmd[0] != "make"),
             })
     if filas_multi:
         imprimir_tabla(

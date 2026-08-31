@@ -238,8 +238,7 @@ void extract_declared_names(const std::string &text, const std::string &uri,
 std::string norm_target_arch(const std::string &arch) {
     if (arch.empty() || arch == "x86-64" || arch == "x86_64" || arch == "x64")
         return "x86_64";
-    if (arch == "x86-32" || arch == "x86_32" || arch == "x86" ||
-        arch == "i386")
+    if (arch == "x86-32" || arch == "x86_32" || arch == "x86" || arch == "i386")
         return "x86";
     return arch;
 }

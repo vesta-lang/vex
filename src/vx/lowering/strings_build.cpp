@@ -44,7 +44,8 @@ ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
     // byte[0] = char.
     store_u8(v_slot, v_char);
     // byte[1] = nul.
-    store_u8(emit_ptr_add(v_slot, (uint64_t) (1), source_line), emit_const(ir::IrType::U8, 0, source_line));
+    store_u8(emit_ptr_add(v_slot, (uint64_t)(1), source_line),
+             emit_const(ir::IrType::U8, 0, source_line));
     // qword2 = (1 << 56): byte[23]=1 (SSO len 1), bytes 16..22=0.
     emit_str_meta_sso(v_slot, emit_const(ir::IrType::I64, 1, source_line),
                       source_line);
@@ -76,9 +77,8 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
     ir::IrValueId v_b_len = emit_native_str_len(v_b, source_line);
 
     // 2. total = la + lb.
-    ir::IrValueId v_total =
-        emit_ir_binop(ir::IrOp::ADD, v_a_len, v_b_len,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_total = emit_ir_binop(ir::IrOp::ADD, v_a_len, v_b_len,
+                                          ir::IrType::I64, source_line);
 
     // 3. Slot de 24 bytes del resultado.
     const ir::IrValueId v_slot = emit_new_native_str_slot(source_line);
@@ -106,9 +106,8 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
     current_block_ = heap_bb;
     {
         ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-        ir::IrValueId v_cap =
-            emit_ir_binop(ir::IrOp::ADD, v_total, v_one,
-                          ir::IrType::I64, source_line);
+        ir::IrValueId v_cap = emit_ir_binop(ir::IrOp::ADD, v_total, v_one,
+                                            ir::IrType::I64, source_line);
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_buf].is_host_ptr = true;
         {
@@ -121,11 +120,14 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
             emit(current_block_, std::move(ra));
         }
         emit_memcpy(v_buf, v_a_ptr, v_a_len);
-        emit_memcpy(emit_ptr_add(v_buf, v_a_len, source_line), v_b_ptr, v_b_len);
+        emit_memcpy(emit_ptr_add(v_buf, v_a_len, source_line), v_b_ptr,
+                    v_b_len);
         store_at(emit_ptr_add(v_buf, v_total, source_line),
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         store_at(v_slot, v_buf, ir::IrType::I64);
-        store_at(emit_ptr_add(v_slot, emit_const(ir::IrType::I64, 8, source_line), source_line),
+        store_at(emit_ptr_add(v_slot,
+                              emit_const(ir::IrType::I64, 8, source_line),
+                              source_line),
                  v_total, ir::IrType::I64);
         // qword2 = cap | flag HEAP (un solo i64).
         emit_str_meta_heap(v_slot, v_cap, source_line);
@@ -136,7 +138,8 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
     current_block_ = sso_bb;
     {
         emit_memcpy(v_slot, v_a_ptr, v_a_len);
-        emit_memcpy(emit_ptr_add(v_slot, v_a_len, source_line), v_b_ptr, v_b_len);
+        emit_memcpy(emit_ptr_add(v_slot, v_a_len, source_line), v_b_ptr,
+                    v_b_len);
         store_at(emit_ptr_add(v_slot, v_total, source_line),
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         // qword2 = (total << 56): byte[23]=total (SSO).
@@ -233,9 +236,8 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
     auto fill_heap = [&]() {
         // cap = len + 1.
         ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-        ir::IrValueId v_cap =
-            emit_ir_binop(ir::IrOp::ADD, v_len, v_one,
-                          ir::IrType::I64, source_line);
+        ir::IrValueId v_cap = emit_ir_binop(ir::IrOp::ADD, v_len, v_one,
+                                            ir::IrType::I64, source_line);
         // buf = RAW_ALLOC(cap).
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_buf].is_host_ptr = true;
@@ -255,7 +257,9 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         // Campos: ptr@0 = buf, len@8 = len, qword2 = cap | flag HEAP.
         store_at(v_slot, v_buf, ir::IrType::I64);
-        store_at(emit_ptr_add(v_slot, emit_const(ir::IrType::I64, 8, source_line), source_line),
+        store_at(emit_ptr_add(v_slot,
+                              emit_const(ir::IrType::I64, 8, source_line),
+                              source_line),
                  v_len, ir::IrType::I64);
         emit_str_meta_heap(v_slot, v_cap, source_line);
     };
@@ -298,9 +302,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
     {
         emit_br_cond(v_cond, heap_bb, sso_bb, source_line);
     }
-    auto close_to_merge = [&]() {
-        emit_br(merge_bb, source_line);
-    };
+    auto close_to_merge = [&]() { emit_br(merge_bb, source_line); };
     current_block_ = heap_bb;
     fill_heap();
     close_to_merge();
@@ -347,13 +349,11 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         emit_native_str_data_ptr(v_dst_slot, source_line);
     ir::IrValueId v_old_len = emit_native_str_len(v_dst_slot, source_line);
     // 2. new_len = old_len + app_len ; new_cap = new_len + 1.
-    ir::IrValueId v_new_len =
-        emit_ir_binop(ir::IrOp::ADD, v_old_len, v_app_len,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_new_len = emit_ir_binop(ir::IrOp::ADD, v_old_len, v_app_len,
+                                            ir::IrType::I64, source_line);
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-    ir::IrValueId v_new_cap =
-        emit_ir_binop(ir::IrOp::ADD, v_new_len, v_one,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_new_cap = emit_ir_binop(ir::IrOp::ADD, v_new_len, v_one,
+                                            ir::IrType::I64, source_line);
 
     // 3. Branch new_len > 22.  HEAP nunca decrece (new_len >= old_len) ->
     //    HEAP solo transiciona a HEAP; SSO crece SSO->SSO (cero malloc,
@@ -394,7 +394,8 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         // Copiar lo viejo (old_data: inline o heap) + lo nuevo ANTES de
         // liberar y de tocar los campos.
         emit_memcpy(v_new_buf, v_old_data, v_old_len);
-        emit_memcpy(emit_ptr_add(v_new_buf, v_old_len, source_line), v_app_ptr, v_app_len);
+        emit_memcpy(emit_ptr_add(v_new_buf, v_old_len, source_line), v_app_ptr,
+                    v_app_len);
         store_at(emit_ptr_add(v_new_buf, v_new_len, source_line),
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         // Liberar el buffer viejo SOLO si era HEAP (lee el flag/ptr0 del
@@ -402,9 +403,10 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         // nunca aliasa el viejo -> sin doble-free.
         emit_native_str_free_if_heap(v_dst_slot, source_line);
         store_at(v_dst_slot, v_new_buf, ir::IrType::I64);
-        store_at(
-            emit_ptr_add(v_dst_slot, emit_const(ir::IrType::I64, 8, source_line), source_line),
-            v_new_len, ir::IrType::I64);
+        store_at(emit_ptr_add(v_dst_slot,
+                              emit_const(ir::IrType::I64, 8, source_line),
+                              source_line),
+                 v_new_len, ir::IrType::I64);
         // qword2 = cap | flag HEAP (un solo i64).
         emit_str_meta_heap(v_dst_slot, v_new_cap, source_line);
         emit_br(merge_bb, source_line);
@@ -416,7 +418,8 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
     {
         // app -> slot[old_len..old_len+app_len).  old_data == &slot, asi
         // que la data vieja ya esta en su sitio; solo copiamos lo nuevo.
-        emit_memcpy(emit_ptr_add(v_dst_slot, v_old_len, source_line), v_app_ptr, v_app_len);
+        emit_memcpy(emit_ptr_add(v_dst_slot, v_old_len, source_line), v_app_ptr,
+                    v_app_len);
         store_at(emit_ptr_add(v_dst_slot, v_new_len, source_line),
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         // qword2 = (new_len << 56): byte[23]=new_len (SSO).
@@ -616,10 +619,12 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
             current_block_ = bb_inv_body;
             {
                 ir::IrValueId v_src_b = load_i64(s_src);
-                ir::IrValueId v_tmp_at = emit_ptr_add(s_tmp, v_src_b, source_line);
+                ir::IrValueId v_tmp_at =
+                    emit_ptr_add(s_tmp, v_src_b, source_line);
                 ir::IrValueId v_d = emit_load_byte(v_tmp_at, source_line);
                 ir::IrValueId v_pos = load_i64(s_pos);
-                ir::IrValueId v_dst_at = emit_ptr_add(v_buf, v_pos, source_line);
+                ir::IrValueId v_dst_at =
+                    emit_ptr_add(v_buf, v_pos, source_line);
                 store_byte(v_dst_at, v_d);
                 ir::IrValueId v_pos1 =
                     bin(ir::IrOp::ADD, v_pos, v_one_helper(source_line));
@@ -691,6 +696,5 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
     out_mod_->add_function(std::move(hf));
     return name;
 }
-
 
 } // namespace vx

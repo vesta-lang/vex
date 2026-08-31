@@ -5,48 +5,12 @@
  * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
  */
 
-/*
-La clave está especialmente aquí:
-                                    ┌─────────────┐
-                    análisis ──────►│             │
-                    estático        │             │
-                                    │     ASA     │────► DSE
-                    C2/runtime ────►│    Fact     │────► scheduler
-                                    │             │────► codegen
-                    PGO ───────────►│             │────► otros
-                                    └─────────────┘
-
-estático -> certeza demostrada
-C2       -> certeza posiblemente inválida
-PGO      -> conocimiento observado
-
-
-En un diseño convencional, es frecuente encontrar algo conceptualmente más
-parecido a:
-
-range analysis ─────► optimizador ──► criterio propio
-points-to ──────────► optimizador ──► criterio propio
-profile ────────────► JIT ──────────► criterio propio
-type analysis ──────► codegen ──────► criterio propio
-
-Aunque existen sistemas que comparten análisis, la idea fuerte de que el
-conocimiento sea un recurso arquitectónico explícito,
-con certeza/procedencia/prueba, y que los consumidores sean
-deliberadamente agnósticos respecto al productor, es otra cosa.
-
-"Vesta introduce una arquitectura de conocimiento unificada basada en ASA,
-donde análisis estático, runtime/JIT y PGO actúan como productores de hechos
-con certeza y procedencia, mientras los consumidores consultan ese conocimiento
-sin mantener criterios paralelos."
-
-*/
-
 /**
  * @file analysis/asa/dump.h
  * @brief La VISTA del conocimiento: ensenar lo que hay en el almacen.
  *
  * Aqui NO se decide que es un hecho ni si algo merece afirmarse -- eso es del
- * productor de cada dominio (@c analysis/asa/productores.h).  Esto solo ordena,
+ * productor de cada dominio (@c analysis/asa/producers.h).  Esto solo ordena,
  * filtra y escribe.  La separacion importa: si la vista decidiera, tendriamos
  * otra vez un criterio propio en un consumidor, que es exactamente lo que el
  * ASA existe para quitar.
@@ -61,7 +25,7 @@ sin mantener criterios paralelos."
 #define ANALYSIS_ASA_DUMP_H
 
 #include "analysis/asa/fact_store.h"
-#include "analysis/asa/productores.h"
+#include "analysis/asa/producers.h"
 
 #include <cstdio>
 #include <string>
@@ -80,13 +44,12 @@ namespace asa {
  * personas miren cosas distintas creyendo mirar lo mismo.  Sale por la salida
  * que se le de: para quedarse con un trozo estan las herramientas de siempre.
  *
- * @param almacen   Los hechos.
- * @param resumenes Lo que produjo cada dominio.
- * @param salida    Fichero abierto donde escribir.
+ * @param store     Los hechos.
+ * @param summaries Lo que produjo cada dominio.
+ * @param out       Fichero abierto donde escribir.
  */
-void imprimir_volcado(const FactStore &almacen,
-                      const std::vector<ResumenProduccion> &resumenes,
-                      FILE *salida);
+void print_dump(const FactStore &store,
+                const std::vector<ProductionSummary> &summaries, FILE *out);
 
 } // namespace asa
 } // namespace analysis

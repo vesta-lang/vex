@@ -66,25 +66,25 @@ static const char *const kDomB = "prueba.beta";
 /// Un almacen con contenido que exprime lo que se estropea al cruzar de
 /// plataforma: negativos, el extremo de 64 bits, cadenas repetidas y apoyos.
 static void poblar(FactStore &a) {
-    FactId anterior = kSinHecho;
+    FactId anterior = kNoFact;
     for (int i = 0; i < 12; ++i) {
         Fact f;
-        f.que.dominio = (i % 2 == 0) ? kDomA : kDomB;
-        f.que.codigo = "prueba.codigo";
-        f.que.a = -1234567890123456789ll + i;
-        f.que.b = 0x7FFFFFFFFFFFFFFFll;
-        f.que.detalle = a.internar("detalle que se repite");
-        f.de_quien.clase = Sujeto::Clase::Valor;
-        f.de_quien.funcion = a.internar("f" + std::to_string(i % 3));
-        f.de_quien.id = 0xFFFFFFFFu - static_cast<uint32_t>(i);
-        f.sello.certeza = Certeza::Inferida;
-        f.sello.origen.fuente = Fuente::Perfil;
-        f.sello.origen.productor = (i % 2 == 0) ? kDomA : kDomB;
-        f.sello.origen.sitio = static_cast<uint32_t>(i);
-        f.sello.apoyos.anadir(kDomA);
-        f.prueba.regla = "regla";
-        if (anterior != kSinHecho) f.prueba.de.push_back(anterior);
-        anterior = a.anadir(std::move(f));
+        f.what.domain = (i % 2 == 0) ? kDomA : kDomB;
+        f.what.code = "prueba.codigo";
+        f.what.a = -1234567890123456789ll + i;
+        f.what.b = 0x7FFFFFFFFFFFFFFFll;
+        f.what.detail = a.intern("detalle que se repite");
+        f.about.kind = Subject::Kind::Value;
+        f.about.function = a.intern("f" + std::to_string(i % 3));
+        f.about.id = 0xFFFFFFFFu - static_cast<uint32_t>(i);
+        f.seal.certainty = Certainty::Inferred;
+        f.seal.origin.source = Source::Profile;
+        f.seal.origin.producer = (i % 2 == 0) ? kDomA : kDomB;
+        f.seal.origin.site = static_cast<uint32_t>(i);
+        f.seal.support.add(kDomA);
+        f.proof.rule = "regla";
+        if (anterior != kNoFact) f.proof.from.push_back(anterior);
+        anterior = a.add(std::move(f));
     }
 }
 
@@ -115,18 +115,18 @@ int main(int argc, char **argv) {
         read_facts(bytes.data(), bytes.size(), 0xABCDEF0123456789ull, d, {},
                    0x1122334455667788ull);
     CHECK(r.ok && r.facts == 12, "y se lee entero");
-    CHECK(d.at(0).que.a == -1234567890123456789ll,
+    CHECK(d.at(0).what.a == -1234567890123456789ll,
           "un negativo grande cruza sin estropearse");
-    CHECK(d.at(0).que.b == 0x7FFFFFFFFFFFFFFFll, "y el extremo de 64 bits");
-    CHECK(d.at(0).de_quien.id == 0xFFFFFFFFu,
+    CHECK(d.at(0).what.b == 0x7FFFFFFFFFFFFFFFll, "y el extremo de 64 bits");
+    CHECK(d.at(0).about.id == 0xFFFFFFFFu,
           "y un entero sin signo en su valor mas alto");
-    CHECK(d.at(0).que.dominio == kDomA,
+    CHECK(d.at(0).what.domain == kDomA,
           "los nombres vuelven a su literal en cualquier plataforma");
 
     /* El grafo, que es lo unico que el fichero promete conservar. */
     bool grafo = true;
     for (FactId i = 0; i < d.size(); ++i)
-        for (FactId p : d.at(i).prueba.de)
+        for (FactId p : d.at(i).proof.from)
             if (p >= d.size()) grafo = false;
     CHECK(grafo, "ningun apoyo apunta fuera");
     CHECK(r.lost_proofs == 0, "no se pierde ningun apoyo al cruzar");

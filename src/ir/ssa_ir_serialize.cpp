@@ -44,7 +44,6 @@
 // deflate para la seccion @ir (ver kIrCompressionLevel).
 #include "miniz.h"
 
-
 #include <cstring>
 
 namespace ir {
@@ -848,12 +847,11 @@ std::vector<uint8_t> emit_ir_section(const std::vector<IrFunction> &functions) {
     mz_ulong tope = mz_compressBound(static_cast<mz_ulong>(cuerpo.size()));
     std::vector<uint8_t> comprimido(tope);
     mz_ulong final_len = tope;
-    const bool ok =
-        !cuerpo.empty() &&
-        mz_compress2(comprimido.data(), &final_len, cuerpo.data(),
-                     static_cast<mz_ulong>(cuerpo.size()),
-                     kIrCompressionLevel) == MZ_OK &&
-        final_len < cuerpo.size();
+    const bool ok = !cuerpo.empty() &&
+                    mz_compress2(comprimido.data(), &final_len, cuerpo.data(),
+                                 static_cast<mz_ulong>(cuerpo.size()),
+                                 kIrCompressionLevel) == MZ_OK &&
+                    final_len < cuerpo.size();
 
     if (ok) {
         write_u16(out, kIrFlagDeflate);
@@ -1127,15 +1125,22 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
     for (const auto &ni : mod.native_imports) {
         write_str(out, ni.lib);
         write_str(out, ni.name);
-        const IrNativeEffects &fx = ni.efectos;
-        write_u8(out, fx.declarados ? 1u : 0u);
-        write_u32(out, fx.lee_apuntado);
-        write_u32(out, fx.escribe_apuntado);
-        write_u8(out, uint8_t((fx.lee_global ? 1u : 0u) |
-                              (fx.escribe_global ? 2u : 0u) |
-                              (fx.io ? 4u : 0u) | (fx.puede_lanzar ? 8u : 0u) |
-                              (fx.no_determinista ? 16u : 0u) |
-                              (fx.comptime ? 32u : 0u)));
+        const IrNativeEffects &fx = ni.effects;
+        write_u8(out, fx.declared ? 1u : 0u);
+        write_u32(out, fx.reads_pointee);
+        write_u32(out, fx.writes_pointee);
+        /* Los dos ultimos bits son NUEVOS (panic y reserva).  Caben en el mismo
+         * byte, asi que el formato no cambia de tamano; un fichero viejo los
+         * trae a cero, que es el valor conservador y no el permisivo -- lo
+         * contrario haria que una cache antigua aprobara contratos que no se
+         * han comprobado. */
+        write_u8(out, uint8_t((fx.reads_global ? 1u : 0u) |
+                              (fx.writes_global ? 2u : 0u) |
+                              (fx.io ? 4u : 0u) | (fx.may_throw ? 8u : 0u) |
+                              (fx.nondeterministic ? 16u : 0u) |
+                              (fx.comptime ? 32u : 0u) |
+                              (fx.may_panic ? 64u : 0u) |
+                              (fx.allocates ? 128u : 0u)));
     }
     return out;
 }
@@ -1207,16 +1212,18 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out) {
             IrNativeEffects fx;
             uint8_t decl = 0, bits = 0;
             if (!read_u8(data, off, decl)) return false;
-            if (!read_u32(data, off, fx.lee_apuntado)) return false;
-            if (!read_u32(data, off, fx.escribe_apuntado)) return false;
+            if (!read_u32(data, off, fx.reads_pointee)) return false;
+            if (!read_u32(data, off, fx.writes_pointee)) return false;
             if (!read_u8(data, off, bits)) return false;
-            fx.declarados = decl != 0;
-            fx.lee_global = (bits & 1u) != 0;
-            fx.escribe_global = (bits & 2u) != 0;
+            fx.declared = decl != 0;
+            fx.reads_global = (bits & 1u) != 0;
+            fx.writes_global = (bits & 2u) != 0;
             fx.io = (bits & 4u) != 0;
-            fx.puede_lanzar = (bits & 8u) != 0;
-            fx.no_determinista = (bits & 16u) != 0;
+            fx.may_throw = (bits & 8u) != 0;
+            fx.nondeterministic = (bits & 16u) != 0;
             fx.comptime = (bits & 32u) != 0;
+            fx.may_panic = (bits & 64u) != 0;
+            fx.allocates = (bits & 128u) != 0;
             out.register_native_import(std::move(lib), std::move(name), fx);
         }
     }

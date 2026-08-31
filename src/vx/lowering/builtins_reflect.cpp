@@ -72,7 +72,8 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
     const bool is_getMethodAt = (b == Builtin::GetMethodAt);
     const bool is_getFieldAt = (b == Builtin::GetFieldAt);
 
-    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
+    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo.
+     */
     if (!(is_forName || is_getClass || is_getField || is_getMethod ||
           is_newInstance || is_invoke || is_proceed || is_getMethods ||
           is_getFields || is_getMethodAt || is_getFieldAt))
@@ -81,8 +82,10 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
     if (is_forName) {
         if (e->args.size() != 1 || !e->args[0] ||
             e->args[0]->kind != ast::NodeKind::StringLitExpr) {
-            return builtin_error(e->loc, "forName: requiere un string literal con el "
-                                         "nombre de la clase", out_value);
+            return builtin_error(e->loc,
+                                 "forName: requiere un string literal con el "
+                                 "nombre de la clase",
+                                 out_value);
         }
         auto *slit = static_cast<ast::StringLitExpr *>(e->args[0].get());
         const uint64_t name_idx = intern_class_name(*out_mod_, slit->value);
@@ -104,7 +107,9 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
     if (is_getField) {
         if (e->args.size() != 2 || !e->args[0] || !e->args[1] ||
             e->args[1]->kind != ast::NodeKind::StringLitExpr) {
-            return builtin_error(e->loc, "getField: requiere (i64 cls, string lit name)", out_value);
+            return builtin_error(
+                e->loc, "getField: requiere (i64 cls, string lit name)",
+                out_value);
         }
         const ir::IrValueId v_cls = lower_expr(e->args[0].get());
         if (v_cls == ir::IR_NO_VALUE) {
@@ -234,7 +239,9 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
     if (is_getMethod) {
         if (e->args.size() != 2 || !e->args[0] || !e->args[1] ||
             e->args[1]->kind != ast::NodeKind::StringLitExpr) {
-            return builtin_error(e->loc, "getMethod: requiere (i64 cls, string lit name)", out_value);
+            return builtin_error(
+                e->loc, "getMethod: requiere (i64 cls, string lit name)",
+                out_value);
         }
         const ir::IrValueId v_cls = lower_expr(e->args[0].get());
         if (v_cls == ir::IR_NO_VALUE) {
@@ -276,7 +283,9 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
     // hace __new_<X>) para que el resultado sea utilizable como objeto.
     if (is_newInstance) {
         if (e->args.size() != 1 || !e->args[0]) {
-            return builtin_error(e->loc, "newInstance: requiere un argumento (i64 cls)", out_value);
+            return builtin_error(e->loc,
+                                 "newInstance: requiere un argumento (i64 cls)",
+                                 out_value);
         }
         // Fix #1 (caso estatico): si el arg es un IdentExpr con origen
         // conocido (`Class cls = Class.forName("X")`), emitir `new X()`
@@ -343,7 +352,9 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
     // (0xFD) que dispara la cadena AOP advice_chain como CALLVIRT.
     if (is_invoke) {
         if (e->args.size() < 2 || !e->args[0] || !e->args[1]) {
-            return builtin_error(e->loc, "invoke: requiere (i64 method, T this, args...)", out_value);
+            return builtin_error(
+                e->loc, "invoke: requiere (i64 method, T this, args...)",
+                out_value);
         }
         const ir::IrValueId v_method = lower_expr(e->args[0].get());
         if (v_method == ir::IR_NO_VALUE) {
@@ -402,7 +413,9 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
     // genere `movh` en vez de `mov` y lea desde memoria HOST.
     if (is_getClass) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "getClass: requiere exactamente 1 argumento", out_value);
+            return builtin_error(e->loc,
+                                 "getClass: requiere exactamente 1 argumento",
+                                 out_value);
         }
         const ir::IrValueId v_obj = lower_expr(e->args[0].get());
         if (v_obj == ir::IR_NO_VALUE) {
@@ -422,9 +435,11 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
 
     if (is_getMethods || is_getFields) {
         if (e->args.size() != 1 || !e->args[0]) {
-            return builtin_error(e->loc,
-                                 std::string(is_getMethods ? "getMethods" : "getFields") +
-                                     ": requiere 1 argumento (cls)", out_value);
+            return builtin_error(
+                e->loc,
+                std::string(is_getMethods ? "getMethods" : "getFields") +
+                    ": requiere 1 argumento (cls)",
+                out_value);
         }
         const ir::IrValueId v_cls = lower_expr(e->args[0].get());
         if (v_cls == ir::IR_NO_VALUE) {
@@ -452,9 +467,11 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
     // en R00, o 0 si i fuera de rango / cls nulo.
     if (is_getMethodAt || is_getFieldAt) {
         if (e->args.size() != 2 || !e->args[0] || !e->args[1]) {
-            return builtin_error(e->loc, std::string(is_getMethodAt ? "getMethodAt"
-                                                                    : "getFieldAt") +
-                                             ": requiere 2 argumentos (cls, i)", out_value);
+            return builtin_error(
+                e->loc,
+                std::string(is_getMethodAt ? "getMethodAt" : "getFieldAt") +
+                    ": requiere 2 argumentos (cls, i)",
+                out_value);
         }
         const ir::IrValueId v_cls = lower_expr(e->args[0].get());
         const ir::IrValueId v_idx = lower_expr(e->args[1].get());

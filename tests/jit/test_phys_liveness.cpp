@@ -75,16 +75,21 @@ void expect(const PhysLivenessFacts &F, uint32_t b, uint32_t i, uint8_t r,
     ++failures;
 }
 
-MOperand reg(MReg r, uint8_t w = 8) { return MOperand::make_reg(r, w); }
+MOperand reg(MReg r, uint8_t w = 8) {
+    return MOperand::make_reg(r, w);
+}
 MOperand reg(uint8_t r, uint8_t w = 8) {
     return MOperand::make_reg(static_cast<MReg>(r), w);
 }
-MOperand imm(int32_t v) { return MOperand::make_imm32(v); }
+MOperand imm(int32_t v) {
+    return MOperand::make_imm32(v);
+}
 
 /// @brief Una funcion de un solo bloque con las instrucciones dadas.
 MFunction one_block(std::vector<MInstr> is) {
     MFunction f;
-    f.target = &target_info(); // para QUE se compila: sin esto no hay convencion
+    f.target =
+        &target_info(); // para QUE se compila: sin esto no hay convencion
     f.blocks.emplace_back();
     f.blocks[0].instrs = std::move(is);
     return f;
@@ -158,7 +163,8 @@ void case_across_blocks() {
 
 /* --- 5.  Un bloque de `asm volatile` dice lo que lee. -------------------- */
 void case_asm() {
-    std::printf("un asm volatile lee registros que no estan en los operandos\n");
+    std::printf(
+        "un asm volatile lee registros que no estan en los operandos\n");
     MFunction f;
     f.target = &target_info();
     f.blocks.emplace_back();
@@ -199,7 +205,8 @@ void case_call_convention() {
      * aprendio empezo a contestar primero, la convencion dejo de aplicarse sin
      * que nada fallara al compilar, y todo programa devolvia 0 -- el `mov rax,
      * <resultado>` lo borraba quien busca escrituras muertas. */
-    expect(F, 0, 0, ret_reg_of_target(), true, "el de retorno, vivo al llegar al ret");
+    expect(F, 0, 0, ret_reg_of_target(), true,
+           "el de retorno, vivo al llegar al ret");
 }
 
 /* --- 7.  Y una llamada lee sus argumentos. ------------------------------ */
@@ -306,9 +313,9 @@ void case_island_in_block() {
     MInstr jc = MInstr::make_jcc(MCond::NE, 7);
     f.blocks[0].instrs = {
         MInstr::make_unary(MOp::MOV, reg(MReg::R14), imm(5)),
-        jc,                                    // se salta lo de abajo
+        jc, // se salta lo de abajo
         MInstr::make_unary(MOp::POP, reg(MReg::R14), MOperand()), // lo pisa
-        MInstr::make_label_def(7),             // ...y aqui aterriza el salto
+        MInstr::make_label_def(7), // ...y aqui aterriza el salto
         MInstr::make_unary(MOp::MOV, reg(MReg::RAX), reg(MReg::R14)), // lo lee
         MInstr::make_ret(),
     };

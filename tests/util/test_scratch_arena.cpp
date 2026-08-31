@@ -47,7 +47,10 @@ int main() {
             const size_t n = 8 + (i % 200);
             const size_t al = (i % 4 == 0) ? 32 : 8;
             void *p = a.allocate(n, al);
-            if (p == nullptr) { distinct = false; break; }
+            if (p == nullptr) {
+                distinct = false;
+                break;
+            }
             if (reinterpret_cast<uintptr_t>(p) % al != 0) aligned = false;
             std::memset(p, i & 0xFF, n);
             got.push_back(p);
@@ -61,7 +64,8 @@ int main() {
         const size_t before = a.reserved_bytes();
         for (int fase = 0; fase < 200; ++fase) {
             util::ScratchScope scope;
-            for (int i = 0; i < 2000; ++i) (void)a.allocate(64, 8);
+            for (int i = 0; i < 2000; ++i)
+                (void)a.allocate(64, 8);
         }
         const size_t after = a.reserved_bytes();
         check(after == before,
@@ -88,7 +92,8 @@ int main() {
         std::vector<std::thread> ts;
         for (int i = 0; i < kThreads; ++i)
             ts.emplace_back([&, i] { seen[i] = &util::scratch_arena(); });
-        for (auto &t : ts) t.join();
+        for (auto &t : ts)
+            t.join();
         for (int i = 0; i < kThreads; ++i)
             for (int j = i + 1; j < kThreads; ++j)
                 if (seen[i] == seen[j]) ++shared;
@@ -106,7 +111,8 @@ int main() {
         auto t1 = std::chrono::steady_clock::now();
         {
             util::ScratchScope scope;
-            for (int i = 0; i < kIter; ++i) (void)a.allocate(48, 8);
+            for (int i = 0; i < kIter; ++i)
+                (void)a.allocate(48, 8);
         }
         auto t2 = std::chrono::steady_clock::now();
         const double gen =

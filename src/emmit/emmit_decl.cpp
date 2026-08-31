@@ -3255,7 +3255,7 @@ void emit_gcfinalc(const vm::Instruction *instruction_parser,
     // El mnemonico elige a quien se llama; ver arriba por que el cero es el
     // destructor de clase.
     const uint8_t kind = (instruction_parser->opcode == "gcfinalu") ? 1u : 0u;
-    code_final.emit8(static_cast<uint8_t>(kind << 6));                  // b2
+    code_final.emit8(static_cast<uint8_t>(kind << 6));                   // b2
     code_final.emit8(static_cast<uint8_t>((idx2 << 4) | (idx1 & 0x0F))); // b3
 }
 

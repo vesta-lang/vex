@@ -35,7 +35,7 @@
 #include "vx/type_checker.h"
 
 #include "vx/diag/diag_catalog.h"
-#include "vx/ansi_names.h" // los nombres de color que el lenguaje conoce
+#include "vx/ansi_names.h"      // los nombres de color que el lenguaje conoce
 #include "vx/asm/asm_effects.h" // asm_canonical_reg ( AS inc.4)
 #include "vx/type_classify.h"   // is_c_representable / is_managed (Fase 1)
 #include "vx/collection_intrinsics.h"        // tabla de tipos coleccion
@@ -1582,10 +1582,10 @@ ResultLayout TypeChecker::result_layout(const Type &t) const {
      * dos payloads se guardan UNO AL LADO DEL OTRO aunque solo uno este vivo
      * cada vez: son ocho mas lo que ocupe cada uno.
      *
-     * Escrito a mano -- veinticuatro, valor en el ocho, error en el dieciseis --
-     * un `Result` cuyo valor fuera un struct de mas de una palabra no cabia, y
-     * lo que se sacaba eran ceros.  Es el mismo fallo que tenia el `Optional` y
-     * se arregla igual: preguntando. */
+     * Escrito a mano -- veinticuatro, valor en el ocho, error en el dieciseis
+     * -- un `Result` cuyo valor fuera un struct de mas de una palabra no cabia,
+     * y lo que se sacaba eran ceros.  Es el mismo fallo que tenia el `Optional`
+     * y se arregla igual: preguntando. */
     lay.value_offset = 8;
     const uint32_t v = t.pointee ? payload_slot_bytes(*t.pointee) : 8u;
     const uint32_t e = t.pointee2 ? payload_slot_bytes(*t.pointee2) : 8u;
@@ -1601,11 +1601,11 @@ OptionalLayout TypeChecker::optional_layout(const Type &t) const {
     OptionalLayout lay;
     /* El payload de un escalar ocupa una palabra; el de un struct por valor,
      * su tamano real redondeado a palabra, para que quepa entero. */
-    const uint32_t payload =
-        t.pointee ? payload_slot_bytes(*t.pointee) : 8u;
+    const uint32_t payload = t.pointee ? payload_slot_bytes(*t.pointee) : 8u;
     /* AQUI ES DONDE OCUPA MENOS.  Cuando el payload no puede valer cero, el
      * cero SOBRA como valor y sirve de marca: no hace falta una palabra aparte
-     * para decir si esta o no esta, y el conjunto mide ocho en vez de dieciseis.
+     * para decir si esta o no esta, y el conjunto mide ocho en vez de
+     * dieciseis.
      *
      * Solo donde el tipo lo PROMETE.  Un prestamo (`borrow<T>`) es la
      * direccion de algo que existe -- solo se obtiene prestando algo vivo --,
@@ -1810,8 +1810,7 @@ static void pre_mono_collect_in_expr(TypeChecker &tc, const ast::Expr *e) {
             auto *cid = static_cast<const ast::IdentExpr *>(c->callee.get());
             // Una plantilla importada se ve por su nombre corto; el registro
             // esta bajo su label.
-            const std::string &tpl_name =
-                tc.resolve_generic_fn_name(cid->name);
+            const std::string &tpl_name = tc.resolve_generic_fn_name(cid->name);
             if (tc.is_generic_fn_template(tpl_name)) {
                 std::vector<Type> targs;
                 targs.reserve(c->type_args.size());
@@ -2258,10 +2257,9 @@ bool TypeChecker::run() {
                         comptime_runtime_.load_macros_from_bytes(
                             std::move(bytes)) &&
                         util::flag_on(util::FlagId::McVerbose)) {
-                        std::cerr
-                            << "[mc-prebuilt] cargado: " << pre << " ("
-                            << comptime_runtime_.registered_macro_count()
-                            << " macros registrados)\n";
+                        std::cerr << "[mc-prebuilt] cargado: " << pre << " ("
+                                  << comptime_runtime_.registered_macro_count()
+                                  << " macros registrados)\n";
                     }
                 }
             }
@@ -3419,7 +3417,8 @@ void TypeChecker::collect_globals() {
     // La lista vive en un solo sitio (vx/ansi_names.h) porque tambien la
     // necesita el bajado, y una lista por sitio se desincroniza sin que nada
     // lo note: un color que existe como nombre pero no se baja, o al reves.
-    for (const AnsiName &a : kAnsiNames) reg_const_string(a.name);
+    for (const AnsiName &a : kAnsiNames)
+        reg_const_string(a.name);
 
     // Builtins de color verdadero (truecolor, SGR 24-bit).  A
     // diferencia de los identificadores magicos anteriores (cadenas
@@ -4283,9 +4282,9 @@ void TypeChecker::collect_globals() {
                                 " distinguen por el numero de argumentos, no"
                                 " por sus tipos");
                     } else {
-                        diags_.error(m->loc,
-                                     "metodo duplicado en struct '" + s->name +
-                                         "': '" + m->name + "'");
+                        diags_.error(m->loc, "metodo duplicado en struct '" +
+                                                 s->name + "': '" + m->name +
+                                                 "'");
                     }
                     continue;
                 }
@@ -5665,7 +5664,6 @@ bool TypeChecker::type_declares_to_string(const Type &t) const {
     }
     return false;
 }
-
 
 /**
  * @brief Anota en @p mi los tipos de los parametros de @p m.
@@ -8390,11 +8388,11 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         // tipo del destino (`i64 x = 300u8;` cabe en i64 pero no en u8).
         if (sfx != PrimitiveKind::VOID &&
             !literal_fits(sfx, lit->negated, lit->value)) {
-            diags_.error(e->loc,
-                         vx::diag::format(
-                             "VXT002", {literal_text(lit->negated, lit->value),
-                                        primitive_name(sfx),
-                                        numeric_range_text(sfx)}));
+            diags_.error(
+                e->loc,
+                vx::diag::format(
+                    "VXT002", {literal_text(lit->negated, lit->value),
+                               primitive_name(sfx), numeric_range_text(sfx)}));
         }
         break;
     }
@@ -10474,8 +10472,9 @@ bool TypeChecker::marshal_const_args(const ast::CallExpr &e,
             out.push_back(static_cast<const ast::IntLitExpr *>(a.get())->value);
             break;
         case ast::NodeKind::BoolLitExpr:
-            out.push_back(
-                static_cast<const ast::BoolLitExpr *>(a.get())->value ? 1u : 0u);
+            out.push_back(static_cast<const ast::BoolLitExpr *>(a.get())->value
+                              ? 1u
+                              : 0u);
             break;
         case ast::NodeKind::CharLitExpr:
             out.push_back(
@@ -10515,8 +10514,8 @@ bool TypeChecker::marshal_const_args(const ast::CallExpr &e,
             if (u->operand->kind == ast::NodeKind::IntLitExpr) {
                 const auto *lit =
                     static_cast<const ast::IntLitExpr *>(u->operand.get());
-                out.push_back(static_cast<uint64_t>(
-                    -static_cast<int64_t>(lit->value)));
+                out.push_back(
+                    static_cast<uint64_t>(-static_cast<int64_t>(lit->value)));
             } else if (u->operand->kind == ast::NodeKind::FloatLitExpr) {
                 const double neg =
                     -static_cast<const ast::FloatLitExpr *>(u->operand.get())
@@ -10693,11 +10692,10 @@ Type TypeChecker::check_static_method_call(ast::CallExpr *e,
                                            const std::string &donde,
                                            uint8_t marca) {
     if (e->args.size() != smtd.param_types.size()) {
-        diags_.error(e->loc, donde +
-                                 ": numero de argumentos incorrecto (esperado " +
-                                 std::to_string(smtd.param_types.size()) +
-                                 ", recibido " +
-                                 std::to_string(e->args.size()) + ")");
+        diags_.error(e->loc,
+                     donde + ": numero de argumentos incorrecto (esperado " +
+                         std::to_string(smtd.param_types.size()) +
+                         ", recibido " + std::to_string(e->args.size()) + ")");
     }
     for (size_t i = 0; i < e->args.size(); ++i)
         check_call_arg(e->args[i].get(),
@@ -10728,8 +10726,7 @@ Type TypeChecker::check_static_method_call(ast::CallExpr *e,
  * @param enum_name Nombre del enum, que es el tipo del resultado.
  * @return El tipo del valor construido.
  */
-Type TypeChecker::check_variant_ctor(ast::CallExpr *e,
-                                     ast::FieldAccessExpr *fa,
+Type TypeChecker::check_variant_ctor(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                                      const EnumVariantInfo &var,
                                      const std::string &enum_name) {
     if (e->args.size() != var.field_types.size()) {
@@ -10764,12 +10761,12 @@ void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
     if (!arg) return;
     Type ta = check_expr(arg);
     if (arg_fits_param(arg, tp, ta)) return;
-    diags_.error(arg->loc, std::string("argumento ") + std::to_string(idx + 1) +
-                               (what.empty() ? std::string()
-                                             : (" de " + what)) +
-                               ": tipo (" + type_to_string(ta) +
-                               ") incompatible con parametro (" +
-                               type_to_string(tp) + ")");
+    diags_.error(arg->loc,
+                 std::string("argumento ") + std::to_string(idx + 1) +
+                     (what.empty() ? std::string() : (" de " + what)) +
+                     ": tipo (" + type_to_string(ta) +
+                     ") incompatible con parametro (" + type_to_string(tp) +
+                     ")");
 }
 /**
  * @brief Tipo que vale `new X(...)`.
@@ -15522,7 +15519,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         // El tipo del valor: el payload si es un Optional, el propio tipo si
         // es una referencia nullable.
         Type rt = at;
-        if (at.kind == PrimitiveKind::OPTIONAL && at.pointee) rt = *at.pointee;
+        if (at.kind == PrimitiveKind::OPTIONAL && at.pointee)
+            rt = *at.pointee;
         else if (at.kind != PrimitiveKind::CLASS &&
                  at.kind != PrimitiveKind::PTR &&
                  at.kind != PrimitiveKind::I64 &&
@@ -16773,10 +16771,10 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         const Type fn_type = s->type;
         /* Con un variadico la aridad no es exacta: los de delante son
          * obligatorios y de ahi en adelante vale cualquier cantidad. */
-        const size_t fn_fixed = (fn_type.fn_is_variadic &&
-                                 !fn_type.fn_params.empty())
-                                    ? fn_type.fn_params.size() - 1
-                                    : fn_type.fn_params.size();
+        const size_t fn_fixed =
+            (fn_type.fn_is_variadic && !fn_type.fn_params.empty())
+                ? fn_type.fn_params.size() - 1
+                : fn_type.fn_params.size();
         // Validar aridad y tipos de los argumentos contra fn_params.
         if (fn_type.fn_is_variadic) {
             if (e->args.size() < fn_fixed)
@@ -16795,9 +16793,10 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     std::to_string(fn_type.fn_params.size()) + ", recibidos " +
                     std::to_string(e->args.size()));
         }
-        const size_t n = fn_type.fn_is_variadic
-                             ? e->args.size()
-                             : std::min(e->args.size(), fn_type.fn_params.size());
+        const size_t n =
+            fn_type.fn_is_variadic
+                ? e->args.size()
+                : std::min(e->args.size(), fn_type.fn_params.size());
         /* El que sobra se compara con el tipo del ELEMENTO: el parametro
          * declarado es ya la direccion del array. */
         const Type var_elem =
@@ -16807,7 +16806,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 : Type{};
         for (size_t i = 0; i < n; ++i)
             check_call_arg(e->args[i].get(),
-                           (i >= fn_fixed) ? var_elem : fn_type.fn_params[i], i);
+                           (i >= fn_fixed) ? var_elem : fn_type.fn_params[i],
+                           i);
         for (size_t i = n; i < e->args.size(); ++i)
             (void)check_expr(e->args[i].get());
         // Marcar el callee con el tipo function para que el lowering

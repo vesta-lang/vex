@@ -189,8 +189,9 @@ struct DeclName {
  * @param decls Declaraciones a recorrer.
  * @param out   Nombres encontrados; se anaden al final.
  */
-void collect_decls_from(const std::vector<std::unique_ptr<vx::ast::Node>> &decls,
-                        std::vector<DeclName> &out) {
+void collect_decls_from(
+    const std::vector<std::unique_ptr<vx::ast::Node>> &decls,
+    std::vector<DeclName> &out) {
     using namespace vx::ast;
 
     // Helper: registrar parametros de una lista.

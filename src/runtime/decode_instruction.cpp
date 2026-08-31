@@ -1237,14 +1237,13 @@ void decode_instruction(ProcessVM *process) {
         measuring ? now_ns() : 0; // marca de tiempo inicial (solo si se mide)
 
     uint64_t pc = process->registers.rip.raw(); // PC actual del proceso
-    uint32_t idx = icache_index(pc); // indice en la icache para este PC
 
     // --- CACHE HIT ---
     // Si la entrada de la icache corresponde a este PC se reutiliza el
     // resultado anterior. Importante: la icache no detecta modificaciones en
     // tiempo de ejecucion del codigo.
-    DecodedInstr *cached = &process->icache[idx];
-    if (cached->pc == pc && process->decoded_ptr != nullptr) {
+    DecodedInstr *cached = icache_lookup(process, pc);
+    if (cached != nullptr && process->decoded_ptr != nullptr) {
         process->decoded_ptr = cached; // apuntar al cache sin copiar
 
         if (measuring)
@@ -1295,9 +1294,9 @@ void decode_instruction(ProcessVM *process) {
             &metadata; // enlazar metadata (exec/decode pueden ser null)
         decode_tmp.exec_cached =
             nullptr; // sentinel: el run_loop detecta nullptr y emite HALT
-        process->icache[idx] =
-            decode_tmp; // cachear para que decoded_ptr sea valido
-        process->decoded_ptr = &process->icache[idx];
+        DecodedInstr *slot = icache_victim(process, pc);
+        *slot = decode_tmp; // cachear para que decoded_ptr sea valido
+        process->decoded_ptr = slot;
         if (measuring) process->scheduler.time_decode += now_ns() - t1;
         PROFILE_END("DECODER")
         vm_hook(process, DebugStage::DecodeEnd);
@@ -1333,11 +1332,13 @@ void decode_instruction(ProcessVM *process) {
     metadata.decode(process, decode_tmp);
 
     // guardar el resultado en la icache (muy importante: despues de llamar a
-    // decode)
-    process->icache[idx] = decode_tmp;
+    // decode).  `icache_victim` elige la via a desalojar; con una sola via es
+    // la entrada de siempre.
+    DecodedInstr *slot = icache_victim(process, pc);
+    *slot = decode_tmp;
 
     // apuntar decoded_ptr a la entrada de la icache (sin copiar)
-    process->decoded_ptr = &process->icache[idx];
+    process->decoded_ptr = slot;
 
     if (measuring)
         process->scheduler.time_decode +=

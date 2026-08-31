@@ -40,6 +40,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "analysis/asa/fact.h" // vocabulario de Ambito: kBackend*
 #include "ir/ssa_ir.h"
 
 namespace analysis {
@@ -271,7 +272,7 @@ static constexpr uint32_t kAlineacionBloqueGlobales = 64;
  * aqui por eso: si cada uno llevara el suyo serian dos criterios, y podrian
  * separarse sin que nada fallara.  Uno afirmaria lo que el otro ya no cumple.
  *
- * @param backend "vm", "jit" o "aot".  Vacio = sin decidir.
+ * @param backend Uno de @c asa::kBackend*.  Vacio = sin decidir.
  * @return La alineacion garantizada, o 0 si en ese ambito NO SE SABE -- que no
  *         es lo mismo que "no esta alineado": es que no se puede afirmar, y
  *         quien pregunte debe quedarse con la garantia generica.
@@ -316,7 +317,8 @@ inline uint32_t alineacion_seccion_datos(const char *backend) {
     if (backend == nullptr) return 0;
     /* Corriendo en la maquina el bloque lo reserva el cargador: el numero es
      * nuestro y es firme. */
-    if (std::strcmp(backend, "vm") == 0 || std::strcmp(backend, "jit") == 0)
+    if (std::strcmp(backend, asa::kBackendVm) == 0 ||
+        std::strcmp(backend, asa::kBackendJit) == 0)
         return kAlineacionBloqueGlobales;
     /* Y en el nativo NO se sabe aqui: las secciones caen en pagina por
      * defecto, pero un guion de enlazado puede colocarlas donde quiera y esa

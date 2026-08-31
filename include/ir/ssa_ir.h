@@ -1760,19 +1760,41 @@ struct IrSectionDef {
  * efecto maximo, y el nombre sale en el informe para que se pueda cerrar.
  */
 struct IrNativeEffects {
-    bool declarados = false; ///< false = nadie ha dicho nada -> opaca.
+    bool declared = false; ///< false = nadie ha dicho nada -> opaca.
     /// Operandos del CALLN cuyo APUNTADO se lee / escribe (bit i = operando i).
     /// Es un bitmask sobre los argumentos, no sobre memoria concreta: el
     /// analizador resuelve cada uno a su localizacion en el sitio de llamada,
     /// con lo que "escribe su segundo argumento" acaba diciendo `stack#3` y no
     /// "algun sitio".
-    uint32_t lee_apuntado = 0;
-    uint32_t escribe_apuntado = 0;
-    bool lee_global = false;     ///< Lee estado global (estatico del proceso).
-    bool escribe_global = false; ///< Lo escribe.
-    bool io = false;             ///< E/S observable (consola, fichero, puerto).
-    bool puede_lanzar = false;   ///< Puede cortar el flujo (throw/abort).
-    bool no_determinista = false; ///< Dos llamadas iguales pueden diferir.
+    uint32_t reads_pointee = 0;
+    uint32_t writes_pointee = 0;
+    bool reads_global = false;  ///< Lee estado global (estatico del proceso).
+    bool writes_global = false; ///< Lo escribe.
+    bool io = false;            ///< E/S observable (consola, fichero, puerto).
+    bool may_throw = false;     ///< Puede lanzar una excepcion capturable.
+    bool nondeterministic = false; ///< Dos llamadas iguales pueden diferir.
+    /**
+     * @brief Puede ABORTAR el programa (panic), que no es lanzar.
+     *
+     * Ejes distintos en todo el compilador: un `throw` se captura y un panic
+     * corta.  Sin este campo, respetar una declaracion dejaba `panics` en falso
+     * por omision, y entonces un `@nopanic` sobre algo que llama a `abort` se
+     * daba por bueno -- una promesa aprobada justo por lo que no se dijo.
+     */
+    bool may_panic = false;
+    /**
+     * @brief Puede RESERVAR memoria del monton.
+     *
+     * Un booleano y no una cuenta a proposito: nadie puede saber cuantas veces
+     * reserva algo que no se ve, y prometer un numero seria inventarlo.  Con
+     * esto, un `@alloc(0)` sobre quien llame a un `malloc` declarado se
+     * INCUMPLE -- que es lo correcto -- y un `@alloc(3)` se queda en
+     * indecidible, que es lo honesto.
+     *
+     * Sin el campo, una nativa declarada aportaba CERO reservas y `@alloc(0)`
+     * pasaba: el silencio se leia como una demostracion.
+     */
+    bool allocates = false;
     /// Corre AL COMPILAR, no en ejecucion.  Sus efectos son sobre la propia
     /// compilacion, no sobre el programa compilado.
     bool comptime = false;
@@ -1782,7 +1804,7 @@ struct IrNativeImport {
     std::string
         lib; ///< Ruta logica de la libreria (p.ej. "stdlib/native/io/vesta_io")
     std::string name; ///< Nombre de la funcion nativa (p.ej. "vio_println")
-    IrNativeEffects efectos; ///< Lo que hace, si alguien lo ha dicho.
+    IrNativeEffects effects; ///< Lo que hace, si alguien lo ha dicho.
 };
 
 // =========================================================================
@@ -2164,7 +2186,7 @@ struct IrModule {
      * cuanto se sabe de la funcion).
      */
     void register_native_import(std::string lib, std::string name,
-                                const IrNativeEffects &efectos);
+                                const IrNativeEffects &effects);
 
     /// Devuelve lo declarado para @p lib_dos_puntos_fn ("lib:fn"), o nullptr si
     /// esa nativa no se importa aqui o nadie ha dicho lo que hace.

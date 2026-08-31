@@ -6,7 +6,7 @@ from ..comun import C, Spinner, _stats_summary, color_de, una_medida
 from ..contexto import Ctx
 from ..informe import barra, cabecera_fase, imprimir_tabla
 from ..medida import verificar_en_paralelo
-from ..ordenes import entorno_cache
+from ..ordenes import SECUENCIAL, entorno_cache
 from ..topologia import (contar_rehechos, escribir_topologia,
                         huella_artefactos, mutar, orden_multi)
 
@@ -38,10 +38,15 @@ def fase(ctx: Ctx) -> None:
             ficheros = escribir_topologia(ln, n_topo, args.ficheros, forma, d)
             if not ficheros:
                 continue
-            cmd = orden_multi(ln, ficheros, d / "out", vm)
+            # Eje SECUENCIAL: aqui se compara la FORMA del grafo de
+            # dependencias, y el paralelismo depende de esa forma -- un
+            # grafo ancho paraleliza y uno en cadena no --, asi que
+            # dejarlo suelto mezclaria las dos cosas en un solo numero.
+            cmd = orden_multi(ln, ficheros, d / "out", vm, SECUENCIAL,
+                              ctx.nucleos)
             if not cmd:
                 continue
-            env = entorno_cache(ln, dir_cache, entorno_base)
+            env = entorno_cache(ln, dir_cache, entorno_base, SECUENCIAL)
             prep_topo.append(((forma, ln), ln, cmd, env, d, d / "out",
                               forma, ficheros))
     with Spinner("verificando las topologias", color=C.DIM):

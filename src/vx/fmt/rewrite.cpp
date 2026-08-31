@@ -104,7 +104,8 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
                 // que las precede pertenece a la linea, no a la palabra.
                 std::swap(pieces[i].kind, pieces[i + 1].kind);
                 std::swap(pieces[i].text, pieces[i + 1].text);
-                hechas.push_back({RewriteKind::SwapModifiers, pieces[i].offset});
+                hechas.push_back(
+                    {RewriteKind::SwapModifiers, pieces[i].offset});
             }
         }
     }

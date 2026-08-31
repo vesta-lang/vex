@@ -57,8 +57,8 @@ namespace {
  * de la familia, asi que no se puede pertenecer sin decir como se baja.
  */
 struct MathBuiltin {
-    Builtin b;         ///< Que operacion es.
-    uint8_t nargs;     ///< Cuantos argumentos exige.
+    Builtin b;     ///< Que operacion es.
+    uint8_t nargs; ///< Cuantos argumentos exige.
     /**
      * @brief La funcion de la biblioteca, si se baja llamandola.
      *
@@ -68,7 +68,7 @@ struct MathBuiltin {
      * en el juego de instrucciones.
      */
     const char *native;
-    ir::IrOp op;       ///< La instruccion, si @c native es nulo.
+    ir::IrOp op; ///< La instruccion, si @c native es nulo.
     /**
      * @brief En que trabaja: enteros (cierto) o numeros reales (falso).
      *
@@ -125,7 +125,6 @@ constexpr const MathBuiltin *math_builtin_for(Builtin b) {
 
 } // namespace
 
-
 /**
  * @brief Intenta bajar @p e como una de las operaciones matematicas.
  *
@@ -157,12 +156,16 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
          * el dia que haya otro procesador detras no hay que tocar nada de aqui.
          *
          * Era DOS ayudantes, uno para enteros y otro para reales, y las mismas
-         * treinta lineas en los dos.  Lo unico que los separaba es como entra el
-         * argumento y de que tipo sale, y las dos cosas las dice la tabla. */
+         * treinta lineas en los dos.  Lo unico que los separaba es como entra
+         * el argumento y de que tipo sale, y las dos cosas las dice la tabla.
+         */
         auto emit_irop = [&](ir::IrOp op, size_t nargs, bool integral) -> bool {
             if (e->args.size() != nargs) {
-                return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) +
-                                                 "': " + std::to_string(nargs) + " arg(s)", out_value);
+                return builtin_error(
+                    e->loc,
+                    std::string("'") + std::string(builtin_name(b)) +
+                        "': " + std::to_string(nargs) + " arg(s)",
+                    out_value);
             }
             const ir::IrType want =
                 integral ? ir::IrType::I64 : ir::IrType::F64;
@@ -212,8 +215,11 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
         const ir::IrType ret_ir =
             m->integral ? ir::IrType::I64 : ir::IrType::F64;
         if (e->args.size() != expected_args) {
-            return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) + "': " +
-                                             std::to_string(expected_args) + " arg(s)", out_value);
+            return builtin_error(
+                e->loc,
+                std::string("'") + std::string(builtin_name(b)) +
+                    "': " + std::to_string(expected_args) + " arg(s)",
+                out_value);
         }
         std::vector<ir::IrValueId> ops;
         ops.reserve(expected_args);
@@ -230,13 +236,12 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
             const ir::IrType vt = fn_->values[v].type;
             if (vt == ir::IrType::F64 || vt == ir::IrType::F32) {
                 if (vt == ir::IrType::F32) {
-                    ir::IrValueId f64v =
-                        emit_ir_unop(ir::IrOp::F32TOF64, v,
-                                     ir::IrType::F64, e->loc.line);
+                    ir::IrValueId f64v = emit_ir_unop(
+                        ir::IrOp::F32TOF64, v, ir::IrType::F64, e->loc.line);
                     v = f64v;
                 }
-                ir::IrValueId bits =
-                    emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::I64, e->loc.line);
+                ir::IrValueId bits = emit_ir_unop(ir::IrOp::BITCAST, v,
+                                                  ir::IrType::I64, e->loc.line);
                 v = bits;
             } else {
                 v = cast_if_needed(v, vt, ir::IrType::I64, e->loc.line);

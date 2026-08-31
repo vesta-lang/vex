@@ -711,7 +711,6 @@ constexpr bool is_numeric(PrimitiveKind k) noexcept {
     return is_integral(k) || is_floating(k);
 }
 
-
 /**
  * @brief Bytes que ocupa la RANURA de un envoltorio de puntero inteligente.
  *
@@ -727,9 +726,9 @@ constexpr bool is_numeric(PrimitiveKind k) noexcept {
  * este, esta funcion devuelve la cota de arriba, que es siempre correcta
  * aunque gaste.
  *
- * Estaba escrita a mano en cuatro sitios del bajado.  Con la decision repartida,
- * la optimizacion habria que meterla en los cuatro y el primero que se olvidara
- * daria una ranura de un tamano y una escritura de otro.
+ * Estaba escrita a mano en cuatro sitios del bajado.  Con la decision
+ * repartida, la optimizacion habria que meterla en los cuatro y el primero que
+ * se olvidara daria una ranura de un tamano y una escritura de otro.
  *
  * @param k Clase del tipo.
  * @return Bytes de la ranura.
@@ -1091,10 +1090,10 @@ inline PrimitiveKind numeric_primitive_from_name(const std::string &name) {
  * @c INT64_MAX, asi que la comparacion es segura por los dos lados.
  */
 struct NumericRange {
-    int64_t min = 0;       ///< Minimo representable (0 en los sin signo).
-    uint64_t max = 0;      ///< Maximo representable.
+    int64_t min = 0;        ///< Minimo representable (0 en los sin signo).
+    uint64_t max = 0;       ///< Maximo representable.
     bool is_signed = false; ///< Cierto si el tipo admite negativos.
-    bool valid = false;    ///< Falso si el tipo no es entero.
+    bool valid = false;     ///< Falso si el tipo no es entero.
 };
 
 /**

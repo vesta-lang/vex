@@ -45,18 +45,18 @@
 
 #include <filesystem>
 
-#include "analysis/asa/dump.h"         // la vista del conocimiento
-#include "analysis/asa/productores.h"  // producir()
-#include "analyze/asm_report.h"        // registrar_productor_asm()
+#include "analysis/asa/dump.h"      // la vista del conocimiento
+#include "analysis/asa/producers.h" // produce()
+#include "analyze/asm_report.h"     // registrar_productor_asm()
 #include "aot/aot_analyze.h"
 #include "analyze/bigo.h"
-#include "lsp/symbol_index.h"          // uri_to_fs_path
-#include "jit/vreg_select.h"           // vreg_ultimo_motivo
-#include "vx/asm/instr_db.h"           // microarquitecturas y CPU conocidas
-#include "vx/asm/asm_effects.h"        // isa_of_arch(): arquitectura -> ISA
-#include "vx/asm/asm_cfg.h"            // el flujo de un bloque escrito a mano
+#include "lsp/symbol_index.h"            // uri_to_fs_path
+#include "jit/vreg_select.h"             // vreg_ultimo_motivo
+#include "vx/asm/instr_db.h"             // microarquitecturas y CPU conocidas
+#include "vx/asm/asm_effects.h"          // isa_of_arch(): arquitectura -> ISA
+#include "vx/asm/asm_cfg.h"              // el flujo de un bloque escrito a mano
 #include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
-#include "toolchain/native_backend.h"  // el mismo codegen que usa el AOT real
+#include "toolchain/native_backend.h"    // el mismo codegen que usa el AOT real
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
 #include "jit/code_cache.h"
@@ -354,10 +354,10 @@ std::string disasm_native(const uint8_t *code, size_t code_size, uint64_t base,
  * @param arch      Arquitectura de esos bytes.
  * @return Un array de @c {addr, text, line}.
  */
-nlohmann::json disasm_correlated_generic(const uint8_t *code, size_t code_size,
-                                         const std::vector<jit::LineMapEntry>
-                                             &line_map,
-                                         aot::AotArch arch) {
+nlohmann::json
+disasm_correlated_generic(const uint8_t *code, size_t code_size,
+                          const std::vector<jit::LineMapEntry> &line_map,
+                          aot::AotArch arch) {
     nlohmann::json arr = nlohmann::json::array();
     cs_arch cs_a = CS_ARCH_X86;
     cs_mode cs_m = CS_MODE_64;
@@ -379,7 +379,8 @@ nlohmann::json disasm_correlated_generic(const uint8_t *code, size_t code_size,
         std::snprintf(buf, sizeof(buf), "%04llx",
                       static_cast<unsigned long long>(off));
         std::string texto = insn[i].mnemonic;
-        if (insn[i].op_str[0] != '\0') texto += std::string(" ") + insn[i].op_str;
+        if (insn[i].op_str[0] != '\0')
+            texto += std::string(" ") + insn[i].op_str;
         nlohmann::json ji;
         ji["addr"] = buf;
         ji["text"] = std::move(texto);
@@ -1226,8 +1227,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     const std::string key = uri + "|" + std::to_string(hsh) +
                             "|bc-gb:" + function + target.cache_key();
     std::string guardado;
-    if (view_cached(key, guardado))
-        return nlohmann::json::parse(guardado);
+    if (view_cached(key, guardado)) return nlohmann::json::parse(guardado);
 
     vx::CompileOptions opts;
     opts.module_name = "main";
@@ -1637,7 +1637,7 @@ nlohmann::json Inspector::function_report(const std::string &uri) {
     if (fp_arch.empty()) fp_arch = "x86_64";
     std::vector<analyze::FunctionFingerprint> huellas =
         analyze::compute_module_fingerprints(mod, fp_arch);
-    analyze::compose_fingerprints(huellas, &an.result.contracts);
+    analyze::compose_fingerprints(huellas, &an.result.contracts, &mod);
     const std::vector<analyze::ContractCheck> veredictos =
         analyze::verify_contracts(huellas, an.result.contracts);
 
@@ -1646,12 +1646,14 @@ nlohmann::json Inspector::function_report(const std::string &uri) {
         problemas;
     aot::AotTarget objetivo_aot;
     objetivo_aot.tier = tier_from_str("bare");
-    const aot::AotCompatReport compat = aot::aot_analyze_module(mod, objetivo_aot);
+    const aot::AotCompatReport compat =
+        aot::aot_analyze_module(mod, objetivo_aot);
     for (const auto &iss : compat.issues)
         problemas[iss.fn_name].push_back(&iss);
 
     // Indice por nombre para cruzar las tres cosas.
-    std::unordered_map<std::string, const analyze::FunctionFingerprint *> por_fn;
+    std::unordered_map<std::string, const analyze::FunctionFingerprint *>
+        por_fn;
     for (const auto &h : huellas)
         por_fn[h.function] = &h;
 
@@ -2269,9 +2271,8 @@ nlohmann::json Inspector::aot_compat(const std::string &uri,
     ir::IrModule mod;
     if (build.ir_bytes.empty() ||
         !ir::parse_ir_module_cache(build.ir_bytes, mod))
-        return {{"error",
-                 "el modulo no produjo IR en modo nativo (revisa los "
-                 "diagnosticos)"}};
+        return {{"error", "el modulo no produjo IR en modo nativo (revisa los "
+                          "diagnosticos)"}};
 
     aot::AotTarget target;
     target.tier = tier_from_str(tier);
@@ -2435,12 +2436,11 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         aot_build(uri, doc_text,
                   target.any_override() ? target.cache_key() : "", target.opt);
     const AotBuild &build = *build_ref;
-    const bool got_ir =
-        !build.ir_bytes.empty() && ir::parse_ir_module_cache(build.ir_bytes, mod);
+    const bool got_ir = !build.ir_bytes.empty() &&
+                        ir::parse_ir_module_cache(build.ir_bytes, mod);
     if (!got_ir)
-        return {{"error",
-                 "el modulo no produjo IR en modo nativo (revisa los "
-                 "diagnosticos)"}};
+        return {{"error", "el modulo no produjo IR en modo nativo (revisa los "
+                          "diagnosticos)"}};
 
     const ir::IrFunction *fn = pick_function(mod, function);
     if (!fn && !function.empty()) {
@@ -2503,7 +2503,8 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     // La arquitectura que se pidio ver, no la del anfitrion: el compilador
     // genera para varias y esta vista existe para poder mirarlas.
     const aot::AotArch arco = arch_from_name(target.arch);
-    std::unique_ptr<aot::NativeBackend> backend = aot::make_native_backend(arco);
+    std::unique_ptr<aot::NativeBackend> backend =
+        aot::make_native_backend(arco);
     if (!backend)
         return {{"error", "no hay generador de codigo nativo para esa "
                           "arquitectura"}};
@@ -2531,11 +2532,11 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         // es la diferencia entre un aviso que se puede investigar y uno que
         // solo dice que no.
         const std::string motivo = jit::vreg_ultimo_motivo();
-        return {{"incompatible", true},
-                {"reason", "la funcion '" + fn->name +
-                               "' no esta soportada por el generador nativo" +
-                               (motivo.empty() ? std::string()
-                                               : ": " + motivo)}};
+        return {
+            {"incompatible", true},
+            {"reason", "la funcion '" + fn->name +
+                           "' no esta soportada por el generador nativo" +
+                           (motivo.empty() ? std::string() : ": " + motivo)}};
     }
 
     std::string text = disasm_native(bytes.data(), bytes.size(), 0, arco);
@@ -2543,13 +2544,12 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     // convencion: SysV y Win64 en x86-64, y AAPCS64 en aarch64.
     const bool es_arm64 = (arco == aot::AotArch::ARM64);
     nlohmann::json args = function_args(
-        *fn,
-        es_arm64
-            ? std::vector<const char *>{"x0", "x1", "x2", "x3", "x4", "x5",
-                                        "x6", "x7"}
-            : (sysv ? std::vector<const char *>{"rdi", "rsi", "rdx", "rcx",
-                                                "r8", "r9"}
-                    : std::vector<const char *>{"rcx", "rdx", "r8", "r9"}));
+        *fn, es_arm64 ? std::vector<const char *>{"x0", "x1", "x2", "x3", "x4",
+                                                  "x5", "x6", "x7"}
+                      : (sysv ? std::vector<const char *>{"rdi", "rsi", "rdx",
+                                                          "rcx", "r8", "r9"}
+                              : std::vector<const char *>{"rcx", "rdx", "r8",
+                                                          "r9"}));
     std::vector<std::pair<std::string, std::string>> seed;
     for (const auto &a : args)
         seed.emplace_back(a["reg"].get<std::string>(),
@@ -2631,11 +2631,11 @@ nlohmann::json Inspector::asa(const std::string &uri) {
     /* El asm es un dominio mas, pero su productor vive junto a la base de datos
      * de instrucciones: se da de alta desde aqui, que es quien la tiene, igual
      * que hace la linea de ordenes.  El alta es idempotente. */
-    analyze::registrar_productor_asm();
+    analyze::register_asm_producer();
 
     analysis::asa::FactStore almacen;
-    const std::vector<analysis::asa::ResumenProduccion> resumenes =
-        analysis::asa::producir(mod, almacen);
+    const std::vector<analysis::asa::ProductionSummary> resumenes =
+        analysis::asa::produce(mod, almacen);
 
     /* La vista del subsistema escribe a un fichero abierto, no a una cadena, y
      * asi debe seguir: quien decide como se ensena el conocimiento es el, no
@@ -2647,14 +2647,15 @@ nlohmann::json Inspector::asa(const std::string &uri) {
     {
 #if defined(_WIN32)
         FILE *salida = nullptr;
-        if (fopen_s(&salida, ruta.string().c_str(), "w+b") != 0) salida = nullptr;
+        if (fopen_s(&salida, ruta.string().c_str(), "w+b") != 0)
+            salida = nullptr;
 #else
         FILE *salida = std::fopen(ruta.string().c_str(), "w+b");
 #endif
         if (salida == nullptr)
             return {{"error", "no se pudo abrir un fichero temporal para el "
                               "volcado del ASA"}};
-        analysis::asa::imprimir_volcado(almacen, resumenes, salida);
+        analysis::asa::print_dump(almacen, resumenes, salida);
         std::fflush(salida);
         std::rewind(salida);
         char buf[8192];
@@ -2685,13 +2686,13 @@ namespace {
  * @return La linea (contando desde uno), o 0 si no se puede atar a ninguna.
  */
 uint32_t linea_del_sujeto(const ir::IrModule &mod,
-                          const analysis::asa::Sujeto &sujeto) {
-    using Clase = analysis::asa::Sujeto::Clase;
-    if (sujeto.funcion == nullptr || *sujeto.funcion == '\0') return 0;
+                          const analysis::asa::Subject &sujeto) {
+    using Clase = analysis::asa::Subject::Kind;
+    if (sujeto.function == nullptr || *sujeto.function == '\0') return 0;
 
     const ir::IrFunction *fn = nullptr;
     for (const auto &f : mod.functions) {
-        if (f.name == sujeto.funcion) {
+        if (f.name == sujeto.function) {
             fn = &f;
             break;
         }
@@ -2705,12 +2706,12 @@ uint32_t linea_del_sujeto(const ir::IrModule &mod,
     for (const auto &blk : fn->blocks) {
         for (const auto &in : blk.instrs) {
             if (primera == 0 && in.source_line > 0) primera = in.source_line;
-            switch (sujeto.clase) {
-            case Clase::Valor:
+            switch (sujeto.kind) {
+            case Clase::Value:
                 if (in.dst == sujeto.id && in.source_line > 0)
                     return in.source_line;
                 break;
-            case Clase::Instruccion:
+            case Clase::Instruction:
                 if (posicion == sujeto.id && in.source_line > 0)
                     return in.source_line;
                 break;
@@ -2718,7 +2719,7 @@ uint32_t linea_del_sujeto(const ir::IrModule &mod,
             }
             ++posicion;
         }
-        if (sujeto.clase == Clase::Bloque &&
+        if (sujeto.kind == Clase::Block &&
             static_cast<uint32_t>(&blk - &fn->blocks[0]) == sujeto.id &&
             !blk.instrs.empty()) {
             for (const auto &in : blk.instrs)
@@ -2741,16 +2742,16 @@ uint32_t linea_del_sujeto(const ir::IrModule &mod,
  * @return La operacion que lo define, o vacio si no se puede situar.
  */
 std::string texto_del_sujeto(const ir::IrModule &mod,
-                             const analysis::asa::Sujeto &sujeto) {
-    using Clase = analysis::asa::Sujeto::Clase;
-    if (sujeto.clase != Clase::Valor && sujeto.clase != Clase::Instruccion)
+                             const analysis::asa::Subject &sujeto) {
+    using Clase = analysis::asa::Subject::Kind;
+    if (sujeto.kind != Clase::Value && sujeto.kind != Clase::Instruction)
         return std::string();
-    if (sujeto.funcion == nullptr || *sujeto.funcion == '\0')
+    if (sujeto.function == nullptr || *sujeto.function == '\0')
         return std::string();
 
     const ir::IrFunction *fn = nullptr;
     for (const auto &f : mod.functions) {
-        if (f.name == sujeto.funcion) {
+        if (f.name == sujeto.function) {
             fn = &f;
             break;
         }
@@ -2760,9 +2761,9 @@ std::string texto_del_sujeto(const ir::IrModule &mod,
     uint32_t posicion = 0;
     for (const auto &blk : fn->blocks) {
         for (const auto &in : blk.instrs) {
-            const bool es =
-                (sujeto.clase == Clase::Valor) ? (in.dst == sujeto.id)
-                                               : (posicion == sujeto.id);
+            const bool es = (sujeto.kind == Clase::Value)
+                                ? (in.dst == sujeto.id)
+                                : (posicion == sujeto.id);
             if (es) {
                 std::ostringstream oss;
                 ir::print_instr(oss, *fn, in);
@@ -2779,7 +2780,7 @@ std::string texto_del_sujeto(const ir::IrModule &mod,
     /* Un valor sin instruccion que lo defina es un PARAMETRO: entra ya hecho.
      * Decirlo es mejor que dejar la celda vacia, que es lo que hacia parecer
      * que el hecho no era de nada. */
-    if (sujeto.clase == Clase::Valor && sujeto.id < fn->params.size())
+    if (sujeto.kind == Clase::Value && sujeto.id < fn->params.size())
         return "parametro #" + std::to_string(sujeto.id);
     return std::string();
 }
@@ -2794,18 +2795,18 @@ std::string texto_del_sujeto(const ir::IrModule &mod,
  * @param p Lo que se afirma.
  * @return Texto listo para ensenar junto al codigo.
  */
-std::string etiqueta_del_hecho(const analysis::asa::Proposicion &p) {
-    const std::string codigo = p.codigo ? p.codigo : "";
+std::string etiqueta_del_hecho(const analysis::asa::Claim &p) {
+    const std::string codigo = p.code ? p.code : "";
     const std::string a = std::to_string(p.a);
     const std::string b = std::to_string(p.b);
-    const std::string detalle = p.detalle ? p.detalle : "";
-    if (codigo == "rango.acotado") return vx::diag::format("VX9150", {a, b});
-    if (codigo == "rango.constante") return vx::diag::format("VX9151", {a});
-    if (codigo == "rango.inalcanzable") return vx::diag::format("VX9152");
-    if (codigo == "disposicion.alineacion_seccion")
+    const std::string detalle = p.detail ? p.detail : "";
+    if (codigo == "range.bounded") return vx::diag::format("VX9150", {a, b});
+    if (codigo == "range.constant") return vx::diag::format("VX9151", {a});
+    if (codigo == "range.unreachable") return vx::diag::format("VX9152");
+    if (codigo == "layout.section_alignment")
         return vx::diag::format("VX9153", {a, detalle});
-    if (codigo == "bucle.cabecera") return vx::diag::format("VX9154", {a});
-    if (codigo == "memoria.apunta_a")
+    if (codigo == "loop.header") return vx::diag::format("VX9154", {a});
+    if (codigo == "memory.points_to")
         return vx::diag::format("VX9155", {detalle.empty() ? a : detalle});
     // Sin entrada en el catalogo: el codigo, que es vocabulario estable.
     if (detalle.empty()) return codigo;
@@ -2830,7 +2831,8 @@ nlohmann::json Inspector::targets() {
         {"aarch64", "AArch64", vx::instr_db::Isa::ARM64, aot::AotArch::ARM64},
         {"arm32", "ARM de 32 bits", vx::instr_db::Isa::ARM32,
          aot::AotArch::ARM32},
-        {"riscv64", "RISC-V 64", vx::instr_db::Isa::RISCV, aot::AotArch::RISCV64},
+        {"riscv64", "RISC-V 64", vx::instr_db::Isa::RISCV,
+         aot::AotArch::RISCV64},
     };
 
     nlohmann::json arquitecturas = nlohmann::json::array();
@@ -2896,10 +2898,11 @@ static std::string asm_text_of_line(const std::string &linea) {
         const size_t n = std::strlen(w);
         size_t p = antes.find(w);
         while (p != std::string::npos) {
-            const bool izq = (p == 0) || !std::isalnum((unsigned char)antes[p - 1]);
+            const bool izq =
+                (p == 0) || !std::isalnum((unsigned char)antes[p - 1]);
             const size_t fin = p + n;
-            const bool der =
-                (fin >= antes.size()) || !std::isalnum((unsigned char)antes[fin]);
+            const bool der = (fin >= antes.size()) ||
+                             !std::isalnum((unsigned char)antes[fin]);
             if (izq && der) return true;
             p = antes.find(w, p + 1);
         }
@@ -2935,7 +2938,8 @@ static bool localizar_bloque_asm(DocumentStore &docs, const std::string &uri,
         const size_t pb = s.find("//");
         size_t corte = std::string::npos;
         if (pc != std::string::npos) corte = pc;
-        if (pb != std::string::npos && (corte == std::string::npos || pb < corte))
+        if (pb != std::string::npos &&
+            (corte == std::string::npos || pb < corte))
             corte = pb;
         if (corte != std::string::npos) s.resize(corte);
         return s;
@@ -3020,7 +3024,8 @@ nlohmann::json Inspector::asm_block(const std::string &uri, uint32_t line,
         const size_t a = t.find_first_not_of(" \t");
         if (a == std::string::npos) continue;
         t = t.substr(a);
-        while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) t.pop_back();
+        while (!t.empty() && (t.back() == ' ' || t.back() == '\t'))
+            t.pop_back();
         if (t.empty()) continue;
         cuerpo.emplace_back(i, t);
     }
@@ -3075,16 +3080,15 @@ nlohmann::json Inspector::asm_block(const std::string &uri, uint32_t line,
         j["flow"] = nombre_term(in.term);
         j["target"] = in.target;
         auto it = por_etiqueta.find(in.target);
-        j["targetIndex"] = it == por_etiqueta.end() ? -1
-                                                    : static_cast<int>(it->second);
+        j["targetIndex"] =
+            it == por_etiqueta.end() ? -1 : static_cast<int>(it->second);
         /* Salta a algo que no esta en el bloque, pero que existe: una funcion
          * del modulo.  Sin decirlo, la linea se quedaba sin flecha y sin
          * explicacion, como si el salto no fuera a ninguna parte. */
-        j["exitsTo"] =
-            (it == por_etiqueta.end() && !in.target.empty() &&
-             vx::asm_is_external_symbol(in.target))
-                ? in.target
-                : std::string();
+        j["exitsTo"] = (it == por_etiqueta.end() && !in.target.empty() &&
+                        vx::asm_is_external_symbol(in.target))
+                           ? in.target
+                           : std::string();
 
         // Lo que la base sabe de ella, y lo que cuesta aqui.
         const vx::instr_db::AsmInsnSem sem =
@@ -3148,9 +3152,8 @@ nlohmann::json Inspector::asm_flow(const std::string &uri,
     for (uint32_t linea = 1; linea <= total;) {
         uint32_t ini = 0, fin = 0;
         if (localizar_bloque_asm(docs_, uri, linea, ini, fin) && ini == linea) {
-            nlohmann::json b =
-                asm_block(uri, linea + (fin > linea ? 1 : 0), std::string(),
-                          arch);
+            nlohmann::json b = asm_block(uri, linea + (fin > linea ? 1 : 0),
+                                         std::string(), arch);
             if (b.value("found", false)) {
                 nlohmann::json j;
                 j["firstLine"] = b["firstLine"];
@@ -3184,8 +3187,8 @@ nlohmann::json Inspector::asm_flow(const std::string &uri,
                     if (destino >= static_cast<int>(insns.size())) continue;
                     nlohmann::json s;
                     s["fromLine"] = in.value("line", 0u);
-                    s["toLine"] = insns[static_cast<size_t>(destino)].value(
-                        "line", 0u);
+                    s["toLine"] =
+                        insns[static_cast<size_t>(destino)].value("line", 0u);
                     s["flow"] = in.value("flow", std::string());
                     s["target"] = in.value("target", std::string());
                     if (s["fromLine"] != 0 && s["toLine"] != 0)
@@ -3380,32 +3383,33 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
     if (!parse_post_opt_module(an.result, mod))
         return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
 
-    analyze::registrar_productor_asm();
+    analyze::register_asm_producer();
     analysis::asa::FactStore almacen;
-    const std::vector<analysis::asa::ResumenProduccion> resumenes =
-        analysis::asa::producir(mod, almacen);
+    const std::vector<analysis::asa::ProductionSummary> resumenes =
+        analysis::asa::produce(mod, almacen);
 
     nlohmann::json hechos = nlohmann::json::array();
     for (size_t i = 0; i < almacen.size(); ++i) {
         const analysis::asa::Fact &f = almacen.at(i);
         nlohmann::json j;
-        j["line"] = linea_del_sujeto(mod, f.de_quien);
-        j["function"] = f.de_quien.funcion ? f.de_quien.funcion : "";
-        j["functionDisplay"] = vx::demangle_symbol(
-            f.de_quien.funcion ? f.de_quien.funcion : "");
-        j["subject"] = analysis::asa::nombre_clase_sujeto(f.de_quien.clase);
+        j["line"] = linea_del_sujeto(mod, f.about);
+        j["function"] = f.about.function ? f.about.function : "";
+        j["functionDisplay"] =
+            vx::demangle_symbol(f.about.function ? f.about.function : "");
+        j["subject"] = analysis::asa::subject_kind_name(f.about.kind);
         // De QUE habla, no solo de que CLASE de cosa: el identificador y la
         // operacion que lo define.  Sin esto, ocho hechos sobre ocho valores
         // distintos de la misma linea son ocho filas identicas que dicen
         // "valor" y no se pueden distinguir.
-        j["subjectId"] = f.de_quien.id;
-        j["subjectText"] = texto_del_sujeto(mod, f.de_quien);
+        j["subjectId"] = f.about.id;
+        j["subjectText"] = texto_del_sujeto(mod, f.about);
         /* Y lo mismo dicho en CoDIGO.
          *
          * `%12 = add %7, 40` identifica sin lugar a dudas, y no sirve de nada
          * si no se tiene el IR delante -- que es casi siempre --.  La linea del
          * fuente es de lo que uno esta hablando cuando programa, asi que va
-         * como lo principal y la operacion del IR queda para quien la quiera. */
+         * como lo principal y la operacion del IR queda para quien la quiera.
+         */
         {
             const uint32_t linea = j["line"].get<uint32_t>();
             std::string src = linea >= 1 ? docs_.line(uri, linea - 1) : "";
@@ -3419,39 +3423,38 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
             if (src.size() > 120) src = src.substr(0, 117) + "...";
             j["sourceText"] = src;
         }
-        j["domain"] = f.que.dominio ? f.que.dominio : "";
-        j["code"] = f.que.codigo ? f.que.codigo : "";
-        j["a"] = f.que.a;
-        j["b"] = f.que.b;
-        j["detail"] = f.que.detalle ? f.que.detalle : "";
-        j["label"] = etiqueta_del_hecho(f.que);
-        j["certainty"] = analysis::asa::nombre_certeza(f.sello.certeza);
-        j["source"] = analysis::asa::nombre_fuente(f.sello.origen.fuente);
+        j["domain"] = f.what.domain ? f.what.domain : "";
+        j["code"] = f.what.code ? f.what.code : "";
+        j["a"] = f.what.a;
+        j["b"] = f.what.b;
+        j["detail"] = f.what.detail ? f.what.detail : "";
+        j["label"] = etiqueta_del_hecho(f.what);
+        j["certainty"] = analysis::asa::certainty_name(f.seal.certainty);
+        j["source"] = analysis::asa::source_name(f.seal.origin.source);
         // El ambito importa: un hecho puede valer solo para una arquitectura o
         // un backend, y ensenarlo sin decirlo seria mentir por omision.
-        j["isa"] = f.donde.isa ? f.donde.isa : "";
-        j["os"] = f.donde.sistema ? f.donde.sistema : "";
-        j["backend"] = f.donde.backend ? f.donde.backend : "";
+        j["isa"] = f.scope.isa ? f.scope.isa : "";
+        j["os"] = f.scope.os ? f.scope.os : "";
+        j["backend"] = f.scope.backend ? f.scope.backend : "";
 
         /* COMO se llego a el.  Es la mitad que faltaba: sin la regla y sin los
          * hechos de los que se sigue, un hecho es una afirmacion que hay que
          * creerse.  Con ellos se puede recorrer la derivacion hacia atras --
          * que es lo que el modelo llama "todo veredicto lleva su prueba" y lo
          * que el editor estaba tirando --. */
-        j["rule"] = f.prueba.regla ? f.prueba.regla : "";
+        j["rule"] = f.proof.rule ? f.proof.rule : "";
         nlohmann::json de = nlohmann::json::array();
-        for (const analysis::asa::FactId id : f.prueba.de)
+        for (const analysis::asa::FactId id : f.proof.from)
             de.push_back(id);
         j["from"] = std::move(de);
         /* Y quien lo emitio, con el sitio exacto que miro: el numero de valor o
          * de bloque del que salio, que es lo que permite cruzarlo con el IR. */
-        j["producer"] =
-            f.sello.origen.productor ? f.sello.origen.productor : "";
-        j["site"] = f.sello.origen.sitio;
+        j["producer"] = f.seal.origin.producer ? f.seal.origin.producer : "";
+        j["site"] = f.seal.origin.site;
         /* En que se apoya, por analisis.  Grueso, pero dice si un hecho es de
          * cosecha propia o depende de lo que otro dedujo antes. */
         nlohmann::json apoyos = nlohmann::json::array();
-        for (const char *p : f.sello.apoyos.de)
+        for (const char *p : f.seal.support.on)
             if (p != nullptr && *p != '\0') apoyos.push_back(p);
         j["restsOn"] = std::move(apoyos);
         hechos.push_back(std::move(j));
@@ -3463,32 +3466,36 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
      * sirve saberlo.  Puesto debajo de "entre que valores se puede mover, y
      * que descarta eso", ya se entiende que es y por que esta ahi. */
     auto proposito = [](const std::string &dominio) -> std::string {
-        if (dominio == "asa.rangos") return vx::diag::format("VX9160", {});
-        if (dominio == "asa.memoria") return vx::diag::format("VX9161", {});
-        if (dominio == "asa.estructura") return vx::diag::format("VX9162", {});
-        if (dominio == "asa.frontera") return vx::diag::format("VX9163", {});
-        if (dominio == "asa.bucles") return vx::diag::format("VX9164", {});
+        if (dominio == "asa.ranges") return vx::diag::format("VX9160", {});
+        if (dominio == "asa.memory") return vx::diag::format("VX9161", {});
+        if (dominio == "asa.structure") return vx::diag::format("VX9162", {});
+        if (dominio == "asa.boundary") return vx::diag::format("VX9163", {});
+        if (dominio == "asa.loops") return vx::diag::format("VX9164", {});
         if (dominio == "asa.asm") return vx::diag::format("VX9165", {});
-        if (dominio == "asa.asm_flujo") return vx::diag::format("VX9166", {});
-        if (dominio == "asa.disposicion") return vx::diag::format("VX9167", {});
-        if (dominio == "asa.forma_de_valor") return vx::diag::format("VX9168", {});
+        if (dominio == "asa.asm_flow") return vx::diag::format("VX9166", {});
+        if (dominio == "asa.layout") return vx::diag::format("VX9167", {});
+        if (dominio == "asa.value_shape") return vx::diag::format("VX9168", {});
         return std::string();
     };
 
     nlohmann::json dominios = nlohmann::json::array();
     for (const auto &r : resumenes) {
         nlohmann::json j;
-        j["domain"] = r.dominio ? r.dominio : "";
-        j["purpose"] = proposito(r.dominio ? r.dominio : "");
-        j["facts"] = r.hechos;
-        j["looked"] = r.miradas;
-        j["silent"] = r.callados;
+        j["domain"] = r.domain ? r.domain : "";
+        j["purpose"] = proposito(r.domain ? r.domain : "");
+        j["facts"] = r.facts;
+        j["looked"] = r.looked_at;
+        j["silent"] = r.silent;
         j["micros"] = static_cast<int64_t>(r.micros);
         nlohmann::json motivos = nlohmann::json::array();
-        for (const auto &m : r.motivos) {
+        for (const auto &m : r.reasons) {
             nlohmann::json jm;
-            jm["code"] = m.codigo ? m.codigo : "";
-            jm["times"] = m.veces;
+            jm["code"] = m.code ? m.code : "";
+            jm["times"] = m.times;
+            /* La CLASE del no saber, que es lo que decide la accion: dos
+             * codigos distintos de la misma clase se arreglan igual, y quien
+             * mira el editor no tiene por que conocer el dominio. */
+            jm["reason"] = analysis::asa::unknown_reason_name(m.reason);
             motivos.push_back(std::move(jm));
         }
         j["unknown"] = std::move(motivos);
@@ -3643,7 +3650,7 @@ nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
             for (const auto &iss : report.issues) {
                 nlohmann::json ji;
                 ji["fn_name"] = iss.fn_name;
-        ji["fn_display"] = vx::demangle_symbol(iss.fn_name);
+                ji["fn_display"] = vx::demangle_symbol(iss.fn_name);
                 ji["source_line"] = iss.source_line;
                 ji["op"] = ir::ir_op_name(iss.op);
                 ji["reason"] = iss.reason;
@@ -3715,8 +3722,7 @@ nlohmann::json Inspector::comptime_values(const std::string &uri) {
     const uint64_t h = fnv1a_hash(text);
     const std::string key = uri + "|" + std::to_string(h) + "|comptime-values";
     std::string guardado;
-    if (view_cached(key, guardado))
-        return nlohmann::json::parse(guardado);
+    if (view_cached(key, guardado)) return nlohmann::json::parse(guardado);
 
     vx::CompileOptions opts;
     opts.module_name = "main";

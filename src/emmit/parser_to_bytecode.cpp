@@ -471,7 +471,8 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
 void Assembler::apply_annotation(const vm::AnnotationNode *annotation) {
     // si la notacion esta permitida por el ensamblador entonces tiene efecto y
     // describe alguna informacion necesaria para este ensamblador.
-    const emmit::Directive d = emmit::directive_from_text(annotation->key.c_str());
+    const emmit::Directive d =
+        emmit::directive_from_text(annotation->key.c_str());
     if (const AnnotationHandler h = handler_of(d)) {
         h(annotation, *this); // Ejecuta la funcion asociada
         return;

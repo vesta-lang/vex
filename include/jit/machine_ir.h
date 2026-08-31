@@ -1860,10 +1860,10 @@ struct MFunction {
      * mano.  Aqui varia por funcion, asi que se describe con estos campos.
      */
     struct UnwindDesc {
-        bool naked = false;      ///< el cuerpo es dueno de la pila: sin marco.
-        bool push_rbp = false;   ///< el prologo empieza salvando RBP.
-        bool frame_ptr = false;  ///< ademas hace `mov rbp, rsp`.
-        bool push_rbx = false;   ///< salva RBX (lleva el ProcessVM*).
+        bool naked = false;     ///< el cuerpo es dueno de la pila: sin marco.
+        bool push_rbp = false;  ///< el prologo empieza salvando RBP.
+        bool frame_ptr = false; ///< ademas hace `mov rbp, rsp`.
+        bool push_rbx = false;  ///< salva RBX (lleva el ProcessVM*).
         std::vector<uint8_t> callee_saved; ///< los demas, en orden de push.
         uint32_t spill_bytes = 0;          ///< lo que reserva el `sub rsp`.
     };

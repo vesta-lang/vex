@@ -247,6 +247,8 @@ class WorkspaceIndex {
 
     /// @brief true si las raices estan fijadas (hay donde indexar).
     bool has_roots() const { return !roots_.empty(); }
+    /// @brief Raices del workspace, para quien necesite recorrerlas.
+    const std::vector<std::string> &roots() const noexcept { return roots_; }
 
   private:
     /// Indexa un fichero concreto (lee de disco) y registra sus entradas.

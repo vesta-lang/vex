@@ -1040,7 +1040,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &kv : tc.function_names()) {
         const std::string &fname = kv.first;
         const FunctionSig *sig = tc.function_sig_by_name(fname);
-        if (util::flag_on(util::FlagId::DbgVxi) && fname.find("invoke") != std::string::npos)
+        if (util::flag_on(util::FlagId::DbgVxi) &&
+            fname.find("invoke") != std::string::npos)
             fprintf(stderr,
                     "[vxi-fn] fname=%s sig=%p strip='%s' in_ns=%d "
                     "pub=%d\n",
@@ -1456,7 +1457,6 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     }
 }
 
-
 /**
  * @brief Registra en el comprobador un typedef que viene de un `.vxi`.
  *
@@ -1468,8 +1468,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
  *
  * Esto vivia dentro del bucle que importa los simbolos de un `.vxi`.  Hace
  * falta tambien al inyectar plantillas genericas, que se re-parsean y necesitan
- * resolver los tipos que su modulo trajo de un tercero; escribirlo alli otra vez
- * habria sido una segunda version de las mismas reglas, y la copia que se
+ * resolver los tipos que su modulo trajo de un tercero; escribirlo alli otra
+ * vez habria sido una segunda version de las mismas reglas, y la copia que se
  * quedara corta seria la que fallara -- que es exactamente lo que paso al
  * intentarlo: una version reducida se dejo lo de la identidad y el compilador
  * se caia.
@@ -1483,8 +1483,7 @@ static void register_vxi_typedef_(TypeChecker &tc, const VxiSymbol &s,
                                   const std::string &canon,
                                   const std::string &local_name) {
     Type underlying = tc.resolve_type_string(s.underlying_type);
-    if (underlying.kind == PrimitiveKind::VOID &&
-        s.underlying_type != "void") {
+    if (underlying.kind == PrimitiveKind::VOID && s.underlying_type != "void") {
         // No se pudo resolver el underlying (e.g. apunta a un
         // tipo no importado todavia).  Skip silente; M5
         // añadira un round adicional de resolucion.
@@ -1523,45 +1522,43 @@ static void register_vxi_typedef_(TypeChecker &tc, const VxiSymbol &s,
             TypeChecker::NewtypeInfo ni;
             ni.from_conversions.reserve(s.from_conversions.size());
             for (const auto &c : s.from_conversions) {
-        TypeChecker::ExplicitConv ec;
-        ec.type = tc.resolve_type_string(c.type_str);
-        ec.is_public = c.is_public;
-        ni.from_conversions.push_back(std::move(ec));
+                TypeChecker::ExplicitConv ec;
+                ec.type = tc.resolve_type_string(c.type_str);
+                ec.is_public = c.is_public;
+                ni.from_conversions.push_back(std::move(ec));
             }
             ni.to_conversions.reserve(s.to_conversions.size());
             for (const auto &c : s.to_conversions) {
-        TypeChecker::ExplicitConv ec;
-        ec.type = tc.resolve_type_string(c.type_str);
-        ec.is_public = c.is_public;
-        ni.to_conversions.push_back(std::move(ec));
+                TypeChecker::ExplicitConv ec;
+                ec.type = tc.resolve_type_string(c.type_str);
+                ec.is_public = c.is_public;
+                ni.to_conversions.push_back(std::move(ec));
             }
             ni.implicit_from_conversions.reserve(
-        s.implicit_from_conversions.size());
+                s.implicit_from_conversions.size());
             for (const auto &c : s.implicit_from_conversions) {
-        TypeChecker::ExplicitConv ec;
-        ec.type = tc.resolve_type_string(c.type_str);
-        ec.is_public = c.is_public;
-        ni.implicit_from_conversions.push_back(std::move(ec));
+                TypeChecker::ExplicitConv ec;
+                ec.type = tc.resolve_type_string(c.type_str);
+                ec.is_public = c.is_public;
+                ni.implicit_from_conversions.push_back(std::move(ec));
             }
             ni.implicit_to_conversions.reserve(
-        s.implicit_to_conversions.size());
+                s.implicit_to_conversions.size());
             for (const auto &c : s.implicit_to_conversions) {
-        TypeChecker::ExplicitConv ec;
-        ec.type = tc.resolve_type_string(c.type_str);
-        ec.is_public = c.is_public;
-        ni.implicit_to_conversions.push_back(std::move(ec));
+                TypeChecker::ExplicitConv ec;
+                ec.type = tc.resolve_type_string(c.type_str);
+                ec.is_public = c.is_public;
+                ni.implicit_to_conversions.push_back(std::move(ec));
             }
             // El newtype importado responde a su nombre local Y al
             // canonico (mangled): las firmas de otros .vxi lo
             // referencian por el segundo, y si solo estuviera el
             // primero la conversion no se encontraria desde ahi.
             if (canon != local_name) {
-        TypeChecker::NewtypeInfo copia = ni;
-        tc.register_imported_newtype_info(canon,
-                                  std::move(copia));
+                TypeChecker::NewtypeInfo copia = ni;
+                tc.register_imported_newtype_info(canon, std::move(copia));
             }
-            tc.register_imported_newtype_info(local_name,
-                              std::move(ni));
+            tc.register_imported_newtype_info(local_name, std::move(ni));
         }
     }
     // Igual que con struct/class/enum: atar el tipo TAMBIEN a su clave
@@ -1674,8 +1671,8 @@ void inject_generic_templates_from_vxi(
             // `u64`, no tiene esa vuelta -- y es lo que hace falta para que las
             // firmas de las plantillas resuelvan.  Lo demas lo trae el import
             // normal cuando alguien lo pida de verdad.
-            if (!comptime_is_primitive(tc.resolve_type_string(
-                    sym.underlying_type)))
+            if (!comptime_is_primitive(
+                    tc.resolve_type_string(sym.underlying_type)))
                 continue;
             register_vxi_typedef_(tc, sym, qualify_once_(sym.ns_path, sym.name),
                                   sym.name);
@@ -1821,7 +1818,10 @@ void inject_generic_templates_from_vxi(
         const std::string cnm = decl_name(d.get());
         std::string cns;
         for (const auto &g : mod.generic_templates)
-            if (g.name == cnm) { cns = g.ns_path; break; }
+            if (g.name == cnm) {
+                cns = g.ns_path;
+                break;
+            }
         if (cns.empty()) continue;
         std::string ns_m;
         for (char c : cns)
@@ -1853,7 +1853,8 @@ void inject_generic_templates_from_vxi(
                 if (it != concept_rename.end()) id->name = it->second;
             }
             rename_in_expr(c->callee.get());
-            for (auto &a : c->args) rename_in_expr(a.get());
+            for (auto &a : c->args)
+                rename_in_expr(a.get());
             break;
         }
         case ast::NodeKind::BinaryExpr: {
@@ -1957,8 +1958,8 @@ void inject_generic_templates_from_vxi(
                     static_cast<ast::EnumDecl *>(decl.get())->type_bounds);
                 break;
             case ast::NodeKind::ConceptDecl:
-                rename_in_expr(
-                    static_cast<ast::ConceptDecl *>(decl.get())->predicate.get());
+                rename_in_expr(static_cast<ast::ConceptDecl *>(decl.get())
+                                   ->predicate.get());
                 break;
             default: break;
             }

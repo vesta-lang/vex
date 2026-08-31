@@ -23,7 +23,7 @@
  */
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
-#include <cstring>  // strlen, para comparar prefijos
+#include <cstring>           // strlen, para comparar prefijos
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -36,7 +36,6 @@ namespace vx {
 
 /// La biblioteca nativa de entrada y salida de la maquina virtual.
 const std::string kVestaIoLib = "stdlib/native/io/vesta_io";
-
 
 /**
  * @brief @c true si @p fn_name es una funcion que se invento el compilador.
@@ -87,38 +86,37 @@ Lowering::emit_string_lit(ast::StringLitExpr *slit) {
     return {v_str, v_len};
 }
 
-    // Helper que emite getproc en el bloque actual.
+// Helper que emite getproc en el bloque actual.
 
+// -----------------------------------------------------------------
+// Helpers para emitir un fragmento de salida.
+//
+// emit_print_string_literal(text):  CALLN vio_print(proc, addr, len)
+//   con text registrado en static_data.  Si text vacio, no-op.
+//
+// emit_print_typed_value(expr):  segun el tipo de expr, despacha a
+//   vio_print_int / _uint / _hex / _float / _bool / _char / o
+//   vio_print(proc, addr, len) si el tipo es PTR (string).  Solo
+//   un CALLN por valor; cero overhead intermedio.
+//
+// emit_print_arg(expr): si expr es StringLitExpr interpolado,
+//   itera parts/exprs y emite UN CALLN por fragmento.  Si es un
+//   string simple emite UN solo CALLN.  Si es escalar despacha
+//   por tipo via emit_print_typed_value.
+//
+// emit_print_newline():  CALLN vio_print_newline (cero args).
+// -----------------------------------------------------------------
 
-    // -----------------------------------------------------------------
-    // Helpers para emitir un fragmento de salida.
-    //
-    // emit_print_string_literal(text):  CALLN vio_print(proc, addr, len)
-    //   con text registrado en static_data.  Si text vacio, no-op.
-    //
-    // emit_print_typed_value(expr):  segun el tipo de expr, despacha a
-    //   vio_print_int / _uint / _hex / _float / _bool / _char / o
-    //   vio_print(proc, addr, len) si el tipo es PTR (string).  Solo
-    //   un CALLN por valor; cero overhead intermedio.
-    //
-    // emit_print_arg(expr): si expr es StringLitExpr interpolado,
-    //   itera parts/exprs y emite UN CALLN por fragmento.  Si es un
-    //   string simple emite UN solo CALLN.  Si es escalar despacha
-    //   por tipo via emit_print_typed_value.
-    //
-    // emit_print_newline():  CALLN vio_print_newline (cero args).
-    // -----------------------------------------------------------------
-
-    // emit_io_prim(prim, args):  emite la llamada a una primitiva de I/O
-    // nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vesta con
-    // ese nombre (p.ej. `void __vx_write(u8* b, u64 n) {...}`) se llama a la
-    // SUYA (CALL interno, resuelto en el mismo objeto -> override en Vesta);
-    // si no, se usa el simbolo C por defecto (CALLN vx_bare_io:<prim>, lo
-    // aporta stdlib/native/io/vesta_io_bare.c).  Asi las primitivas son
-    // programables en el propio lenguaje sin import ni libreria std.
+// emit_io_prim(prim, args):  emite la llamada a una primitiva de I/O
+// nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vesta con
+// ese nombre (p.ej. `void __vx_write(u8* b, u64 n) {...}`) se llama a la
+// SUYA (CALL interno, resuelto en el mismo objeto -> override en Vesta);
+// si no, se usa el simbolo C por defecto (CALLN vx_bare_io:<prim>, lo
+// aporta stdlib/native/io/vesta_io_bare.c).  Asi las primitivas son
+// programables en el propio lenguaje sin import ni libreria std.
 void Lowering::emit_io_prim(const std::string &prim,
-                        const std::vector<ir::IrValueId> &args,
-                        uint32_t line) {
+                            const std::vector<ir::IrValueId> &args,
+                            uint32_t line) {
     const bool user_defined = (tc_.function_sig_by_name(prim) != nullptr);
     ir::IrInstr ins{};
     ins.type = ir::IrType::VOID;
@@ -137,7 +135,7 @@ void Lowering::emit_io_prim(const std::string &prim,
 }
 
 void Lowering::emit_print_string_literal(const std::string &text,
-                                     uint32_t line) {
+                                         uint32_t line) {
     if (text.empty()) return;
     std::vector<uint8_t> bytes(text.begin(), text.end());
     const uint64_t lit_idx = out_mod_->intern_static_data(std::move(bytes));
@@ -155,6 +153,5 @@ void Lowering::emit_print_string_literal(const std::string &text,
     emit_native_call(kVestaIoLib, "vio_print", {v_proc, v_str, v_len},
                      ir::IrType::VOID, line);
 }
-
 
 } // namespace vx

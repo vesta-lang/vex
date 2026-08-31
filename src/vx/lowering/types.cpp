@@ -22,7 +22,7 @@
  */
 #include "vx/lowering.h"
 #include "util/thread_slot.h" // el estado por hilo NO va en thread_local
-#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -401,7 +401,8 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
         /* Esta tabla se escribia a mano y OMITIA F32, que caia en el default y
          * valia 8 en vez de 4.  No fallaba porque esta rama solo se recorre
          * cuando el origen NO es flotante -- estaba protegida por el contexto,
-         * no por ser correcta.  El vocabulario unico ya no deja escribir eso. */
+         * no por ser correcta.  El vocabulario unico ya no deja escribir eso.
+         */
         auto bytes_of_local = [](ir::IrType t) -> int {
             return static_cast<int>(ir::type_slot_bytes(t));
         };
@@ -457,8 +458,6 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
     return dst;
 }
 
-
-
 /**
  * @brief Resuelve como se ve un parametro desde el IR.
  *
@@ -487,7 +486,8 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
     ParamAbi abi;
 
     if (p.type && p.type->kind == ast::NodeKind::PrimitiveTypeNode) {
-        const auto *ptn = static_cast<const ast::PrimitiveTypeNode *>(p.type.get());
+        const auto *ptn =
+            static_cast<const ast::PrimitiveTypeNode *>(p.type.get());
         abi.type = ir_type_from_primitive(ptn->prim);
         if (native_poo_ && ptn->prim == PrimitiveKind::STRING)
             abi.mem.is_host_ptr = true;
@@ -551,21 +551,22 @@ std::vector<Lowering::DeclaredParam> Lowering::declare_params(
      *
      * Asi que esto NO es un limite del lenguaje, es de un modo de ejecucion, y
      * por eso se dice aqui -- donde ya se sabe para donde se compila -- y no en
-     * el comprobador de tipos, que rechazaria tambien lo que en nativo funciona.
-     * Y hay que decirlo: pasarse no daba un error sino un argumento con basura,
-     * que compila, arranca y da numeros absurdos. */
+     * el comprobador de tipos, que rechazaria tambien lo que en nativo
+     * funciona. Y hay que decirlo: pasarse no daba un error sino un argumento
+     * con basura, que compila, arranca y da numeros absurdos. */
     if (!native_poo_ && !params.empty()) {
         const size_t slots = param_slot_count(params) + reserved_slots;
         if (slots > 12) {
-            error_at(params.front()->loc,
-                     "'" + fn.name + "' necesita " + std::to_string(slots) +
-                         " huecos de argumento y la maquina virtual tiene "
-                         "doce" +
-                         (reserved_slots ? " (uno lo ocupa 'this')" : "") +
-                         ".\n  Un variadico ocupa dos: la direccion y cuantos "
-                         "son.\n  sugerencia: agrupa los que sobren en un "
-                         "struct, o compila a nativo (`-m aot`), que ahi no hay "
-                         "limite");
+            error_at(
+                params.front()->loc,
+                "'" + fn.name + "' necesita " + std::to_string(slots) +
+                    " huecos de argumento y la maquina virtual tiene "
+                    "doce" +
+                    (reserved_slots ? " (uno lo ocupa 'this')" : "") +
+                    ".\n  Un variadico ocupa dos: la direccion y cuantos "
+                    "son.\n  sugerencia: agrupa los que sobren en un "
+                    "struct, o compila a nativo (`-m aot`), que ahi no hay "
+                    "limite");
         }
     }
 
@@ -619,8 +620,8 @@ void Lowering::pack_variadic_args(std::vector<ir::IrValueId> &arg_ids,
         for (size_t i = 0; i < vcount; ++i) {
             ir::IrValueId slot = v_arr;
             if (i != 0)
-                slot = emit_ptr_add(v_arr, emit_const(ir::IrType::I64, i * esz, line),
-                                    line);
+                slot = emit_ptr_add(
+                    v_arr, emit_const(ir::IrType::I64, i * esz, line), line);
             emit_store_typed(slot, arg_ids[fixed + i], elem_ty, line);
         }
     } else {

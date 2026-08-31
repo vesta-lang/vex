@@ -83,7 +83,8 @@ int main() {
     {
         auto ds = asm_diagnose(Isa::X86, "mov rdi, rbx\n"
                                          "jmp __vxp_fiber_exit\n");
-        CHECK(!has_code(ds, "VXA002"), "salto a funcion del modulo: sin VXA002");
+        CHECK(!has_code(ds, "VXA002"),
+              "salto a funcion del modulo: sin VXA002");
         CHECK(!has_code(ds, "VXA003"), "y tampoco es un bucle infinito");
     }
 

@@ -38,10 +38,10 @@ namespace {
  */
 struct DispatchStats {
     std::atomic<size_t> parallel_dispatches{0}; ///< Repartos hechos en paralelo
-    std::atomic<size_t> serial_walks{0};   ///< Recorridos hechos en fila de uno
-    std::atomic<size_t> functions{0};      ///< Funciones repartidas en paralelo
-    std::atomic<long long> wait_us{0};     ///< Microsegundos girando al final
-    std::atomic<long long> total_us{0};    ///< Microsegundos dentro del reparto
+    std::atomic<size_t> serial_walks{0}; ///< Recorridos hechos en fila de uno
+    std::atomic<size_t> functions{0};    ///< Funciones repartidas en paralelo
+    std::atomic<long long> wait_us{0};   ///< Microsegundos girando al final
+    std::atomic<long long> total_us{0};  ///< Microsegundos dentro del reparto
 
     /// Vuelca el resumen al terminar el proceso, si se pidio.
     ~DispatchStats() {

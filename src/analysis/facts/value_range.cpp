@@ -158,12 +158,12 @@ struct CosteEstado {
      * necesita los 64 bits.  Sin este dato, cambiar la representacion es
      * apostar. */
     uint64_t narrow_width_count = 0; ///< entradas con tipo de 32 bits o menos
-    uint64_t width_seen = 0;    ///< entradas miradas
+    uint64_t width_seen = 0;         ///< entradas miradas
     /* Cuanto tira la poda.  Decide si compensa FUSIONAR la copia con ella en
      * `calcular_out`: hoy se copia el estado entero y despues se descarta lo
      * muerto, asi que lo que la poda tira se copio para nada. */
-    uint64_t pruned_count = 0;      ///< entradas descartadas por muertas
-    uint64_t prune_seen = 0; ///< entradas que entraron en la poda
+    uint64_t pruned_count = 0; ///< entradas descartadas por muertas
+    uint64_t prune_seen = 0;   ///< entradas que entraron en la poda
     /* CUANTO cambia una visita que cambia.  Si el delta es minusculo frente al
      * tamano del estado, rehacer la fusion y la copia enteras para propagarlo
      * es trabajo de mas, y la salida seria incremental en vez de recalcular. */
@@ -214,8 +214,7 @@ static const bool g_keep_floor_entries =
 static const bool g_stats_verbose = util::flag_on(util::FlagId::RangeStats);
 
 /// Saltarse la cache de rangos (para comparar con y sin).
-static const bool g_no_range_cache =
-    util::flag_on(util::FlagId::NoRangeCache);
+static const bool g_no_range_cache = util::flag_on(util::FlagId::NoRangeCache);
 
 /**
  * @brief El refinamiento va al asignador general, y NO a una arena de fase.
@@ -265,19 +264,15 @@ struct Estado {
     /// al que apuntar.  Quien quiera el rango pide @c range().
     const RangeEntry *buscar(ir::IrValueId v) const {
         if (g_medir_coste) ++g_coste.busquedas;
-        auto it =
-            std::lower_bound(ref.begin(), ref.end(), v,
-                             [](const RangeEntry &p, ir::IrValueId x) {
-                                 return p.id < x;
-                             });
+        auto it = std::lower_bound(
+            ref.begin(), ref.end(), v,
+            [](const RangeEntry &p, ir::IrValueId x) { return p.id < x; });
         return (it == ref.end() || it->id != v) ? nullptr : &*it;
     }
     void poner(ir::IrValueId v, const ValueRange &r) {
-        auto it =
-            std::lower_bound(ref.begin(), ref.end(), v,
-                             [](const RangeEntry &p, ir::IrValueId x) {
-                                 return p.id < x;
-                             });
+        auto it = std::lower_bound(
+            ref.begin(), ref.end(), v,
+            [](const RangeEntry &p, ir::IrValueId x) { return p.id < x; });
         if (it != ref.end() && it->id == v) {
             it->set_range(r);
             if (g_medir_coste) ++g_coste.reescrituras;
@@ -303,9 +298,8 @@ struct Estado {
          * byte de relleno explicito nace a cero y nadie lo escribe.  Sin esas
          * dos condiciones esto compararia basura y dos estados iguales podrian
          * salir distintos: por eso las aserciones y no un comentario. */
-        return ref.empty() ||
-               std::memcmp(ref.data(), o.ref.data(),
-                           ref.size() * sizeof(RangeEntry)) == 0;
+        return ref.empty() || std::memcmp(ref.data(), o.ref.data(),
+                                          ref.size() * sizeof(RangeEntry)) == 0;
     }
 };
 
@@ -689,7 +683,7 @@ struct Motor : Contexto {
     /// crece.
     /// Sobre un destino REUTILIZADO; ver el motivo en @c narrow_into.
     void widen_into(const Estado &viejo, const Estado &nuevo,
-                      Estado &out) const {
+                    Estado &out) const {
         if (!viejo.alcanzable || !nuevo.alcanzable) {
             if (&out != &nuevo) out = nuevo;
             return;
@@ -703,8 +697,7 @@ struct Motor : Contexto {
         for (const RangeEntry &p : nuevo.ref) {
             while (j < viejo.ref.size() && viejo.ref[j].id < p.id)
                 ++j;
-            const bool hay =
-                (j < viejo.ref.size() && viejo.ref[j].id == p.id);
+            const bool hay = (j < viejo.ref.size() && viejo.ref[j].id == p.id);
             if (g_medir_coste) ++g_coste.busquedas;
             const ValueRange base = hay ? viejo.ref[j].range() : suelo[p.id];
             const ValueRange w = base.ensanchar(p.range());
@@ -728,7 +721,7 @@ struct Motor : Contexto {
      * paso del descenso, que recorre TODOS los bloques.  El destino se limpia
      * al entrar, asi que conserva su capacidad de la vuelta anterior. */
     void narrow_into(const Estado &viejo, const Estado &nuevo,
-                      Estado &out) const {
+                     Estado &out) const {
         if (!nuevo.alcanzable || !viejo.alcanzable) {
             if (&out != &nuevo) out = nuevo;
             return;
@@ -742,8 +735,7 @@ struct Motor : Contexto {
         for (const RangeEntry &p : nuevo.ref) {
             while (j < viejo.ref.size() && viejo.ref[j].id < p.id)
                 ++j;
-            const bool hay =
-                (j < viejo.ref.size() && viejo.ref[j].id == p.id);
+            const bool hay = (j < viejo.ref.size() && viejo.ref[j].id == p.id);
             if (g_medir_coste) ++g_coste.busquedas;
             ValueRange r = p.range();
             if (hay) {
@@ -1272,7 +1264,7 @@ void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
             const std::string destino =
                 (in.op == IrOp::CALL)
                     ? in.func_name
-                    : funcion_apuntada(fn, facts, in.func_ptr);
+                    : pointed_function(fn, facts, in.func_ptr);
             if (const FnRangeSummary *s = sum.buscar(destino)) nuevo = s->ret;
         }
         break;
@@ -1353,6 +1345,11 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
     if (d.huella_opciones != util::fnv_bytes(util::kFnvOffset, &op, sizeof(op)))
         return false;
     if (d.huella_ir != huella_de_funcion(fn)) return false;
+    /* HABIA resumenes entonces y los hay ahora?  Esta comprobacion no la puede
+     * hacer la lista de abajo: un calculo SIN resumenes no consulta ninguno, y
+     * su lista vacia pasa el bucle sin mirar nada.  Es el guardia lo que
+     * cambia, no lo que se leyo detras de el. */
+    if (d.had_summaries != (sum != nullptr)) return false;
     // Se RELEE cada resumen que se consulto, contra el estado de ahora.
     for (const auto &leida : d.resumenes) {
         const FnRangeSummary *s = sum ? sum->buscar(leida.first) : nullptr;
@@ -1448,6 +1445,10 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
     out.deps.huella_opciones =
         util::fnv_bytes(util::kFnvOffset, &op, sizeof(op));
     out.deps.resumenes = m.sum.soltar();
+    /* Y si HABIA resumenes, que es lo que el guardia de arriba mira y la lista
+     * de lecturas no puede contar: sin resumenes no se consulta ninguno, y una
+     * lista vacia valdria para cualquier peticion futura. */
+    out.deps.had_summaries = sum != nullptr;
     out.deps.registrada = true;
 
     // Densidad: cuantos de los valores de la funcion acaban teniendo rango en
@@ -1535,13 +1536,14 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                 out.stats.cambios, out.stats.ensanches, out.stats.estrechados,
                 (unsigned long long)g_coste.elems_muertos,
                 (unsigned long long)g_coste.elems_vivos_total);
-            std::fprintf(stderr,
-                         "[anchura] estrechas=%llu de %llu | pruned_count=%llu de "
-                         "%llu\n",
-                         (unsigned long long)g_coste.narrow_width_count,
-                         (unsigned long long)g_coste.width_seen,
-                         (unsigned long long)g_coste.pruned_count,
-                         (unsigned long long)g_coste.prune_seen);
+            std::fprintf(
+                stderr,
+                "[anchura] estrechas=%llu de %llu | pruned_count=%llu de "
+                "%llu\n",
+                (unsigned long long)g_coste.narrow_width_count,
+                (unsigned long long)g_coste.width_seen,
+                (unsigned long long)g_coste.pruned_count,
+                (unsigned long long)g_coste.prune_seen);
             std::fprintf(stderr,
                          "[delta] difieren=%llu de %llu | salida=entrada %llu "
                          "de %llu\n",

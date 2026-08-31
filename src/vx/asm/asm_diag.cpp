@@ -226,8 +226,8 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
             bool lee_condicion = sem[i].reads_flags;
             if (sem[i].reads_flags && sem[i].form_id >= 0) {
                 std::vector<std::string> lee_n, escribe_n;
-                if (instr_db::flag_names_of(isa, sem[i].form_id,
-                                            lee_n, escribe_n)) {
+                if (instr_db::flag_names_of(isa, sem[i].form_id, lee_n,
+                                            escribe_n)) {
                     lee_condicion = false;
                     for (const std::string &f : lee_n)
                         if (f == "af" || f == "cf" || f == "of" || f == "pf" ||

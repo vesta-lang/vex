@@ -54,9 +54,9 @@ namespace {
  * huerfano a imprimirse como cadena de C.
  */
 struct ScalarPrinter {
-    Builtin b;         ///< Que builtin es.
-    const char *vm;    ///< La primitiva del runtime de la maquina virtual.
-    const char *bare;  ///< La del binario nativo; nulo si ahi todavia no hay.
+    Builtin b;        ///< Que builtin es.
+    const char *vm;   ///< La primitiva del runtime de la maquina virtual.
+    const char *bare; ///< La del binario nativo; nulo si ahi todavia no hay.
     /**
      * @brief Si callar cuando el argumento no es lo que el nombre promete.
      *
@@ -147,8 +147,8 @@ static FmtSpec parse_fmt_spec(const std::string &s, const SourceLoc &loc,
         // seguido de digitos para el width, y opcionalmente un char
         // de fill.
         if (s[i] == '<' || s[i] == '>') {
-            out.align = (s[i] == '<') ? FmtSpec::Align::LEFT
-                                      : FmtSpec::Align::RIGHT;
+            out.align =
+                (s[i] == '<') ? FmtSpec::Align::LEFT : FmtSpec::Align::RIGHT;
             ++i;
             uint32_t w = 0;
             while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
@@ -166,8 +166,7 @@ static FmtSpec parse_fmt_spec(const std::string &s, const SourceLoc &loc,
         } else {
             // Detectar keyword.
             size_t start = i;
-            while (i < s.size() && s[i] != ':' && s[i] != ' ' &&
-                   s[i] != '\t')
+            while (i < s.size() && s[i] != ':' && s[i] != ' ' && s[i] != '\t')
                 ++i;
             std::string kw = s.substr(start, i - start);
             if (kw == "hex")
@@ -208,8 +207,7 @@ static FmtSpec parse_fmt_spec(const std::string &s, const SourceLoc &loc,
  * @param out_value Donde dejar el resultado; sin valor si el builtin no lo da.
  * @return @c true si @p b era de esta familia y quedo bajado.
  */
-bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
-                                        Builtin b,
+bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
                                         ir::IrValueId &out_value) {
     const bool is_print = (b == Builtin::Print);
     /*  MC.18: `comptime_print` / `ct_print` se aliasan a
@@ -219,15 +217,16 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
      * site), asi que el output aparece durante la compilacion
      * igual que el AST eval. */
     const bool is_println =
-        (b == Builtin::Println || b == Builtin::ComptimePrint || b == Builtin::CtPrint);
+        (b == Builtin::Println || b == Builtin::ComptimePrint ||
+         b == Builtin::CtPrint);
     const bool is_echo = (b == Builtin::Echo);   // alias de print
     const bool is_flush = (b == Builtin::Flush); // vio_flush() sin args
     const bool is_gc_collect =
         (b == Builtin::GcCollect); // fuerza GC + finalizadores
     const bool is_gc_finalize_all =
         (b == Builtin::GcFinalizeAll); // finaliza todo objeto GC con recurso
-    /* Los que escriben UN escalar -- `print_int`, `print_hex`, `print_ptr`... --
-     * se preguntan de una vez: la tabla dice si @p b es de esos y, si lo es,
+    /* Los que escriben UN escalar -- `print_int`, `print_hex`, `print_ptr`...
+     * -- se preguntan de una vez: la tabla dice si @p b es de esos y, si lo es,
      * como se llama la primitiva en cada camino.  Nulo es "no es de esos". */
     const ScalarPrinter *const scalar = scalar_printer_for(b);
     const bool is_print_pad = (b == Builtin::PrintPad);
@@ -304,8 +303,11 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // print y echo son sinonimos; println anade '\n' al final.
     if (is_print || is_println || is_echo) {
         if (e->args.size() != 1 || !e->args[0]) {
-            return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) +
-                                             "' requiere exactamente un argumento", out_value);
+            return builtin_error(e->loc,
+                                 std::string("'") +
+                                     std::string(builtin_name(b)) +
+                                     "' requiere exactamente un argumento",
+                                 out_value);
         }
         emit_print_arg(e->args[0].get());
         if (is_println) emit_print_newline(e->loc.line);
@@ -317,7 +319,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // Vacia el buffer global de vesta_io ahora mismo.  Util para TUIs.
     if (is_gc_collect) {
         if (!e->args.empty()) {
-            return builtin_error(e->loc, "'gc_collect' no acepta argumentos", out_value);
+            return builtin_error(e->loc, "'gc_collect' no acepta argumentos",
+                                 out_value);
         }
         if (native_poo_) {
             // AOT: CALL al recolector nativo (libvesta_gc).
@@ -347,7 +350,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // observar la finalizacion de escapados sin polling ni residuos de scan.
     if (is_gc_finalize_all) {
         if (!e->args.empty()) {
-            return builtin_error(e->loc, "'gc_finalize_all' no acepta argumentos", out_value);
+            return builtin_error(
+                e->loc, "'gc_finalize_all' no acepta argumentos", out_value);
         }
         module_has_gc_finalizers_ = true;
         if (native_poo_) {
@@ -376,7 +380,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
 
     if (is_flush) {
         if (!e->args.empty()) {
-            return builtin_error(e->loc, "'flush' no acepta argumentos", out_value);
+            return builtin_error(e->loc, "'flush' no acepta argumentos",
+                                 out_value);
         }
         if (native_poo_) {
             emit_io_prim("__vx_flush", {}, e->loc.line);
@@ -399,8 +404,11 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
      * hoy ninguno de los doce exige un entero, todos convierten. */
     if (scalar) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) +
-                                             "' requiere exactamente un argumento", out_value);
+            return builtin_error(e->loc,
+                                 std::string("'") +
+                                     std::string(builtin_name(b)) +
+                                     "' requiere exactamente un argumento",
+                                 out_value);
         }
         ir::IrValueId v = lower_expr(e->args[0].get());
         if (v == ir::IR_NO_VALUE) {
@@ -422,7 +430,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             // formateador suelto.  Los que la tabla deja a nulo todavia no
             // existen ahi, y eso se DICE en vez de escribir basura.
             if (!scalar->bare) {
-                diags_.warning(e->loc, std::string("'") + std::string(builtin_name(b)) +
+                diags_.warning(e->loc, std::string("'") +
+                                           std::string(builtin_name(b)) +
                                            "' en AOT nativo aun no soportado; "
                                            "se omite");
                 out_value = ir::IR_NO_VALUE;
@@ -442,7 +451,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // para construir alineacion manual de columnas (TUI / tablas).
     if (is_print_pad) {
         if (e->args.size() != 2) {
-            return builtin_error(e->loc, "'print_pad' requiere (fill_cp, width)", out_value);
+            return builtin_error(
+                e->loc, "'print_pad' requiere (fill_cp, width)", out_value);
         }
         ir::IrValueId v_fill = lower_expr(e->args[0].get());
         ir::IrValueId v_w = lower_expr(e->args[1].get());
@@ -466,7 +476,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
      * seria partir la familia por la mitad. */
     if (is_term_clear) {
         if (!e->args.empty()) {
-            return builtin_error(e->loc, "term_clear: no acepta argumentos", out_value);
+            return builtin_error(e->loc, "term_clear: no acepta argumentos",
+                                 out_value);
         }
         emit_print_string_literal("\x1b[2J\x1b[H", e->loc.line);
         out_value = ir::IR_NO_VALUE;
@@ -474,7 +485,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     }
     if (is_term_clear_line) {
         if (!e->args.empty()) {
-            return builtin_error(e->loc, "term_clear_line: no acepta argumentos", out_value);
+            return builtin_error(
+                e->loc, "term_clear_line: no acepta argumentos", out_value);
         }
         emit_print_string_literal("\x1b[2K", e->loc.line);
         out_value = ir::IR_NO_VALUE;
@@ -508,7 +520,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     }
     if (is_term_move) {
         if (e->args.size() != 2 || !e->args[0] || !e->args[1]) {
-            return builtin_error(e->loc, "term_move: requiere 2 argumentos (row, col)", out_value);
+            return builtin_error(e->loc,
+                                 "term_move: requiere 2 argumentos (row, col)",
+                                 out_value);
         }
         // Emite "\x1b[" + row + ";" + col + "H" usando print + print_int.
         emit_print_string_literal("\x1b[", e->loc.line);
@@ -581,12 +595,11 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
             const bool is_bg = (cn == "bg_rgb");
             if (is_fg || is_bg) {
                 if (ce->args.size() != 3) {
-                    error_at(ex->loc,
-                             cn + ": requiere 3 argumentos (r, g, b)");
+                    error_at(ex->loc, cn + ": requiere 3 argumentos (r, g, b)");
                     return;
                 }
-                emit_print_string_literal(
-                    is_fg ? "\x1b[38;2;" : "\x1b[48;2;", ex->loc.line);
+                emit_print_string_literal(is_fg ? "\x1b[38;2;" : "\x1b[48;2;",
+                                          ex->loc.line);
                 emit_print_typed_value(ce->args[0].get(), std::string());
                 emit_print_string_literal(";", ex->loc.line);
                 emit_print_typed_value(ce->args[1].get(), std::string());
@@ -649,9 +662,8 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
             // aproximado en Vesta puro).  F32 se promociona a F64 antes.
             ir::IrValueId vf = v;
             if (t.kind == PrimitiveKind::F32) {
-                ir::IrValueId vp =
-                    emit_ir_unop(ir::IrOp::F32TOF64, v,
-                                 ir::IrType::F64, ex->loc.line);
+                ir::IrValueId vp = emit_ir_unop(ir::IrOp::F32TOF64, v,
+                                                ir::IrType::F64, ex->loc.line);
                 vf = vp;
             }
             emit_io_prim("__vx_print_float", {vf}, ex->loc.line);
@@ -670,18 +682,19 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
                 ir::IrValueId v_width = emit_const(
                     ir::IrType::I64, (uint64_t)fs.width, ex->loc.line);
                 ir::IrValueId v_sub =
-                    emit_ir_binop(ir::IrOp::SUB, v_width, slen,
-                                  ir::IrType::I64, ex->loc.line);
+                    emit_ir_binop(ir::IrOp::SUB, v_width, slen, ir::IrType::I64,
+                                  ex->loc.line);
                 ir::IrValueId v_zero =
                     emit_const(ir::IrType::I64, 0, ex->loc.line);
                 ir::IrValueId v_pos =
-                    emit_ir_binop(ir::IrOp::CMP_GT, v_sub, v_zero, ir::IrType::BOOL, ex->loc.line);
+                    emit_ir_binop(ir::IrOp::CMP_GT, v_sub, v_zero,
+                                  ir::IrType::BOOL, ex->loc.line);
                 ir::IrValueId v_mask = cast_if_needed(
                     v_pos, ir::IrType::BOOL, ir::IrType::I64, ex->loc.line,
                     /*is_explicit=*/true);
                 ir::IrValueId v_cl =
-                    emit_ir_binop(ir::IrOp::MUL, v_sub, v_mask,
-                                  ir::IrType::I64, ex->loc.line);
+                    emit_ir_binop(ir::IrOp::MUL, v_sub, v_mask, ir::IrType::I64,
+                                  ex->loc.line);
                 return v_cl;
             };
             auto emit_pad = [&](ir::IrValueId v_count) {
@@ -691,17 +704,14 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
             };
             ir::IrValueId v_pad = ir::IR_NO_VALUE;
             if (need_pad) v_pad = compute_pad();
-            if (need_pad && fs.align == FmtSpec::Align::RIGHT)
-                emit_pad(v_pad);
+            if (need_pad && fs.align == FmtSpec::Align::RIGHT) emit_pad(v_pad);
             emit_io_prim("__vx_write", {sptr, slen}, ex->loc.line);
-            if (need_pad && fs.align == FmtSpec::Align::LEFT)
-                emit_pad(v_pad);
+            if (need_pad && fs.align == FmtSpec::Align::LEFT) emit_pad(v_pad);
             return;
         }
         if (fs.align != FmtSpec::Align::NONE && fs.width > 0) {
-            diags_.warning(ex->loc,
-                           "padding/alineacion en print AOT nativo "
-                           "aun no soportado; se ignora el ancho");
+            diags_.warning(ex->loc, "padding/alineacion en print AOT nativo "
+                                    "aun no soportado; se ignora el ancho");
         }
         const bool is_unsigned_t =
             (t.kind == PrimitiveKind::CHAR || t.kind == PrimitiveKind::U8 ||
@@ -791,11 +801,10 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
         else if (fs.kind == FmtSpec::Kind::CHAR)
             kind_code = 8;
         else if (fs.kind == FmtSpec::Kind::DEC) {
-            const bool unsigned_t = (t.kind == PrimitiveKind::CHAR ||
-                                     t.kind == PrimitiveKind::U8 ||
-                                     t.kind == PrimitiveKind::U16 ||
-                                     t.kind == PrimitiveKind::U32 ||
-                                     t.kind == PrimitiveKind::U64);
+            const bool unsigned_t =
+                (t.kind == PrimitiveKind::CHAR || t.kind == PrimitiveKind::U8 ||
+                 t.kind == PrimitiveKind::U16 || t.kind == PrimitiveKind::U32 ||
+                 t.kind == PrimitiveKind::U64);
             kind_code = unsigned_t ? 1 : 0;
         } else {
             // AUTO: dispatch por tipo del operando.
@@ -822,15 +831,14 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
         ir::IrValueId v_arg = v;
         if (t.kind == PrimitiveKind::F32) {
             // F32 -> F64 (re-encoding) -> i64 bits.
-            ir::IrValueId f64v =
-                emit_ir_unop(ir::IrOp::F32TOF64, v_arg,
-                             ir::IrType::F64, ex->loc.line);
-            ir::IrValueId bits =
-                emit_ir_unop(ir::IrOp::BITCAST, f64v, ir::IrType::I64, ex->loc.line);
+            ir::IrValueId f64v = emit_ir_unop(ir::IrOp::F32TOF64, v_arg,
+                                              ir::IrType::F64, ex->loc.line);
+            ir::IrValueId bits = emit_ir_unop(ir::IrOp::BITCAST, f64v,
+                                              ir::IrType::I64, ex->loc.line);
             v_arg = bits;
         } else if (t.kind == PrimitiveKind::F64 && vt != ir::IrType::I64) {
-            ir::IrValueId bits =
-                emit_ir_unop(ir::IrOp::BITCAST, v_arg, ir::IrType::I64, ex->loc.line);
+            ir::IrValueId bits = emit_ir_unop(ir::IrOp::BITCAST, v_arg,
+                                              ir::IrType::I64, ex->loc.line);
             v_arg = bits;
         } else if (t.kind == PrimitiveKind::CLASS) {
             // CLASS -> GcHandle via instruccion `gchandle`.
@@ -867,12 +875,11 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
         // (ptr,len) via accesores flag-aware + escritura por __vx_write
         // (PURE_NATIVE).  Full/JIT/interp: GcHandle via strraw/strgetbytes
         // + vio_print_buf (VM).
-        ir::IrValueId v_ptr =
-            native_poo_ ? emit_native_str_data_ptr(v, ex->loc.line)
-                        : emit_strraw(v, ex->loc.line);
-        ir::IrValueId v_len = native_poo_
-                                  ? emit_native_str_len(v, ex->loc.line)
-                                  : emit_strgetbytes(v, ex->loc.line);
+        ir::IrValueId v_ptr = native_poo_
+                                  ? emit_native_str_data_ptr(v, ex->loc.line)
+                                  : emit_strraw(v, ex->loc.line);
+        ir::IrValueId v_len = native_poo_ ? emit_native_str_len(v, ex->loc.line)
+                                          : emit_strgetbytes(v, ex->loc.line);
         // Item 17: format spec en STRING.  Si align != NONE Y
         // width > 0, calcular padding = max(0, width - len) y
         // emitirlo antes (RIGHT) o despues (LEFT) del print_buf.
@@ -885,32 +892,29 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
             // Implementado via SUB + CMOV.  Como no tengo CMOV en
             // el IR, uso: pad = width - len; if (pad < 0) pad = 0.
             // Cmps signed: si len > width, sub queda negativo.
-            ir::IrValueId v_width = emit_const(
-                ir::IrType::I64, (uint64_t)fs.width, ex->loc.line);
-            ir::IrValueId v_sub =
-                emit_ir_binop(ir::IrOp::SUB, v_width, v_len,
-                              ir::IrType::I64, ex->loc.line);
+            ir::IrValueId v_width =
+                emit_const(ir::IrType::I64, (uint64_t)fs.width, ex->loc.line);
+            ir::IrValueId v_sub = emit_ir_binop(ir::IrOp::SUB, v_width, v_len,
+                                                ir::IrType::I64, ex->loc.line);
             // Clamp a 0: si v_sub < 0, usar 0.  Patron:
             // cmps v_sub, 0 -> SF; setcc gt -> 1 si positivo;
             // mul v_sub * mask = clamp.  Mas simple: usar
             // CMP_GT v_sub, 0 -> bool; cast a i64 (0 o 1);
             // mul v_sub * bool.
-            ir::IrValueId v_zero =
-                emit_const(ir::IrType::I64, 0, ex->loc.line);
-            ir::IrValueId v_pos =
-                emit_ir_binop(ir::IrOp::CMP_GT, v_sub, v_zero, ir::IrType::BOOL, ex->loc.line);
+            ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, ex->loc.line);
+            ir::IrValueId v_pos = emit_ir_binop(ir::IrOp::CMP_GT, v_sub, v_zero,
+                                                ir::IrType::BOOL, ex->loc.line);
             ir::IrValueId v_mask =
                 cast_if_needed(v_pos, ir::IrType::BOOL, ir::IrType::I64,
                                ex->loc.line, /*is_explicit=*/true);
-            ir::IrValueId v_clamped =
-                emit_ir_binop(ir::IrOp::MUL, v_sub, v_mask,
-                              ir::IrType::I64, ex->loc.line);
+            ir::IrValueId v_clamped = emit_ir_binop(
+                ir::IrOp::MUL, v_sub, v_mask, ir::IrType::I64, ex->loc.line);
             v_pad = v_clamped;
         }
         // Emit padding LEADING si align==RIGHT.
         auto emit_pad_call = [&](ir::IrValueId v_count) {
-            ir::IrValueId v_fill = emit_const(
-                ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
+            ir::IrValueId v_fill =
+                emit_const(ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
             if (native_poo_) {
                 // AOT: padding via __vx_pad (fill_cp, count) del runtime
                 // de I/O (PURE_NATIVE); no hay vio_print_pad (VM).
@@ -978,15 +982,14 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
     // pequenos hace SEXT/ZEXT/TRUNC normal via cast_if_needed.
     if (t.kind == PrimitiveKind::F32) {
         ir::IrValueId f64v =
-            emit_ir_unop(ir::IrOp::F32TOF64, v,
-                         ir::IrType::F64, ex->loc.line);
-        ir::IrValueId bits =
-            emit_ir_unop(ir::IrOp::BITCAST, f64v, ir::IrType::I64, ex->loc.line);
+            emit_ir_unop(ir::IrOp::F32TOF64, v, ir::IrType::F64, ex->loc.line);
+        ir::IrValueId bits = emit_ir_unop(ir::IrOp::BITCAST, f64v,
+                                          ir::IrType::I64, ex->loc.line);
         v = bits;
     } else if (t.kind == PrimitiveKind::F64) {
         if (vt != ir::IrType::I64) {
-            ir::IrValueId bits =
-                emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::I64, ex->loc.line);
+            ir::IrValueId bits = emit_ir_unop(ir::IrOp::BITCAST, v,
+                                              ir::IrType::I64, ex->loc.line);
             v = bits;
         }
     } else if (t.kind == PrimitiveKind::CLASS) {
@@ -995,8 +998,7 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
         // antes de pasar al native.  vio_print_gchandle espera
         // el handle como uint64 zero-extended.
         v = emit_gc_handle_for_ptr(v, ex->loc.line);
-    } else if (t.kind == PrimitiveKind::PTR ||
-               t.kind == PrimitiveKind::ARRAY) {
+    } else if (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) {
         // Punteros pasan tal cual; el ABI uint64 de
         // vio_print_ptr ya espera la direccion bruta.  Sin
         // cast_if_needed para no emitir un mov espureo.
@@ -1004,8 +1006,7 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
         v = cast_if_needed(v, vt, promote, ex->loc.line,
                            /*is_explicit=*/true);
     }
-    emit_native_call(kVestaIoLib, func, {v}, ir::IrType::VOID,
-                     ex->loc.line);
+    emit_native_call(kVestaIoLib, func, {v}, ir::IrType::VOID, ex->loc.line);
 }
 
 } // namespace vx

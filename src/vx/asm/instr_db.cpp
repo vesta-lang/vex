@@ -106,10 +106,9 @@ const DbIclassRange *find_iclass(const IsaData &t, const std::string &up) {
 /// existian para la base.
 const char *cond_canonica_x86(const std::string &c) {
     static const std::pair<const char *, const char *> alias[] = {
-        {"A", "NBE"}, {"AE", "NB"},  {"C", "B"},    {"E", "Z"},
-        {"G", "NLE"}, {"GE", "NL"},  {"NA", "BE"},  {"NAE", "B"},
-        {"NC", "NB"}, {"NE", "NZ"},  {"NG", "LE"},  {"NGE", "L"},
-        {"PE", "P"},  {"PO", "NP"},
+        {"A", "NBE"}, {"AE", "NB"}, {"C", "B"},   {"E", "Z"},   {"G", "NLE"},
+        {"GE", "NL"}, {"NA", "BE"}, {"NAE", "B"}, {"NC", "NB"}, {"NE", "NZ"},
+        {"NG", "LE"}, {"NGE", "L"}, {"PE", "P"},  {"PO", "NP"},
     };
     for (const auto &a : alias)
         if (c == a.first) return a.second;
@@ -213,9 +212,8 @@ uint16_t reg_width(Isa isa, const std::string &r) {
         if ((r[0] == 'x' || r[0] == 'f') && r.size() > 1 &&
             std::isdigit((unsigned char)r[1]))
             return 64;
-        if (r.size() >= 2 &&
-            (r.rfind("ft", 0) == 0 || r.rfind("fs", 0) == 0 ||
-             r.rfind("fa", 0) == 0))
+        if (r.size() >= 2 && (r.rfind("ft", 0) == 0 || r.rfind("fs", 0) == 0 ||
+                              r.rfind("fa", 0) == 0))
             return 64;
         return 0;
     }
@@ -448,14 +446,10 @@ void addr_regs(Isa isa, const std::string &tok, std::vector<std::string> &out) {
 
 const char *isa_name(Isa isa) {
     switch (isa) {
-    case Isa::X86:
-        return "x86";
-    case Isa::ARM64:
-        return "arm64";
-    case Isa::ARM32:
-        return "arm32";
-    case Isa::RISCV:
-        return "riscv";
+    case Isa::X86: return "x86";
+    case Isa::ARM64: return "arm64";
+    case Isa::ARM32: return "arm32";
+    case Isa::RISCV: return "riscv";
     }
     return "";
 }

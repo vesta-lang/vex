@@ -278,7 +278,8 @@ void split_half_wrapped(const std::vector<Piece> &pieces, const Layout &layout,
         size_t close = 0;
         for (size_t j = i; j < pieces.size(); ++j) {
             const TokenKind kj = kind_of(pieces[j]);
-            if (kj == TokenKind::LPAREN || kj == TokenKind::LBRACKET) ++depth;
+            if (kj == TokenKind::LPAREN || kj == TokenKind::LBRACKET)
+                ++depth;
             else if (kj == TokenKind::RPAREN || kj == TokenKind::RBRACKET) {
                 if (--depth == 0) {
                     close = j;
@@ -298,8 +299,10 @@ void split_half_wrapped(const std::vector<Piece> &pieces, const Layout &layout,
         int d = 0;
         for (size_t j = i + 1; j < close; ++j) {
             const TokenKind kj = kind_of(pieces[j]);
-            if (opens_list(kj)) ++d;
-            else if (closes_list(kj)) --d;
+            if (opens_list(kj))
+                ++d;
+            else if (closes_list(kj))
+                --d;
             else if (d == 0 && kj == TokenKind::COMMA && j + 1 < close)
                 starts.push_back(j + 1);
         }

@@ -541,8 +541,7 @@ Token Lexer::lex_number() {
         if (is_numeric_type_keyword(kind)) {
             // `3.14i32` no describe nada: el valor tiene parte decimal.
             if (floaty && !is_float_type_keyword(kind)) {
-                error_at(std::move(loc),
-                         vx::diag::format("VXL003", {text}));
+                error_at(std::move(loc), vx::diag::format("VXL003", {text}));
                 return;
             }
             suffix = kind;
@@ -567,8 +566,7 @@ Token Lexer::lex_number() {
             const char *hint = floaty ? (has_f ? "f32" : "f64")
                                       : (has_u ? (has_l ? "u64" : "u32")
                                                : (has_l ? "i64" : "i32"));
-            error_at(std::move(loc),
-                     vx::diag::format("VXL001", {text, hint}));
+            error_at(std::move(loc), vx::diag::format("VXL001", {text, hint}));
             return;
         }
         error_at(std::move(loc), vx::diag::format("VXL002", {text}));

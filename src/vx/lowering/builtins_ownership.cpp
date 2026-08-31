@@ -80,15 +80,17 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     const bool is_read_borrow = (b == Builtin::ReadBorrow);
     const bool is_write_borrow = (b == Builtin::WriteBorrow);
 
-    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
-    if (!(is_unique_box || is_shared_box || is_unique_with ||
-          is_shared_with || is_gc_box || is_move || is_get || is_use_count ||
-          is_lend || is_lend_mut || is_read_borrow || is_write_borrow))
+    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo.
+     */
+    if (!(is_unique_box || is_shared_box || is_unique_with || is_shared_with ||
+          is_gc_box || is_move || is_get || is_use_count || is_lend ||
+          is_lend_mut || is_read_borrow || is_write_borrow))
         return false;
 
     if (is_gc_box) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "gc_box: requiere 1 argumento", out_value);
+            return builtin_error(e->loc, "gc_box: requiere 1 argumento",
+                                 out_value);
         }
         const ir::IrValueId v_payload = lower_expr(e->args[0].get());
         if (v_payload == ir::IR_NO_VALUE) {
@@ -236,7 +238,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
 
     if (is_get) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "ptr_of: requiere 1 argumento", out_value);
+            return builtin_error(e->loc, "ptr_of: requiere 1 argumento",
+                                 out_value);
         }
         const Type arg_t = e->args[0]->result_type;
         const ir::IrValueId v_slot = lower_expr(e->args[0].get());
@@ -301,7 +304,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     // ----- use_count(s) -----  i64 refcount del shared<T>.
     if (is_use_count) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "use_count: requiere 1 argumento", out_value);
+            return builtin_error(e->loc, "use_count: requiere 1 argumento",
+                                 out_value);
         }
         const ir::IrValueId v_slot = lower_expr(e->args[0].get());
         if (v_slot == ir::IR_NO_VALUE) {
@@ -335,7 +339,9 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     if (is_lend || is_lend_mut) return lower_borrow_of(e, b, out_value);
     if (is_read_borrow) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "read_borrow: requiere 1 argumento (borrow)", out_value);
+            return builtin_error(e->loc,
+                                 "read_borrow: requiere 1 argumento (borrow)",
+                                 out_value);
         }
         const ir::IrValueId v_b = lower_expr(e->args[0].get());
         if (v_b == ir::IR_NO_VALUE) {
@@ -376,8 +382,10 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     }
     if (is_write_borrow) {
         if (e->args.size() != 2) {
-            return builtin_error(e->loc,
-                                 "write_borrow: requiere 2 argumentos (borrow_mut, value)", out_value);
+            return builtin_error(
+                e->loc,
+                "write_borrow: requiere 2 argumentos (borrow_mut, value)",
+                out_value);
         }
         const ir::IrValueId v_b = lower_expr(e->args[0].get());
         const ir::IrValueId v_v = lower_expr(e->args[1].get());
@@ -404,14 +412,15 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         if (inner.kind == PrimitiveKind::STRUCT) {
             auto it_l = tc_.struct_layouts().find(inner.struct_name);
             if (it_l == tc_.struct_layouts().end()) {
-                return builtin_error(e->loc,
-                                     "write_borrow: no se conoce la disposicion de '" +
-                                         inner.struct_name +
-                                         "'; no se puede copiar el valor", out_value);
+                return builtin_error(
+                    e->loc,
+                    "write_borrow: no se conoce la disposicion de '" +
+                        inner.struct_name + "'; no se puede copiar el valor",
+                    out_value);
             }
             const ir::IrValueId v_n = emit_const(
-                ir::IrType::I64,
-                static_cast<uint64_t>(it_l->second.size_bytes), e->loc.line);
+                ir::IrType::I64, static_cast<uint64_t>(it_l->second.size_bytes),
+                e->loc.line);
             fn_->values[v_v].is_host_ptr = true;
             ir::IrInstr mc{};
             mc.op = ir::IrOp::MEMCPY;
@@ -453,7 +462,9 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                                ir::IrValueId &out_value) {
     const bool is_unique_box = (b == Builtin::UniqueBox);
     if (e->args.size() != 1) {
-        return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento", out_value);
+        return builtin_error(
+            e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento",
+            out_value);
     }
     // Construccion IN-PLACE para `unique<Punto> p = {.x=10, .y=20}`:
     // si el arg es un InitListExpr con target_type_name anotado
@@ -484,8 +495,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                 const ir::IrValueId v_size = emit_const(
                     ir::IrType::I64, static_cast<int64_t>(lay.size_bytes),
                     e->loc.line);
-                const ir::IrValueId v_host =
-                    fn_->new_value(ir::IrType::PTR);
+                const ir::IrValueId v_host = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_host].is_host_ptr = true;
                 {
                     ir::IrInstr ins{};
@@ -537,8 +547,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                     ir::IrValueId v_dst = v_host;
                     if (fld->offset > 0) {
                         const ir::IrValueId v_off = emit_const(
-                            ir::IrType::I64,
-                            static_cast<int64_t>(fld->offset), e->loc.line);
+                            ir::IrType::I64, static_cast<int64_t>(fld->offset),
+                            e->loc.line);
                         const ir::IrValueId v_addr =
                             fn_->new_value(ir::IrType::PTR);
                         fn_->values[v_addr].is_host_ptr = true;
@@ -552,12 +562,11 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                         v_dst = v_addr;
                     }
                     // STORE val at [v_dst].
-                    emit_store_typed(v_dst, v_casted,
-                                     ft, il->elements[i]->loc.line);
+                    emit_store_typed(v_dst, v_casted, ft,
+                                     il->elements[i]->loc.line);
                 }
                 // 4. STORE host_ptr al slot+0 del unique<T>.
-                emit_store_typed(v_slot, v_host,
-                                 ir::IrType::I64, e->loc.line);
+                emit_store_typed(v_slot, v_host, ir::IrType::I64, e->loc.line);
                 // 5. Y nada mas: la ranura es UNA palabra.  Aqui se escribia
                 //    ademas un cero en la de al lado -- el liberador "por
                 //    defecto" --, que ahora vive en el tipo.
@@ -586,8 +595,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
     // `*ptr_of(p)` recupere el cfn con un solo LOAD.  Sin esto tomaria
     // la rama class-PTR (store directo) y `*ptr_of` deref-earia el codigo
     // de la funcion -> basura/#UD.
-    const bool payload_is_cfn =
-        (sem_payload.kind == PrimitiveKind::FUNCTION);
+    const bool payload_is_cfn = (sem_payload.kind == PrimitiveKind::FUNCTION);
     // bug1: el payload es OTRO smart pointer (unique<T>/shared<T>/borrow).
     // Su @c lower_expr devuelve la DIRECCION del slot (igual que un struct
     // inline: su valor ES su buffer), con @c payload_t == PTR.  Si lo
@@ -614,8 +622,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
     // store-directo (pensada para objetos CLASS) y `*ptr_of` deref-eaba el
     // VALOR del puntero como si fuera una direccion de slot -> se leia el
     // i64 apuntado y luego se deref-eaba ESE como direccion -> SIGSEGV.
-    const bool payload_is_raw_ptr =
-        (sem_payload.kind == PrimitiveKind::PTR);
+    const bool payload_is_raw_ptr = (sem_payload.kind == PrimitiveKind::PTR);
     // sizeof(T): para primitivos usar ir_type_size; para structs
     // value-type consultar struct_layouts; para PTR/CLASS no se usa
     // (no alocamos memoria extra, guardamos el host_ptr directo).
@@ -661,10 +668,9 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
             // host_ptr/ctrl del wrapper (que su dueno original libera); el
             // cleanup del externo solo RAW_FREE-a esta celda de N bytes.
             const ir::IrValueId v_size =
-                emit_const(ir::IrType::I64,
-                           static_cast<int64_t>(payload_size), e->loc.line);
-            const ir::IrValueId v_payload_ptr =
-                fn_->new_value(ir::IrType::PTR);
+                emit_const(ir::IrType::I64, static_cast<int64_t>(payload_size),
+                           e->loc.line);
+            const ir::IrValueId v_payload_ptr = fn_->new_value(ir::IrType::PTR);
             fn_->values[v_payload_ptr].is_host_ptr = true;
             {
                 ir::IrInstr ins{};
@@ -682,11 +688,9 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
             // ALLOCA que tiene tamano >= size_bytes).
             const uint64_t qwords = (payload_size + 7) / 8;
             for (uint64_t i = 0; i < qwords; ++i) {
-                const ir::IrValueId v_off =
-                    emit_const(ir::IrType::I64, static_cast<int64_t>(i * 8),
-                               e->loc.line);
-                const ir::IrValueId v_src_p =
-                    fn_->new_value(ir::IrType::PTR);
+                const ir::IrValueId v_off = emit_const(
+                    ir::IrType::I64, static_cast<int64_t>(i * 8), e->loc.line);
+                const ir::IrValueId v_src_p = fn_->new_value(ir::IrType::PTR);
                 {
                     ir::IrInstr ad{};
                     ad.op = ir::IrOp::ADD;
@@ -696,8 +700,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                     ad.source_line = e->loc.line;
                     emit(current_block_, std::move(ad));
                 }
-                const ir::IrValueId v_word =
-                    fn_->new_value(ir::IrType::I64);
+                const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
                 {
                     ir::IrInstr ld{};
                     ld.op = ir::IrOp::LOAD;
@@ -707,8 +710,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                     ld.source_line = e->loc.line;
                     emit(current_block_, std::move(ld));
                 }
-                const ir::IrValueId v_dst_p =
-                    fn_->new_value(ir::IrType::PTR);
+                const ir::IrValueId v_dst_p = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_dst_p].is_host_ptr = true;
                 {
                     ir::IrInstr ad{};
@@ -719,8 +721,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                     ad.source_line = e->loc.line;
                     emit(current_block_, std::move(ad));
                 }
-                emit_store_typed(v_dst_p, v_word,
-                                 ir::IrType::I64, e->loc.line);
+                emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
             }
             v_to_store = v_payload_ptr;
         } else if (payload_t != ir::IrType::PTR || payload_is_cfn ||
@@ -729,10 +730,9 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
             // (cfn y punteros raw entran aqui pese a ser PTR: son valores
             //  de 8 bytes que se cajean, no host_ptrs a objetos.)
             const ir::IrValueId v_size =
-                emit_const(ir::IrType::I64,
-                           static_cast<int64_t>(payload_size), e->loc.line);
-            const ir::IrValueId v_payload_ptr =
-                fn_->new_value(ir::IrType::PTR);
+                emit_const(ir::IrType::I64, static_cast<int64_t>(payload_size),
+                           e->loc.line);
+            const ir::IrValueId v_payload_ptr = fn_->new_value(ir::IrType::PTR);
             fn_->values[v_payload_ptr].is_host_ptr = true;
             {
                 ir::IrInstr ins{};
@@ -744,8 +744,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                 emit(current_block_, std::move(ins));
             }
             // STORE payload at [v_payload_ptr] (host memory).
-            emit_store_typed(v_payload_ptr, v_payload,
-                             payload_t, e->loc.line);
+            emit_store_typed(v_payload_ptr, v_payload, payload_t, e->loc.line);
             v_to_store = v_payload_ptr;
         }
         // STORE v_to_store at [v_slot+0].
@@ -768,8 +767,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
         // SHAREDPTR_REL hace `free` cuando el refcount cae a 0 (refcount
         // puro, determinista, sin GC -> funciona en AOT standalone).
         const ir::IrValueId v_slot = stack_alloc_buf(8, e->loc.line);
-        const ir::IrValueId v_ctrl_size = emit_const(
-            ir::IrType::I64, 16 + 8, e->loc.line); // 24 bytes total
+        const ir::IrValueId v_ctrl_size =
+            emit_const(ir::IrType::I64, 16 + 8, e->loc.line); // 24 bytes total
         // RAW_ALLOC -> host_ptr al bloque de control.
         const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_ctrl].is_host_ptr = true;
@@ -836,7 +835,9 @@ bool Lowering::lower_owner_box_with(ast::CallExpr *e, Builtin b,
                                     ir::IrValueId &out_value) {
     const bool is_unique_with = (b == Builtin::UniqueWith);
     if (e->args.size() != 2) {
-        return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 2 argumentos", out_value);
+        return builtin_error(
+            e->loc, std::string(builtin_name(b)) + ": requiere 2 argumentos",
+            out_value);
     }
     const ir::IrValueId v_payload = lower_expr(e->args[0].get());
     if (v_payload == ir::IR_NO_VALUE) {
@@ -845,15 +846,16 @@ bool Lowering::lower_owner_box_with(ast::CallExpr *e, Builtin b,
     }
     // Validar que arg[1] sea IdentExpr (type_checker ya lo verifico).
     if (e->args[1]->kind != ast::NodeKind::IdentExpr) {
-        return builtin_error(e->args[1]->loc,
-                             std::string(builtin_name(b)) +
-                                 ": el deleter debe ser un identificador de funcion", out_value);
+        return builtin_error(
+            e->args[1]->loc,
+            std::string(builtin_name(b)) +
+                ": el deleter debe ser un identificador de funcion",
+            out_value);
     }
     const auto *deleter_id =
         static_cast<const ast::IdentExpr *>(e->args[1].get());
     // Capturamos el nombre del deleter; el cleanup lo usara.
-    std::string deleter_label =
-        tc_.lookup_extern_qualified(deleter_id->name);
+    std::string deleter_label = tc_.lookup_extern_qualified(deleter_id->name);
     if (deleter_label.empty()) {
         // No es extern -> es funcion Vesta.  Usamos el nombre puro;
         // el cleanup emitira CALLVM @Absolute("code.<name>").
@@ -990,7 +992,10 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
                                ir::IrValueId &out_value) {
     const bool is_lend_mut = (b == Builtin::LendMut);
     if (e->args.size() != 1) {
-        return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento (owner)", out_value);
+        return builtin_error(e->loc,
+                             std::string(builtin_name(b)) +
+                                 ": requiere 1 argumento (owner)",
+                             out_value);
     }
     /* El prestamo no deja rastro en el IR -- esto no emite instruccion, el
      * puntero es el mismo --, asi que lo que el borrow checker demuestra se
@@ -1008,9 +1013,8 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
          * confundirlos despues. */
         const Type &ot = e->args[0]->result_type;
         using OK = ir::IrFunction::BorrowOwnerKind;
-        bf.owner_kind = (ot.kind == PrimitiveKind::UNIQUE_PTR) ? OK::Unique
-                        : (ot.kind == PrimitiveKind::SHARED_PTR)
-                            ? OK::Shared
+        bf.owner_kind = (ot.kind == PrimitiveKind::UNIQUE_PTR)   ? OK::Unique
+                        : (ot.kind == PrimitiveKind::SHARED_PTR) ? OK::Shared
                         : (ot.kind == PrimitiveKind::BORROW ||
                            ot.kind == PrimitiveKind::BORROW_MUT)
                             ? OK::Reborrow

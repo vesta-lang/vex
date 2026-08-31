@@ -25,11 +25,33 @@ using ir::IrOp;
 /// patron que no se ha previsto, y ahi se para en vez de adivinar.
 constexpr int kMaxSaltos = 16;
 
+/// Deja dicho por que se renuncia y devuelve el vacio de siempre.
+///
+/// Un ayudante y no siete copias: el dia que se anada una renuncia mas, lo que
+/// hace falta es que no se pueda escribir sin motivo.
+std::string give_up(FnTargetUnknown *why, asa::UnknownReason reason,
+                    const char *code) {
+    if (why != nullptr) {
+        why->reason = reason;
+        why->code = code;
+    }
+    return {};
+}
+
 std::string seguir(const ir::IrFunction &fn, const IrFacts &facts,
-                   ir::IrValueId v, int saltos) {
-    if (saltos > kMaxSaltos) return {};
+                   ir::IrValueId v, int saltos, FnTargetUnknown *why) {
+    if (saltos > kMaxSaltos)
+        /* Ni el programa esta mal ni falta nada por declarar: es NUESTRO
+         * limite. Se arregla subiendolo, y decirlo asi evita que alguien busque
+         * el problema en su codigo. */
+        return give_up(why, asa::UnknownReason::BudgetExceeded,
+                       "target.too_many_hops");
     const ir::IrInstr *d = facts.def(v);
-    if (d == nullptr) return {};
+    if (d == nullptr)
+        /* Sin definicion dentro de la funcion: viene de fuera -- un parametro,
+         * un global --, y quien lo pase es quien sabe a donde apunta. */
+        return give_up(why, asa::UnknownReason::OpaqueBoundary,
+                       "target.comes_from_outside");
     switch (d->op) {
     case IrOp::LABEL_ADDR:
         // Aqui se toma la direccion: es el unico sitio donde nace un destino.
@@ -38,32 +60,52 @@ std::string seguir(const ir::IrFunction &fn, const IrFacts &facts,
     case IrOp::BITCAST:
         // Copias y reinterpretaciones no cambian a donde apunta.
         return d->operands.empty()
-                   ? std::string{}
-                   : seguir(fn, facts, d->operands[0], saltos + 1);
+                   ? give_up(why, asa::UnknownReason::ShapeNotRecognized,
+                             "target.copy_without_source")
+                   : seguir(fn, facts, d->operands[0], saltos + 1, why);
     case IrOp::LOAD: {
         /* Guardado y releido.  Solo vale si el hueco se escribe UNA vez: con
          * dos escrituras el contenido depende del camino, y entonces el destino
          * tambien. */
-        if (d->operands.empty()) return {};
-        const ir::IrValueId guardado =
-            valor_unico_del_hueco(fn, d->operands[0]);
-        if (guardado == ir::IR_NO_VALUE) return {};
-        return seguir(fn, facts, guardado, saltos + 1);
+        if (d->operands.empty())
+            return give_up(why, asa::UnknownReason::ShapeNotRecognized,
+                           "target.load_without_address");
+        const ir::IrValueId guardado = single_value_of_slot(fn, d->operands[0]);
+        if (guardado == ir::IR_NO_VALUE)
+            /* El hueco se escribe mas de una vez: cual llega depende del camino
+             * que se tome.  Eso SI es especulable con una guarda, que es justo
+             * lo que se perdia al devolver el mismo vacio que todo lo demas. */
+            return give_up(why, asa::UnknownReason::RuntimeDependent,
+                           "target.slot_written_many_times");
+        return seguir(fn, facts, guardado, saltos + 1, why);
     }
     case IrOp::PHI: {
         // Varios caminos: solo se afirma si todos llevan al mismo sitio.
         std::string comun;
         for (const ir::IrPhiArg &pa : d->phi_args) {
-            const std::string n = seguir(fn, facts, pa.value, saltos + 1);
-            if (n.empty()) return {};
+            const std::string n = seguir(fn, facts, pa.value, saltos + 1, why);
+            if (n.empty())
+                /* Uno de los caminos no se supo, y su motivo ya quedo escrito
+                 * por la llamada de dentro: este se apoya en aquel, y eso es lo
+                 * que hay que arreglar primero. */
+                return give_up(why, asa::UnknownReason::MissingDependency,
+                               "target.one_path_unresolved");
             if (comun.empty())
                 comun = n;
             else if (comun != n)
-                return {};
+                /* Dos caminos con destinos DISTINTOS.  No es ignorancia: se
+                 * sabe que son varios, y ahi es donde nace una cache de
+                 * llamada con su guarda. */
+                return give_up(why, asa::UnknownReason::RuntimeDependent,
+                               "target.varies_by_path");
         }
         return comun;
     }
-    default: return {};
+    default:
+        /* Una operacion que este resolvedor no modela.  El programa esta bien;
+         * lo que hay que ampliar es esto. */
+        return give_up(why, asa::UnknownReason::ShapeNotRecognized,
+                       "target.unmodelled_op");
     }
 }
 
@@ -71,7 +113,7 @@ std::string seguir(const ir::IrFunction &fn, const IrFacts &facts,
 /// indirecta.  Cualquier otro uso -- guardarlo, pasarlo, devolverlo, meterlo en
 /// una PHI -- lo saca de la vista.
 bool usos_solo_en_llamadas(const ir::IrFunction &fn, ir::IrValueId v,
-                           std::vector<SitioIndirecto> &sitios) {
+                           std::vector<IndirectSite> &sitios) {
     bool alguno = false;
     for (const ir::IrBlock &b : fn.blocks) {
         for (const ir::IrInstr &in : b.instrs) {
@@ -97,10 +139,12 @@ bool usos_solo_en_llamadas(const ir::IrFunction &fn, ir::IrValueId v,
 
 } // namespace
 
-std::string funcion_apuntada(const ir::IrFunction &fn, const IrFacts &facts,
-                             ir::IrValueId v) {
-    if (v == ir::IR_NO_VALUE) return {};
-    return seguir(fn, facts, v, 0);
+std::string pointed_function(const ir::IrFunction &fn, const IrFacts &facts,
+                             ir::IrValueId v, FnTargetUnknown *why) {
+    if (v == ir::IR_NO_VALUE)
+        return give_up(why, asa::UnknownReason::NothingToSay,
+                       "target.no_value");
+    return seguir(fn, facts, v, 0, why);
 }
 
 namespace {
@@ -108,7 +152,7 @@ namespace {
 /// Lo que hay que saber de un nombre mientras se recorre el modulo: su
 /// resultado, y si todavia se pueden censar todos sus usos.
 struct EnCurso {
-    DireccionTomada out;
+    AddressTaken out;
     bool todas = true;
 };
 
@@ -123,7 +167,7 @@ void mirar_instr(const ir::IrFunction &fn, const ir::IrInstr &in,
                  const std::string &nombre, EnCurso &e) {
     if (in.op == IrOp::CALL || in.op == IrOp::TAILCALL)
         return; // llamada directa: se ve sin seguir nada
-    e.out.tomada = true;
+    e.out.taken = true;
     if (in.op != IrOp::LABEL_ADDR || in.dst == ir::IR_NO_VALUE) {
         // Registrada como metodo, usada de deleter, nombrada por una
         // nativa...: son puertas de entrada que no se pueden censar.
@@ -131,14 +175,14 @@ void mirar_instr(const ir::IrFunction &fn, const ir::IrInstr &in,
         return;
     }
     (void)nombre;
-    if (!usos_solo_en_llamadas(fn, in.dst, e.out.indirectas)) e.todas = false;
+    if (!usos_solo_en_llamadas(fn, in.dst, e.out.indirect)) e.todas = false;
 }
 
 } // namespace
 
-std::unordered_map<std::string, DireccionTomada>
-seguir_direcciones(const ir::IrModule &mod,
-                   const std::unordered_set<std::string> &nombres) {
+std::unordered_map<std::string, AddressTaken>
+follow_addresses(const ir::IrModule &mod,
+                 const std::unordered_set<std::string> &nombres) {
     std::unordered_map<std::string, EnCurso> curso;
     curso.reserve(nombres.size() * 2);
     for (const std::string &n : nombres)
@@ -157,7 +201,7 @@ seguir_direcciones(const ir::IrModule &mod,
                     if (in.func_name.empty()) continue;
                     for (auto &kv : curso)
                         if (in.func_name.find(kv.first) != std::string::npos) {
-                            kv.second.out.tomada = true;
+                            kv.second.out.taken = true;
                             kv.second.todas = false;
                         }
                     continue;
@@ -170,18 +214,18 @@ seguir_direcciones(const ir::IrModule &mod,
         }
     }
 
-    std::unordered_map<std::string, DireccionTomada> res;
+    std::unordered_map<std::string, AddressTaken> res;
     res.reserve(curso.size());
     for (auto &kv : curso) {
-        kv.second.out.todas_se_ven = kv.second.out.tomada && kv.second.todas;
+        kv.second.out.all_visible = kv.second.out.taken && kv.second.todas;
         res.emplace(kv.first, std::move(kv.second.out));
     }
     return res;
 }
 
-DireccionTomada seguir_direccion(const ir::IrModule &mod,
-                                 const std::string &nombre) {
-    DireccionTomada out;
+AddressTaken follow_address(const ir::IrModule &mod,
+                            const std::string &nombre) {
+    AddressTaken out;
     if (nombre.empty()) return out;
     bool todas = true;
     for (const ir::IrFunction &fn : mod.functions) {
@@ -192,7 +236,7 @@ DireccionTomada seguir_direccion(const ir::IrModule &mod,
                  * se intenta interpretarlo: basta con que lo nombre. */
                 if (in.op == IrOp::RAW_ASM || in.op == IrOp::INLINE_ASM) {
                     if (in.func_name.find(nombre) != std::string::npos) {
-                        out.tomada = true;
+                        out.taken = true;
                         todas = false;
                     }
                     continue;
@@ -200,7 +244,7 @@ DireccionTomada seguir_direccion(const ir::IrModule &mod,
                 if (in.func_name != nombre) continue;
                 if (in.op == IrOp::CALL || in.op == IrOp::TAILCALL)
                     continue; // llamada directa: se ve sin seguir nada
-                out.tomada = true;
+                out.taken = true;
                 if (in.op != IrOp::LABEL_ADDR || in.dst == ir::IR_NO_VALUE) {
                     // Registrada como metodo, usada de deleter, nombrada por
                     // una nativa...: son puertas de entrada que no se pueden
@@ -208,12 +252,12 @@ DireccionTomada seguir_direccion(const ir::IrModule &mod,
                     todas = false;
                     continue;
                 }
-                if (!usos_solo_en_llamadas(fn, in.dst, out.indirectas))
+                if (!usos_solo_en_llamadas(fn, in.dst, out.indirect))
                     todas = false;
             }
         }
     }
-    out.todas_se_ven = out.tomada && todas;
+    out.all_visible = out.taken && todas;
     return out;
 }
 

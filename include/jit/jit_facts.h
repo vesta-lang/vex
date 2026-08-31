@@ -9,7 +9,7 @@
  * @file jit/jit_facts.h
  * @brief Lo que el compilador en caliente PREGUNTA a la base de hechos.
  *
- * La base no vive aqui: es del ASA (@c analysis/asa/base_hechos.h) y el JIT es
+ * La base no vive aqui: es del ASA (@c analysis/asa/fact_base.h) y el JIT es
  * UNO de sus consumidores, igual que el volcado, el nativo o una herramienta.
  * Lo que si es del JIT es la pregunta que se hace en sus decisiones, y eso es
  * lo que declara este fichero.
@@ -20,7 +20,7 @@
 #ifndef VESTA_JIT_JIT_FACTS_H
 #define VESTA_JIT_JIT_FACTS_H
 
-#include "analysis/asa/base_hechos.h"
+#include "analysis/asa/fact_base.h"
 
 #include <cstdint>
 #include <string>
@@ -32,13 +32,13 @@ struct IrFunction;
 namespace jit {
 
 /// La base de hechos del ASA, vista desde el JIT.  No es un tipo aparte.
-using JitFactBase = analysis::asa::BaseDeHechos;
-using HechoRegistrado = analysis::asa::HechoRegistrado;
+using JitFactBase = analysis::asa::FactBase;
+using RecordedFact = analysis::asa::RecordedFact;
 
 /// Atajos a los productores que el JIT consulta hoy.
-using analysis::asa::kProductorEstructura;
-using analysis::asa::kProductorRangos;
-using analysis::asa::volcar_hechos;
+using analysis::asa::dump_facts;
+using analysis::asa::kProducerRanges;
+using analysis::asa::kProducerStructure;
 
 /**
  * @brief Lo que se sabe de los argumentos con los que se llega a cada llamada y

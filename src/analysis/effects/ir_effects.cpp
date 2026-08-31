@@ -432,8 +432,8 @@ collect_native_decls(const std::vector<const ir::IrModule *> &mods) {
     for (const ir::IrModule *m : mods) {
         if (!m) continue;
         for (const ir::IrNativeImport &ni : m->native_imports) {
-            if (!ni.efectos.declarados) continue;
-            out.emplace(ni.lib + ":" + ni.name, &ni.efectos);
+            if (!ni.effects.declared) continue;
+            out.emplace(ni.lib + ":" + ni.name, &ni.effects);
         }
     }
     return out;
@@ -462,18 +462,23 @@ static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
                          const std::vector<ir::IrValueId> &ops, LocFn &&loc) {
     for (uint32_t i = 0; i < ops.size() && i < 32; ++i) {
         const uint32_t bit = uint32_t(1) << i;
-        if (d.lee_apuntado & bit) add_read(e, loc(ops[i], 0));
-        if (d.escribe_apuntado & bit) add_write(e, loc(ops[i], 0));
+        if (d.reads_pointee & bit) add_read(e, loc(ops[i], 0));
+        if (d.writes_pointee & bit) add_write(e, loc(ops[i], 0));
     }
-    if (d.lee_global) add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
-    if (d.escribe_global)
+    if (d.reads_global) add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
+    if (d.writes_global)
         add_write(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
     if (d.io) {
         e.may_io = true;
         e.determinism.add(DeterminismTag::ExternalObservable);
     }
-    if (d.puede_lanzar) e.may_throw = true;
-    if (d.no_determinista)
+    if (d.may_throw) e.may_throw = true;
+    /* Los dos ejes nuevos.  Sin ellos, una nativa declarada dejaba `may_panic`
+     * y `may_allocate` en falso por omision, y el motor semantico daba por
+     * demostrado justo lo que nadie habia dicho. */
+    if (d.may_panic) e.may_panic = true;
+    if (d.allocates) e.may_allocate = true;
+    if (d.nondeterministic)
         e.determinism.add(DeterminismTag::ExternalObservable);
 }
 

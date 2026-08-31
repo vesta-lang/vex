@@ -592,7 +592,7 @@ static bool jit_especializar_debug() {
  */
 static void explicar_especializacion(const ir::IrFunction &fn,
                                      const CotasDeLosSitios &cotas,
-                                     const analysis::asa::Sello &sello,
+                                     const analysis::asa::Seal &sello,
                                      size_t cuerpos, bool asignador) {
     const char *motivo = "";
     if (!cotas.hay)
@@ -618,7 +618,7 @@ static void explicar_especializacion(const ir::IrFunction &fn,
             std::fprintf(stderr, " prueba=%s v%u acotado", cotas.sitio.c_str(),
                          cotas.valor);
         std::fprintf(stderr, " certeza=%s",
-                     analysis::asa::nombre_certeza(sello.certeza));
+                     analysis::asa::certainty_name(sello.certainty));
     }
     std::fprintf(stderr, "\n");
 }
@@ -837,7 +837,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         return get_ic_slot(key);
     };
     /* El contador del nivel dos lo emite el prologo del camino de registros
-     * virtuales y viaja en VregEntries (ver mas abajo), no en estas opciones. */
+     * virtuales y viaja en VregEntries (ver mas abajo), no en estas opciones.
+     */
     ffi::FFI *ffi_ptr = &owning_vm.loader_public.ffi_loader;
     auto native_resolver = [ffi_ptr](const std::string &name) -> uint64_t {
         size_t colon = name.find(':');
@@ -958,7 +959,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             g_eager_cache[n] = EAGER_IN_PROGRESS;
             const ir::IrFunction &child_ir = (*fn_ptr)[lit->second];
             JitCompileOptions child_opts;
-                    child_opts.runtime = g_runtime_entries;
+            child_opts.runtime = g_runtime_entries;
             child_opts.safepoint_handler_addr = reinterpret_cast<uint64_t>(
                 g_runtime_entries->safepoint_handler);
             if (st_ptr2) {
@@ -1098,8 +1099,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             return;
         }
         if (g_jit_warn_unsupported)
-            std::fprintf(stderr,
-                         "[jit-vreg] '%s' no soportada -> interp\n",
+            std::fprintf(stderr, "[jit-vreg] '%s' no soportada -> interp\n",
                          key.c_str());
         /* Un metodo que el camino de registros virtuales no sabe compilar se
          * queda en el INTERPRETE, que siempre es correcto.  Aqui no hay ningun
@@ -1374,13 +1374,12 @@ CompileResult eager_compile_function(
             JitFactBase propia;
             JitFactBase &base = (hechos != nullptr) ? *hechos : propia;
             const CotasDeLosSitios cotas =
-                cotas_de_los_sitios(*ir_elegida, base.rangos(*ir_elegida));
+                cotas_de_los_sitios(*ir_elegida, base.ranges(*ir_elegida));
             merece = cotas.hay;
             if (jit_especializar_debug())
                 explicar_especializacion(
-                    *ir_elegida, cotas,
-                    base.sello(kProductorRangos, *ir_elegida), cuerpos.size(),
-                    hay_asignador);
+                    *ir_elegida, cotas, base.seal(kProducerRanges, *ir_elegida),
+                    cuerpos.size(), hay_asignador);
         }
         if (merece && !cuerpos.empty() && (hay_asignador || !quiero.empty())) {
             esp_clone = *ir_elegida;
@@ -1495,7 +1494,7 @@ CompileResult eager_compile_function(
             }
             const ir::IrFunction &child_ir = *child_sel;
             JitCompileOptions opts;
-                    opts.runtime = g_runtime_entries;
+            opts.runtime = g_runtime_entries;
             opts.safepoint_handler_addr = reinterpret_cast<uint64_t>(
                 g_runtime_entries->safepoint_handler);
             opts.resolve_user_fn = *resolver_holder; /* SAME resolver */
@@ -2666,7 +2665,7 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
 
         /* --- (3) recompile C2 por el path Selector (terminal). --- */
         JitCompileOptions c2;
-            c2.runtime = g_runtime_entries;
+        c2.runtime = g_runtime_entries;
         c2.safepoint_handler_addr =
             reinterpret_cast<uint64_t>(g_runtime_entries->safepoint_handler);
         const auto *st_ptr = &owning_exe->symbol_table;

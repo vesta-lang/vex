@@ -430,7 +430,8 @@ PackNodeStore::compact(const std::set<ContentHash> &vivas,
      * paquete UNA vez: ir entrada por entrada llamando a `get` releeria el
      * fichero entero por cada nodo -- 14.685 lecturas de los mismos 1.454
      * ficheros. */
-    std::map<std::string, std::vector<std::pair<ContentHash, Sitio>>> por_paquete;
+    std::map<std::string, std::vector<std::pair<ContentHash, Sitio>>>
+        por_paquete;
     for (const auto &kv : indice_) {
         if (vivas.count(kv.first) != 0)
             por_paquete[kv.second.ruta].push_back(kv);
@@ -489,8 +490,7 @@ PackNodeStore::compact(const std::set<ContentHash> &vivas,
         // Intocable: lo suyo se queda donde esta.
         if (protegidos.count(kv.first) != 0) continue;
         std::vector<uint8_t> bytes;
-        const std::string hoja =
-            stdfs::path(kv.first).filename().string();
+        const std::string hoja = stdfs::path(kv.first).filename().string();
         if (!(lector.ok() ? lector.read_file(hoja, bytes)
                           : util::read_whole_file(kv.first, bytes))) {
             /* No se deja leer.  Se salta en vez de abortar, porque un solo

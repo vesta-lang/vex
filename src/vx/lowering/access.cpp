@@ -17,7 +17,7 @@
  * fichero es decidir cual de las dos se debe entregar.
  */
 #include "vx/lowering.h"
-#include "vx/ansi_names.h" // los nombres de color que el lenguaje conoce
+#include "vx/ansi_names.h"   // los nombres de color que el lenguaje conoce
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
@@ -214,9 +214,8 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         i_v = cast_if_needed(i_v, fn_->values[i_v].type, ir::IrType::I64,
                              e->loc.line);
         // scaled = i * stride
-        ir::IrValueId scaled =
-            emit_ir_binop(ir::IrOp::MUL, i_v, stride_v,
-                          ir::IrType::I64, e->loc.line);
+        ir::IrValueId scaled = emit_ir_binop(ir::IrOp::MUL, i_v, stride_v,
+                                             ir::IrType::I64, e->loc.line);
         // addr = (base_absolute ? table_base : ov_base + pos) + scaled
         ir::IrValueId t1;
         if (base_absolute) {
@@ -266,9 +265,8 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     if (esz != 1) {
         const ir::IrValueId sz_v =
             emit_const(ir::IrType::I64, (uint64_t)esz, e->loc.line);
-        const ir::IrValueId scaled =
-            emit_ir_binop(ir::IrOp::MUL, idx_v, sz_v,
-                          ir::IrType::I64, e->loc.line);
+        const ir::IrValueId scaled = emit_ir_binop(
+            ir::IrOp::MUL, idx_v, sz_v, ir::IrType::I64, e->loc.line);
         offset = scaled;
     }
     // unique<T>/shared<T>: el valor SSA de `base` es la DIRECCION del slot
@@ -1108,8 +1106,8 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                 // Los nombres de campo son unicos en un layout, asi que
                 // buscarlo y luego mirar si cumple es lo mismo que recorrer
                 // comprobando las dos cosas a la vez.
-                const StructFieldInfo *f = find_field(it_e->second,
-                                                      e->field_name);
+                const StructFieldInfo *f =
+                    find_field(it_e->second, e->field_name);
                 if (f && f->endian_expr && f->bit_width == 0 &&
                     (f->size == 2 || f->size == 4 || f->size == 8)) {
                     dst = emit_overlay_endian_swap(e->base.get(), it_e->second,
@@ -1164,12 +1162,11 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                     sh.operands = {dst, v_shamt};
                     sh.source_line = e->loc.line;
                     emit(current_block_, std::move(sh));
-            }
+                }
                 // mask = (1 << bit_width) - 1.
-                const uint64_t mask =
-                    (f->bit_width == 64)
-                        ? UINT64_MAX
-                        : ((uint64_t(1) << f->bit_width) - 1);
+                const uint64_t mask = (f->bit_width == 64)
+                                          ? UINT64_MAX
+                                          : ((uint64_t(1) << f->bit_width) - 1);
                 ir::IrValueId v_mask = emit_const(ft, mask, e->loc.line);
                 ir::IrValueId v_masked = fn_->new_value(ft);
                 ir::IrInstr an{};

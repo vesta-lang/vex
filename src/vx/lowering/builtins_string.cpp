@@ -92,19 +92,20 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
     const bool is_contains_b =
         (b == Builtin::Contains || b == Builtin::ComptimeContains);
 
-    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
+    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo.
+     */
     if (!(is_str_length || is_str_bytes || is_str_cstr || is_str_wstr ||
           is_str_hash || is_str_intern || is_str_concat || is_str_equals ||
-          is_str_make || is_str_convert || is_to_str || is_chr_b ||
-          is_ord_b || is_substr_b || is_repeat_b || is_replace_b ||
-          is_contains_b))
+          is_str_make || is_str_convert || is_to_str || is_chr_b || is_ord_b ||
+          is_substr_b || is_repeat_b || is_replace_b || is_contains_b))
         return false;
 
     if (is_to_str) {
         /* to_str(int) -> string.  Reusa el helper
          * stringify_primitive_via_native con vio_int_to_vmbuf. */
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "to_str: se esperaba 1 argumento", out_value);
+            return builtin_error(e->loc, "to_str: se esperaba 1 argumento",
+                                 out_value);
         }
         const ir::IrValueId v_val = lower_expr(e->args[0].get());
         if (v_val == ir::IR_NO_VALUE) {
@@ -120,7 +121,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         /* chr(codepoint) -> string.  Reusa vio_char_to_vmbuf
          * (codepoint -> UTF-8 bytes -> STRMAKE). */
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "chr: se esperaba 1 argumento (codepoint)", out_value);
+            return builtin_error(
+                e->loc, "chr: se esperaba 1 argumento (codepoint)", out_value);
         }
         const ir::IrValueId v_cp = lower_expr(e->args[0].get());
         if (v_cp == ir::IR_NO_VALUE) {
@@ -138,7 +140,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
          * multi-byte UTF-8 retorna solo el primer byte (lead byte);
          * el caller puede decodear si necesita el codepoint real. */
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "ord: se esperaba 1 argumento (string)", out_value);
+            return builtin_error(
+                e->loc, "ord: se esperaba 1 argumento (string)", out_value);
         }
         const ir::IrValueId v_str = lower_expr(e->args[0].get());
         if (v_str == ir::IR_NO_VALUE) {
@@ -159,8 +162,9 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         /* substr(s, start, len) -> string.  Empaqueta start+len en
          * un u64 (hi<<32 | lo) y emite strslice. */
         if (e->args.size() != 3) {
-            return builtin_error(e->loc,
-                                 "substr: se esperaba 3 argumentos (string, start, len)", out_value);
+            return builtin_error(
+                e->loc, "substr: se esperaba 3 argumentos (string, start, len)",
+                out_value);
         }
         const ir::IrValueId v_str = lower_expr(e->args[0].get());
         const ir::IrValueId v_start = lower_expr(e->args[1].get());
@@ -182,9 +186,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
             sh.source_line = e->loc.line;
             emit(current_block_, std::move(sh));
         }
-        ir::IrValueId v_range =
-            emit_ir_binop(ir::IrOp::OR, v_shifted, v_len,
-                          ir::IrType::U64, e->loc.line);
+        ir::IrValueId v_range = emit_ir_binop(ir::IrOp::OR, v_shifted, v_len,
+                                              ir::IrType::U64, e->loc.line);
         ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
         {
             ir::IrInstr sl{};
@@ -266,8 +269,9 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
 
         if (is_repeat_b) {
             if (e->args.size() != 2) {
-                return builtin_error(e->loc,
-                                     "repeat: se esperaba 2 argumentos (string, n)", out_value);
+                return builtin_error(
+                    e->loc, "repeat: se esperaba 2 argumentos (string, n)",
+                    out_value);
             }
             const ir::IrValueId v_str = coerce_str_arg(e->args[0].get());
             const ir::IrValueId v_n = lower_expr(e->args[1].get());
@@ -296,8 +300,9 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         if (is_contains_b) {
             if (e->args.size() != 2) {
                 return builtin_error(
-                                e->loc,
-                                "contains: se esperaba 2 argumentos (string, substring)", out_value);
+                    e->loc,
+                    "contains: se esperaba 2 argumentos (string, substring)",
+                    out_value);
             }
             const ir::IrValueId v_hay = coerce_str_arg(e->args[0].get());
             const ir::IrValueId v_needle = coerce_str_arg(e->args[1].get());
@@ -310,10 +315,10 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
             auto [v_n_addr, v_n_len] =
                 materialize_str_to_vmbuf(v_needle, e->loc.line);
             const ir::IrValueId v_proc = emit_getproc(e->loc.line);
-            ir::IrValueId v_dst = emit_native_call(
-                kVestaIoLib, "vstr_contains",
-                {v_proc, v_h_addr, v_h_len, v_n_addr, v_n_len},
-                ir::IrType::BOOL, e->loc.line);
+            ir::IrValueId v_dst =
+                emit_native_call(kVestaIoLib, "vstr_contains",
+                                 {v_proc, v_h_addr, v_h_len, v_n_addr, v_n_len},
+                                 ir::IrType::BOOL, e->loc.line);
             out_value = v_dst;
             return true;
         }
@@ -321,8 +326,9 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         if (is_replace_b) {
             if (e->args.size() != 3) {
                 return builtin_error(
-                                e->loc,
-                                "replace: se esperaba 3 argumentos (string, from, to)", out_value);
+                    e->loc,
+                    "replace: se esperaba 3 argumentos (string, from, to)",
+                    out_value);
             }
             // Auto-promote string literals a StringObjects.  Sin esto,
             // un literal como `"{a}"` se pasa como raw static_data ptr
@@ -344,11 +350,11 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
             /* Buffer destino (64 KB ALLOCA). */
             ir::IrValueId v_dst_buf = stack_alloc_buf(65536, e->loc.line);
             const ir::IrValueId v_proc = emit_getproc(e->loc.line);
-            ir::IrValueId v_len = emit_native_call(
-                kVestaIoLib, "vstr_replace_to_vmbuf",
-                {v_proc, v_dst_buf, v_src_addr, v_src_len, v_from_addr,
-                 v_from_len, v_to_addr, v_to_len},
-                ir::IrType::U64, e->loc.line);
+            ir::IrValueId v_len =
+                emit_native_call(kVestaIoLib, "vstr_replace_to_vmbuf",
+                                 {v_proc, v_dst_buf, v_src_addr, v_src_len,
+                                  v_from_addr, v_from_len, v_to_addr, v_to_len},
+                                 ir::IrType::U64, e->loc.line);
             ir::IrValueId v_h = emit_strmake(v_dst_buf, v_len, e->loc.line);
             out_value = v_h;
             return true;
@@ -471,7 +477,10 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
     if (is_str_length || is_str_bytes || is_str_cstr || is_str_wstr ||
         is_str_hash || is_str_intern) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) + "': 1 arg", out_value);
+            return builtin_error(e->loc,
+                                 std::string("'") +
+                                     std::string(builtin_name(b)) + "': 1 arg",
+                                 out_value);
         }
         // coerce string literal (PTR) a StringObject (STRING
         // handle) inline via STRMAKE.  Sin esto pasar un literal directo
@@ -504,18 +513,16 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         }
         // Resto: 1 sola instruccion bytecode mediante IR ops dedicados.
         if (is_str_length) {
-            ir::IrValueId v_dst =
-                emit_ir_unop(ir::IrOp::STRLEN, v_str,
-                             ir::IrType::I64, e->loc.line);
+            ir::IrValueId v_dst = emit_ir_unop(ir::IrOp::STRLEN, v_str,
+                                               ir::IrType::I64, e->loc.line);
             out_value = v_dst;
         } else if (is_str_bytes) {
             out_value = emit_strgetbytes(v_str, e->loc.line);
         } else if (is_str_cstr) {
             out_value = emit_strraw(v_str, e->loc.line);
         } else if (is_str_hash) {
-            ir::IrValueId v_dst =
-                emit_ir_unop(ir::IrOp::STRHASH, v_str,
-                             ir::IrType::I64, e->loc.line);
+            ir::IrValueId v_dst = emit_ir_unop(ir::IrOp::STRHASH, v_str,
+                                               ir::IrType::I64, e->loc.line);
             out_value = v_dst;
         } else {
             // str_intern: aloca nuevo StringObject canonical o reusa pool.
@@ -536,7 +543,10 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
 
     if (is_str_concat || is_str_equals) {
         if (e->args.size() != 2) {
-            return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) + "': 2 args", out_value);
+            return builtin_error(e->loc,
+                                 std::string("'") +
+                                     std::string(builtin_name(b)) + "': 2 args",
+                                 out_value);
         }
         // C-3: ruteo del builtin str_concat/str_equals al override del
         // usuario (@StringConcat / @StringEq).  Solo el builtin runtime
@@ -670,8 +680,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
                 emit_native_str_free_if_heap(rb.temp, e->loc.line);
             // str_equals: bool = (strcmp == 0).
             ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
-            ir::IrValueId v_eq =
-                emit_ir_binop(ir::IrOp::CMP_EQ, v_cmp, v_zero, ir::IrType::BOOL, e->loc.line);
+            ir::IrValueId v_eq = emit_ir_binop(ir::IrOp::CMP_EQ, v_cmp, v_zero,
+                                               ir::IrType::BOOL, e->loc.line);
             out_value = v_eq;
             return true;
         }
@@ -711,8 +721,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         // str_equals returns -1/0/1 (strcmp).  Convertir a bool: 0 == equal.
         if (is_str_equals) {
             ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
-            ir::IrValueId v_eq =
-                emit_ir_binop(ir::IrOp::CMP_EQ, v_dst, v_zero, ir::IrType::BOOL, e->loc.line);
+            ir::IrValueId v_eq = emit_ir_binop(ir::IrOp::CMP_EQ, v_dst, v_zero,
+                                               ir::IrType::BOOL, e->loc.line);
             out_value = v_eq;
         } else {
             out_value = v_dst;
@@ -722,7 +732,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
 
     if (is_str_make) {
         if (e->args.size() != 2) {
-            return builtin_error(e->loc, "str_make: 2 args (ptr, len)", out_value);
+            return builtin_error(e->loc, "str_make: 2 args (ptr, len)",
+                                 out_value);
         }
         // Vesta Embed (native_poo_): str_make(ptr, len) COPIA len bytes a un
         // value-string PROPIO (sin GC), NO un StringObject GC.  Si len es un
@@ -779,10 +790,12 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         // buffer en la codificacion que espera esa API.  Ademas asi el mismo
         // codigo se comporta igual en interprete, JIT y AOT -- antes AOT
         // trataba la codificacion como advisory y divergia en silencio.
-        return builtin_error(e->loc,
-                             "str_convert no existe: un `string` es siempre una secuencia "
-                             "de code points.  La codificacion se elige al cruzar a codigo "
-                             "nativo: usa `s.cstr()` para UTF-8 o `s.wstr()` para UTF-16", out_value);
+        return builtin_error(
+            e->loc,
+            "str_convert no existe: un `string` es siempre una secuencia "
+            "de code points.  La codificacion se elige al cruzar a codigo "
+            "nativo: usa `s.cstr()` para UTF-8 o `s.wstr()` para UTF-16",
+            out_value);
     }
 
     return false;

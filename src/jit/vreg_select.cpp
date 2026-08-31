@@ -447,9 +447,8 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
  */
 inline int canon_vec_to_mreg(const std::string &c) {
     if (c.size() < 4) return -1;
-    const bool es_vec =
-        (c.rfind("xmm", 0) == 0 || c.rfind("ymm", 0) == 0 ||
-         c.rfind("zmm", 0) == 0);
+    const bool es_vec = (c.rfind("xmm", 0) == 0 || c.rfind("ymm", 0) == 0 ||
+                         c.rfind("zmm", 0) == 0);
     if (!es_vec) return -1;
     unsigned n = 0;
     for (size_t i = 3; i < c.size(); ++i) {
@@ -515,7 +514,7 @@ inline int canon_gp_to_mreg(const std::string &c, bool for_pin = false) {
  *         porque salvarlo usaria @c rsp --; el llamador hace fallback.
  */
 static bool asm_blob_mark_clobbers(const ir::AsmMicro &am, AsmBlob &blob,
-                                     bool &salvar_rbx, bool &salvar_rbp) {
+                                   bool &salvar_rbx, bool &salvar_rbp) {
     // Efectos de la DB: bit0 mem, bit3 barrera -> clobber de memoria; bit2
     // escribe flags.
     blob.clobbers_mem = (am.eff & 0x9) != 0;
@@ -589,30 +588,44 @@ static bool packed_binop_mop(ir::IrType t, uint64_t subop, MOp &out) {
     case ir::IrType::I64:
     case ir::IrType::U64:
         // No hay multiplicacion de 64 bits empaquetada hasta AVX-512.
-        if (subop == 0) out = MOp::PADDQ;
-        else if (subop == 1) out = MOp::PSUBQ;
-        else return false;
+        if (subop == 0)
+            out = MOp::PADDQ;
+        else if (subop == 1)
+            out = MOp::PSUBQ;
+        else
+            return false;
         return true;
     case ir::IrType::I32:
     case ir::IrType::U32:
-        if (subop == 0) out = MOp::PADDD;
-        else if (subop == 1) out = MOp::PSUBD;
-        else if (subop == 2) out = MOp::PMULLD; // SSE4.1 / AVX2
-        else return false;                      // la division no existe
+        if (subop == 0)
+            out = MOp::PADDD;
+        else if (subop == 1)
+            out = MOp::PSUBD;
+        else if (subop == 2)
+            out = MOp::PMULLD; // SSE4.1 / AVX2
+        else
+            return false; // la division no existe
         return true;
     case ir::IrType::I16:
     case ir::IrType::U16:
-        if (subop == 0) out = MOp::PADDW;
-        else if (subop == 1) out = MOp::PSUBW;
-        else if (subop == 2) out = MOp::PMULLW; // parte baja, SSE2
-        else return false;
+        if (subop == 0)
+            out = MOp::PADDW;
+        else if (subop == 1)
+            out = MOp::PSUBW;
+        else if (subop == 2)
+            out = MOp::PMULLW; // parte baja, SSE2
+        else
+            return false;
         return true;
     case ir::IrType::I8:
     case ir::IrType::U8:
         // Multiplicar bytes no existe empaquetado en ninguna extension.
-        if (subop == 0) out = MOp::PADDB;
-        else if (subop == 1) out = MOp::PSUBB;
-        else return false;
+        if (subop == 0)
+            out = MOp::PADDB;
+        else if (subop == 1)
+            out = MOp::PSUBB;
+        else
+            return false;
         return true;
     default: return false; // el resto de tipos no viaja por carriles
     }
@@ -657,7 +670,7 @@ void vreg_set_abi_resolver(AbiResolver resolver) noexcept {
  * @param salvar_rbp idem con @c rbp.
  */
 static void asm_blob_emit(std::vector<MInstr> &O, uint32_t bidx,
-                            bool salvar_rbx, bool salvar_rbp) {
+                          bool salvar_rbx, bool salvar_rbp) {
     if (salvar_rbx) {
         MInstr p;
         p.op = MOp::PUSH;
@@ -837,9 +850,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         for (const ir::IrInstr &ins : blk.instrs) {
             if (ins.op != ir::IrOp::ASM_MICRO) continue;
             if (ins.imm >= fn.asm_micros.size()) continue;
-            for (const ir::AsmMicroOperand &op : fn.asm_micros[ins.imm].operands) {
+            for (const ir::AsmMicroOperand &op :
+                 fn.asm_micros[ins.imm].operands) {
                 if (op.value == ir::IR_NO_VALUE) continue;
-                if (op.regclass != vx::ASM_RC_VEC && op.regclass != vx::ASM_RC_FP)
+                if (op.regclass != vx::ASM_RC_VEC &&
+                    op.regclass != vx::ASM_RC_FP)
                     continue;
                 if (op.value < out.vreg_class.size())
                     out.vreg_class[op.value] = RegClass::FP;
@@ -3116,7 +3131,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), ir::ir_op_name(in.op));
                     return false;
                 }
-                const int sb = ir::type_slot_bytes(st), db = ir::type_slot_bytes(dt);
+                const int sb = ir::type_slot_bytes(st),
+                          db = ir::type_slot_bytes(dt);
                 /* MOV de ancho w (w<8 zero-extiende los bits altos). */
                 auto mov_w = [&](int w) {
                     MOperand d = vr(in.dst);
@@ -3662,8 +3678,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * la maquina lo tiene para todos los anchos desde el baseline.
                  * El valor absoluto entero se queda fuera porque necesita PABS*
                  * y ese aun no se emite. */
-                const bool u_fp = (in.type == ir::IrType::F64 ||
-                                   in.type == ir::IrType::F32);
+                const bool u_fp =
+                    (in.type == ir::IrType::F64 || in.type == ir::IrType::F32);
                 const bool u_f32 = (in.type == ir::IrType::F32);
                 if (u_fp && !fp_ok) return false;
                 if (!u_fp && subop != 0 && subop != 1)
@@ -4754,7 +4770,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      * bloque deja de tratarse como posicion de llamada. */
                     bool salvar_rbx = false, salvar_rbp = false;
                     if (!asm_blob_mark_clobbers(am, blob, salvar_rbx,
-                                                  salvar_rbp)) {
+                                                salvar_rbp)) {
                         vreg_dbg(fn.name.c_str(),
                                  "asm_micro(reasigna la pila)");
                         return false;
@@ -4796,8 +4812,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 AsmBlob blob;
                 blob.bytes = std::move(ar.bytes);
                 bool salvar_rbx = false, salvar_rbp = false;
-                if (!asm_blob_mark_clobbers(am, blob, salvar_rbx,
-                                              salvar_rbp)) {
+                if (!asm_blob_mark_clobbers(am, blob, salvar_rbx, salvar_rbp)) {
                     vreg_dbg(fn.name.c_str(), "asm_micro(reasigna la pila)");
                     return false;
                 }
@@ -5903,8 +5918,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(mk_test(vtbl, vtbl));
                     O.push_back(MInstr::make_jcc(MCond::E, Lfb));
                     /* method = [vtbl + vtbl_idx*8]. */
-                    const ir::IrValueId method =
-                        load_qword_at(vtbl, static_cast<int32_t>(vtbl_idx * 8u));
+                    const ir::IrValueId method = load_qword_at(
+                        vtbl, static_cast<int32_t>(vtbl_idx * 8u));
                     O.push_back(mk_test(method, method));
                     O.push_back(MInstr::make_jcc(MCond::E, Lfb));
                     /* advice = [method + ADVICE_CHAIN_OFFSET]; si != 0

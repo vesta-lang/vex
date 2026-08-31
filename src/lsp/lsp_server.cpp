@@ -16,6 +16,11 @@
  */
 
 #include "lsp/lsp_server.h"
+
+#include <filesystem>
+
+#include "vx/fmt/fmt.h"
+#include "vx/fmt/fmt_driver.h"
 #include "vx/diag/diag_catalog.h"
 #include "vx/diag/diag_format.h" // formatted_message: el MISMO texto que la CLI
 #include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
@@ -207,8 +212,8 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
         }
         // Para que maquina analizar.  El editor lo manda al arrancar y cada
         // vez que se cambia (@c workspace/didChangeConfiguration).
-        apply_target_settings(params.value("initializationOptions",
-                                           nlohmann::json::object()));
+        apply_target_settings(
+            params.value("initializationOptions", nlohmann::json::object()));
         // Deduplicar entradas vacias/repetidas conservando el orden.
         std::vector<std::string> uniq;
         for (const auto &r : roots) {
@@ -244,6 +249,14 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     caps["semanticTokensProvider"] = std::move(sem);
 
     // Navegacion (Fase 4): hover, ir a la definicion y buscar referencias.
+    /* Dar formato al fichero entero.  Es lo que enchufa `vesta fmt` al editor:
+     * el mismo codigo, el mismo estandar y el mismo resultado que en la linea
+     * de ordenes, sin que el editor tenga que saber nada de reglas.
+     *
+     * Solo el documento COMPLETO (`documentFormattingProvider`), no por rango:
+     * la alineacion de un bloque mira a sus vecinas y las columnas de un trozo
+     * suelto no significan nada sin el resto. */
+    caps["documentFormattingProvider"] = true;
     caps["hoverProvider"] = true;
     caps["definitionProvider"] = true;
     caps["referencesProvider"] = true;
@@ -263,14 +276,17 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     // forman parte del LSP estandar, asi que se anuncian bajo el campo
     // experimental para que un cliente que las conozca las descubra.
     nlohmann::json experimental;
-    experimental["vestaMethods"] = nlohmann::json::array(
-        {"vesta/bytecode", "vesta/ir", "vesta/complexity", "vesta/diagram",
-         "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm",
-         "vesta/modes", "vesta/compile", "vesta/compileProject",
-         "vesta/macroExpand", "vesta/comptimeValues", "vesta/asa",
-         "vesta/asaFacts", "vesta/targets", "vesta/instruction",
-         "vesta/functionReport", "vesta/asmBlock",
-         "vesta/asmFlow"});
+    experimental["vestaMethods"] =
+        nlohmann::json::array({"vesta/bytecode",       "vesta/ir",
+                               "vesta/complexity",     "vesta/diagram",
+                               "vesta/functions",      "vesta/aotCompat",
+                               "vesta/jitAsm",         "vesta/aotAsm",
+                               "vesta/modes",          "vesta/compile",
+                               "vesta/compileProject", "vesta/macroExpand",
+                               "vesta/comptimeValues", "vesta/asa",
+                               "vesta/asaFacts",       "vesta/targets",
+                               "vesta/instruction",    "vesta/functionReport",
+                               "vesta/asmBlock",       "vesta/asmFlow"});
     caps["experimental"] = std::move(experimental);
 
     nlohmann::json result;
@@ -686,19 +702,21 @@ std::string doc_to_markdown(const std::string &doc) {
         return s.substr(a, b - a + 1);
     };
 
-    std::string descripcion;   ///< texto libre, que fluye.
+    std::string descripcion; ///< texto libre, que fluye.
     std::vector<std::string> parametros;
     std::vector<std::string> otras; ///< devuelve / lanza / ve / nota.
     // A que se le esta anadiendo el texto que continua en la linea siguiente.
-    enum class Destino { Descripcion, Parametro, Otra } destino =
-        Destino::Descripcion;
+    enum class Destino {
+        Descripcion,
+        Parametro,
+        Otra
+    } destino = Destino::Descripcion;
 
     size_t pos = 0;
     while (pos <= doc.size()) {
         const size_t nl = doc.find('\n', pos);
-        const std::string linea =
-            trim(doc.substr(pos, nl == std::string::npos ? std::string::npos
-                                                         : nl - pos));
+        const std::string linea = trim(doc.substr(
+            pos, nl == std::string::npos ? std::string::npos : nl - pos));
         pos = (nl == std::string::npos) ? doc.size() + 1 : nl + 1;
 
         if (linea.empty()) {
@@ -716,20 +734,18 @@ std::string doc_to_markdown(const std::string &doc) {
             const size_t fin_tag = linea.find_first_of(" \t");
             const std::string tag = linea.substr(
                 1, (fin_tag == std::string::npos ? linea.size() : fin_tag) - 1);
-            const std::string resto =
-                (fin_tag == std::string::npos) ? std::string()
-                                               : trim(linea.substr(fin_tag));
+            const std::string resto = (fin_tag == std::string::npos)
+                                          ? std::string()
+                                          : trim(linea.substr(fin_tag));
             if (tag == "param" || tag == "tparam") {
                 // El primer termino es el nombre del parametro.
                 const size_t fin_nombre = resto.find_first_of(" \t");
-                const std::string nombre =
-                    (fin_nombre == std::string::npos)
-                        ? resto
-                        : resto.substr(0, fin_nombre);
-                const std::string texto =
-                    (fin_nombre == std::string::npos)
-                        ? std::string()
-                        : trim(resto.substr(fin_nombre));
+                const std::string nombre = (fin_nombre == std::string::npos)
+                                               ? resto
+                                               : resto.substr(0, fin_nombre);
+                const std::string texto = (fin_nombre == std::string::npos)
+                                              ? std::string()
+                                              : trim(resto.substr(fin_nombre));
                 parametros.push_back("- `" + nombre + "`" +
                                      (texto.empty() ? "" : " -- " + texto));
                 destino = Destino::Parametro;
@@ -1105,6 +1121,65 @@ bool LspServer::word_under_cursor(const nlohmann::json &params,
     return true;
 }
 
+void LspServer::handle_formatting(const nlohmann::json &msg) {
+    const auto &params = msg.at("params");
+    const std::string uri =
+        params.at("textDocument").at("uri").get<std::string>();
+    const auto src = docs_.text(uri);
+    if (!src) {
+        if (msg.contains("id"))
+            send_result(msg.at("id"), nlohmann::json::array());
+        return;
+    }
+
+    /* Los nombres de las funciones que capturan el texto de su argumento
+     * (`R110`) no se pueden saber mirando un fichero solo: las importadas se
+     * declaran en otro modulo.  El indice de simbolos ya tiene los ficheros
+     * del espacio de trabajo, asi que se los pasamos. */
+    if (!capture_names_listos_) {
+        capture_names_listos_ = true;
+        std::vector<std::string> ficheros;
+        std::error_code ec;
+        for (const std::string &raiz : workspace_.roots()) {
+            for (std::filesystem::recursive_directory_iterator it(raiz, ec),
+                 fin;
+                 it != fin && !ec; it.increment(ec)) {
+                if (!it->is_regular_file(ec)) continue;
+                if (it->path().extension() == ".vx")
+                    ficheros.push_back(it->path().string());
+            }
+        }
+        capture_names_ = vx::fmt::capture_names_in_files(ficheros);
+    }
+    vx::fmt::FormatOptions options;
+    options.raw_capture_names = capture_names_;
+
+    const vx::fmt::FormatResult r = vx::fmt::format(*src, uri, options);
+    if (!r.ok || r.text == *src) {
+        // No se pudo, o ya estaba formateado: ninguna edicion.  Que el
+        // formateador se niegue no es un error del editor.
+        if (msg.contains("id"))
+            send_result(msg.at("id"), nlohmann::json::array());
+        return;
+    }
+
+    /* Una sola edicion que sustituye el documento entero.
+     *
+     * Podria calcularse un diff minimo, y seria mas fino para el historial de
+     * deshacer; pero el formateador toca casi todas las lineas de un fichero
+     * sin formatear, asi que el diff no seria mucho menor y si mucho mas
+     * codigo que mantener en sincronia con el resultado. */
+    uint32_t lineas = 0;
+    for (const char c : *src)
+        if (c == '\n') ++lineas;
+    nlohmann::json edit;
+    edit["range"] = {{"start", {{"line", 0}, {"character", 0}}},
+                     {"end", {{"line", lineas + 1}, {"character", 0}}}};
+    edit["newText"] = r.text;
+    if (msg.contains("id"))
+        send_result(msg.at("id"), nlohmann::json::array({edit}));
+}
+
 void LspServer::handle_hover(const nlohmann::json &msg) {
     const auto &params = msg.at("params");
 
@@ -1182,8 +1257,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     size_t cursor_off = std::string::npos;
     if (params.contains("position") && params["position"].is_object()) {
         const auto &pos = params["position"];
-        cursor_off = lsp_position_to_byte_offset(
-            text, pos.value("line", 0u), pos.value("character", 0u));
+        cursor_off = lsp_position_to_byte_offset(text, pos.value("line", 0u),
+                                                 pos.value("character", 0u));
     }
 
     // Buscar en las definiciones locales (preferencia por exactitud de scope).
@@ -1343,9 +1418,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         }
     }
     if (doc_pendiente && !def_text.empty()) {
-        doc = extract_doc_comment(
-            def_text,
-            lsp_position_to_byte_offset(def_text, doc_line, doc_char));
+        doc = extract_doc_comment(def_text, lsp_position_to_byte_offset(
+                                                def_text, doc_line, doc_char));
     }
     // Analisis del fichero que define: de ahi salen el coste, los contratos y
     // la disposicion en memoria de los tipos.  Se pide una sola vez.
@@ -1542,8 +1616,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 const analyze::VariantPlacement &v = tf->variants[i];
                 if (v.name != word) continue;
                 md += "\n";
-                md += vx::diag::format("VX9115",
-                                       {std::to_string(v.int_value)});
+                md += vx::diag::format("VX9115", {std::to_string(v.int_value)});
                 // La etiqueta es lo que se guarda en memoria; solo se ensena
                 // cuando NO coincide con el valor, que es cuando confundirlos
                 // duele.
@@ -1560,8 +1633,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 md += "\n";
                 if (v.payload_fields > 0) {
                     md += "\n";
-                    md += vx::diag::format(
-                        "VX9118", {std::to_string(v.payload_fields)});
+                    md += vx::diag::format("VX9118",
+                                           {std::to_string(v.payload_fields)});
                     md += "\n";
                 }
                 md += "\n";
@@ -1577,9 +1650,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 char hex[32];
                 std::snprintf(hex, sizeof(hex), "0x%X", f.offset);
                 md += "\n";
-                md += vx::diag::format("VX9120",
-                                       {std::to_string(f.offset), hex,
-                                        std::to_string(f.size)});
+                md += vx::diag::format("VX9120", {std::to_string(f.offset), hex,
+                                                  std::to_string(f.size)});
                 md += "\n";
                 if (f.bit_width > 0) {
                     // Campo de bits: lo que importa es que trozo de la palabra
@@ -1597,9 +1669,9 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 // vista los desplazamientos los fija el autor.
                 if (!tf->is_union && !tf->is_overlay) {
                     const uint32_t anterior =
-                        (i == 0) ? 0
-                                 : tf->fields[i - 1].offset +
-                                       tf->fields[i - 1].size;
+                        (i == 0)
+                            ? 0
+                            : tf->fields[i - 1].offset + tf->fields[i - 1].size;
                     if (f.offset > anterior) {
                         md += "\n";
                         md += vx::diag::format(
@@ -1618,14 +1690,12 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                     }
                 }
                 md += "\n";
-                md += vx::diag::format("VX9124",
-                                       {container,
-                                        std::to_string(tf->size_bytes),
-                                        std::to_string(tf->align_bytes)});
+                md += vx::diag::format(
+                    "VX9124", {container, std::to_string(tf->size_bytes),
+                               std::to_string(tf->align_bytes)});
                 if (tf->is_union) md += ", " + vx::diag::format("VX9125");
                 if (tf->is_overlay) md += ", " + vx::diag::format("VX9126");
-                if (tf->is_polymorphic)
-                    md += ", " + vx::diag::format("VX9127");
+                if (tf->is_polymorphic) md += ", " + vx::diag::format("VX9127");
                 md += "\n";
                 break;
             }
@@ -1738,15 +1808,15 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
  */
 static int symbol_kind_to_lsp(SymbolKind k) {
     switch (k) {
-    case SymbolKind::Struct: return 23;    // Struct
-    case SymbolKind::Class: return 5;      // Class
-    case SymbolKind::Enum: return 10;      // Enum
+    case SymbolKind::Struct: return 23;      // Struct
+    case SymbolKind::Class: return 5;        // Class
+    case SymbolKind::Enum: return 10;        // Enum
     case SymbolKind::EnumVariant: return 22; // EnumMember
-    case SymbolKind::TypeAlias: return 26; // TypeParameter
-    case SymbolKind::Variable: return 13;  // Variable
-    case SymbolKind::Field: return 8;      // Field
-    case SymbolKind::Method: return 6;     // Method
-    default: return 12;                    // Function
+    case SymbolKind::TypeAlias: return 26;   // TypeParameter
+    case SymbolKind::Variable: return 13;    // Variable
+    case SymbolKind::Field: return 8;        // Field
+    case SymbolKind::Method: return 6;       // Method
+    default: return 12;                      // Function
     }
 }
 
@@ -2126,19 +2196,19 @@ bool LspServer::handle_vesta_request(const std::string &method,
         // asi se responde por lo que el compilador entendio de ella.
         if (method == "vesta/asmFlow") {
             // El flujo de todos los bloques, para pintarlo sobre el codigo.
-            send_result(id, inspector_.asm_flow(
-                                params.value("uri", std::string()),
-                                params.value("arch", std::string())));
+            send_result(
+                id, inspector_.asm_flow(params.value("uri", std::string()),
+                                        params.value("arch", std::string())));
             return true;
         }
         if (method == "vesta/asmBlock") {
             // Un bloque de asm entero, con su flujo y lo que se sabe de cada
             // instruccion.
-            send_result(id, inspector_.asm_block(
-                                params.value("uri", std::string()),
-                                params.value("line", 0u),
-                                params.value("cpu", std::string()),
-                                params.value("arch", std::string())));
+            send_result(
+                id, inspector_.asm_block(params.value("uri", std::string()),
+                                         params.value("line", 0u),
+                                         params.value("cpu", std::string()),
+                                         params.value("arch", std::string())));
             return true;
         }
         if (method == "vesta/instruction") {
@@ -2362,6 +2432,16 @@ void LspServer::dispatch(const nlohmann::json &msg) {
         handle_did_close(msg.at("params"));
     } else if (method == "textDocument/semanticTokens/full") {
         handle_semantic_tokens_full(msg);
+    } else if (method == "textDocument/formatting") {
+        try {
+            handle_formatting(msg);
+        } catch (...) {
+            // Ante cualquier fallo se responde una lista VACIA de ediciones:
+            // el editor deja el fichero como esta, que es lo que hay que hacer
+            // cuando no se sabe.  Nunca a medias.
+            if (msg.contains("id"))
+                send_result(msg.at("id"), nlohmann::json::array());
+        }
     } else if (method == "textDocument/hover") {
         // Navegacion (Fase 4): cada handler envuelve su logica de forma que un
         // fallo NO tumba el servidor; ademas respondemos null/[] ante error

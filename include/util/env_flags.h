@@ -26,10 +26,10 @@
  *     de la cache hace que se sirva un artefacto construido con OTRA
  *     configuracion.  No da error: da un binario que no corresponde al fuente.
  *
- * LA FORMA.  Una sola tabla (@c util/env_flags_table.h) de la que salen el enum,
- * los descriptores y las huellas.  Anadir un mando es anadir UNA linea; no hay
- * ningun sitio donde puedas anadirlo y olvidar la huella, porque la huella se
- * deriva de la misma linea.
+ * LA FORMA.  Una sola tabla (@c util/env_flags_table.h) de la que salen el
+ * enum, los descriptores y las huellas.  Anadir un mando es anadir UNA linea;
+ * no hay ningun sitio donde puedas anadirlo y olvidar la huella, porque la
+ * huella se deriva de la misma linea.
  *
  * CADA MANDO DICE QUE CAMBIA (@c FlagScope), y de ahi sale si entra en una
  * huella.  Solo @c Emitted entra.  `VESTA_TIMES` no puede invalidar la cache

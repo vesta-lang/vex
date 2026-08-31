@@ -64,7 +64,10 @@ RUNS_SLOW = 3   # python, vx_interp (interpretados/lentos)
 RUNS_PER_MODE = RUNS_FAST  # default de --runs (compat)
 # Lenguajes interpretados/lentos: se miden con RUNS_SLOW.
 INTERPRETED_LANGS = frozenset({"python", "vx_interp"})
-BENCH_TIMEOUT = 120.0  # algunos benches Python tardan minutos
+BENCH_TIMEOUT = 60.0   # tope por caso.  Lo que pase de aqui NO se pierde:
+                       # se apunta como ">tope" (cota inferior) en vez de
+                       # como TIMEOUT, que tiraba la celda entera.  60 s
+                       # mantiene la tanda en horas y no en dias.
 
 
 # =============================================================================
@@ -765,7 +768,7 @@ def print_category_summary(rows: list[dict], active_langs: list[str],
             for r in rows_in_cat:
                 v_ln = r.get(ln)
                 v_base = r.get(baseline)
-                dudosas = r.get("_bajo_suelo") or {}
+                dudosas = no_agregables(r)
                 # Fuera de la media lo que no se distingue del arranque: una
                 # media geometrica de razones inventadas es una cifra
                 # inventada, y encima con aspecto de resumen fiable.
@@ -1040,6 +1043,256 @@ class Spinner:
 # Ejecucion / compilacion por lenguaje
 # =============================================================================
 
+# Una medida que no se pudo tomar porque el proceso NO LLEGO A ARRANCAR.  Es
+# negativa como el -1 de planton -- todos los `ms >= 0` de siempre la
+# descartan igual -- pero se distingue de el, porque el planton puede ser un
+# mal momento de la maquina y esto no cambia por reintentarlo.
+# -4 y no -2: el -2 ya estaba cogido por "no compila", y compartir el valor
+# hacia que un binario que no se puede lanzar saliera en la tabla como si el
+# compilador hubiera fallado -- mandando a mirar el sitio equivocado.
+NO_ARRANCA = -4.0
+
+# Por que no arranco el ultimo intento.  Lo pone `run_timed` y lo lee
+# `una_medida`, que es la que sabe si el caso se pudo recuperar: avisar en el
+# sitio donde se detecta daria un "no se pudo lanzar" de algo que se lanza
+# bien un milisegundo despues.  Vale un global porque las medidas son
+# SECUENCIALES por diseno -- ver `verificar_en_paralelo`, que paraleliza las
+# comprobaciones justamente para no tener que paralelizar estas.
+_MOTIVO_NO_ARRANCA = ""
+
+# Los binarios a los que hubo que ponerles el bit de ejecucion.  Se acumulan
+# en vez de avisar cada vez: son 3 modos AOT x 33 benches, y un aviso por cada
+# uno son 99 lineas repetidas que entierran cualquier problema de verdad.  Se
+# explica UNA vez y se resume al final.
+_SIN_PERMISO: list[str] = []
+
+# ¿La ultima medida se corto por el tope de tiempo?  Lo pone `run_timed` y lo
+# lee el bucle que junta las muestras, que es quien puede marcar la fila.
+# Mismo patron y mismo motivo que `_MOTIVO_NO_ARRANCA`: las medidas son
+# secuenciales por diseno.
+_ULTIMA_CENSURADA = False
+
+# El proceso arranco pero se MURIO por una senal (SIGILL, SIGSEGV...).  No es
+# una medida: es un programa que no llego a hacer su trabajo, y publicarlo lo
+# convertiria en el mas rapido de la tabla.
+MURIO = -3.0
+
+# Ni un solo intento: a ese par (bench, lenguaje) no le toco turno en ninguna
+# ronda.  No es un fallo del lenguaje ni del programa, y llamarlo `TIMEOUT`
+# -- que es lo que pasaba -- acusa de lento a quien ni llego a correr.
+SIN_TURNO = -5.0
+
+# Celdas que se quedaron sin muestras y sin un motivo reconocible.  Existen
+# porque la alternativa era la de antes: llamarlas `TIMEOUT` y dar por bueno
+# un diagnostico que nadie comprobo.  Si esta lista sale con algo, hay un
+# camino en el arnes que su propio codigo no explica.
+_SIN_EXPLICACION: list = []
+
+# TODO lo que le pasa a un caso durante la corrida: no compila, no arranca,
+# revienta.  Se acumula y se cuenta al FINAL, no segun ocurre.
+#
+# El motivo es de lectura, no de estilo: durante la tanda lo que se mira es la
+# linea de cada bench -- una por fila, alineada, comparable de un vistazo -- y
+# un aviso en medio la parte en dos.  Con 17 casos rotos, la salida en vivo
+# eran mas avisos que resultados y no se veia el banco.  La celda ya dice
+# `MURIO` en su sitio: quien mira en vivo no pierde nada, y quien quiere el
+# porque lo tiene entero y agrupado al terminar.
+_INCIDENCIAS: list = []
+
+
+def apuntar_incidencia(caso: str, motivo: str) -> None:
+    """Guarda una incidencia para el resumen final.  NO imprime."""
+    _INCIDENCIAS.append((caso, motivo))
+
+
+def resumen_incidencias() -> None:
+    """Que le paso a cada caso que no dio medida, agrupado por motivo."""
+    if not _INCIDENCIAS:
+        return
+    print()
+    warn("%d caso(s) no dieron medida:" % len(_INCIDENCIAS))
+    # Agrupado por motivo: diecisiete lineas identicas de SIGSEGV no informan
+    # mas que una que diga cuales.
+    por: dict = {}
+    for caso, motivo in _INCIDENCIAS:
+        por.setdefault(motivo, []).append(caso)
+    for motivo, casos in sorted(por.items(), key=lambda kv: -len(kv[1])):
+        print("        %s%s%s  (%d)" % (C.BOLD, motivo, C.RESET, len(casos)))
+        print("          " + ", ".join(sorted(casos)))
+
+
+def resumen_sin_explicacion() -> None:
+    """Celdas vacias cuyo motivo el arnes no supo dar.  Deberia salir vacio."""
+    if not _SIN_EXPLICACION:
+        return
+    print()
+    warn("%d celda(s) se quedaron sin muestras y el arnes no sabe por que.  Esto es un fallo DEL BANCO, no de lo medido: revisalo antes de fiarte de esa fila." % len(_SIN_EXPLICACION))
+    for bench, ln, motivo in _SIN_EXPLICACION:
+        print("        %s/%s: %s" % (bench, ln, motivo))
+
+_MUERTES: list[tuple[str, int, float]] = []
+
+# Nombres de las senales que importan aqui.  No se usa `signal.Signals` porque
+# en Windows no estan todas y esto tiene que poder imprimirse igual.
+_SENALES = {4: "SIGILL (instruccion ilegal)", 6: "SIGABRT", 8: "SIGFPE",
+            9: "SIGKILL", 11: "SIGSEGV (fallo de memoria)", 15: "SIGTERM"}
+
+
+# Marcas de "esto reventó" que NO se ven en el codigo de salida.  Un runtime
+# que atrapa su propia senal -- Vesta captura el acceso invalido a memoria y lo
+# convierte en `fatal error`, que es una FEATURE suya -- sale con un codigo
+# normal, y para el arnes eso era una ejecucion buena.  Medido: 23 de 35
+# benchmarks reventaban bajo el JIT y entraban en la tabla como medidas
+# validas de ~32 ms, que es justo lo que tarda arrancar la VM.
+_MARCAS_FATALES = ("fatal error", "Stack trace (Vesta)", "panic:",
+                   "Segmentation fault", "AddressSanitizer",
+                   "Traceback (most recent call last)", "Exception in thread")
+
+
+def verificar_ejecucion(cmd: list, env: dict | None, cwd, timeout: float):
+    """¿Este caso EJECUTA de verdad, o solo falla deprisa?  (ok, motivo).
+
+    Una pasada aparte, con la salida capturada, ANTES de cronometrar nada.  Es
+    la gemela de `compila_de_verdad` del banco de compilacion, y existe por lo
+    mismo que ella: sin comprobarlo, se cronometran fallos y se publican como
+    tiempos -- y un programa que revienta al arrancar sale como el mas rapido.
+    Aqui faltaba, y por eso paso desapercibido durante toda la campana.
+    """
+    if not cmd:
+        return (False, "sin orden")
+
+    def _lanzar():
+        return subprocess.run(cmd, capture_output=True, env=env,
+                              cwd=str(cwd) if cwd else None, timeout=timeout)
+
+    try:
+        p = _lanzar()
+    except subprocess.TimeoutExpired:
+        return (True, "")     # lento no es roto: de eso se ocupa la censura
+    except OSError as e:
+        # Falta el bit de ejecucion: es lo mismo que `una_medida` ya sabe
+        # arreglar, y esta comprobacion corre ANTES que ella.  Sin repetirlo
+        # aqui, un binario recuperable quedaba marcado como que no ejecuta --
+        # acusando al programa de un problema del fichero.
+        if not (cmd and asegurar_ejecutable(cmd[0])):
+            return (False, "no se pudo lanzar: %s" % e)
+        try:
+            p = _lanzar()
+        except subprocess.TimeoutExpired:
+            return (True, "")
+        except OSError as e2:
+            return (False, "no se pudo lanzar: %s" % e2)
+    if p.returncode is not None and p.returncode < 0:
+        return (False, "murio con %s"
+                % _SENALES.get(-p.returncode, "senal %d" % -p.returncode))
+    texto = (p.stderr or b"").decode("utf-8", "replace")
+    for marca in _MARCAS_FATALES:
+        if marca in texto:
+            primera = texto.strip().splitlines()
+            return (False, primera[0][:90] if primera else marca)
+    return (True, "")
+
+
+def _registrar_muerte(cmd, senal: int, ms: float) -> None:
+    """Apunta un proceso que murio, y lo dice la primera vez."""
+    # No imprime.  `verificar_ejecucion` ya coge estos casos ANTES de medir y
+    # los apunta con su motivo, asi que un aviso aqui seria el segundo del
+    # mismo problema y encima en medio de la corrida.  Se guarda para el
+    # resumen y ya.
+    nombre = Path(str(cmd[0])).name if cmd else "?"
+    _MUERTES.append((nombre, senal, ms))
+
+
+def resumen_muertes() -> None:
+    """Que binarios se murieron, agrupados por senal.  Una vez, al final."""
+    if not _MUERTES:
+        return
+    print()
+    warn("%d ejecucion(es) murieron por una senal y quedaron fuera de la "
+         "tabla." % len(_MUERTES))
+    por: dict = {}
+    for nombre, senal, _ in _MUERTES:
+        por.setdefault(_SENALES.get(senal, "senal %d" % senal),
+                       set()).add(nombre)
+    for senal, quienes in sorted(por.items()):
+        print("        %s: %s" % (senal, ", ".join(sorted(quienes))))
+
+
+def no_agregables(row: dict) -> set:
+    """Lenguajes de esta fila cuyo numero NO puede entrar en razones ni medias.
+
+    Son dos casos opuestos y por eso se juntan aqui en vez de en cada sitio:
+      - por abajo, lo que no se separa del arranque del proceso;
+      - por arriba, lo que se corto en el tope y solo es una cota inferior.
+    Los dos se ENSENAN en la tabla -- son lo que se midio -- y los dos
+    envenenan un cociente: uno por dividir entre casi cero y el otro por
+    dividir entre un numero que no es el de verdad.
+    """
+    return set(row.get("_bajo_suelo") or {}) | set(row.get("_censurado") or {})
+
+
+def asegurar_ejecutable(ruta) -> bool:
+    """Le pone el bit de ejecucion a @p ruta si le faltaba.  ¿Se arreglo algo?
+
+    El banco no deberia tener que hacer esto: un compilador que emite un
+    ejecutable tiene que dejarlo ejecutable.  Se hace igualmente porque
+    depender de que la otra parte acierte SIEMPRE es lo que convierte un
+    despiste en media hora de tanda perdida:
+
+      - el compilador puede fallar al poner el bit (umask raro, un sistema de
+        ficheros que no los soporta, permisos del directorio) y su aviso no
+        para el build;
+      - el binario que se mide puede ser uno INSTALADO, mas viejo que el
+        arreglo -- que es exactamente el caso que destapo esto: `vesta` de
+        `/usr/bin` no llevaba el fix del toolchain;
+      - y el mismo problema podria venir de cualquier otra herramienta.
+
+    Solo devuelve True si de verdad cambio el permiso, para que el llamante
+    reintente unicamente cuando el reintento tiene sentido.  En Windows no hay
+    bit que poner y devuelve False sin tocar nada.
+    """
+    if os.name != "posix":
+        return False
+    try:
+        p = Path(ruta)
+        if not p.is_file() or os.access(str(p), os.X_OK):
+            return False
+        modo = p.stat().st_mode
+        # El bit de ejecucion donde ya haya lectura: 0644 -> 0755, 0600 -> 0700.
+        nuevo = modo | ((modo & 0o444) >> 2)
+        if nuevo == modo:
+            return False
+        os.chmod(str(p), nuevo)
+        if not os.access(str(p), os.X_OK):
+            return False
+        # NO se avisa aqui.  Esto se arreglo y el programa corrio, asi que
+        # interrumpir la tanda con un aviso cuenta un problema que ya no
+        # existe -- y encima pisa la linea de progreso.  Se cuenta y se
+        # resume al final, que es donde se lee sin estorbar (ver
+        # `resumen_permisos`).
+        _SIN_PERMISO.append(p.name)
+        return True
+    except OSError:
+        return False
+
+
+def resumen_permisos() -> None:
+    """Cuantos binarios hubo que arreglar, y de quien eran.  Una linea."""
+    if not _SIN_PERMISO:
+        return
+    print()
+    warn("%d ejecutable(s) venian sin permiso de ejecucion y se lo puse para "
+         "poder medirlos.  El banco no deberia tener que hacer esto: es un "
+         "fallo de quien los emite." % len(_SIN_PERMISO))
+    # Los sufijos dicen QUIEN los genero mejor que la lista entera de nombres.
+    familias: dict[str, int] = {}
+    for n in _SIN_PERMISO:
+        clave = n.rsplit("_", 1)[-1] if "_" in n else n
+        familias[clave] = familias.get(clave, 0) + 1
+    print("        por variante: " + ", ".join(
+        "%s x%d" % (k, v) for k, v in sorted(familias.items())))
+
+
 def run_timed(cmd: list[str], env: dict | None = None,
               timeout: float = 60.0, cwd: Optional[Path] = None) -> float:
     """Wall time external (incluye fork + startup del runtime).
@@ -1048,23 +1301,59 @@ def run_timed(cmd: list[str], env: dict | None = None,
     binarios optimizados; Python ~30ms; Java ~50-80ms por JVM init).  Para
     Vesta-lang la VM tiene ~28ms de overhead de boot que distorsiona benches
     cortos -- usar @c run_timed_vx en su lugar."""
+    global _ULTIMA_CENSURADA
+    _ULTIMA_CENSURADA = False
     t0 = time.perf_counter()
     try:
-        subprocess.run(
+        proc = subprocess.run(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             env=env, timeout=timeout, cwd=str(cwd) if cwd else None, check=False,
         )
     except subprocess.TimeoutExpired:
-        return -1.0
+        # CENSURA, no perdida.  Antes se devolvia -1 y la celda salia
+        # `TIMEOUT`: se tiraba la unica informacion que habia -- que ese caso
+        # tarda MAS que el tope -- y con ella la fila entera.  Ahora se
+        # devuelve el tope y se marca.  Es una COTA INFERIOR y como tal se
+        # trata: se ensena con `>`, y queda fuera de razones y medias igual
+        # que las medidas que no se separan del arranque.
+        _ULTIMA_CENSURADA = True
+        return timeout * 1000.0
     except OSError as e:
-        # El proceso no llego a arrancar: ejecutable que no esta, directorio de
-        # trabajo invalido, ruta mal formada.  Antes esto tumbaba la tanda
-        # ENTERA -- media hora de medidas perdida porque un caso de treinta no
-        # pudo lanzarse --.  Se trata como lo que es: ese caso no da medida, y
-        # se dice cual y por que.
-        warn("no se pudo lanzar %s: %s" % (" ".join(map(str, cmd[:2])), e))
-        return -1.0
-    return (time.perf_counter() - t0) * 1000.0
+        # El proceso no llego a arrancar: ejecutable que no esta, sin permiso
+        # de ejecucion, directorio de trabajo invalido, ruta mal formada.
+        # Antes esto tumbaba la tanda ENTERA -- media hora de medidas perdida
+        # porque un caso de treinta no pudo lanzarse --.  Se trata como lo que
+        # es: ese caso no da medida, y se dice cual y por que.
+        #
+        # Se devuelve NO_ARRANCA y no el -1 de planton porque son cosas
+        # distintas: un planton puede ser la maquina teniendo un mal momento y
+        # merece reintento; esto es determinista y reintentarlo son cinco
+        # esperas por medida para llegar al mismo sitio.  Con un binario sin
+        # el bit de ejecucion, el banco parecia colgado.
+        #
+        # NO se avisa aqui: `una_medida` puede arreglar el caso del permiso y
+        # volver a lanzar, y entonces este aviso seria falso -- decia "no se
+        # pudo lanzar" de algo que se lanzo un milisegundo despues.  Se deja
+        # el motivo apuntado y avisa quien sepa como acabo la cosa.
+        global _MOTIVO_NO_ARRANCA
+        _MOTIVO_NO_ARRANCA = "%s: %s" % (" ".join(map(str, cmd[:2])), e)
+        return NO_ARRANCA
+    ms = (time.perf_counter() - t0) * 1000.0
+    # ¿Termino, o se MURIO?  Hasta ahora el resultado de `subprocess.run` ni se
+    # recogia, asi que un binario que revienta al arrancar entraba en la tabla
+    # como la medida mas rapida del banco.  Es exactamente el fallo que el
+    # banco de COMPILACION ya evita con `compila_de_verdad` ("un compilador que
+    # falla deprisa daria el mejor tiempo"); aqui no habia equivalente.
+    #
+    # Solo cuentan las muertes por SENAL (returncode < 0 en POSIX).  Un codigo
+    # de salida distinto de cero es NORMAL en este corpus: varios benchmarks
+    # devuelven el resultado del calculo como exit-code -- `tight_loop` acaba
+    # con `return (int32_t)(acc & 0xFFFFFFFF)` -- y rechazarlos por eso tiraria
+    # medidas buenas.
+    if proc.returncode is not None and proc.returncode < 0:
+        _registrar_muerte(cmd, -proc.returncode, ms)
+        return MURIO
+    return ms
 
 
 # Sprint bench-walltime (2026-06-02): patron de parseo para extraer el
@@ -1083,6 +1372,8 @@ def run_timed_vx(cmd: list[str], env: dict | None,
 
     Cualquier @c --stats / @c --jit-stats que el usuario ya tenga en
     @c cmd se preserva (no se duplica)."""
+    global _ULTIMA_CENSURADA
+    _ULTIMA_CENSURADA = False
     cmd_with_stats = list(cmd)
     if "--stats" not in cmd_with_stats:
         cmd_with_stats.append("--stats")
@@ -1092,12 +1383,17 @@ def run_timed_vx(cmd: list[str], env: dict | None,
             env=env, timeout=timeout, cwd=str(cwd) if cwd else None, check=False,
         )
     except subprocess.TimeoutExpired:
-        return -1.0
+        # Mismo trato que en `run_timed`: se corta en el tope y se marca como
+        # cota, en vez de perder la celda.  (`global` ya declarado arriba.)
+        _ULTIMA_CENSURADA = True
+        return timeout * 1000.0
     except OSError as e:
         # Mismo blindaje que en `run_timed`: si el proceso no arranca, ese caso
-        # se queda sin medida y el resto de la tanda sigue.
-        warn("no se pudo lanzar %s: %s" % (" ".join(map(str, cmd[:2])), e))
-        return -1.0
+        # se queda sin medida y el resto de la tanda sigue.  Se apunta el
+        # motivo y avisa `una_medida`, que es quien sabe si se pudo recuperar.
+        global _MOTIVO_NO_ARRANCA
+        _MOTIVO_NO_ARRANCA = "%s: %s" % (" ".join(map(str, cmd[:2])), e)
+        return NO_ARRANCA
     m = _VX_WALL_RE.search(proc.stdout or "")
     if not m:
         m = _VX_WALL_RE.search(proc.stderr or "")
@@ -1187,6 +1483,49 @@ def una_medida(cmd: list[str], env: dict | None, timeout: float,
         ms = timer(cmd, env=env, timeout=timeout, cwd=cwd)
         if ms >= 0:
             return ms
+        # Que no arranque no se reintenta a ciegas: no es un flake del
+        # entorno, es que ese binario no se puede ejecutar, y cinco intentos
+        # con esperas llegan al mismo sitio tres segundos y medio mas tarde.
+        # Multiplicado por cada medida de cada ronda, el banco parecia colgado
+        # -- se vio con un ejecutable AOT al que le faltaba el bit de
+        # ejecucion.
+        #
+        # La UNICA causa que si se puede arreglar desde aqui es esa, la del
+        # permiso.  Se intenta una vez: si se arreglo, se reintenta; si no,
+        # se corta ya.
+        if ms == MURIO:
+            return MURIO   # determinista: reintentar da lo mismo
+        if ms == NO_ARRANCA:
+            # El motivo se lee AHORA, antes de relanzar: el relanzamiento lo
+            # sobreescribe, y avisar despues con el de antes cuenta una
+            # historia falsa.  Paso de verdad: un binario sin permiso se
+            # arreglaba, se relanzaba, moria con SIGSEGV -- y se publicaba
+            # "no se pudo lanzar: Permission denied" de algo que si se lanzo.
+            motivo = _MOTIVO_NO_ARRANCA or str(cmd[:1])
+            # 1) La causa que se puede arreglar aqui: el bit de ejecucion.
+            if cmd and asegurar_ejecutable(cmd[0]):
+                ms = timer(cmd, env=env, timeout=timeout, cwd=cwd)
+                if ms >= 0:
+                    return ms      # recuperado: ni una linea de ruido
+                if ms == MURIO:
+                    return ms      # arranco y murio: ya se reporto solo
+            # 2) Y si no era el permiso, SE REINTENTA.  En Windows un fallo al
+            # lanzar es a menudo pasajero -- el antivirus mirando el .exe, o
+            # contencion de handles al abrir muchos procesos seguidos -- y el
+            # arnes ya tenia reintentos con espera justo para eso.  Al hacer
+            # `NO_ARRANCA` no-reintentable para no perder tres segundos con un
+            # binario sin permiso, me lleve por delante esa resiliencia: en
+            # Windows aparecian fallos sueltos, uno por fila y en lenguajes
+            # distintos, que es la firma de un problema pasajero.
+            #
+            # Se reintenta solo esto: `MURIO` es determinista y el permiso ya
+            # se ha probado arriba.
+            if intento < max(1, intentos) - 1:
+                continue
+            apuntar_incidencia(str(cmd[0]) if cmd else "?",
+                               "no se pudo lanzar tras %d intentos: %s"
+                               % (max(1, intentos), motivo))
+            return NO_ARRANCA
     return -1.0
 
 
@@ -1547,8 +1886,24 @@ FUENTES_VACIAS: dict[str, tuple[str, str]] = {
 }
 
 
+def usa_eje_interno(ln: str, fair: bool) -> bool:
+    """Si las medidas de @p ln salen del reloj INTERNO (@c --stats).
+
+    En modo FAIR (el de por defecto) NADIE lo usa: todos se miden por wall
+    externo, arranque incluido, que es lo que paga quien ejecuta el programa.
+    En @c --unfair los Vesta-lang vuelven al reloj de dentro.
+
+    Vive aqui, en UN sitio, porque la medida y el suelo que se le resta tienen
+    que estar en el mismo eje.  Estaba escrito solo en el plan de ejecucion, el
+    suelo no se enteraba, y restar un arranque a una medida que ya venia sin
+    arranque daba tiempos negativos.
+    """
+    return (not fair) and ln in ("vx_interp", "vx_jit")
+
+
 def medir_suelo(active_langs: list[str], work_dir: Path,
-                compilar_para, runs: int, timeout: float) -> dict:
+                compilar_para, runs: int, timeout: float,
+                eje_interno: Callable[[str], bool] | None = None) -> dict:
     """Cuanto tarda cada lenguaje en NO hacer nada.
 
     Es lo que cuesta arrancar el proceso y levantar el runtime, y esta dentro de
@@ -1559,6 +1914,16 @@ def medir_suelo(active_langs: list[str], work_dir: Path,
 
     Se mide con el mismo camino de compilacion y el mismo calentamiento que un
     bench: un suelo obtenido de otra manera no seria el suelo de estas medidas.
+
+    @param eje_interno  Dice, por lenguaje, si sus medidas van a salir del reloj
+        INTERNO (@c --stats) en vez del wall externo.  El suelo tiene que
+        medirse en el MISMO eje que lo que se le va a restar: en @c --unfair
+        los Vesta-lang se miden por dentro -- sin arranque -- y se les restaba
+        un suelo medido por fuera -- con arranque --, asi que el neto salia
+        NEGATIVO.  `compare_json.py` los descartaba entonces como "sin medir",
+        21 de 33 benchmarks, sin decir por que.  Medido en su eje, el suelo de
+        un programa vacio por dentro es casi cero, que es justo lo que debe
+        descontarse cuando el arranque ya no esta en la medida.
     """
     suelo: dict[str, dict] = {}
     base = work_dir / "_suelo"
@@ -1590,17 +1955,19 @@ def medir_suelo(active_langs: list[str], work_dir: Path,
         # Mismo calentamiento adaptativo que un bench: si el suelo se midiera en
         # frio seria mayor que el arranque que de verdad pagan las medidas, y
         # descontarlo se comeria trabajo real del programa.
+        vx_wt = bool(eje_interno(ln)) if eje_interno is not None else False
         traza: list[float] = []
         gastado = 0.0
         while (len(traza) < CALENTAMIENTO_MAX
                and not serie_asentada(traza)
                and gastado < CALENTAMIENTO_PRESUPUESTO_MS):
-            ms = una_medida(cmd, None, timeout, cwd)
+            ms = una_medida(cmd, None, timeout, cwd, use_vx_walltime=vx_wt)
             if ms < 0:
                 break
             traza.append(ms)
             gastado += ms
-        muestras = [una_medida(cmd, None, timeout, cwd) for _ in range(runs)]
+        muestras = [una_medida(cmd, None, timeout, cwd, use_vx_walltime=vx_wt)
+                    for _ in range(runs)]
         muestras = [m for m in muestras if m >= 0]
         if muestras:
             suelo[ln] = _stats_summary(muestras)
@@ -1683,6 +2050,91 @@ def print_verbose_stats_table(rows: list[dict], active_langs: list[str],
                               else f"{neto:>9.1f}")
             print(linea)
     print("-" * (len(cab) + 2))
+
+
+def print_dos_ejes(rows: list[dict], active_langs: list[str], tc: dict,
+                   suelo: dict) -> None:
+    """Los dos ejes de Vesta, uno al lado del otro.
+
+    externo   lo que tarda el proceso entero, arranque de la VM incluido.  Es
+              lo que espera quien ejecuta el programa, y lo unico comparable
+              contra un binario nativo o contra Python.
+    interno   lo que tarda el codigo dentro de la VM, sin el arranque.  Es lo
+              unico que se puede medir cuando el bench dura menos que el
+              propio arranque.
+
+    Ninguno de los dos sobra, y por eso se publican juntos: el externo dice
+    QUE se paga y el interno dice DONDE se va.  La resta entre ambos es el
+    arranque, que hasta ahora no aparecia en ningun sitio -- habia que elegir
+    con `--fair` cual de los dos numeros ver, y elegir uno escondia el otro.
+    """
+    vx = [ln for ln in active_langs if ln.startswith("vx_")]
+    filas = [(r, {ln: (r.get("_interno") or {}).get(ln) for ln in vx})
+             for r in rows]
+    filas = [(r, d) for r, d in filas if any(v for v in d.values())]
+    if not filas or not vx:
+        return
+    print()
+    print(f"{C.BOLD}Los dos ejes: con el arranque dentro y sin el{C.RESET}")
+    print(f"{C.DIM}  `externo` es lo que tarda el proceso -- lo que se paga de "
+          f"verdad --; `interno` es el codigo sin el arranque de la VM, que es "
+          f"lo unico medible cuando el bench dura menos que arrancar.  La "
+          f"diferencia entre los dos ES el arranque.{C.RESET}")
+    cab = f"{'BENCH':<22}" + "".join(
+        f"{tc[ln].label[:11]:>13}{'':>11}" for ln in vx)
+    print(f"{C.BOLD}{cab}{C.RESET}")
+    print(f"{C.DIM}  {'':<20}" + "".join(f"{'externo':>13}{'interno':>11}"
+                                         for ln in vx) + f"{C.RESET}")
+    print("-" * len(cab))
+    for r, dat in filas:
+        cols = [f"{r['bench']:<22}"]
+        for ln in vx:
+            bruto = (r.get("_bruto") or {}).get(ln)
+            interno = dat.get(ln)
+            cols.append(f"{bruto:>13.1f}" if bruto else f"{'-':>13}")
+            cols.append(f"{interno:>11.1f}" if interno else f"{'-':>11}")
+        print("".join(cols))
+    print("-" * len(cab))
+    # El arranque, que es la resta, en una linea por lenguaje.
+    for ln in vx:
+        pares = [((r.get("_bruto") or {}).get(ln), (r.get("_interno") or {}).get(ln))
+                 for r, _ in filas]
+        pares = [(b, i) for b, i in pares if b and i and b > i]
+        if not pares:
+            continue
+        dif = statistics.median([b - i for b, i in pares])
+        piso = (suelo.get(ln) or {}).get("p50")
+        extra = ("  (el suelo medido aparte dice %.1f ms)" % piso) if piso else ""
+        print(f"{C.DIM}  {tc[ln].label:<22} arranque implicito: "
+              f"{dif:.1f} ms{extra}{C.RESET}")
+
+
+def print_censurados_table(rows: list[dict], tc: dict) -> None:
+    """Que celdas se cortaron en el tope, y que significa su numero.
+
+    Es la gemela por arriba de `print_bajo_suelo_table`.  Las dos dicen lo
+    mismo con signo contrario: aqui hay un numero que se ensena y que NO se
+    puede usar en un cociente.  Antes estas celdas salian como `TIMEOUT` y no
+    tenian tabla porque no tenian numero; ahora lo tienen -- una cota -- y hay
+    que decir de que cota se trata.
+    """
+    casos = [(r["bench"], ln, d)
+             for r in rows
+             for ln, d in (r.get("_censurado") or {}).items()]
+    if not casos:
+        return
+    print()
+    print(f"{C.BOLD}Cortados por el tope: {len(casos)} casos{C.RESET}")
+    print(f"{C.DIM}  Estos tardan MAS de lo que dice su numero: es una cota "
+          f"inferior, no una medida.  Salen del cuadro por lo mismo que los de "
+          f"abajo -- un cociente con una cota no es un cociente -- pero se "
+          f"publican, porque saber que algo pasa del tope es informacion y un "
+          f"hueco no lo es.{C.RESET}")
+    for bench, ln, d in sorted(casos):
+        etiqueta = tc[ln].label if ln in tc else ln
+        print(f"    {bench}/{etiqueta:<22} >{d.get('tope_ms', 0) / 1000.0:.0f} s"
+              f"   ({d.get('cortadas', 0)} de {d.get('muestras', 0)} "
+              f"ejecuciones se cortaron)")
 
 
 def print_bajo_suelo_table(rows: list[dict], active_langs: list[str],
@@ -1938,7 +2390,7 @@ def print_results_table(rows: list[dict], tc: dict[str, Toolchain],
 
     for row in rows:
         cols = [f"{row['bench']:<22}"]
-        dudosas = row.get("_bajo_suelo") or {}
+        dudosas = no_agregables(row)
         # El ganador se busca solo entre las medidas que SI se distinguen del
         # arranque.  Sin ese filtro, ganaria el que menos se distingue.
         valid_times = {k: row[k] for k in active_langs
@@ -1949,14 +2401,31 @@ def print_results_table(rows: list[dict], tc: dict[str, Toolchain],
             t = row.get(ln)
             if t is None:
                 cols.append(f"{C.GREY}{'N/A':>14}{C.RESET}")
+            elif t == SIN_TURNO and ln not in dudosas:
+                cols.append(f"{C.GREY}{'SIN TURNO':>14}{C.RESET}")
+            elif t == NO_ARRANCA and ln not in dudosas:
+                # Ni compilo mal ni tardo: no se pudo ni lanzar (falta el
+                # binario, o el permiso no se pudo arreglar).
+                cols.append(f"{C.RED}{'NO ARRANCA':>14}{C.RESET}")
+            elif t == MURIO and ln not in dudosas:
+                # Compilo y arranco; se murio a mitad.  Antes caia en la rama
+                # de abajo y salia `NO COMPILA`, que manda a mirar el
+                # compilador cuando el problema esta en el programa.
+                cols.append(f"{C.RED}{'MURIO':>14}{C.RESET}")
             elif t <= -2 and ln not in dudosas:
                 cols.append(f"{C.RED}{'NO COMPILA':>14}{C.RESET}")
             elif t < 0 and ln not in dudosas:
                 cols.append(f"{C.RED}{'TIMEOUT':>14}{C.RESET}")
             elif ln in dudosas:
                 # Se muestra el numero -- es lo que se midio -- con la marca de
-                # que no se sostiene por si solo.
-                texto = f"~{t:.1f}" if t > 0 else "~0"
+                # que no se sostiene por si solo.  Dos marcas distintas porque
+                # son problemas OPUESTOS y el lector tiene que poder verlo:
+                #   `~`  demasiado rapido: no se separa del arranque.
+                #   `>`  demasiado lento: se corto en el tope, es una cota.
+                if ln in (row.get("_censurado") or {}):
+                    texto = f">{t:.0f}"
+                else:
+                    texto = f"~{t:.1f}" if t > 0 else "~0"
                 cols.append(f"{C.YELLOW}{texto:>14}{C.RESET}")
             else:
                 color = C.BOLD + C.GREEN if t == min_time else tc[ln].color
@@ -1986,8 +2455,16 @@ def print_ascii_charts(rows: list[dict], active_langs: list[str],
     print()
     print(f"{C.BOLD}(1) Wall time relativo por bench (lang mas rapido = 100%){C.RESET}")
     for r in rows:
+        # El MISMO filtro que la tabla: fuera las medidas que no se separan
+        # del arranque del proceso.  Sin el, esta grafica cogia como "ganador"
+        # justamente el numero que la tabla ya habia declarado no medible --
+        # un `vx_jit` de 0.0 ms -- y escalaba a los demas contra el, con
+        # resultados como "Python 172089.66x".  El mismo informe excluia un
+        # valor en una pagina y montaba su titular sobre el en la siguiente.
+        dudosas = no_agregables(r)
         valid = [(ln, r[ln]) for ln in active_langs
-                 if r.get(ln) is not None and r.get(ln, -1) > 0]
+                 if r.get(ln) is not None and r.get(ln, -1) > 0
+                 and ln not in dudosas]
         if len(valid) < 2:
             continue
         valid.sort(key=lambda x: x[1])
@@ -2085,7 +2562,7 @@ def print_speedup_summary(rows: list[dict], active_langs: list[str],
     saltadas = 0
     for row in rows:
         cols = [f"{row['bench']:<22}"]
-        dudosas = row.get("_bajo_suelo") or {}
+        dudosas = no_agregables(row)
         baseline_t = row.get(baseline)
         # Una razon exige que los DOS terminos se sostengan.  Si el baseline no
         # se distingue del arranque, dividir por el da un numero inventado.
@@ -2271,6 +2748,10 @@ def generate_html_report(rows: list[dict], active_langs: list[str],
     .winner { font-weight:700; color:#1a7f37; }
     .timeout { color:#cf222e; }
     .na { color:#8c959f; }
+    /* Medidas que se ensenan pero no entran en razones ni medias: `~` no se
+       separa del arranque, `>` se corto en el tope.  En ambar, no en rojo:
+       no son un fallo, son un numero que no se sostiene solo. */
+    .dudosa { color:#9a6700; }
     .cat-good { color:#1a7f37; font-weight:600; }
     .cat-mid { color:#bf8700; font-weight:600; }
     .cat-bad { color:#cf222e; font-weight:600; }
@@ -2333,16 +2814,38 @@ def generate_html_report(rows: list[dict], active_langs: list[str],
     html.append("<thead><tr>" + "".join(head) + "</tr></thead>")
     html.append("<tbody>")
     for row in rows:
+        # El MISMO filtro que la consola.  El HTML se publica y se comparte, y
+        # que ensene como buena una cifra que la tabla del terminal marco es
+        # peor que no publicarlo: sobrevive al terminal donde estaba el aviso.
+        dudosas = no_agregables(row)
         valid_times = {k: row[k] for k in active_langs
-                       if k in row and row[k] is not None and row[k] >= 0}
+                       if k in row and row[k] is not None and row[k] >= 0
+                       and k not in dudosas}
         min_time = min(valid_times.values()) if valid_times else None
         cols = [f"<td>{_html_escape(row['bench'])}</td>"]
         for ln in active_langs:
             t = row.get(ln)
             if t is None:
                 cols.append('<td class="na">N/A</td>')
+            elif ln in dudosas and t is not None and t >= 0:
+                # Se ensena con su marca, igual que en la consola: `>` es una
+                # cota por arriba (se corto en el tope) y `~` una por abajo
+                # (no se separa del arranque).
+                if ln in (row.get("_censurado") or {}):
+                    texto, titulo = ">%.0f" % t, "se corto en el tope: cota inferior"
+                else:
+                    texto, titulo = "~%.1f" % t, "no se separa del arranque del proceso"
+                cols.append('<td class="dudosa" title="%s">%s</td>'
+                            % (titulo, texto))
             elif t < 0:
-                cols.append('<td class="timeout">TIMEOUT</td>')
+                # Los mismos cuatro estados que la consola.  El HTML se
+                # comparte y sobrevive al terminal, asi que es el sitio donde
+                # menos puede permitirse decir `TIMEOUT` de un crash.
+                estado = ("SIN TURNO" if t == SIN_TURNO else
+                          "NO ARRANCA" if t == NO_ARRANCA else
+                          "MURIO" if t == MURIO else
+                          "NO COMPILA" if t <= -2 else "TIMEOUT")
+                cols.append('<td class="timeout">%s</td>' % estado)
             else:
                 cls = ' class="winner"' if t == min_time else ""
                 cols.append(f'<td{cls}>{t:.1f}</td>')
@@ -2499,6 +3002,12 @@ def rerender_from_json(json_path: Path, project_root: Path,
         row["_calentamientos"] = r.get("calentamientos", {})
         row["_bruto"] = r.get("bruto", {})
         row["_bajo_suelo"] = r.get("bajo_suelo", {})
+        # Las dos que se anadieron con los dos ejes.  Se restauran aqui o el
+        # re-render publicaria como buenas unas cifras que la tanda original
+        # habia marcado, y sin el eje interno la tabla de los dos ejes saldria
+        # vacia al re-renderizar.
+        row["_censurado"] = r.get("censurado", {})
+        row["_interno"] = r.get("interno", {})
         row["_suelo_descontado"] = bool(data.get("suelo"))
         rows.append(row)
 
@@ -2534,6 +3043,8 @@ def rerender_from_json(json_path: Path, project_root: Path,
     suelo = data.get("suelo", {})
     print_suelo_table(suelo, active_langs, tc)
     print_calentamiento_table(rows, active_langs, tc)
+    print_dos_ejes(rows, active_langs, tc, suelo)
+    print_censurados_table(rows, tc)
     print_bajo_suelo_table(rows, active_langs, tc)
     if verbose_stats:
         print_verbose_stats_table(rows, active_langs, tc, suelo)
@@ -2631,7 +3142,11 @@ def main() -> int:
                         help=("Runs medidos para lenguajes INTERPRETADOS "
                               "(python, vx_interp), lentos (default %d)."
                               % RUNS_SLOW))
-    parser.add_argument("--timeout", type=float, default=BENCH_TIMEOUT)
+    parser.add_argument("--timeout", type=float, default=BENCH_TIMEOUT,
+                        help="tope de segundos por MEDIDA (default %g).  Lo "
+                             "que se pase se anota como cota inferior "
+                             "(`>tope`), se ensena en la tabla y se deja "
+                             "fuera de razones y medias." % BENCH_TIMEOUT)
     parser.add_argument("--no-plot", action="store_true")
     parser.add_argument("--out-json", type=str, default="bench_results.json")
     parser.add_argument("--out-plot", type=str, default="bench_results.png")
@@ -2770,6 +3285,22 @@ def main() -> int:
     info(f"benches: {C.BOLD}{len(benches)}{C.RESET} "
          f"({multi} multi-lenguaje, {legacy} legacy single-vx)")
 
+    # Las librerias de dibujo se comprueban ANTES de medir.  Esta tanda dura
+    # veinte minutos largos; descubrir al final que no hay graficas obliga a
+    # repetirla entera.  Aqui se esta a tiempo de cortar, instalar y relanzar.
+    if not args.no_plot:
+        try:
+            from . import plots  # cuando se invoca como modulo
+        except (ImportError, ValueError):
+            sys.path.insert(0, str(Path(__file__).parent))
+            import plots  # type: ignore
+        falta = plots.diagnostico_dependencias()
+        if falta:
+            warn(falta)
+            print(f"{C.DIM}         La tanda sigue y el JSON se escribe igual; "
+                  f"lo unico que no habra son las graficas.  Con `--no-plot` "
+                  f"este aviso no sale.{C.RESET}")
+
     work_dir = Path(os.environ.get("TEMP", "/tmp")) / "vx_bench_multi"
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2867,7 +3398,8 @@ def main() -> int:
     info(f"compile total: {C.BOLD}{compile_elapsed:.2f}s{C.RESET}")
     if compile_errors:
         for (bname, ln), err in compile_errors.items():
-            warn(f"compile fail {bname}/{ln}: {err}")
+            apuntar_incidencia(f"{bname}/{ln}",
+                               "fallo al compilar: %s" % err)
 
     # -------------------------------------------------------------------
     #   SUELO de cada lenguaje.  Se mide ANTES de los benches porque es
@@ -2877,7 +3409,9 @@ def main() -> int:
     print()
     with Spinner("midiendo el suelo de cada lenguaje", color=C.DIM):
         suelo = medir_suelo(active_langs, work_dir, compilar_para,
-                            runs=max(5, args.runs), timeout=args.timeout)
+                            runs=max(5, args.runs), timeout=args.timeout,
+                            eje_interno=lambda ln: usa_eje_interno(ln,
+                                                                   args.fair))
     print_suelo_table(suelo, active_langs, tc)
 
     # -------------------------------------------------------------------
@@ -2916,7 +3450,8 @@ def main() -> int:
                 row[ln] = None if ln in VX_AOT_MODES else -2.0
                 motivo = ERRORES_COMPILACION.get((b.name, ln))
                 if motivo and ln not in VX_AOT_MODES:
-                    warn(f"{b.name}/{ln} no compila: {motivo}")
+                    apuntar_incidencia(f"{b.name}/{ln}",
+                                       "no compila: %s" % motivo)
                 continue
             cmd, cwd, factor = compiled
 
@@ -2932,6 +3467,16 @@ def main() -> int:
 
             # Los no interpretados se miden mas veces (rapidos + ruidosos); los
             # interpretados pocas (lentos).  --runs / --runs-slow lo overridean.
+            # ANTES de cronometrar: ¿esto ejecuta?  Una pasada con la salida
+            # capturada.  Sin ella se cronometraban crashes y salian como
+            # medidas -- 23 de 35 benchmarks bajo el JIT, todos a ~32 ms, que
+            # es lo que tarda arrancar la VM antes de reventar.
+            ok_ej, motivo_ej = verificar_ejecucion(cmd, env, cwd, args.timeout)
+            if not ok_ej:
+                row[ln] = MURIO
+                _MUERTES.append((f"{b.name}/{ln}", 0, 0.0))
+                apuntar_incidencia(f"{b.name}/{ln}", motivo_ej)
+                continue
             plan[ln] = {
                 "cmd": cmd, "cwd": cwd, "factor": factor, "env": env,
                 "n": args.runs_slow if ln in INTERPRETED_LANGS else args.runs,
@@ -2939,7 +3484,7 @@ def main() -> int:
                 # wall externo para TODOS los lenguajes (incluye fork +
                 # runtime init).  Mode --unfair restaura el legacy (Vesta-lang
                 # usa --stats interno, otros wall externo).
-                "vx_wt": (not args.fair) and ln in ("vx_interp", "vx_jit"),
+                "vx_wt": usa_eje_interno(ln, args.fair),
                 "muestras": [],
             }
 
@@ -3026,10 +3571,49 @@ def main() -> int:
                                     p["cwd"], p["vx_wt"])
                     if ms >= 0:
                         p["muestras"].append(ms)
+                        # Una muestra cortada por el tope entra igual -- es lo
+                        # que se sabe de ese caso -- pero deja constancia, para
+                        # que luego no se use como si fuera un tiempo medido.
+                        if _ULTIMA_CENSURADA:
+                            p["censuradas"] = p.get("censuradas", 0) + 1
+                    else:
+                        # Se apunta el MOTIVO de quedarse sin muestras.  Sin
+                        # esto, una fila sin muestras salia siempre como
+                        # `TIMEOUT` -- daba igual lo que hubiera pasado -- y
+                        # mandaba a buscar un problema de lentitud donde podia
+                        # haber un crash, un binario que no arranca, o un
+                        # lenguaje al que ni le toco el turno.
+                        p["ultimo_fallo"] = ms
+                        if ms == MURIO:
+                            p["muerto"] = True
 
         for ln, p in plan.items():
             if not p["muestras"]:
-                row[ln] = -1.0
+                # Sin muestras.  El motivo se ARRASTRA desde el intento que
+                # fallo en vez de asumir uno: con la censura activa un planton
+                # de verdad ya no llega aqui -- se apunta como `>tope` y SI da
+                # muestra --, asi que un `-1` a estas alturas significaba
+                # "no lo se" y se publicaba como TIMEOUT, que es afirmar algo
+                # que nadie comprobo.
+                ultimo = p.get("ultimo_fallo")
+                if ultimo in (MURIO, NO_ARRANCA):
+                    row[ln] = ultimo
+                elif ultimo is None:
+                    # Ni un solo intento.  Leyendo el planificador esto NO
+                    # deberia poder pasar -- `orden` es el plan entero y la
+                    # ronda 0 siempre esta en `p["rondas"]` --, asi que si
+                    # aparece es que el planificador hace algo que su codigo
+                    # no dice.  Se marca aparte justamente para eso: para que
+                    # se vea en vez de confundirse con un planton.
+                    row[ln] = SIN_TURNO
+                    _SIN_EXPLICACION.append((b.name, ln, "ni un intento"))
+                else:
+                    # Un negativo que no es ninguno de los conocidos.  Se
+                    # publica el valor crudo en el resumen: inventarle una
+                    # etiqueta es lo que hacia que todo saliera `TIMEOUT`.
+                    row[ln] = -1.0
+                    _SIN_EXPLICACION.append(
+                        (b.name, ln, "valor %.1f sin estado conocido" % ultimo))
                 row.setdefault("_runs", {})[ln] = []
                 continue
             # Normalizar (Python memcpy_loop reduce iters).
@@ -3037,6 +3621,34 @@ def main() -> int:
             bruto = statistics.median(normalized)
             row.setdefault("_runs", {})[ln] = normalized
             row.setdefault("_bruto", {})[ln] = bruto
+            # Cortada por el tope: lo que se publica es una COTA INFERIOR.  Se
+            # marca antes de descontar el suelo, porque el neto de una cota
+            # sigue siendo una cota y hay que decirlo igual.
+            if p.get("censuradas"):
+                row.setdefault("_censurado", {})[ln] = {
+                    "muestras": len(normalized),
+                    "cortadas": p["censuradas"],
+                    "tope_ms": args.timeout * 1000.0,
+                }
+            # --- El SEGUNDO eje: el wall time INTERNO de la VM.
+            #
+            # El externo (la serie de arriba) es el que manda y no se toca: es
+            # lo que tarda el codigo de verdad, arranque incluido, y es lo
+            # comparable contra los demas lenguajes.  Pero con la VM tardando
+            # ~32 ms en arrancar, ese arranque se come benchmarks enteros: once
+            # medidas del JIT no se separaban de el.
+            #
+            # El interno se saca de UNA pasada aparte con `--stats`, no de la
+            # serie: capturar la salida cuesta, y meterlo en las ejecuciones
+            # cronometradas ensuciaria el numero que se publica.  Una basta
+            # porque este numero no tiene el ruido del sistema operativo --
+            # mismo criterio que la memoria, que tambien va en su propia
+            # pasada y por lo mismo.
+            if ln.startswith("vx_") and not p.get("vx_wt"):
+                interno = run_timed_vx(p["cmd"], p["env"], args.timeout,
+                                       p["cwd"])
+                if interno >= 0 and not _ULTIMA_CENSURADA:
+                    row.setdefault("_interno", {})[ln] = interno * p["factor"]
             # Lo que se publica es el tiempo del CoDIGO: al bruto se le quita el
             # suelo del lenguaje, que es lo que cuesta arrancar el proceso y no
             # dice nada de lo que el compilador genero.  Sin descontarlo,
@@ -3086,8 +3698,20 @@ def main() -> int:
             # Ancho fijo de la columna: etiqueta (p.ej. "vx_interp=") mas hasta
             # 6 digitos de ms y el sufijo "ms".  Caben N/A, FAIL y TIMEOUT.
             col_w = len(ln) + 1 + 6 + 2  # "<ln>=" + 6 digitos + "ms"
+            # Los mismos cuatro estados que la tabla final, y por el mismo
+            # motivo: son cosas distintas y mandan a mirar sitios distintos.
+            # Esta linea se lee EN VIVO, asi que es la primera -- y a veces la
+            # unica -- que alguien ve; que aqui dijera `NO COMPILA` de un
+            # binario que compilo bien y luego reventó mandaba a revisar el
+            # compilador en vez del programa.
             if v is None:
                 text, color = "N/A", C.GREY
+            elif v == SIN_TURNO:
+                text, color = "SIN TURNO", C.GREY
+            elif v == NO_ARRANCA:
+                text, color = "NO ARRANCA", C.RED
+            elif v == MURIO:
+                text, color = "MURIO", C.RED
             elif v <= -2:
                 text, color = "NO COMPILA", C.RED
             elif v < 0:
@@ -3111,6 +3735,8 @@ def main() -> int:
         print_category_summary(rows, active_langs, tc, baseline="c")
 
     print_calentamiento_table(rows, active_langs, tc)
+    print_dos_ejes(rows, active_langs, tc, suelo)
+    print_censurados_table(rows, tc)
     print_bajo_suelo_table(rows, active_langs, tc)
 
     if args.verbose_stats:
@@ -3156,6 +3782,16 @@ def main() -> int:
         # -- o contra otra herramienta que no descuente nada -- lo necesita.
         new_r["bruto"] = r.get("_bruto", {})
         new_r["bajo_suelo"] = r.get("_bajo_suelo", {})
+        # Las dos marcas que dicen que un numero NO se puede meter en una
+        # razon.  Sin guardarlas, el JSON publica la cifra desnuda y quien lo
+        # lea despues -- `compare_json`, las graficas, un re-render -- la usa
+        # como si fuera una medida limpia: el aviso vivia solo en la consola de
+        # aquella tanda.
+        new_r["censurado"] = r.get("_censurado", {})
+        # El SEGUNDO eje: el codigo sin el arranque de la VM.  Es la mitad del
+        # trabajo de esta version; dejarlo fuera del JSON lo reduciria a una
+        # tabla bonita que se pierde al cerrar el terminal.
+        new_r["interno"] = r.get("_interno", {})
         # Sprint bench-categories: tag de categoria por bench.
         new_r["category"] = bench_category(r["bench"])
         # Sprint bench-stats: incluir summary por lang en el JSON para
@@ -3230,6 +3866,12 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             warn(f"HTML error: {e}")
 
+    # Al final y no por el camino: durante la tanda hay barras de progreso y
+    # una linea por bench, y un aviso ahi dentro se pierde entre las medidas.
+    resumen_incidencias()
+    resumen_permisos()
+    resumen_muertes()
+    resumen_sin_explicacion()
     return 0
 
 

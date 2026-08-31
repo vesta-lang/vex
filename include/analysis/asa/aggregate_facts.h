@@ -110,7 +110,16 @@ struct IrModule;
 } // namespace ir
 
 namespace analysis {
+
+/* Solo se pasa por referencia, asi que basta declararlo: arrastrar el
+ * points-to entero a todo el que incluya esta cabecera seria pagar en tiempo de
+ * compilacion por un tipo que aqui no se abre. */
+struct PointsTo;
+
 namespace asa {
+
+/// Idem: la base solo se pasa por puntero (ver @c analysis/asa/fact_base.h).
+class FactBase;
 
 // =========================================================================
 //  NIVEL A -- observaciones, con su contexto
@@ -295,6 +304,19 @@ struct Limitacion {
     std::string destino;
     uint32_t profundidad = 0;
     ir::IrValueId valor = 0;
+    /**
+     * @brief De que CLASE es la limitacion, en el vocabulario comun del ASA.
+     *
+     * El codigo de arriba dice el caso EXACTO de este dominio; esto dice de que
+     * tipo es, que es lo unico que puede leer un consumidor que no lo conoce --
+     * y lo que decide la accion.  `DestinoIndirectoNoUnico` cubria SIETE
+     * situaciones distintas: desde "hay dos destinos segun el camino" (que se
+     * puede especular con guarda) hasta "esa operacion no la modelamos" (que se
+     * arregla ampliando el analisis).  Con un solo codigo se trataban igual.
+     */
+    asa::UnknownReason reason = asa::UnknownReason::NotAsked;
+    /// Y el codigo estable del sub-caso, cuando quien limita lo sabe.
+    const char *reason_code = "";
 };
 
 // =========================================================================
@@ -420,7 +442,7 @@ struct AggregateFacts {
     bool devuelto_entero = false;
     bool transferido_como_bloque = false;
 
-    Sello sello;
+    Seal seal;
 
     // --- nivel B ---
     PerfilDeUso perfil() const;
@@ -496,6 +518,30 @@ struct AggregateFactsMap {
 AggregateFactsMap observar_agregados(const ir::IrModule &mod,
                                      const ir::IrFunction &fn,
                                      const IrFacts &facts);
+
+/**
+ * @brief Igual, pero CONSUMIENDO un points-to que ya se calculo.
+ *
+ * La forma de arriba lo calcula ella misma, y eso es trabajo repetido en cuanto
+ * quien llama ya lo tiene: en el camino del ASA, la base de hechos cachea el
+ * points-to de cada funcion para el dominio de memoria y este dominio lo volvia
+ * a calcular entero para la misma funcion.
+ *
+ * Es la Regla 1 -- un pase CONSUME la base, no la CONSTRUYE -- aplicada a un
+ * sitio donde no se veia: no habia dos criterios, habia dos COMPUTOS del mismo,
+ * que es la otra forma de desperdiciar lo que el ASA existe para compartir.
+ *
+ * @param pt   Points-to de @p fn, ya calculado por quien llama.
+ * @param base Base de hechos compartida, o @c nullptr.  Con ella, las funciones
+ *             que el recorrido visita al SEGUIR LLAMADAS tampoco se recalculan:
+ *             sin esto, la cache interna las computaba por su cuenta aunque la
+ *             base ya las tuviera, que es el mismo desperdicio un nivel mas
+ *             adentro.
+ */
+AggregateFactsMap observar_agregados(const ir::IrModule &mod,
+                                     const ir::IrFunction &fn,
+                                     const IrFacts &facts, const PointsTo &pt,
+                                     FactBase *base = nullptr);
 
 // =========================================================================
 //  El modulo entero, y que le pasa entre dos estados

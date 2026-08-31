@@ -31,6 +31,7 @@
 #ifndef ANALYSIS_MEMORY_FN_TARGETS_H
 #define ANALYSIS_MEMORY_FN_TARGETS_H
 
+#include "analysis/asa/fact.h" // UnknownReason: por que no se supo
 #include "analysis/facts/ir_facts.h"
 
 #include <string>
@@ -48,37 +49,62 @@ struct IrModule;
 namespace analysis {
 
 /**
+ * @brief POR QUE no se pudo decir a donde apunta.  Solo vale con nombre vacio.
+ *
+ * El resolvedor tiene SIETE formas de rendirse y todas devolvian la misma
+ * cadena vacia.  Quien pregunta -- la devirtualizacion, el inline, el analisis
+ * de efectos -- no podia distinguirlas, y de la diferencia depende que puede
+ * hacer:
+ *
+ *   - dos caminos con destinos distintos, o un hueco escrito varias veces, son
+ *     `RuntimeDependent`: hay algo concreto que especular con guarda, y ahi es
+ *     donde nace una cache de llamada;
+ *   - una op que no modelamos es `ShapeNotRecognized`: el programa esta bien y
+ *     es el analisis el que hay que ampliar;
+ *   - un valor sin definicion viene de FUERA (`OpaqueBoundary`);
+ *   - y pararse a los 16 saltos es `BudgetExceeded`: ni una cosa ni la otra.
+ *
+ * Con una cadena vacia, los cuatro se trataban igual: no especular nunca.
+ */
+struct FnTargetUnknown {
+    asa::UnknownReason reason = asa::UnknownReason::NotAsked;
+    /// Codigo estable del caso EXACTO, del vocabulario de este dominio.
+    const char *code = "";
+};
+
+/**
  * @brief Nombre de la funcion a la que apunta @p v, o cadena vacia.
  *
  * Vacio significa "no se puede afirmar", nunca "no apunta a nada".
+ *
+ * @param why Opcional: si se da y el nombre sale vacio, recibe POR QUE.
  */
-std::string funcion_apuntada(const ir::IrFunction &fn, const IrFacts &facts,
-                             ir::IrValueId v);
+std::string pointed_function(const ir::IrFunction &fn, const IrFacts &facts,
+                             ir::IrValueId v, FnTargetUnknown *why = nullptr);
 
 /// Un sitio desde el que se llama, cuando la llamada es indirecta.
-struct SitioIndirecto {
+struct IndirectSite {
     const ir::IrFunction *fn = nullptr;
     const ir::IrInstr *instr = nullptr;
 };
 
 /// Que pasa con la direccion de una funcion en todo el modulo.
-struct DireccionTomada {
+struct AddressTaken {
     /// Si su nombre aparece en algun sitio que no sea un `call` directo.
-    bool tomada = false;
+    bool taken = false;
     /// Si TODOS esos sitios acaban en llamadas indirectas que se ven.  Cuando
     /// es cierto, la lista de abajo completa el censo de llamantes.
-    bool todas_se_ven = false;
-    std::vector<SitioIndirecto> indirectas;
+    bool all_visible = false;
+    std::vector<IndirectSite> indirect;
 };
 
 /**
- * @brief Sigue la direccion de @p nombre por todo @p mod.
+ * @brief Sigue la direccion de @p name por todo @p mod.
  *
  * Responde si se pueden enumerar todos sus llamantes, y cuales son los
  * indirectos.  Los directos los ve cualquiera buscando `call`.
  */
-DireccionTomada seguir_direccion(const ir::IrModule &mod,
-                                 const std::string &nombre);
+AddressTaken follow_address(const ir::IrModule &mod, const std::string &name);
 
 /**
  * @brief Lo mismo para VARIOS nombres a la vez, recorriendo el modulo UNA vez.
@@ -95,11 +121,11 @@ DireccionTomada seguir_direccion(const ir::IrModule &mod,
  * pasa a ser "nombres por bloques de asm" en lugar de por el modulo entero.
  *
  * @return Una entrada por cada nombre pedido, con el mismo contenido que daria
- *         @c seguir_direccion llamada por separado.
+ *         @c follow_address llamada por separado.
  */
-std::unordered_map<std::string, DireccionTomada>
-seguir_direcciones(const ir::IrModule &mod,
-                   const std::unordered_set<std::string> &nombres);
+std::unordered_map<std::string, AddressTaken>
+follow_addresses(const ir::IrModule &mod,
+                 const std::unordered_set<std::string> &names);
 
 } // namespace analysis
 

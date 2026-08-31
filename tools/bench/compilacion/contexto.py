@@ -44,12 +44,43 @@ class Ctx:
     suelo_frio: dict = field(default_factory=dict)
     resultados: dict = field(default_factory=dict)
 
+    @property
+    def ejes(self) -> list[str]:
+        """Los ejes de paralelismo que hay que correr, en orden.
+
+        Vive aqui y no en cada fase porque las cuatro que compilan varios
+        modulos tienen que estar de acuerdo: si una publica el eje `maquina` y
+        otra el `secuencial` sin decirlo, sus tablas dejan de poder leerse
+        juntas.
+        """
+        from .ordenes import MAQUINA, SECUENCIAL
+        pedido = getattr(self.args, "paralelismo", "ambos")
+        if pedido == "ambos":
+            return [SECUENCIAL, MAQUINA]
+        return [pedido]
+
+    @property
+    def nucleos(self) -> int:
+        """Cuantos hilos se le conceden a una herramienta en el eje `maquina`.
+
+        El mismo tope que usa el compilador Vesta por su cuenta (8): darle mas
+        a `make -j` seria concederle a C una maquina que a Vesta no se le da.
+        """
+        import os
+        return max(1, min(8, os.cpu_count() or 1))
+
     def __post_init__(self) -> None:
         # `suelo` es el MISMO objeto dentro de los resultados: las fases lo
         # rellenan segun miden y el JSON tiene que ver lo ultimo, no una foto
         # vacia tomada al arrancar.
         self.resultados.setdefault("casos", [])
         self.resultados["suelo"] = self.suelo
+        # El de frio tambien: las graficas que restan el arranque necesitan el
+        # que toca en cada regimen, y restar el caliente a una medida en frio
+        # deja dentro la parte que solo se paga sin cache -- justo lo que este
+        # campo existe para evitar.  Sin exportarlo, el JSON solo llevaba la
+        # mitad y quien lo leyera despues no podia hacer bien esa resta.
+        self.resultados["suelo_frio"] = self.suelo_frio
 
     def fuente(self, ln: str, n: int) -> Optional[Path]:
         """La fuente de @p n funciones para @p ln, generandola si no esta.

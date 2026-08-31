@@ -53,7 +53,9 @@ bool is_call_like(IrOp op) {
     default: return false;
     }
 }
-bool is_vec(IrOp op) { return ir::is_vec_op(op); }
+bool is_vec(IrOp op) {
+    return ir::is_vec_op(op);
+}
 bool is_fp(IrOp op) {
     switch (op) {
     case IrOp::FADD:

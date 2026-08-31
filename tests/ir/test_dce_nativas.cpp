@@ -82,9 +82,9 @@ IrModule construir(bool declarar, bool con_io, bool leer) {
         IrNativeImport ni;
         ni.lib = kLib;
         ni.name = kFn;
-        ni.efectos.declarados = true;
-        ni.efectos.escribe_apuntado = 1u << 0; // el buffer es el primer arg
-        ni.efectos.io = con_io;
+        ni.effects.declared = true;
+        ni.effects.writes_pointee = 1u << 0; // el buffer es el primer arg
+        ni.effects.io = con_io;
         mod.native_imports.push_back(std::move(ni));
     }
 

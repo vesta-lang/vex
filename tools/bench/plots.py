@@ -11,6 +11,7 @@ imagen sobrecargada.
 from __future__ import annotations
 import math
 import statistics
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,14 @@ LANG_COLORS = {
     "vx_aot_sse2": "#8c564b",  # marron
     "vx_aot_avx":  "#e377c2",  # rosa
     "vx_aot_auto": "#bcbd22",  # oliva
+    # El banco de COMPILACION nombra a Vesta de otra forma (`vesta` para el
+    # camino que para en el `.velb` y `vesta_aot` para el nativo), asi que sus
+    # claves no estaban aqui y las DOS caian al gris fallback: en cada figura
+    # de ese banco las dos curvas de Vesta salian del mismo color, que es
+    # justo lo que estaba mal.  Se les da el verde del JIT y el marron del
+    # AOT para que las dos tandas se lean juntas sin volver a la leyenda.
+    "vesta":        "#2ca02c",  # verde, como vx_jit
+    "vesta_aot":    "#8c564b",  # marron, como vx_aot_sse2
     "c":            "#1f77b4",  # azul
     "cpp":          "#9467bd",  # violeta
     "python":       "#17becf",  # cyan
@@ -39,6 +48,8 @@ LANG_LABELS = {
     "vx_aot_sse2": "Vesta-lang AOT sse2",
     "vx_aot_avx":  "Vesta-lang AOT avx2",
     "vx_aot_auto": "Vesta-lang AOT auto",
+    "vesta":        "Vesta (a .velb)",
+    "vesta_aot":    "Vesta (AOT nativo)",
     "c":            "C (gcc -O3)",
     "cpp":          "C++ (g++ -O3)",
     "python":       "Python",
@@ -49,16 +60,44 @@ LANG_LABELS = {
 }
 
 
+# Por que no se pudieron dibujar las graficas.  Lo rellena `_try_import` y lo
+# lee `generate_all`: sin esto, faltar una libreria salia como doce `FAIL`
+# seguidos sin decir de que, y se buscaba el error en las graficas cuando el
+# problema era el interprete.  Pasa facil al lanzar con `sudo`: root suele
+# tener otro Python, sin los paquetes del usuario.
+_MOTIVO_SIN_GRAFICAS = ""
+
+
 def _try_import():
     """Intenta importar matplotlib + numpy.  Returns (mpl, plt, np) o None."""
+    global _MOTIVO_SIN_GRAFICAS
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import numpy as np
         return matplotlib, plt, np
-    except ImportError:
+    except ImportError as e:
+        _MOTIVO_SIN_GRAFICAS = str(e)
         return None
+
+
+def diagnostico_dependencias() -> str:
+    """Una explicacion con la solucion, o "" si no falta nada.
+
+    Se da el interprete EXACTO con el que hay que instalar, no un `pip install`
+    a secas: el fallo tipico es tener matplotlib para el usuario y lanzar el
+    banco con `sudo`, y ahi un `pip install` sin mas lo instala otra vez donde
+    ya estaba.
+    """
+    if _try_import() is not None:
+        return ""
+    return ("faltan las librerias de dibujo (%s).  Instalalas para ESTE "
+            "interprete:\n           %s -m pip install matplotlib numpy\n"
+            "         Si lanzaste el banco con `sudo`, ojo: root suele tener "
+            "otro Python distinto del tuyo." % (
+                _MOTIVO_SIN_GRAFICAS or "matplotlib / numpy",
+                sys.executable))
 
 
 def valor(r: dict, lang: str) -> Optional[float]:
@@ -1326,6 +1365,12 @@ def generate_all(rows: list[dict], langs: list[str], plot_dir: Path,
     """Genera todas las graficas en @c plot_dir .  Retorna dict con
     {nombre_plot: bool_ok} para que el caller reporte que se genero.
     """
+    # Si faltan las dependencias fallan TODAS por la misma razon.  Se dice una
+    # vez y con la solucion, en vez de doce `FAIL` que no explican nada y que
+    # ademas invitan a buscar el error en el sitio equivocado.
+    motivo = diagnostico_dependencias()
+    if motivo:
+        return {"(ninguna) " + motivo: False}
     plot_dir.mkdir(parents=True, exist_ok=True)
     results = {}
     # System info PRIMERO (00 prefix).  Es el contexto de todo lo demas.

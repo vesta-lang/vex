@@ -25,6 +25,7 @@
 #include "analyze/fingerprint.h" // verificacion de contratos de huella
 #include "ir/ir_emitter.h"
 #include "analysis/asa/aggregate_facts.h"
+#include "analysis/asa/fact_store.h" // el almacen de hechos de la compilacion
 #include "ir/ir_optimizer.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
@@ -354,10 +355,9 @@ CompileResult compile_vx_source(const std::string &source,
         /* Si esta compilacion ES la del conjunto, no se recolecta: el
          * conjunto se contiene a si mismo y saldria el artefacto DEL
          * artefacto, encogiendo nivel a nivel. */
-        const ComptimeUnit cu =
-            opts.building_comptime_artifact
-                ? ComptimeUnit{}
-                : collect_comptime_unit(*mod, source);
+        const ComptimeUnit cu = opts.building_comptime_artifact
+                                    ? ComptimeUnit{}
+                                    : collect_comptime_unit(*mod, source);
         res.comptime_unit_source = cu.unit_source;
         res.comptime_unit_hash = cu.content_hash;
         res.comptime_unit_not_collected = cu.not_collected;
@@ -926,7 +926,7 @@ CompileResult compile_vx_source(const std::string &source,
                     // materializa nativas).
                     for (const auto &ni : vf_mod.native_imports)
                         irmod.register_native_import(ni.lib, ni.name,
-                                                     ni.efectos);
+                                                     ni.effects);
                 }
             }
         }
@@ -1213,24 +1213,21 @@ CompileResult compile_vx_source(const std::string &source,
             vx::get_aot_condcomp_target(fp_os, fp_arch);
             if (fp_arch.empty()) fp_arch = "x86_64";
             auto fps = analyze::compute_module_fingerprints(irmod, fp_arch);
-            analyze::compose_fingerprints(fps, &res.contracts);
+            /* Con el modulo: lo que las importaciones DECLAREN de una nativa
+             * cuenta, en vez de volver opaco el cierre entero. */
+            analyze::compose_fingerprints(fps, &res.contracts, &irmod);
             // En --analyze (`emit_ir_preopt`) NO se emite el error ni se aborta
             // (ver la nota en compiler_project.cpp): analyze mide, el build
             // real enforza.
             if (!opts.emit_ir_preopt) {
-                auto checks = analyze::verify_contracts(fps, res.contracts);
-                bool violated = false;
-                for (const auto &ck : checks) {
-                    if (ck.status != analyze::ContractCheck::VIOLATED) continue;
-                    SourceLoc loc;
-                    loc.file = filename;
-                    res.diagnostics.error(std::move(loc),
-                                          "contrato " + ck.contract +
-                                              " incumplido en '" + ck.function +
-                                              "': " + ck.detail);
-                    violated = true;
-                }
-                if (violated) {
+                /* Por la misma puerta que el camino de proyecto: un solo sitio
+                 * decide que hacer con cada veredicto, y el indecidible deja de
+                 * descartarse en silencio. */
+                const analyze::ContractReport rep =
+                    analyze::report_contract_checks(
+                        analyze::verify_contracts(fps, res.contracts), filename,
+                        res.diagnostics);
+                if (rep.violated != 0) {
                     res.ok = false;
                     return res;
                 }
@@ -1244,20 +1241,17 @@ CompileResult compile_vx_source(const std::string &source,
         collect_type_contracts_(mod->decls, res.type_contracts);
         res.type_fingerprints = compute_type_fingerprints_(tc);
         if (!res.type_contracts.empty()) {
-            auto tchecks = analyze::verify_type_contracts(res.type_fingerprints,
-                                                          res.type_contracts);
-            bool tviolated = false;
-            for (const auto &ck : tchecks) {
-                if (ck.status != analyze::ContractCheck::VIOLATED) continue;
-                SourceLoc loc;
-                loc.file = filename;
-                res.diagnostics.error(std::move(loc),
-                                      "contrato de tipo " + ck.contract +
-                                          " incumplido en '" + ck.function +
-                                          "': " + ck.detail);
-                tviolated = true;
-            }
-            if (tviolated) {
+            /* Por la MISMA puerta que los de funcion.  Estos son decidibles del
+             * layout -- nunca sale un indecidible --, asi que esa rama no se
+             * usa aqui; pero el criterio de que hacer con cada veredicto tiene
+             * que estar escrito una sola vez, o el dia que cambie se cambiara
+             * en dos de los tres sitios. */
+            const analyze::ContractReport trep =
+                analyze::report_contract_checks(
+                    analyze::verify_type_contracts(res.type_fingerprints,
+                                                   res.type_contracts),
+                    filename, res.diagnostics);
+            if (trep.violated != 0) {
                 res.ok = false;
                 return res;
             }
@@ -1315,7 +1309,8 @@ CompileResult compile_vx_source(const std::string &source,
             std::vector<std::string> ir_errs;
             if (!ir::ir_verify(irmod_for_section, ir_errs)) {
                 for (const std::string &m : ir_errs)
-                    std::fprintf(stderr, "[ir-verify post-opt] %s\n", m.c_str());
+                    std::fprintf(stderr, "[ir-verify post-opt] %s\n",
+                                 m.c_str());
                 std::fprintf(stderr,
                              "[ir-verify post-opt] %zu problemas en '%s'\n",
                              ir_errs.size(), filename.c_str());
@@ -1339,10 +1334,14 @@ CompileResult compile_vx_source(const std::string &source,
          * otra segun se compilara solo o con el resto -- justo lo que no puede
          * pasar cuando los modulos se cachean por separado.  Quien SI ve el
          * programa entero es el camino de proyecto, y alli se dice. */
+        /* El almacen de hechos es de LA COMPILACION, no de quien pregunta: lo
+         * dueno aqui para que el siguiente consumidor que aparezca reuse lo ya
+         * producido en vez de volver a calcularlo. */
+        analysis::asa::FactStore facts;
         vx_report_asm_preconditions(
             irmod_for_section, res.diagnostics, filename,
             /*programa_cerrado=*/false, opts.emit_ir_preopt,
-            opts.native_poo ? "aot" : "vm");
+            opts.native_poo ? "aot" : "vm", facts);
         mod_para_seccion = std::move(irmod_for_section);
         hay_seccion = true;
     }
@@ -1364,8 +1363,9 @@ CompileResult compile_vx_source(const std::string &source,
     // que conflictua. Tampoco cuando solo se pide el IR: el precomputo existe
     // para que el artefacto lleve el resultado ya calculado, y aqui no hay
     // artefacto.
-    if (!util::flag_on(util::FlagId::NoCtpe) && opts.opt_level >= 2 && !opts.ir_only &&
-        !res.ir_section_bytes.empty() && !res.has_lowerable_macros) {
+    if (!util::flag_on(util::FlagId::NoCtpe) && opts.opt_level >= 2 &&
+        !opts.ir_only && !res.ir_section_bytes.empty() &&
+        !res.has_lowerable_macros) {
         ctpe::Evaluability ev = ctpe::compute_evaluability(irmod);
         std::vector<ctpe::Candidate> cands = ctpe::find_candidates(irmod, ev);
         res.has_ctpe_candidates = !cands.empty();

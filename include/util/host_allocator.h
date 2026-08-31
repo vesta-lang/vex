@@ -61,12 +61,12 @@ namespace util {
  * sincronizar en el camino rapido.
  */
 struct HostAllocStats {
-    uint64_t small_allocs = 0;  ///< reservas servidas por las clases
-    uint64_t small_frees = 0;   ///< liberaciones del propio hilo
-    uint64_t remote_frees = 0;  ///< liberaciones hechas por OTRO hilo
-    uint64_t large_allocs = 0;  ///< reservas que fueron al sistema
-    uint64_t chunks = 0;        ///< trozos pedidos a la region
-    uint64_t bytes_reserved = 0;///< bytes comprometidos de la region
+    uint64_t small_allocs = 0;   ///< reservas servidas por las clases
+    uint64_t small_frees = 0;    ///< liberaciones del propio hilo
+    uint64_t remote_frees = 0;   ///< liberaciones hechas por OTRO hilo
+    uint64_t large_allocs = 0;   ///< reservas que fueron al sistema
+    uint64_t chunks = 0;         ///< trozos pedidos a la region
+    uint64_t bytes_reserved = 0; ///< bytes comprometidos de la region
     /// Reparto de los tamanos PEDIDOS, por tramos: <=64, <=128, <=256, <=512,
     /// <=1K, <=4K, <=64K, >64K.  Solo se llena con VESTA_HOST_ALLOC_STATS=1.
     uint64_t size_hist[8] = {};
@@ -78,7 +78,6 @@ void *host_alloc(size_t n) noexcept;
 
 /// Devuelve un bloque de @c host_alloc.  Vale aunque lo reservara OTRO hilo.
 void host_free(void *p) noexcept;
-
 
 /// Suma los contadores de todos los hilos.
 HostAllocStats host_alloc_stats();

@@ -164,7 +164,6 @@ class AnalysisEngine {
      */
     void set_target(const std::string &os, const std::string &arch);
 
-
     /**
      * @brief Analiza un documento, reutilizando la cache si el texto no
      *        cambio.
@@ -185,8 +184,8 @@ class AnalysisEngine {
      * @param text Texto completo actual del documento.
      * @return El analisis de ese documento.  Nunca nulo.
      */
-    std::shared_ptr<const DocAnalysis> analyze_document(const std::string &uri,
-                                                        const std::string &text);
+    std::shared_ptr<const DocAnalysis>
+    analyze_document(const std::string &uri, const std::string &text);
 
     /**
      * @brief Devuelve el analisis cacheado de un documento, o nullptr.

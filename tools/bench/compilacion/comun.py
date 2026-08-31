@@ -23,6 +23,7 @@ from run_all_benches import (  # noqa: E402
     elegir_compilador,
     find_project_root,
     find_vm_candidates,
+    get_tool_version,
     prompt_choose_vm,
     serie_asentada,
     una_medida,
@@ -31,7 +32,7 @@ from run_all_benches import (  # noqa: E402
 __all__ = [
     "C", "Spinner", "_stats_summary", "buscar_compiladores",
     "elegir_compilador", "find_project_root", "find_vm_candidates",
-    "prompt_choose_vm", "serie_asentada", "una_medida",
+    "get_tool_version", "prompt_choose_vm", "serie_asentada", "una_medida",
     "ELEGIDO", "COLOR_LANG", "color_de",
 ]
 

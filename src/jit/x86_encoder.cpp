@@ -2268,9 +2268,8 @@ void X86Encoder::emit_jmp(MFunction &fn, const MInstr &mi,
             const uint32_t patch_at = static_cast<uint32_t>(out.size());
             put32(out, 0); /* hueco para el relativo */
             const uint32_t instr_end = static_cast<uint32_t>(out.size());
-            fn.rel_jump_fixups.push_back(
-                MFunction::RelJumpFixup{patch_at, instr_end,
-                                        fn.imm64_pool[idx]});
+            fn.rel_jump_fixups.push_back(MFunction::RelJumpFixup{
+                patch_at, instr_end, fn.imm64_pool[idx]});
             return;
         }
     }

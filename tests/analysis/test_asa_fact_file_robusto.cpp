@@ -33,7 +33,7 @@
  *  5. VOLUMEN, para que lo anterior no se demuestre solo sobre juguetes.
  */
 
-#include "analysis/asa/base_hechos.h"
+#include "analysis/asa/fact_base.h"
 #include "analysis/asa/fact_file.h"
 #include "analysis/asa/fact_store.h"
 
@@ -60,27 +60,27 @@ static int g_fail = 0;
 
 /// Un almacen con varios dominios, cadenas repetidas y una derivacion.
 static std::vector<uint8_t> fichero_de_muestra(uint32_t n_por_dominio = 8) {
-    static const char *const kDominios[] = {"asa.estructura", "asa.rangos",
-                                            "asa.memoria"};
+    static const char *const kDominios[] = {"asa.structure", "asa.ranges",
+                                            "asa.memory"};
     FactStore a;
-    FactId anterior = kSinHecho;
+    FactId anterior = kNoFact;
     for (const char *dom : kDominios) {
         for (uint32_t i = 0; i < n_por_dominio; ++i) {
             Fact f;
-            f.que.dominio = dom;
-            f.que.codigo = "codigo.estable";
-            f.que.a = static_cast<int64_t>(i) - 3;
-            f.que.b = 0x7FFFFFFFFFFFFFFFll;
-            f.que.detalle = a.internar("un detalle que se repite mucho");
-            f.de_quien.clase = Sujeto::Clase::Valor;
-            f.de_quien.funcion = a.internar("funcion_" + std::to_string(i % 3));
-            f.de_quien.id = i;
-            f.sello.certeza = Certeza::Inferida;
-            f.sello.origen.productor = dom;
-            f.sello.apoyos.anadir(dom);
-            f.prueba.regla = "regla";
-            if (anterior != kSinHecho) f.prueba.de.push_back(anterior);
-            anterior = a.anadir(std::move(f));
+            f.what.domain = dom;
+            f.what.code = "codigo.estable";
+            f.what.a = static_cast<int64_t>(i) - 3;
+            f.what.b = 0x7FFFFFFFFFFFFFFFll;
+            f.what.detail = a.intern("un detalle que se repite mucho");
+            f.about.kind = Subject::Kind::Value;
+            f.about.function = a.intern("funcion_" + std::to_string(i % 3));
+            f.about.id = i;
+            f.seal.certainty = Certainty::Inferred;
+            f.seal.origin.producer = dom;
+            f.seal.support.add(dom);
+            f.proof.rule = "regla";
+            if (anterior != kNoFact) f.proof.from.push_back(anterior);
+            anterior = a.add(std::move(f));
         }
     }
     return serialize(a, 0x1234ull, CacheLevel::All, {});
@@ -145,7 +145,7 @@ static void probar_corrupcion_exhaustiva() {
                 /* Y si lo acepta, lo que deposito tiene que ser coherente: los
                  * apoyos apuntan a hechos que existen de verdad. */
                 for (size_t k = 0; k < d.size(); ++k) {
-                    for (FactId p : d.at(static_cast<FactId>(k)).prueba.de) {
+                    for (FactId p : d.at(static_cast<FactId>(k)).proof.from) {
                         if (p >= d.size()) {
                             ++g_fail;
                             std::printf("  [FALLO] apoyo colgando tras "
@@ -219,14 +219,14 @@ static void probar_cuentas_absurdas() {
 static void probar_ciclos() {
     FactStore a;
     Fact x;
-    x.que.dominio = "asa.rangos";
-    x.que.codigo = "a";
-    const FactId ix = a.anadir(std::move(x));
+    x.what.domain = "asa.ranges";
+    x.what.code = "a";
+    const FactId ix = a.add(std::move(x));
     Fact y;
-    y.que.dominio = "asa.rangos";
-    y.que.codigo = "b";
-    y.prueba.de.push_back(ix);
-    const FactId iy = a.anadir(std::move(y));
+    y.what.domain = "asa.ranges";
+    y.what.code = "b";
+    y.proof.from.push_back(ix);
+    const FactId iy = a.add(std::move(y));
     /* Un ciclo no se puede construir con la API (un hecho solo puede apoyarse
      * en otro anterior), asi que se fabrica en los BYTES -- que es justo de
      * donde vendria: un fichero puede decir lo que quiera. */
@@ -250,7 +250,7 @@ static void probar_ciclos() {
     if (r.ok && d.size() > 0) {
         /* Lo unico que importa: TERMINA.  Si no, aqui se cuelga el test. */
         const size_t pasos =
-            d.explicar(static_cast<FactId>(d.size() - 1)).size();
+            d.explain(static_cast<FactId>(d.size() - 1)).size();
         CHECK(pasos <= d.size(), "explicar un ciclo termina y no repite");
     } else {
         ++g_checks; // rechazarlo tambien es una respuesta valida.
@@ -262,19 +262,19 @@ static void probar_ciclos() {
 // ===========================================================================
 static void probar_volumen() {
     FactStore a;
-    a.reservar(20000);
+    a.reserve(20000);
     for (uint32_t i = 0; i < 20000; ++i) {
         Fact f;
-        f.que.dominio = (i % 2 == 0) ? "asa.rangos" : "asa.memoria";
-        f.que.codigo = "codigo.estable";
-        f.que.a = i;
-        f.que.detalle = a.internar("detalle " + std::to_string(i % 50));
-        f.de_quien.clase = Sujeto::Clase::Valor;
-        f.de_quien.funcion = a.internar("f" + std::to_string(i % 100));
-        f.de_quien.id = i;
-        f.sello.certeza = Certeza::Demostrada;
-        if (i > 0) f.prueba.de.push_back(i - 1);
-        a.anadir(std::move(f));
+        f.what.domain = (i % 2 == 0) ? "asa.ranges" : "asa.memory";
+        f.what.code = "codigo.estable";
+        f.what.a = i;
+        f.what.detail = a.intern("detalle " + std::to_string(i % 50));
+        f.about.kind = Subject::Kind::Value;
+        f.about.function = a.intern("f" + std::to_string(i % 100));
+        f.about.id = i;
+        f.seal.certainty = Certainty::Proven;
+        if (i > 0) f.proof.from.push_back(i - 1);
+        a.add(std::move(f));
     }
     const std::vector<uint8_t> bytes = serialize(a, 11, CacheLevel::All, {});
     CHECK(!bytes.empty(), "veinte mil hechos se escriben");
@@ -293,15 +293,16 @@ static void probar_volumen() {
     bool grafo_intacto = true;
     for (FactId i = 0; i < d.size(); ++i) {
         const Fact &f = d.at(i);
-        const int64_t yo = f.que.a;
+        const int64_t yo = f.what.a;
         if (yo == 0) {
-            if (!f.prueba.de.empty()) {
+            if (!f.proof.from.empty()) {
                 grafo_intacto = false;
                 break;
             }
             continue;
         }
-        if (f.prueba.de.size() != 1 || d.at(f.prueba.de[0]).que.a != yo - 1) {
+        if (f.proof.from.size() != 1 ||
+            d.at(f.proof.from[0]).what.a != yo - 1) {
             grafo_intacto = false;
             break;
         }
@@ -349,18 +350,18 @@ static std::vector<uint8_t> con_dominios(const std::vector<const char *> &doms,
                                          uint32_t por_dominio,
                                          const std::vector<uint64_t> &huellas,
                                          FactStore &a) {
-    FactId anterior = kSinHecho;
+    FactId anterior = kNoFact;
     for (const char *dom : doms) {
         for (uint32_t i = 0; i < por_dominio; ++i) {
             Fact f;
-            f.que.dominio = dom;
-            f.que.codigo = "c";
-            f.que.a = static_cast<int64_t>(i);
-            f.de_quien.clase = Sujeto::Clase::Funcion;
-            f.de_quien.funcion = a.internar("f");
-            f.sello.certeza = Certeza::Demostrada;
-            if (anterior != kSinHecho) f.prueba.de.push_back(anterior);
-            anterior = a.anadir(std::move(f));
+            f.what.domain = dom;
+            f.what.code = "c";
+            f.what.a = static_cast<int64_t>(i);
+            f.about.kind = Subject::Kind::Function;
+            f.about.function = a.intern("f");
+            f.seal.certainty = Certainty::Proven;
+            if (anterior != kNoFact) f.proof.from.push_back(anterior);
+            anterior = a.add(std::move(f));
         }
     }
     std::vector<DomainCost> costes;
@@ -370,8 +371,8 @@ static std::vector<uint8_t> con_dominios(const std::vector<const char *> &doms,
 }
 
 static void probar_anulacion() {
-    const std::vector<const char *> doms = {"asa.estructura", "asa.rangos",
-                                            "asa.memoria", "asa.bucles"};
+    const std::vector<const char *> doms = {"asa.structure", "asa.ranges",
+                                            "asa.memory", "asa.loops"};
     const std::vector<uint64_t> originales = {11, 22, 33, 44};
     FactStore origen;
     const std::vector<uint8_t> bytes =
@@ -411,7 +412,7 @@ static void probar_anulacion() {
               "se cuenta el apoyo que se quedo sin destino");
         bool sanos = true;
         for (FactId i = 0; i < d.size(); ++i)
-            for (FactId pr : d.at(i).prueba.de)
+            for (FactId pr : d.at(i).proof.from)
                 if (pr >= d.size()) sanos = false;
         CHECK(sanos, "y ningun apoyo apunta fuera del almacen");
     }
@@ -519,7 +520,7 @@ static void probar_anulacion() {
 /// otro analisis puede concluir otra cosa del mismo programa.
 static void probar_version_del_compilador() {
     FactStore a;
-    const std::vector<uint8_t> bytes = con_dominios({"asa.rangos"}, 4, {5}, a);
+    const std::vector<uint8_t> bytes = con_dominios({"asa.ranges"}, 4, {5}, a);
     const std::vector<uint8_t> con_v =
         serialize(a, 0x5150ull, CacheLevel::All, {}, 0xC0FFEEull);
 
@@ -548,8 +549,8 @@ static void probar_version_del_compilador() {
 // 8. Anular no puede depender de en que orden se pregunte
 // ===========================================================================
 static void probar_anulacion_estable() {
-    const std::vector<const char *> doms = {"asa.estructura", "asa.rangos",
-                                            "asa.memoria"};
+    const std::vector<const char *> doms = {"asa.structure", "asa.ranges",
+                                            "asa.memory"};
     const std::vector<uint64_t> hu = {7, 8, 9};
     FactStore origen;
     const std::vector<uint8_t> bytes = con_dominios(doms, 3, hu, origen);

@@ -7,7 +7,8 @@
 
 /**
  * @file tests/util/test_threadpool_rafaga.cpp
- * @brief Encolar en rafaga nada mas construir el pool, que es lo que lo colgaba.
+ * @brief Encolar en rafaga nada mas construir el pool, que es lo que lo
+ * colgaba.
  *
  * El patron que revienta -- y que ningun test cubria -- es este: construir el
  * pool y encolar N tareas de golpe.  Los workers acaban de arrancar y estan

@@ -73,8 +73,8 @@ constexpr size_t kAlign = 16;
  * relativo es menor.  El mayor desperdicio interno queda en el 14%.
  */
 constexpr uint32_t kSizes[] = {
-    16,   32,   48,   64,   80,   96,   112,  128,  160,  192,  224,  256,
-    320,  384,  448,  512,  640,  768,  896,  1024,
+    16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512,
+    640, 768, 896, 1024,
     // De 1 KiB a 2 KiB el paso se abre un poco: son el 0,5% de las reservas,
     // asi que el desperdicio por redondeo pesa poco.  El mayor queda en un
     // 15% (1.537 bytes van a una clase de 1.792).
@@ -97,7 +97,8 @@ constexpr uint32_t kChunkMagic = 0x56455354u; // 'VEST'
 /// Topes del reparto de tamanos (solo con VESTA_HOST_ALLOC_STATS=1).
 constexpr size_t kBucketLimit[] = {64,   256,  1024,  2048,
                                    4096, 8192, 16384, ~size_t(0)};
-constexpr uint32_t kSizeBuckets = sizeof(kBucketLimit) / sizeof(kBucketLimit[0]);
+constexpr uint32_t kSizeBuckets =
+    sizeof(kBucketLimit) / sizeof(kBucketLimit[0]);
 
 // =========================================================================
 //  Estado
@@ -116,7 +117,8 @@ struct alignas(kAlign) ChunkHeader {
     uint32_t owner;
     uint32_t _pad;
 };
-static_assert(sizeof(ChunkHeader) == kAlign, "la cabecera descuadra los bloques");
+static_assert(sizeof(ChunkHeader) == kAlign,
+              "la cabecera descuadra los bloques");
 
 /// Listas libres de un hilo.  Todo POD: se inicializa a cero sin codigo.
 struct ThreadCache {
@@ -176,7 +178,8 @@ void build_class_table() noexcept {
     for (size_t step = 0; step <= kMaxSmall / kAlign; ++step) {
         const size_t want = step * kAlign;
         uint8_t k = 0;
-        while (k + 1 < kClasses && kSizes[k] < want) ++k;
+        while (k + 1 < kClasses && kSizes[k] < want)
+            ++k;
         g_class_of[step] = k;
     }
     g_class_table_ready.store(true, std::memory_order_release);
@@ -244,7 +247,8 @@ bool ensure_region() noexcept {
      * Si algun dia hace falta en mas sitios, lo suyo es anadir reservar y
      * comprometer por separado a `vm::`, no repetir esto. */
 #if defined(_WIN32)
-    void *base = VirtualAlloc(nullptr, kRegionBytes, MEM_RESERVE, PAGE_READWRITE);
+    void *base =
+        VirtualAlloc(nullptr, kRegionBytes, MEM_RESERVE, PAGE_READWRITE);
 #else
     void *base = mmap(nullptr, kRegionBytes, PROT_NONE,
                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
@@ -259,7 +263,8 @@ bool ensure_region() noexcept {
      * 64 KiB; fuera de Windows se redondea hacia arriba y se pierde como mucho
      * un trozo. */
     uintptr_t b = reinterpret_cast<uintptr_t>(base);
-    const uintptr_t aligned = (b + kChunkBytes - 1) & ~(uintptr_t)(kChunkBytes - 1);
+    const uintptr_t aligned =
+        (b + kChunkBytes - 1) & ~(uintptr_t)(kChunkBytes - 1);
     g_region_base.store(aligned, std::memory_order_relaxed);
     g_region_end.store(b + kRegionBytes, std::memory_order_relaxed);
     g_region_state.store(2, std::memory_order_release);
@@ -293,7 +298,8 @@ ThreadCache *cache() noexcept {
 
 /// Recoge de un golpe lo que otros hilos soltaron de esta clase.
 void *take_remote(ThreadCache *c, uint32_t k) noexcept {
-    void *head = g_remote[c->id][k].exchange(nullptr, std::memory_order_acq_rel);
+    void *head =
+        g_remote[c->id][k].exchange(nullptr, std::memory_order_acq_rel);
     return head;
 }
 
@@ -353,7 +359,8 @@ void *host_alloc(size_t n) noexcept {
         // que se pide cae fuera de las clases, subir el tope da mas de lo que
         // cuesta; si no, no.
         uint32_t b = 0;
-        while (b + 1 < kSizeBuckets && n > kBucketLimit[b]) ++b;
+        while (b + 1 < kSizeBuckets && n > kBucketLimit[b])
+            ++b;
         c->stats.size_hist[b]++;
     }
     if (n > kMaxSmall || c == nullptr) {
@@ -419,25 +426,27 @@ HostAllocStats host_alloc_stats() {
     return t;
 }
 
-bool host_alloc_active() { return allocator_active(); }
+bool host_alloc_active() {
+    return allocator_active();
+}
 
 namespace {
 
 StatsDump::~StatsDump() {
     if (!g_measure) return;
     const HostAllocStats s = host_alloc_stats();
-    std::fprintf(stderr,
-                 "[asignador] pequenas=%llu sueltas=%llu ajenas=%llu "
-                 "grandes=%llu trozos=%llu\n",
-                 (unsigned long long)s.small_allocs,
-                 (unsigned long long)s.small_frees,
-                 (unsigned long long)s.remote_frees,
-                 (unsigned long long)s.large_allocs,
-                 (unsigned long long)s.chunks);
+    std::fprintf(
+        stderr,
+        "[asignador] pequenas=%llu sueltas=%llu ajenas=%llu "
+        "grandes=%llu trozos=%llu\n",
+        (unsigned long long)s.small_allocs, (unsigned long long)s.small_frees,
+        (unsigned long long)s.remote_frees, (unsigned long long)s.large_allocs,
+        (unsigned long long)s.chunks);
     static const char *kNames[kSizeBuckets] = {
         "<=64", "<=256", "<=1K", "<=2K", "<=4K", "<=8K", "<=16K", ">16K"};
     uint64_t total = 0;
-    for (uint32_t b = 0; b < kSizeBuckets; ++b) total += s.size_hist[b];
+    for (uint32_t b = 0; b < kSizeBuckets; ++b)
+        total += s.size_hist[b];
     if (total == 0) return;
     std::fprintf(stderr, "[asignador] reparto de tamanos pedidos:\n");
     for (uint32_t b = 0; b < kSizeBuckets; ++b)
@@ -476,10 +485,18 @@ void *operator new[](size_t n, const std::nothrow_t &) noexcept {
     return util::host_alloc(n);
 }
 
-void operator delete(void *p) noexcept { util::host_free(p); }
-void operator delete[](void *p) noexcept { util::host_free(p); }
-void operator delete(void *p, size_t) noexcept { util::host_free(p); }
-void operator delete[](void *p, size_t) noexcept { util::host_free(p); }
+void operator delete(void *p) noexcept {
+    util::host_free(p);
+}
+void operator delete[](void *p) noexcept {
+    util::host_free(p);
+}
+void operator delete(void *p, size_t) noexcept {
+    util::host_free(p);
+}
+void operator delete[](void *p, size_t) noexcept {
+    util::host_free(p);
+}
 void operator delete(void *p, const std::nothrow_t &) noexcept {
     util::host_free(p);
 }

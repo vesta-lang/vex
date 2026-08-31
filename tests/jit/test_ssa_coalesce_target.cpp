@@ -141,7 +141,8 @@ static void test_answer_depends_on_target() {
         jit::ssa_phi_coalesce_remap(fn, jit::DstKind::Preserving);
 
     // Donde el destino se destruye, %2 y %1 NO pueden acabar en el mismo
-    // registro: el `mov dst, op0` de la legalizacion pisaria %1 antes de leerlo.
+    // registro: el `mov dst, op0` de la legalizacion pisaria %1 antes de
+    // leerlo.
     const bool joined_destructive =
         !destructive.empty() && destructive[v1] == destructive[v2];
     CHECK(!joined_destructive,

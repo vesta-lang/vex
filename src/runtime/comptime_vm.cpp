@@ -35,7 +35,7 @@
 #include "jit/auto_jit.h"         /*   : eager-compile macros */
 #include "ffi/virtual_lib_registry.h" /* #3: resolver vrt:* en el JIT del CV */
 #include "jit/interp_jit_bridge.h"    /* CTPE: enter_jit (invocacion directa) */
-#include "jit/jit_compile_options.h" /* CompileResult */
+#include "jit/jit_compile_options.h"  /* CompileResult */
 #include "jit/vreg_pipeline.h" /* CTPE: vreg_set_ctpe_safepoint_handler */
 
 #include <atomic>
@@ -614,7 +614,8 @@ bool ComptimeRuntime::marshal_aggregate(const std::vector<uint8_t> &bytes,
     out_vm_addr = 0;
     if (!impl_ || bytes.empty()) return false;
     /* Tope: esto es para un valor, no para un array.  Sin el, un tamano absurdo
-     * se comeria la memoria y el fallo saldria mucho despues y en otro sitio. */
+     * se comeria la memoria y el fallo saldria mucho despues y en otro sitio.
+     */
     if (bytes.size() > 64u * 1024u) return false;
     try {
         impl_->agg_args.emplace_back(bytes);

@@ -60,19 +60,36 @@ ExtensionResuelta resolver_extension(const AsmBindingFacts &lig,
                                      const vx::AsmBlockEffects::Extension &ex) {
     ExtensionResuelta r;
     // Sin saber cuanto mide un acceso no hay extension que acotar.
-    if (!ex.ancho_conocido()) return r;
+    if (!ex.ancho_conocido()) {
+        r.reason = asa::UnknownReason::ShapeNotRecognized;
+        r.reason_code = "asm.access_width_unknown";
+        return r;
+    }
 
     /* Entre que valores se mueve un operando NOMBRADO.  El nombre se lleva por
      * su ligadura hasta el valor del programa, y de ese se pregunta el rango:
      * es el mismo camino que usa todo lo demas, aqui aplicado a lo que el
-     * bloque dijo que no era constante. */
+     * bloque dijo que no era constante.
+     *
+     * Y deja dicho POR QUE falla, que son dos cosas muy distintas: sin ligadura
+     * se le puede decir al usuario QUE ESCRIBIR -- liga ese registro --, y con
+     * ligadura pero sin cota el arreglo esta en el programa. */
     auto rango_de = [&](const std::string &nombre, int64_t &lo,
                         int64_t &hi) -> bool {
         const LigaduraAsm *l = lig.unica(nombre);
-        if (l == nullptr || l->valor == ir::IR_NO_VALUE) return false;
+        if (l == nullptr || l->valor == ir::IR_NO_VALUE) {
+            r.reason = asa::UnknownReason::ShapeNotRecognized;
+            r.reason_code = l == nullptr ? "asm.operand_not_bound"
+                                         : "asm.binding_without_value";
+            return false;
+        }
         const ValueRange &vr = rangos.at(l->valor);
-        if (!vr.acotada()) return false;
-        return vr.vista_con_signo(lo, hi);
+        if (!vr.acotada() || !vr.vista_con_signo(lo, hi)) {
+            r.reason = asa::UnknownReason::RuntimeDependent;
+            r.reason_code = "asm.bound_value_unbounded";
+            return false;
+        }
+        return true;
     };
 
     int64_t lo = ex.const_off, hi = ex.const_off;
@@ -95,7 +112,15 @@ ExtensionResuelta resolver_extension(const AsmBindingFacts &lig,
          */
         int64_t nlo = 0, nhi = 0;
         if (!rango_de(ex.repeticion, nlo, nhi)) return r;
-        if (nhi < 0) return r; // una cuenta negativa no describe nada.
+        if (nhi < 0) {
+            /* Una cuenta de vueltas negativa no describe ningun acceso.  No es
+             * que no se sepa: es que lo que se sabe no tiene sentido, y eso
+             * apunta a un rango mal calculado -- nuestro -- o a un programa que
+             * hace algo que no puede querer. */
+            r.reason = asa::UnknownReason::ShapeNotRecognized;
+            r.reason_code = "asm.negative_repeat_count";
+            return r;
+        }
         if (nhi > 0) hi += (nhi - 1) * (int64_t)ex.bytes;
     }
     r.desde = lo;
@@ -160,8 +185,7 @@ AsmBindingFacts compute_asm_bindings(const ir::IrFunction &fn) {
     huecos.reserve(f.ligaduras.size());
     for (const LigaduraAsm &l : f.ligaduras)
         huecos.push_back(l.hueco);
-    const std::vector<ir::IrValueId> vals =
-        valores_unicos_de_huecos(fn, huecos);
+    const std::vector<ir::IrValueId> vals = single_values_of_slots(fn, huecos);
     for (size_t k = 0; k < f.ligaduras.size(); ++k)
         f.ligaduras[k].valor = vals[k];
     return f;

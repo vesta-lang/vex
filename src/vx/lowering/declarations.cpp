@@ -257,17 +257,14 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     // posicional `Point p = {1, 2};`.
     if (try_lower_struct_init_list(vd, sem_type)) return;
 
-
     // Variable de tipo struct.  Reservamos memoria local con ALLOCA del IR
     // (el emisor lo baja a 'subsp rsp, N + readcur') y guardamos el
     // IrValueId del puntero como "current value" de la variable en scope.
     // El acceso a campos via FieldAccessExpr calcula offsets desde esa base.
     if (try_lower_struct_var(vd, sem_type)) return;
 
-
     // Array nativo T[N]: identico a struct desde la optica del lowering.
     if (try_lower_array_var(vd, sem_type)) return;
-
 
     // Caso 2: tipos primitivos / PTR (camino tradicional).
     ir::IrType vt = ir::IrType::I64;
@@ -640,7 +637,6 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     pending_smartptr_deleter_.clear();
 }
 
-
 /**
  * @brief Declara un struct dado por una lista de inicializacion.
  *
@@ -664,8 +660,8 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
     const auto &layouts = tc_.struct_layouts();
     auto it_l = layouts.find(sem_type.struct_name);
     if (it_l == layouts.end()) {
-        error_at(vd->loc, "lowering: struct '" + sem_type.struct_name +
-                              "' sin layout");
+        error_at(vd->loc,
+                 "lowering: struct '" + sem_type.struct_name + "' sin layout");
         return true;
     }
     const StructLayout &lay = it_l->second;
@@ -703,8 +699,8 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
         ir::IrValueId v_zero = emit_const(ft_zero, 0, vd->loc.line);
         ir::IrValueId v_addr_w = addr;
         if (f.offset > 0) {
-            ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, (uint64_t)f.offset, vd->loc.line);
+            ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, (uint64_t)f.offset, vd->loc.line);
             v_addr_w = emit_ptr_add(addr, v_off, vd->loc.line);
         }
         emit_store_typed(v_addr_w, v_zero, ft_zero, vd->loc.line);
@@ -715,8 +711,7 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
             const std::string &fname = il->field_names[i];
             fi = find_field(lay, fname);
             if (!fi) {
-                error_at(vd->loc,
-                         "lowering: campo '" + fname + "' no existe");
+                error_at(vd->loc, "lowering: campo '" + fname + "' no existe");
                 continue;
             }
         } else {
@@ -740,8 +735,7 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
             }
             auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
             if (it_sl == tc_.struct_layouts().end()) {
-                error_at(vd->loc, "lowering: struct '" +
-                                      fi->type.struct_name +
+                error_at(vd->loc, "lowering: struct '" + fi->type.struct_name +
                                       "' sin layout (init anidado)");
                 continue;
             }
@@ -760,13 +754,13 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
             il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
             il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
             il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-        v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft,
-                               vd->loc.line,
-                               /*is_explicit=*/elem_is_literal);
+        v_val =
+            cast_if_needed(v_val, fn_->values[v_val].type, ir_ft, vd->loc.line,
+                           /*is_explicit=*/elem_is_literal);
         ir::IrValueId v_addr = addr;
         if (fi->offset > 0) {
-            ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
+            ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
             v_addr = emit_ptr_add(addr, v_off, vd->loc.line);
         }
         // Campo AGREGADO inline (struct/array value-type): @c v_val es la
@@ -782,16 +776,14 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
             fi->type.kind == PrimitiveKind::ARRAY) {
             uint64_t sz = size_of_type(fi->type);
             if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
-                auto it_sl =
-                    tc_.struct_layouts().find(fi->type.struct_name);
+                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
                 if (it_sl != tc_.struct_layouts().end())
                     sz = (uint64_t)it_sl->second.size_bytes;
             }
             if (sz == 0) sz = 8;
             emit_memberwise_copy(v_addr, v_val, sz, vd->loc.line);
             if (fi->type.kind == PrimitiveKind::STRUCT) {
-                auto it_sl =
-                    tc_.struct_layouts().find(fi->type.struct_name);
+                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
                 if (it_sl != tc_.struct_layouts().end() &&
                     it_sl->second.has_copy_hook) {
                     emit_struct_method_on_host_field(
@@ -808,10 +800,9 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
         // para bit fields.
         if (fi->bit_width > 0) {
             ir::IrValueId v_old = emit_load_typed(v_addr, ir_ft, vd->loc.line);
-            const uint64_t mask =
-                (fi->bit_width == 64)
-                    ? UINT64_MAX
-                    : ((uint64_t(1) << fi->bit_width) - 1);
+            const uint64_t mask = (fi->bit_width == 64)
+                                      ? UINT64_MAX
+                                      : ((uint64_t(1) << fi->bit_width) - 1);
             const uint64_t inv_mask = ~(mask << fi->bit_offset);
             ir::IrValueId v_inv = emit_const(ir_ft, inv_mask, vd->loc.line);
             ir::IrValueId v_clr = fn_->new_value(ir_ft);
@@ -837,8 +828,8 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
             }
             ir::IrValueId v_sh = v_tr;
             if (fi->bit_offset > 0) {
-                ir::IrValueId v_amt = emit_const(
-                    ir_ft, (uint64_t)fi->bit_offset, vd->loc.line);
+                ir::IrValueId v_amt =
+                    emit_const(ir_ft, (uint64_t)fi->bit_offset, vd->loc.line);
                 v_sh = fn_->new_value(ir_ft);
                 ir::IrInstr sh{};
                 sh.op = ir::IrOp::SHL;
@@ -1027,12 +1018,10 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
             const uint64_t qwords = (lay.size_bytes + 7) / 8;
             for (uint64_t qi = 0; qi < qwords; ++qi) {
                 const uint64_t off = qi * 8;
-                const ir::IrValueId v_off =
-                    emit_const(ir::IrType::I64, static_cast<int64_t>(off),
-                               vd->loc.line);
+                const ir::IrValueId v_off = emit_const(
+                    ir::IrType::I64, static_cast<int64_t>(off), vd->loc.line);
                 // src + off
-                const ir::IrValueId v_src_at =
-                    fn_->new_value(ir::IrType::PTR);
+                const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_src_at].is_host_ptr = src_is_host;
                 {
                     ir::IrInstr ad{};
@@ -1044,8 +1033,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
                     emit(current_block_, std::move(ad));
                 }
                 // LOAD i64 from src+off
-                const ir::IrValueId v_word =
-                    fn_->new_value(ir::IrType::I64);
+                const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
                 {
                     ir::IrInstr ld{};
                     ld.op = ir::IrOp::LOAD;
@@ -1059,8 +1047,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
                 // por hecho que es VM hacia que la copia escribiera con
                 // `mov` sobre una direccion host -> el struct se quedaba a
                 // ceros (y su copy-hook/dtor operaban sobre basura).
-                const ir::IrValueId v_dst_at =
-                    fn_->new_value(ir::IrType::PTR);
+                const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_dst_at].is_host_ptr =
                     fn_->values[addr].is_host_ptr;
                 {
@@ -1073,8 +1060,8 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
                     emit(current_block_, std::move(ad));
                 }
                 // STORE i64 [dst+off] = word
-                emit_store_typed(v_dst_at, v_word,
-                                 ir::IrType::I64, vd->loc.line);
+                emit_store_typed(v_dst_at, v_word, ir::IrType::I64,
+                                 vd->loc.line);
             }
         }
     }
@@ -1125,8 +1112,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
         if (vd->init && vd->init->kind == ast::NodeKind::CallExpr) {
             std::vector<uint32_t> fn_offs;
             for (const auto &f : lay.fields)
-                if (f.type.kind == PrimitiveKind::FUNCTION &&
-                    !f.type.fn_is_raw)
+                if (f.type.kind == PrimitiveKind::FUNCTION && !f.type.fn_is_raw)
                     fn_offs.push_back(f.offset);
             if (!fn_offs.empty()) {
                 CleanupAction act;
@@ -1161,8 +1147,7 @@ bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
  * @param sem_type El tipo ya resuelto (alias aplicados).
  * @return @c true si era un array y quedo bajado.
  */
-bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd,
-                                   const Type &sem_type) {
+bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type) {
     if (sem_type.kind != PrimitiveKind::ARRAY) return false;
     // C-style string init para arrays byte-like: `u8[N] arr = "literal"`.
     // Detecta el patron y emite STOREs byte-a-byte del contenido del
@@ -1170,8 +1155,8 @@ bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd,
     // strlen > N reporta error (truncation, comportamiento C).
     // No se promueve el literal a StringObject (es array de bytes
     // crudo, sin GC).  Aceptamos solo literales no interpolados.
-    if (vd->init &&
-        vd->init->kind == ast::NodeKind::StringLitExpr && sem_type.pointee &&
+    if (vd->init && vd->init->kind == ast::NodeKind::StringLitExpr &&
+        sem_type.pointee &&
         (sem_type.pointee->kind == PrimitiveKind::U8 ||
          sem_type.pointee->kind == PrimitiveKind::I8 ||
          sem_type.pointee->kind == PrimitiveKind::CHAR)) {
@@ -1238,8 +1223,7 @@ bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd,
     //   Por cada elemento: STORE val a (base + i * sizeof(T)).
     //   bind nombre al PTR base.
     // Solo positional (sin .field=); reportamos error si is_designated.
-    if (vd->init &&
-        vd->init->kind == ast::NodeKind::InitListExpr) {
+    if (vd->init && vd->init->kind == ast::NodeKind::InitListExpr) {
         auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
         if (il->is_designated) {
             error_at(vd->loc,
@@ -1650,7 +1634,8 @@ bool Lowering::try_lower_address_taken_var(ast::VarDeclStmt *vd,
                                            ir::IrType vt) {
     if (!address_taken_locals_.count(vd->name)) return false;
     {
-        const size_t bytes = ir::type_access_bytes(vt); // tamano del tipo escalar
+        const size_t bytes =
+            ir::type_access_bytes(vt); // tamano del tipo escalar
         const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr ai{};
         ai.op = ir::IrOp::ALLOCA;

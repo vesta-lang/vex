@@ -97,8 +97,24 @@ struct Resolver {
     static PointsToEntry root_loc(K kind, ir::IrValueId self) {
         return PointsToEntry{kind, self, 0, true};
     }
-    static PointsToEntry unknown() {
-        return PointsToEntry{K::Unknown, effects::LOC_GENERIC, 0, false};
+    /**
+     * @brief No se pudo localizar, Y POR QUE.
+     *
+     * El motivo NO es documentacion: es lo que decide que puede hacer quien
+     * pregunta.  Un puntero cuya raiz depende del camino admite una guarda; una
+     * operacion que este resolvedor no modela, no -- ahi lo que hay que ampliar
+     * es el resolvedor --; y un valor que viene de fuera lo sabe el llamante.
+     * Las trece renuncias de este resolvedor daban el MISMO `Unknown`, asi que
+     * los tres casos se trataban igual: no optimizar nunca.
+     *
+     * Va por el helper y no a mano en cada sitio para que no se pueda escribir
+     * una renuncia nueva sin decir de que clase es.
+     */
+    static PointsToEntry unknown(asa::UnknownReason reason, const char *code) {
+        PointsToEntry e{K::Unknown, effects::LOC_GENERIC, 0, false};
+        e.reason = reason;
+        e.reason_code = code;
+        return e;
     }
 
     // Aplica un offset const a una entrada (respeta off_exact).
@@ -275,7 +291,10 @@ struct Resolver {
     const PointsToEntry &resolve(ir::IrValueId v) {
         if (v == ir::IR_NO_VALUE ||
             v >= static_cast<ir::IrValueId>(memo.size())) {
-            static const PointsToEntry kUnk = unknown();
+            /* Un id que no existe: no hay nada que localizar, y eso es
+             * conocimiento -- no una renuncia del analisis. */
+            static const PointsToEntry kUnk =
+                unknown(asa::UnknownReason::NothingToSay, "memory.no_value");
             return kUnk;
         }
         if (state[v] == 2) return memo[v];
@@ -292,7 +311,11 @@ struct Resolver {
                     K::None, effects::LOC_GENERIC, 0, false};
                 return kNoAporta;
             }
-            memo[v] = unknown();
+            /* Un ciclo que no es el PHI en curso: la raiz se define a si misma
+             * y este resolvedor no resuelve recurrencias.  Es FORMA, no
+             * ejecucion: el puntero puede estar perfectamente acotado. */
+            memo[v] = unknown(asa::UnknownReason::ShapeNotRecognized,
+                              "memory.unresolved_cycle");
             state[v] = 2;
             return memo[v];
         }
@@ -310,7 +333,11 @@ struct Resolver {
                                  true};
 
         const ir::IrInstr *d = facts.def(v);
-        if (!d) return unknown();
+        /* Sin definicion dentro de la funcion: viene de fuera.  Quien lo pase
+         * es quien sabe a que apunta, y por eso es frontera y no ignorancia. */
+        if (!d)
+            return unknown(asa::UnknownReason::OpaqueBoundary,
+                           "memory.comes_from_outside");
 
         using Op = ir::IrOp;
         switch (d->op) {
@@ -339,11 +366,16 @@ struct Resolver {
         case Op::UNWRAP:
         case Op::MVTAKE_IR:
             if (!d->operands.empty()) return resolve(d->operands[0]);
-            return unknown();
+            /* Una derivacion sin origen: el IR no tiene esa forma.  Si llega
+             * aqui es un fallo NUESTRO al construirlo, no del programa. */
+            return unknown(asa::UnknownReason::ShapeNotRecognized,
+                           "memory.derivation_without_source");
 
         // --- ADD con offset const: acumula ---
         case Op::ADD: {
-            if (d->operands.size() != 2) return unknown();
+            if (d->operands.size() != 2)
+                return unknown(asa::UnknownReason::ShapeNotRecognized,
+                               "memory.malformed_addition");
             int64_t c;
             // base + const
             {
@@ -391,7 +423,11 @@ struct Resolver {
                 if (b_raiz && (b_ptr ? !a_ptr : !a_raiz))
                     return con_rango(b, d->operands[0]);
             }
-            return unknown();
+            /* Se suman dos cosas y ninguna es una raiz reconocible, o las dos
+             * lo son.  El valor que resulte depende de lo que traigan en
+             * ejecucion, y por eso no es una forma que se pueda ampliar. */
+            return unknown(asa::UnknownReason::RuntimeDependent,
+                           "memory.addition_without_single_root");
         }
 
         /* --- RESTA: la misma derivacion, hacia el otro lado ---
@@ -409,28 +445,43 @@ struct Resolver {
          * punteros) es una distancia, no una direccion, y `k - p` no es una
          * derivacion de `p`. */
         case Op::SUB: {
-            if (d->operands.size() != 2) return unknown();
+            if (d->operands.size() != 2)
+                return unknown(asa::UnknownReason::ShapeNotRecognized,
+                               "memory.malformed_subtraction");
             int64_t c;
             const PointsToEntry b = resolve(d->operands[0]);
-            if (b.kind == K::Unknown || b.kind == K::None) return unknown();
+            if (b.kind == K::Unknown || b.kind == K::None)
+                /* La izquierda no se supo, asi que esto tampoco.  Se apoya en
+                 * otro que falta: arreglar aquel y este cae solo. */
+                return unknown(asa::UnknownReason::MissingDependency,
+                               "memory.subtraction_base_unresolved");
             // base - const: se acumula el desplazamiento con el signo cambiado.
             if (b.off_exact && const_expr_of(fn, facts, d->operands[1], c)) {
                 int64_t neg;
                 if (!__builtin_sub_overflow(int64_t(0), c, &neg))
                     return with_offset(b, neg);
-                return unknown();
+                /* El desplazamiento se sale de un entero de 64 bits.  Es un
+                 * limite de la representacion, no del programa. */
+                return unknown(asa::UnknownReason::BudgetExceeded,
+                               "memory.offset_overflows");
             }
             // base - valor: se conserva la raiz y se acota con SU rango.  Lo
             // que descarta es restar otra DIRECCION (eso da una distancia, no
             // una direccion), y eso lo dice el tipo.
-            if (es_direccion(d->operands[1])) return unknown();
+            if (es_direccion(d->operands[1]))
+                /* Restar dos direcciones da una DISTANCIA, no una direccion.
+                 * No es que no se sepa: es que el resultado no es un puntero, y
+                 * eso es conocimiento, no ignorancia. */
+                return unknown(asa::UnknownReason::NothingToSay,
+                               "memory.address_difference_is_a_distance");
             return con_rango(b, d->operands[1], /*resta=*/true);
         }
 
         // --- GEP: misma raiz, offset NO probado (escala desconocida aqui) ---
         case Op::GEP:
             if (!d->operands.empty()) return inexact(resolve(d->operands[0]));
-            return unknown();
+            return unknown(asa::UnknownReason::ShapeNotRecognized,
+                           "memory.index_without_base");
 
         /* PHI: si todos los caminos que APORTAN traen la misma raiz, la raiz se
          * conserva.  El desplazamiento no -- por eso queda inexacto --, pero la
@@ -445,7 +496,9 @@ struct Resolver {
          * Si dos caminos traen raices DISTINTAS no se afirma nada: no hay forma
          * de decir cual manda. */
         case Op::PHI: {
-            if (d->operands.empty()) return unknown();
+            if (d->operands.empty())
+                return unknown(asa::UnknownReason::ShapeNotRecognized,
+                               "memory.phi_without_paths");
             const ir::IrValueId marca_previa = phi_en_curso;
             phi_en_curso = v;
             PointsToEntry acc;
@@ -468,7 +521,14 @@ struct Resolver {
                 }
             }
             phi_en_curso = marca_previa;
-            if (discrepan || primero) return unknown();
+            if (discrepan || primero)
+                /* Dos caminos con raices DISTINTAS, o ninguno que aporte.  Cual
+                 * manda depende del camino que se tome en ejecucion -- y eso es
+                 * justo lo que se puede especular con una guarda, en vez de
+                 * rendirse como si no se supiera nada. */
+                return unknown(asa::UnknownReason::RuntimeDependent,
+                               discrepan ? "memory.root_varies_by_path"
+                                         : "memory.no_path_contributes");
             /* Puntero INDUCIDO: su desplazamiento no es un valor que acotar,
              * es una PROGRESION -- `q = buf` al entrar y `q = q + d` al volver,
              * en lo que el optimizador convierte `p + i`.  Se acota con las
@@ -487,8 +547,12 @@ struct Resolver {
         }
 
         default:
-            // Cargado de memoria, const-address, calculo arbitrario...
-            return unknown();
+            /* Cargado de memoria, direccion constante, calculo arbitrario...
+             * Una operacion que este resolvedor no modela: el programa esta
+             * bien y lo que hay que ampliar es esto.  Es el caso mas frecuente
+             * de todos, y por eso importa que no se confunda con los demas. */
+            return unknown(asa::UnknownReason::ShapeNotRecognized,
+                           "memory.unmodelled_op");
         }
     }
 };
@@ -567,8 +631,8 @@ AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width) {
 }
 
 std::vector<ir::IrValueId>
-valores_unicos_de_huecos(const ir::IrFunction &fn,
-                         const std::vector<ir::IrValueId> &slots) {
+single_values_of_slots(const ir::IrFunction &fn,
+                       const std::vector<ir::IrValueId> &slots) {
     std::vector<ir::IrValueId> out(slots.size(), ir::IR_NO_VALUE);
     if (slots.empty()) return out;
 
@@ -601,10 +665,10 @@ valores_unicos_de_huecos(const ir::IrFunction &fn,
     return out;
 }
 
-ir::IrValueId valor_unico_del_hueco(const ir::IrFunction &fn,
-                                    ir::IrValueId slot) {
+ir::IrValueId single_value_of_slot(const ir::IrFunction &fn,
+                                   ir::IrValueId slot) {
     if (slot == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-    return valores_unicos_de_huecos(fn, {slot})[0];
+    return single_values_of_slots(fn, {slot})[0];
 }
 
 } // namespace analysis

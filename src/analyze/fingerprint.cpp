@@ -230,6 +230,10 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
     fp.function = fn.name;
 
     fp.pure_local = true; // hasta encontrar un op impuro.
+    /* El mismo recorrido lleva los DOS ejes.  Todo lo que rompe la pureza la
+     * rompe en los dos, salvo la llamada a una nativa: ese es el unico caso que
+     * se puede recuperar preguntando lo que se haya declarado de ella. */
+    fp.pure_local_ignoring_natives = true;
     using Op = ir::IrOp;
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
@@ -264,6 +268,7 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
             case Op::CALLIND:
                 fp.has_dynamic_call = true;
                 fp.pure_local = false; // efecto opaco.
+                fp.pure_local_ignoring_natives = false;
                 break;
             case Op::INLINE_ASM: {
                 // `asm { }` nativo: se ANALIZA el cuerpo (efectos exactos) en
@@ -285,8 +290,10 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
                 // atomico conserva la pureza local (p.ej. popcnt/aritmetica
                 // sobre registros).  Un mnemonico desconocido -> conservador
                 // (impuro).
-                if (e.touches_mem || e.is_call || e.has_atomic || !e.known())
+                if (e.touches_mem || e.is_call || e.has_atomic || !e.known()) {
                     fp.pure_local = false;
+                    fp.pure_local_ignoring_natives = false;
+                }
                 // Un `call` externo dentro del asm hace el efecto no acotable.
                 if (e.is_call) fp.has_dynamic_call = true;
                 // El marco IMPLICITO de los enlaces register() (los spills y el
@@ -299,7 +306,10 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
             }
             default:
                 // Cualquier op no-pura y no-CALL rompe la pureza local.
-                if (!is_pure_op(ins.op)) fp.pure_local = false;
+                if (!is_pure_op(ins.op)) {
+                    fp.pure_local = false;
+                    fp.pure_local_ignoring_natives = false;
+                }
                 break;
             }
         }
@@ -326,7 +336,8 @@ compute_module_fingerprints(const ir::IrModule &mod, const std::string &arch) {
 
 void compose_fingerprints(
     std::vector<FunctionFingerprint> &fps,
-    const std::unordered_map<std::string, FunctionContracts> *contracts) {
+    const std::unordered_map<std::string, FunctionContracts> *contracts,
+    const ir::IrModule *mod) {
     const size_t n = fps.size();
     if (n == 0) return;
     std::unordered_map<std::string, uint32_t> idx;
@@ -378,6 +389,12 @@ void compose_fingerprints(
         uint32_t alloc_total = 0;
         bool throws_t = false, panics_t = false, recursive = false;
         bool known = true, all_pure_local = true;
+        /* Quien lo hace opaco.  Se queda el PRIMERO que se encuentra: decir
+         * uno concreto es accionable, y una lista de doce solo abruma -- si al
+         * declarar ese sigue habiendo mas, el aviso vuelve a salir con el
+         * siguiente, que es como se arregla una cadena. */
+        std::string opaque_callee;
+        bool opaque_dynamic = false;
         while (!stack.empty()) {
             const uint32_t v = stack.back();
             stack.pop_back();
@@ -387,12 +404,53 @@ void compose_fingerprints(
             alloc_total += f.alloc_sites;
             throws_t = throws_t || f.throws;
             panics_t = panics_t || f.panics;
-            all_pure_local = all_pure_local && f.pure_local;
-            if (f.has_dynamic_call) known = false; // efecto opaco alcanzable.
+            /* Con el modulo delante, las nativas dejan de ser un motivo de
+             * impureza POR SI SOLAS: son aristas del grafo como cualquier otra
+             * y se resuelven abajo, consultando lo declarado.  Sin modulo se usa
+             * el eje conservador, que es el de siempre.
+             *
+             * La seguridad no depende de esta eleccion: una nativa sin declarar
+             * pone `known` en falso mas abajo, y `pure` exige las dos cosas. */
+            all_pure_local =
+                all_pure_local &&
+                (mod != nullptr ? f.pure_local_ignoring_natives : f.pure_local);
+            if (f.has_dynamic_call) {
+                known = false; // efecto opaco alcanzable.
+                opaque_dynamic = true;
+            }
             for (const auto &callee : f.calls) {
                 auto it = idx.find(callee);
                 if (it == idx.end()) {
-                    known = false; // callee externo/no presente -> conservador.
+                    /* No esta en el programa.  Antes eso bastaba para dar el
+                     * cierre por opaco; ahora se PREGUNTA primero si alguien
+                     * dijo lo que hace.
+                     *
+                     * Lo declarado se aporta como lo que es -- una afirmacion
+                     * de quien importa la funcion --, y el cierre sigue siendo
+                     * conocido.  Cada eje que la declaracion NO cubre se queda
+                     * en su valor conservador y no en el permisivo: un campo
+                     * que nadie puso vale `false`, y `false` aqui significa
+                     * "no aporta ese efecto", asi que solo puede aprobar de mas
+                     * si el que declara MINTIO -- que es su responsabilidad, no
+                     * un descuido nuestro. */
+                    const ir::IrNativeEffects *d =
+                        mod != nullptr ? mod->native_effects_of(callee)
+                                       : nullptr;
+                    if (d == nullptr) {
+                        known = false; // nadie ha dicho nada -> conservador.
+                        if (opaque_callee.empty()) opaque_callee = callee;
+                        continue;
+                    }
+                    throws_t = throws_t || d->may_throw;
+                    panics_t = panics_t || d->may_panic;
+                    if (d->allocates) ++alloc_total;
+                    /* La pureza cae con cualquier efecto de dato observable.
+                     * Una nativa que solo lee sus argumentos y no toca nada mas
+                     * SI puede ser pura, que es justo lo que permite demostrar
+                     * un `@pure` sobre codigo que llama a `strlen`. */
+                    if (d->writes_pointee != 0 || d->writes_global ||
+                        d->reads_global || d->io || d->nondeterministic)
+                        all_pure_local = false;
                     continue;
                 }
                 const uint32_t j = it->second;
@@ -404,6 +462,8 @@ void compose_fingerprints(
         fps[i].alloc_sites_total = alloc_total;
         fps[i].recursive = recursive || fps[i].self_recursive;
         fps[i].effects_known = known;
+        fps[i].opaque_callee = std::move(opaque_callee);
+        fps[i].opaque_dynamic = opaque_dynamic;
         // Si no conocemos todos los efectos alcanzables, los totales de efecto
         // se vuelven CONSERVADORES: no podemos PROBAR la ausencia.
         fps[i].throws_total = known ? throws_t : true;
@@ -707,6 +767,43 @@ std::vector<ContractCheck> verify_type_contracts(
         }
     }
     return out;
+}
+
+ContractReport report_contract_checks(const std::vector<ContractCheck> &checks,
+                                      const std::string &file,
+                                      vx::Diagnostics &diags) {
+    ContractReport r;
+    for (const ContractCheck &ck : checks) {
+        vx::SourceLoc loc;
+        loc.file = file;
+        switch (ck.status) {
+        case ContractCheck::VIOLATED:
+            /* Demostrado que no se cumple: es un error del programa, y por eso
+             * aborta la construccion.  El llamante decide -- en `--analyze` se
+             * mide y se ensena, no se construye. */
+            ++r.violated;
+            diags.diag(loc, vx::DiagLevel::ERR, "VXT004",
+                       {ck.function, ck.contract, ck.detail});
+            break;
+        case ContractCheck::UNVERIFIABLE:
+            /* Y este es el que se descartaba en silencio.  NO es un error: el
+             * programa puede estar perfectamente bien y ser el ANALISIS el que
+             * no llega.  Pero callarselo deja un contrato que nadie comprueba y
+             * que parece comprobado, asi que se dice -- con el motivo dentro,
+             * que es lo que lo vuelve accionable. */
+            ++r.unverified;
+            diags.diag(loc, vx::DiagLevel::WARN, "VXW001",
+                       {ck.function, ck.contract, ck.detail});
+            break;
+        case ContractCheck::OK:
+        default:
+            /* Se cumple y esta demostrado: no hay nada que decir.  Decirlo
+             * seria ruido en cada compilacion, y el sitio donde SI se ensena es
+             * el volcado del ASA, que para eso ensena tambien lo verde. */
+            break;
+        }
+    }
+    return r;
 }
 
 } // namespace analyze

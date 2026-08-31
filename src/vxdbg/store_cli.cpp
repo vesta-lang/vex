@@ -86,8 +86,7 @@ const char *reason_text(ReachStatus st) {
         return "un genero de nodo que el recorrido no sabe seguir";
     case ReachStatus::Undecodable:
         return "un nodo que el codec rechazo (esquema de otra version?)";
-    case ReachStatus::Ok:
-        break;
+    case ReachStatus::Ok: break;
     }
     return "";
 }
@@ -120,11 +119,12 @@ const char *kind_name(NodeKind k) {
 /// que con una decena ya se ve donde esta el problema.
 constexpr size_t kMaxCitersShown = 10;
 
-
 void print_kind(NodeKind k) {
     const char *n = kind_name(k);
-    if (n != nullptr) std::printf("%s", n);
-    else std::printf("genero %u", static_cast<unsigned>(k));
+    if (n != nullptr)
+        std::printf("%s", n);
+    else
+        std::printf("genero %u", static_cast<unsigned>(k));
 }
 
 /**
@@ -211,8 +211,10 @@ std::string node_label(const StoredNode &node) {
         if (!m.modules.empty())
             s += ", " + std::to_string(m.modules.size()) + " modulos";
         const std::string pre = common_prefix(m.symbols);
-        if (!pre.empty()) s += "   " + pre;
-        else if (!m.symbols.empty()) s += "   p.ej. " + m.symbols.front().first;
+        if (!pre.empty())
+            s += "   " + pre;
+        else if (!m.symbols.empty())
+            s += "   p.ej. " + m.symbols.front().first;
         return s;
     }
     if (node.header.kind == NodeKind::File) {
@@ -245,8 +247,7 @@ int run_node(const std::string &dir, const std::string &hex, bool listar_todo) {
     // De donde salio: el artefacto al que explica, si alguna raiz lo ofrece.
     const auto rutas = load_artifact_paths(dir);
     auto itr = rutas.find(h);
-    if (itr != rutas.end())
-        std::printf("\n  explica  %s", itr->second.c_str());
+    if (itr != rutas.end()) std::printf("\n  explica  %s", itr->second.c_str());
     std::printf("\n");
 
     /* A quien cita, con la MISMA rutina que usa el recorrido.  Listarlas aparte
@@ -270,8 +271,10 @@ int run_node(const std::string &dir, const std::string &hex, bool listar_todo) {
     std::vector<ContentHash> ausentes;
     for (const auto &r : refs) {
         StoredNode dest;
-        if (store.get(r, dest)) presentes.emplace_back(r, std::move(dest));
-        else ausentes.push_back(r);
+        if (store.get(r, dest))
+            presentes.emplace_back(r, std::move(dest));
+        else
+            ausentes.push_back(r);
     }
     std::printf("  cita %zu nodos: %zu estan, %zu no\n", refs.size(),
                 presentes.size(), ausentes.size());
@@ -352,13 +355,13 @@ int run_dangling(const std::string &dir) {
                 continue;
             }
             StoredNode citante;
-            const std::string lbl =
-                store.get(c.from, citante) ? node_label(citante) : std::string();
-            std::printf("%s\n", lbl.empty()
-                                    ? (kind_name(c.from_kind)
-                                           ? kind_name(c.from_kind)
-                                           : "?")
-                                    : lbl.c_str());
+            const std::string lbl = store.get(c.from, citante)
+                                        ? node_label(citante)
+                                        : std::string();
+            std::printf("%s\n", lbl.empty() ? (kind_name(c.from_kind)
+                                                   ? kind_name(c.from_kind)
+                                                   : "?")
+                                            : lbl.c_str());
         }
         if (report.dangling_by_citer.size() > kMaxCitersShown)
             std::printf("    (y %zu mas)\n",
@@ -392,8 +395,7 @@ int run_gc(const std::string &dir) {
                     "quedan como estaban.\n");
         return 1;
     case MaintenanceStatus::BelowThreshold:
-    case MaintenanceStatus::Ran:
-        break;
+    case MaintenanceStatus::Ran: break;
     }
     std::printf("raices retiradas (sobrescritas): %zu\n", r.roots_retired);
     std::printf("paquetes borrados enteros: %zu\n", r.packs_removed);
@@ -423,12 +425,13 @@ int run_status(const std::string &dir) {
     if (size.roots == 0) {
         /* Sin raices TODO estaria muerto, y reclamar vaciaria el almacen.  Se
          * dice en vez de dar un cero que parece un resultado. */
-        std::printf("\n  sin raices publicadas: no se puede decir que sobra.\n");
+        std::printf(
+            "\n  sin raices publicadas: no se puede decir que sobra.\n");
         return 0;
     }
 
-    PackNodeStore store(
-        dir, std::unique_ptr<NodeStore>(new FileNodeStore(dir)));
+    PackNodeStore store(dir,
+                        std::unique_ptr<NodeStore>(new FileNodeStore(dir)));
 
     std::vector<ContentHash> roots;
     read_published_roots(dir, roots);
@@ -513,8 +516,10 @@ int run(int argc, char **argv) {
         std::string dir;
         for (int i = 3; i < argc; ++i) {
             const std::string a = argv[i];
-            if (a == "--todo") listar_todo = true;
-            else if (dir.empty()) dir = a;
+            if (a == "--todo")
+                listar_todo = true;
+            else if (dir.empty())
+                dir = a;
         }
         if (dir.empty()) dir = vx::default_vxdbg_dir();
         return run_node(dir, argv[2], listar_todo);

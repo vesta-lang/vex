@@ -281,7 +281,7 @@ uint32_t peephole_physical(MFunction &pf) {
                     continue;
                 if (in.src2.kind != MOperandKind::NONE) continue;
                 if (live.is_live_after(static_cast<uint32_t>(bi),
-                                        static_cast<uint32_t>(i), in.dst.reg))
+                                       static_cast<uint32_t>(i), in.dst.reg))
                     continue;
                 /* Y con QUE sigue el bloque, que es lo que identifica el
                  * hueco: si lo de after usa el registro, el que se equivoca
@@ -298,17 +298,17 @@ uint32_t peephole_physical(MFunction &pf) {
                                   static_cast<int>(b.instrs[k].src1.reg));
                     after += buf;
                 }
-                std::fprintf(stderr,
-                             "[deaddef] %s bloque %zu/%zu (succ %d,%d, "
-                             "termina en op%d) instr %zu: "
-                             "mov r%u <- (kind %d) MUERTA; after:%s%s\n",
-                             pf.name.c_str(), bi, pf.blocks.size(),
-                             static_cast<int>(b.succ_a),
-                             static_cast<int>(b.succ_b),
-                             static_cast<int>(b.instrs.back().op), i,
-                             static_cast<unsigned>(in.dst.reg),
-                             static_cast<int>(in.src1.kind), after.c_str(),
-                             live.unknown_points ? " [hay puntos sin saber]" : "");
+                std::fprintf(
+                    stderr,
+                    "[deaddef] %s bloque %zu/%zu (succ %d,%d, "
+                    "termina en op%d) instr %zu: "
+                    "mov r%u <- (kind %d) MUERTA; after:%s%s\n",
+                    pf.name.c_str(), bi, pf.blocks.size(),
+                    static_cast<int>(b.succ_a), static_cast<int>(b.succ_b),
+                    static_cast<int>(b.instrs.back().op), i,
+                    static_cast<unsigned>(in.dst.reg),
+                    static_cast<int>(in.src1.kind), after.c_str(),
+                    live.unknown_points ? " [hay puntos sin saber]" : "");
             }
         }
     }
@@ -355,21 +355,22 @@ uint32_t peephole_physical(MFunction &pf) {
                             return false;
                         };
                         for (size_t cb = 0;
-                             cb < pf.blocks.size() && mentioned_by.size() < 200; ++cb)
-                            for (size_t ci = 0; ci < pf.blocks[cb].instrs.size();
-                                 ++ci) {
+                             cb < pf.blocks.size() && mentioned_by.size() < 200;
+                             ++cb)
+                            for (size_t ci = 0;
+                                 ci < pf.blocks[cb].instrs.size(); ++ci) {
                                 if (cb == bi && ci <= i) continue;
                                 const MInstr &c = pf.blocks[cb].instrs[ci];
                                 if (!mentions(c.dst) && !mentions(c.src1) &&
                                     !mentions(c.src2))
                                     continue;
                                 char buf[56];
-                                std::snprintf(
-                                    buf, sizeof buf, " b%zu:i%zu(op%d%s%s%s)",
-                                    cb, ci, static_cast<int>(c.op),
-                                    mentions(c.dst) ? ",d" : "",
-                                    mentions(c.src1) ? ",s1" : "",
-                                    mentions(c.src2) ? ",s2" : "");
+                                std::snprintf(buf, sizeof buf,
+                                              " b%zu:i%zu(op%d%s%s%s)", cb, ci,
+                                              static_cast<int>(c.op),
+                                              mentions(c.dst) ? ",d" : "",
+                                              mentions(c.src1) ? ",s1" : "",
+                                              mentions(c.src2) ? ",s2" : "");
                                 mentioned_by += buf;
                             }
                         /* Y con QUE sigue el bloque, para ver la forma que
@@ -382,13 +383,14 @@ uint32_t peephole_physical(MFunction &pf) {
                                           static_cast<int>(b.instrs[k].op));
                             around += bb;
                         }
-                        std::fprintf(stderr,
-                                     "[deaddef] BORRA: %s bloque %zu "
-                                     "instr %zu, r%u; sigue:%s; lo menciona:%s\n",
-                                     pf.name.c_str(), bi, i,
-                                     static_cast<unsigned>(in.dst.reg),
-                                     around.c_str(),
-                                     mentioned_by.empty() ? " nadie" : mentioned_by.c_str());
+                        std::fprintf(
+                            stderr,
+                            "[deaddef] BORRA: %s bloque %zu "
+                            "instr %zu, r%u; sigue:%s; lo menciona:%s\n",
+                            pf.name.c_str(), bi, i,
+                            static_cast<unsigned>(in.dst.reg), around.c_str(),
+                            mentioned_by.empty() ? " nadie"
+                                                 : mentioned_by.c_str());
                     }
                     ++removed;
                     changed = true;

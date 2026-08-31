@@ -418,8 +418,8 @@ bool Lowering::try_lower_memcpy_idiom(ast::WhileStmt *s) {
                      idx_name.c_str(), esz);
     // idx es una var EXTERNA: su valor actual viene del scope; tras el loop hay
     // que escribir el idx post-loop (idx_name_for_post = idx_name).
-    return mc_emit_copy(lookup(idx_name), limit, dst_base, src_base,
-                        esz, s->loc.line, /*idx_name_for_post=*/idx_name);
+    return mc_emit_copy(lookup(idx_name), limit, dst_base, src_base, esz,
+                        s->loc.line, /*idx_name_for_post=*/idx_name);
 }
 
 bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
@@ -475,10 +475,9 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
     // Bajamos directamente el init.  Sin push_scope ni post-update.
     const ir::IrValueId v_init = lower_expr(vd->init.get());
     if (v_init == ir::IR_NO_VALUE) return false;
-    return mc_emit_copy(v_init, limit, dst_base, src_base, esz,
-                        s->loc.line, /*idx_name_for_post=*/std::string());
+    return mc_emit_copy(v_init, limit, dst_base, src_base, esz, s->loc.line,
+                        /*idx_name_for_post=*/std::string());
 }
-
 
 /**
  * @brief Abre un bucle contado y deja listo su cuerpo.
@@ -562,8 +561,8 @@ void Lowering::vec_loop_open(VecLoopFrame &f, ir::IrBlockId hdr,
             vec_bin(ir::IrOp::ADD, f.idx_ty, f.phi_idx, f.step, ln);
         cond = vec_bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, next, bound, ln);
     } else {
-        cond = vec_bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, f.phi_idx, bound,
-                       ln);
+        cond =
+            vec_bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, f.phi_idx, bound, ln);
     }
     emit_br_cond(cond, f.body, f.after, ln);
 
@@ -1448,9 +1447,9 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             if (S[k].is_scaled_arr) {
                 // acc += arr[i]*escalar (escalar ya negado si Sub -> suma).
                 const ir::IrValueId ai = load_el(step_base[k]);
-                const ir::IrValueId prod = bin(
-                    elem_fp ? ir::IrOp::FMUL : ir::IrOp::MUL, elem_ty, ai,
-                    step_scalar[k]);
+                const ir::IrValueId prod =
+                    bin(elem_fp ? ir::IrOp::FMUL : ir::IrOp::MUL, elem_ty, ai,
+                        step_scalar[k]);
                 acc = bin(elem_fp ? ir::IrOp::FADD : ir::IrOp::ADD, elem_ty,
                           acc, prod);
             } else {
@@ -1919,8 +1918,8 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         } else {
             /* Entero: -a es 0 - a.  El IR tiene NEG, pero la resta deja el
              * mismo codigo y no obliga a que todos los caminos la conozcan. */
-            v_res = bin(ir::IrOp::SUB, elem_ty,
-                        emit_const(elem_ty, 0, ln), v_ai);
+            v_res =
+                bin(ir::IrOp::SUB, elem_ty, emit_const(elem_ty, 0, ln), v_ai);
         }
         const ir::IrValueId b_at = ptr_at(v_b, off);
         ir::IrInstr st{};
@@ -2375,7 +2374,8 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
             addend = bin(ir::IrOp::FMUL, elem_ty, ai, bi); // a[i]*b[i]
         }
         const ir::IrValueId rnext = bin(acc_op, elem_ty, phi_res, addend);
-        /* La suma parcial es lo que viaja: entra al cierre y sale por el phi. */
+        /* La suma parcial es lo que viaja: entra al cierre y sale por el phi.
+         */
         vec_loop_close(lt, {rnext}, ln);
     }
 

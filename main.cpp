@@ -34,6 +34,7 @@
 #include "cli/version_info.h"   // Banner de `vesta --version` / `-v`
 #include "analysis/asa/dump.h"  // Volcado del ASA: modo --asa
 #include "analyze/asm_report.h" // Informe de bloques asm + su productor del ASA
+#include "analyze/lint_cli.h"   // Subcomando `vesta lint`
 #include "analyze/bigo.h"       // Subsistema de coste: modo --analyze (Big-O)
 #include "analyze/fingerprint.h" // Huella computacional (recursos + efectos)
 #include "analysis/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
@@ -302,16 +303,18 @@ extern "C" void runtime_ensure_vx_callback_registered(void);
  * @param artefacto   Bytes del fichero producido.
  * @param verboso     Dejar constancia por stderr.
  */
-static void guardar_cache_de_proyecto(
-    const std::string &pc_path, uint32_t opts_hash, uint32_t diag_hash,
-    const analysis::asa::Ambito &donde, const vx::CompileResult &cr,
-    bool con_lineas, const std::vector<uint8_t> &artefacto, bool verboso,
-    const std::vector<std::string> &deps_extra) {
+static void
+guardar_cache_de_proyecto(const std::string &pc_path, uint32_t opts_hash,
+                          uint32_t diag_hash, const analysis::asa::Scope &donde,
+                          const vx::CompileResult &cr, bool con_lineas,
+                          const std::vector<uint8_t> &artefacto, bool verboso,
+                          const std::vector<std::string> &deps_extra) {
     /* Las dependencias del compile MAS las que traiga quien llama: el fuente
      * raiz cuando no hay imports -- un fichero suelto depende de si mismo -- y
      * lo que el preprocesador haya incluido.  Se juntan aqui y no en cada sitio
      * de llamada porque la lista tiene que ser LA MISMA que se valida despues,
-     * y tenerla construida en dos lados era garantizar que un dia difirieran. */
+     * y tenerla construida en dos lados era garantizar que un dia difirieran.
+     */
     std::vector<std::string> rutas = cr.dep_paths;
     for (const auto &p : deps_extra) {
         if (p.empty()) continue;
@@ -405,7 +408,6 @@ static bool warn_unresolved_inject(const vx::CompileResult &cr,
     vx::print_diagnostic(std::cerr, d);
     return true;
 }
-
 
 static bool recompilar_con_maquina_de_compilacion(
     vx::CompileResult &cr, const std::string &vx_path,
@@ -844,6 +846,22 @@ int main(int argc, char *argv[]) {
         for (int i = 2; i < argc; ++i)
             sub.push_back(argv[i]);
         return vx::fmt::cli::run(static_cast<int>(sub.size()), sub.data());
+    }
+
+    /* ------------------------------------------------------------------
+     * Subcomando: @c vesta lint <fichero.vx>
+     *
+     * Va con `fmt`, `pkg` y `vxdbg` y no con las opciones porque pasar el
+     * linter NO modifica una compilacion: es una herramienta aparte, con sus
+     * argumentos.  Mezclarla con las opciones del compilador dejaria que
+     * conviviera con `-o`, `--format` o `--emit`, que aqui no significan nada.
+     * ------------------------------------------------------------------ */
+    if (argc >= 2 && std::string(argv[1]) == "lint") {
+        std::vector<char *> sub;
+        sub.push_back(argv[0]);
+        for (int i = 2; i < argc; ++i)
+            sub.push_back(argv[i]);
+        return analyze::lint_cli::run(static_cast<int>(sub.size()), sub.data());
     }
 
     // ------------------------------------------------------------------
@@ -1483,6 +1501,14 @@ int main(int argc, char *argv[]) {
             // Camino de compilacion: lo que hace utilizable
             // @Target("mode:aot") frente a @Target("mode:bytecode").
             vx::set_aot_condcomp_mode("aot");
+            // Y cuanto runtime hay debajo, que es lo que contesta a
+            // `@Target("tier:bare")` / `embed` / `full` -- los mismos nombres
+            // que toma `--target` --, mas `tier:sin_libc` para
+            // `--freestanding`.
+            vx::set_aot_condcomp_tier(aot_tier == aot::Tier::FULL    ? "full"
+                                      : aot_tier == aot::Tier::EMBED ? "embed"
+                                                                     : "bare",
+                                      aot_freestanding);
         }
     } else {
         /* Sin flags CLI explicitos -> consultar env var ahora.  Lo
@@ -2379,12 +2405,15 @@ int main(int argc, char *argv[]) {
         /* El asm es un dominio mas, pero su productor vive junto a la base de
          * datos de instrucciones: se da de alta desde aqui, que es quien la
          * tiene.  Para eso existe el registro. */
-        analyze::registrar_productor_asm();
+        analyze::register_asm_producer();
+        /* Y el de la huella, por lo mismo: necesita la maquinaria de efectos,
+         * que tampoco esta en el nucleo. */
+        analyze::register_fingerprint_producer();
 
         analysis::asa::FactStore almacen;
-        const std::vector<analysis::asa::ResumenProduccion> resumenes =
-            analysis::asa::producir(asa_mod, almacen);
-        analysis::asa::imprimir_volcado(almacen, resumenes, stdout);
+        const std::vector<analysis::asa::ProductionSummary> resumenes =
+            analysis::asa::produce(asa_mod, almacen);
+        analysis::asa::print_dump(almacen, resumenes, stdout);
         return EXIT_SUCCESS;
     }
 
@@ -2424,7 +2453,8 @@ int main(int argc, char *argv[]) {
 #endif
             }
             // Misma traduccion que arriba, por el mismo motivo.
-            vx::set_aot_condcomp_target(os_obj, vx::cwhen::normalize_arch(arch));
+            vx::set_aot_condcomp_target(os_obj,
+                                        vx::cwhen::normalize_arch(arch));
             /* Pedir un objetivo nativo tambien cambia QUIEN ejecuta: alli las
              * ops que dependen del runtime son llamadas a libvesta_rt, y varias
              * ni existen.  El informe de efectos tiene que hablar de ese. */
@@ -2587,7 +2617,7 @@ int main(int argc, char *argv[]) {
                                 amod_post.functions.push_back(std::move(f));
                         for (auto &ni : io_mod.native_imports)
                             amod_post.register_native_import(ni.lib, ni.name,
-                                                             ni.efectos);
+                                                             ni.effects);
                     }
                     break;
                 }
@@ -4134,8 +4164,10 @@ int main(int argc, char *argv[]) {
         // de root + deps recursivos coinciden con los cacheados, copiar
         // el @c .velb cacheado al output y SALTAR todo el compile +
         // link.  Desactivable via @c VX_NO_PROJECT_CACHE=1.
-        const bool project_cache_enabled = !util::flag_on(util::FlagId::NoProjectCache);
-        const bool project_cache_verbose = util::flag_on(util::FlagId::VerboseProjectCache);
+        const bool project_cache_enabled =
+            !util::flag_on(util::FlagId::NoProjectCache);
+        const bool project_cache_verbose =
+            util::flag_on(util::FlagId::VerboseProjectCache);
         const bool has_imports = vx::vx_source_has_imports(vx_source);
 
         vx::ProjectCacheKey pck;
@@ -4197,10 +4229,14 @@ int main(int argc, char *argv[]) {
          * sepan decir que un aviso suyo es universal, se marca con el objetivo
          * actual -- en el peor caso se comporta como antes (se recalcula) y
          * nunca se afirma en un sitio algo comprobado en otro. */
-        analysis::asa::Ambito donde;
+        analysis::asa::Scope donde;
         donde.isa = pck.aot_arch.empty() ? "x86-64" : pck.aot_arch.c_str();
-        donde.sistema = pck.aot_target.c_str();
+        donde.os = pck.aot_target.c_str();
         donde.backend = pck.aot ? "aot" : "vm";
+        /* Restringir obliga a decir por que: lo que el compilador avisa de un
+         * programa depende del objetivo, porque `@Target` descarta
+         * declaraciones segun el. */
+        donde.why = "diag.depende_del_objetivo";
 
         // Path canonico del root para el cache key.
         std::string canonical_root;
@@ -4297,8 +4333,7 @@ int main(int argc, char *argv[]) {
                             // de escribir con ellos, releerlo seria leer dos
                             // veces lo mismo en el camino que mas se recorre.
                             vx::publish_vxdbg_artifact(
-                                out_velb,
-                                vxdbg::ContentHash::from_hex(map_hex),
+                                out_velb, vxdbg::ContentHash::from_hex(map_hex),
                                 vxdbg::ContentHash::from_hex(spans_hex),
                                 copts.vxdbg_dir, &cached_velb);
                         }
@@ -4489,10 +4524,10 @@ int main(int argc, char *argv[]) {
                     std::vector<std::string> deps_extra_aot =
                         vpp_included_files;
                     deps_extra_aot.push_back(canonical_root);
-                    guardar_cache_de_proyecto(
-                        pc_path, opts_hash, diag_hash, donde, cr,
-                        copts.emit_debug, abytes, project_cache_verbose,
-                        deps_extra_aot);
+                    guardar_cache_de_proyecto(pc_path, opts_hash, diag_hash,
+                                              donde, cr, copts.emit_debug,
+                                              abytes, project_cache_verbose,
+                                              deps_extra_aot);
                 }
             }
             return rc_aot;
@@ -5148,10 +5183,10 @@ int main(int argc, char *argv[]) {
                 }
                 vf.close();
                 if (!velb_bytes.empty())
-                    guardar_cache_de_proyecto(
-                        pc_path, opts_hash, diag_hash, donde, cr,
-                        copts.emit_debug, velb_bytes, project_cache_verbose,
-                        deps_extra_cache);
+                    guardar_cache_de_proyecto(pc_path, opts_hash, diag_hash,
+                                              donde, cr, copts.emit_debug,
+                                              velb_bytes, project_cache_verbose,
+                                              deps_extra_cache);
             }
         }
 

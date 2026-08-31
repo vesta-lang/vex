@@ -42,9 +42,28 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
                                 const LoopIV &iv) {
     LoopTripInfo info;
     int64_t init_v = 0, bound_v = 0;
-    if (iv.stride <= 0) return info;
-    if (!const_of(fn, def_block, iv.init, init_v)) return info;
-    if (!const_of(fn, def_block, iv.bound, bound_v)) return info;
+    /* Cada renuncia con SU motivo.  No es documentacion: es lo que decide que
+     * puede hacer el consumidor.  Un limite que solo existe al ejecutar admite
+     * una guarda; una forma que este analisis no cubre, no -- ahi lo que hay
+     * que hacer es ampliar el analisis, y por eso se distinguen. */
+    if (iv.stride <= 0) {
+        /* Decreciente o sin avance: la formula de abajo da por hecho que se
+         * sube.  El bucle puede estar perfectamente acotado; es el analisis el
+         * que no llega, y decirlo asi es lo honesto. */
+        info.reason = asa::UnknownReason::ShapeNotRecognized;
+        info.code = "loop.non_increasing_iv";
+        return info;
+    }
+    if (!const_of(fn, def_block, iv.init, init_v)) {
+        info.reason = asa::UnknownReason::RuntimeDependent;
+        info.code = "loop.non_constant_init";
+        return info;
+    }
+    if (!const_of(fn, def_block, iv.bound, bound_v)) {
+        info.reason = asa::UnknownReason::RuntimeDependent;
+        info.code = "loop.non_constant_bound";
+        return info;
+    }
 
     // room = cuanto queda desde el primer iv (mas el offset de la guarda) hasta
     // N.
@@ -57,8 +76,13 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
         info.trip = (room + iv.stride - 1) / iv.stride; // ceil
     } else if (iv.cmp_op == IrOp::CMP_LE || iv.cmp_op == IrOp::CMP_ULE) {
         info.trip = room / iv.stride + 1; // floor + 1
+    } else {
+        /* La guarda no es `<` ni `<=`.  Otra FORMA que no se cubre, y no un
+         * limite que dependa de la ejecucion: el bucle puede ser perfectamente
+         * contado con `!=` y este analisis no sabe leerlo. */
+        info.reason = asa::UnknownReason::ShapeNotRecognized;
+        info.code = "loop.unsupported_guard";
     }
-    // Guarda no soportada -> trip queda en -1 (desconocido).
     return info;
 }
 

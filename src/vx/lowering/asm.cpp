@@ -1441,57 +1441,56 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
  * @param s El bloque.
  */
 void Lowering::emit_asm_diagnostics(ast::AsmStmt *s) {
-
-// ASA.2: diagnosticos del bloque.  Solo para bloques que el compilador debe
-// entender (Analyzable/Volatile; `raw` es cero-analisis por diseno).  Se
-// emiten como WARNINGS; la linea se mapea con body_loc.
-if (s->level != ast::AsmLevel::Raw) {
-    auto emit = [&](const std::vector<vx::AsmDiag> &ds) {
-        for (const vx::AsmDiag &d : ds) {
-            SourceLoc dl = s->body_loc;
-            if (d.line_no > 0) dl.line = s->body_loc.line + (d.line_no - 1);
-            // Diagnostico CATALOGADO: solo codigo + args; el texto (y su
-            // idioma) los resuelve el catalogo al imprimir.
-            const DiagLevel lvl =
-                (d.severity == vx::AsmDiagSeverity::Error) ? DiagLevel::ERR
-                : (d.severity == vx::AsmDiagSeverity::Info)
-                    ? DiagLevel::NOTE
-                    : DiagLevel::WARN;
-            diags_.diag(dl, lvl, d.code, d.args);
-        }
-    };
-    vx::AsmCfg cfg = vx::build_asm_cfg(vx::instr_db::Isa::X86, s->body);
-    // ESTRUCTURALES (codigo muerto, salto no resuelto, bucle sin salida):
-    // solidos, sin dependencias.
-    emit(vx::asm_diagnose_cfg(cfg));
-    // DATAFLOW.  defined_in = registros ligados por register() EN SCOPE
-    // (los que el `lookup` sigue resolviendo a su ALLOCA).  Solo lo
-    // computamos para el modelo CLASICO (sin operandos inc.7): el inc.7 usa
-    // placeholders %name en el body -> las lecturas/escrituras de registro
-    // no son fiables ahi, asi que en ese caso solo emitimos VXA005 (flags,
-    // basado en el mnemonico/rama, no en los operandos).  Tratar TODAS las
-    // bindings como definidas es un SUPERSET seguro: puede infra-avisar
-    // (output leido antes de escribirse) pero nunca da un falso positivo.
-    const bool classic_model = s->operands.empty();
-    std::vector<std::string> defined_in;
-    if (classic_model) {
-        for (const auto &b : fn_->asm_reg_bindings)
-            if (lookup(b.name) == b.alloca_value) {
-                std::string c = vx::asm_canonical_reg(b.reg);
-                if (!c.empty()) defined_in.push_back(std::move(c));
+    // ASA.2: diagnosticos del bloque.  Solo para bloques que el compilador debe
+    // entender (Analyzable/Volatile; `raw` es cero-analisis por diseno).  Se
+    // emiten como WARNINGS; la linea se mapea con body_loc.
+    if (s->level != ast::AsmLevel::Raw) {
+        auto emit = [&](const std::vector<vx::AsmDiag> &ds) {
+            for (const vx::AsmDiag &d : ds) {
+                SourceLoc dl = s->body_loc;
+                if (d.line_no > 0) dl.line = s->body_loc.line + (d.line_no - 1);
+                // Diagnostico CATALOGADO: solo codigo + args; el texto (y su
+                // idioma) los resuelve el catalogo al imprimir.
+                const DiagLevel lvl =
+                    (d.severity == vx::AsmDiagSeverity::Error) ? DiagLevel::ERR
+                    : (d.severity == vx::AsmDiagSeverity::Info)
+                        ? DiagLevel::NOTE
+                        : DiagLevel::WARN;
+                diags_.diag(dl, lvl, d.code, d.args);
             }
+        };
+        vx::AsmCfg cfg = vx::build_asm_cfg(vx::instr_db::Isa::X86, s->body);
+        // ESTRUCTURALES (codigo muerto, salto no resuelto, bucle sin salida):
+        // solidos, sin dependencias.
+        emit(vx::asm_diagnose_cfg(cfg));
+        // DATAFLOW.  defined_in = registros ligados por register() EN SCOPE
+        // (los que el `lookup` sigue resolviendo a su ALLOCA).  Solo lo
+        // computamos para el modelo CLASICO (sin operandos inc.7): el inc.7 usa
+        // placeholders %name en el body -> las lecturas/escrituras de registro
+        // no son fiables ahi, asi que en ese caso solo emitimos VXA005 (flags,
+        // basado en el mnemonico/rama, no en los operandos).  Tratar TODAS las
+        // bindings como definidas es un SUPERSET seguro: puede infra-avisar
+        // (output leido antes de escribirse) pero nunca da un falso positivo.
+        const bool classic_model = s->operands.empty();
+        std::vector<std::string> defined_in;
+        if (classic_model) {
+            for (const auto &b : fn_->asm_reg_bindings)
+                if (lookup(b.name) == b.alloca_value) {
+                    std::string c = vx::asm_canonical_reg(b.reg);
+                    if (!c.empty()) defined_in.push_back(std::move(c));
+                }
+        }
+        int32_t ua = vx::instr_db::microarch_by_name(vx::instr_db::Isa::X86,
+                                                     "intel-skylake");
+        std::vector<vx::AsmDiag> df =
+            vx::asm_diagnose_uninit(cfg, vx::instr_db::Isa::X86, defined_in,
+                                    static_cast<uint32_t>(ua < 0 ? 0 : ua));
+        std::vector<vx::AsmDiag> keep;
+        for (auto &d : df)
+            if (classic_model || d.code == "VXA005") // VXA004 solo en clasico.
+                keep.push_back(std::move(d));
+        emit(keep);
     }
-    int32_t ua = vx::instr_db::microarch_by_name(vx::instr_db::Isa::X86,
-                                                 "intel-skylake");
-    std::vector<vx::AsmDiag> df =
-        vx::asm_diagnose_uninit(cfg, vx::instr_db::Isa::X86, defined_in,
-                                static_cast<uint32_t>(ua < 0 ? 0 : ua));
-    std::vector<vx::AsmDiag> keep;
-    for (auto &d : df)
-        if (classic_model || d.code == "VXA005") // VXA004 solo en clasico.
-            keep.push_back(std::move(d));
-    emit(keep);
-}
 }
 
 /**
@@ -1512,105 +1511,105 @@ if (s->level != ast::AsmLevel::Raw) {
  */
 bool Lowering::validate_asm_syntax(ast::AsmStmt *s,
                                    const std::string &body_sub) {
-//  AS inc.4b: validacion de sintaxis en compile-time via el
-// backend de ensamblado (Keystone).  Si esta registrado y rechaza el
-// body, emitimos un error con la linea Vesta (mejor que esperar a que
-// GCC falle al compilar el .c).  Si no hay backend (tests sin main),
-// se omite: GCC valida en port-C.  Solo es validacion -- los bytes se
-// descartan (se usaran en inc.5 JIT).
-if (vx::g_asm_backend && !body_sub.empty()) {
-    // Ensamblar el cuerpo COMPLETO (preserva el contexto de etiquetas: un
-    // `jmp .loop` necesita ver la definicion `.loop:` de otra linea).
-    // Arch del TARGET (no del host): ARM si @Target lo pide, o 32/16 en x86
-    // segun @bits / --aot-arch.
-    const vx::AsmArch asm_arch = vx::asm_arch_for_target(asm_target_bits_);
-    // el cuerpo puede llevar placeholders $N (operandos `reg`
-    // auto).  Para VALIDAR la sintaxis con Keystone hay que darle un cuerpo
-    // concreto -> sustituimos $N por el pick greedy del binding (el
-    // ensamblado real usa el registro OPTIMO del RA post-regalloc en el
-    // JIT/AOT, o este mismo greedy en el interp).
-    const std::string vbody =
-        vx::asm_body_subst_greedy(body_sub, fn_->asm_reg_bindings);
-    vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(vbody, asm_arch);
-    if (!ar.ok) {
-        // Traducir el codigo de Keystone a un mensaje claro en espanol.
-        auto human_asm_error = [](const std::string &e) -> std::string {
-            auto has = [&](const char *s) {
-                return e.find(s) != std::string::npos;
+    //  AS inc.4b: validacion de sintaxis en compile-time via el
+    // backend de ensamblado (Keystone).  Si esta registrado y rechaza el
+    // body, emitimos un error con la linea Vesta (mejor que esperar a que
+    // GCC falle al compilar el .c).  Si no hay backend (tests sin main),
+    // se omite: GCC valida en port-C.  Solo es validacion -- los bytes se
+    // descartan (se usaran en inc.5 JIT).
+    if (vx::g_asm_backend && !body_sub.empty()) {
+        // Ensamblar el cuerpo COMPLETO (preserva el contexto de etiquetas: un
+        // `jmp .loop` necesita ver la definicion `.loop:` de otra linea).
+        // Arch del TARGET (no del host): ARM si @Target lo pide, o 32/16 en x86
+        // segun @bits / --aot-arch.
+        const vx::AsmArch asm_arch = vx::asm_arch_for_target(asm_target_bits_);
+        // el cuerpo puede llevar placeholders $N (operandos `reg`
+        // auto).  Para VALIDAR la sintaxis con Keystone hay que darle un cuerpo
+        // concreto -> sustituimos $N por el pick greedy del binding (el
+        // ensamblado real usa el registro OPTIMO del RA post-regalloc en el
+        // JIT/AOT, o este mismo greedy en el interp).
+        const std::string vbody =
+            vx::asm_body_subst_greedy(body_sub, fn_->asm_reg_bindings);
+        vx::AsmAssembleResult ar = vx::g_asm_backend->assemble(vbody, asm_arch);
+        if (!ar.ok) {
+            // Traducir el codigo de Keystone a un mensaje claro en espanol.
+            auto human_asm_error = [](const std::string &e) -> std::string {
+                auto has = [&](const char *s) {
+                    return e.find(s) != std::string::npos;
+                };
+                if (has("mnemonic") || has("Mnemonic"))
+                    return "instruccion desconocida (mnemonico no valido)";
+                if (has("operand") || has("Operand"))
+                    return "operando no valido para esta instruccion";
+                if (has("ymbol") || has("ndefined") || has("elocation"))
+                    return "simbolo o etiqueta no definido";
+                if (has("token") || has("Token") || has("xpression") ||
+                    has("expr"))
+                    return "token no reconocido (no es una instruccion valida)";
+                if (has("mmediate"))
+                    return "valor inmediato no valido o fuera de rango";
+                if (has("egister")) return "registro no valido";
+                if (has("refix")) return "prefijo de instruccion no valido";
+                // Sin traduccion conocida: generico en espanol (el detalle de
+                // Keystone se anexa aparte, asi no se duplica).
+                return "instruccion o sintaxis no valida";
             };
-            if (has("mnemonic") || has("Mnemonic"))
-                return "instruccion desconocida (mnemonico no valido)";
-            if (has("operand") || has("Operand"))
-                return "operando no valido para esta instruccion";
-            if (has("ymbol") || has("ndefined") || has("elocation"))
-                return "simbolo o etiqueta no definido";
-            if (has("token") || has("Token") || has("xpression") ||
-                has("expr"))
-                return "token no reconocido (no es una instruccion valida)";
-            if (has("mmediate"))
-                return "valor inmediato no valido o fuera de rango";
-            if (has("egister")) return "registro no valido";
-            if (has("refix")) return "prefijo de instruccion no valido";
-            // Sin traduccion conocida: generico en espanol (el detalle de
-            // Keystone se anexa aparte, asi no se duplica).
-            return "instruccion o sintaxis no valida";
-        };
 
-        // Localizar la LINEA del fallo: re-ensamblar cada linea por
-        // separado y quedarnos con la primera que falla por un motivo que
-        // NO sea "simbolo no definido" (en una linea aislada, un salto a
-        // una etiqueta de otra linea daria un falso positivo de simbolo).
-        SourceLoc eloc = s->body_loc;
-        std::string detail = ar.error;
-        {
-            size_t start = 0;
-            uint32_t line_rel = 0; // lineas desde el inicio del cuerpo
-            bool located = false;
-            for (size_t k = 0; k <= body_sub.size() && !located; ++k) {
-                if (k == body_sub.size() || body_sub[k] == '\n') {
-                    // contenido util de la linea [a, e2) tras recortar
-                    size_t a = start, e2 = k;
-                    while (a < e2 &&
-                           (body_sub[a] == ' ' || body_sub[a] == '\t' ||
-                            body_sub[a] == '\r'))
-                        ++a;
-                    while (e2 > a && (body_sub[e2 - 1] == ' ' ||
-                                      body_sub[e2 - 1] == '\t' ||
-                                      body_sub[e2 - 1] == '\r'))
-                        --e2;
-                    std::string ln = vx::asm_body_subst_greedy(
-                        body_sub.substr(a, e2 - a), fn_->asm_reg_bindings);
-                    const bool is_comment =
-                        ln.empty() || ln[0] == ';' ||
-                        (ln.size() >= 2 && ln[0] == '/' && ln[1] == '/');
-                    if (!is_comment) {
-                        vx::AsmAssembleResult lr =
-                            vx::g_asm_backend->assemble(ln, asm_arch);
-                        if (!lr.ok &&
-                            lr.error.find("ymbol") == std::string::npos &&
-                            lr.error.find("ndefined") ==
-                                std::string::npos &&
-                            lr.error.find("elocation") ==
-                                std::string::npos) {
-                            eloc.line = s->body_loc.line + line_rel;
-                            eloc.column = (line_rel == 0)
-                                              ? s->body_loc.column +
-                                                    (uint32_t)(a - start)
-                                              : (uint32_t)(a - start) + 1;
-                            detail = lr.error;
-                            located = true;
+            // Localizar la LINEA del fallo: re-ensamblar cada linea por
+            // separado y quedarnos con la primera que falla por un motivo que
+            // NO sea "simbolo no definido" (en una linea aislada, un salto a
+            // una etiqueta de otra linea daria un falso positivo de simbolo).
+            SourceLoc eloc = s->body_loc;
+            std::string detail = ar.error;
+            {
+                size_t start = 0;
+                uint32_t line_rel = 0; // lineas desde el inicio del cuerpo
+                bool located = false;
+                for (size_t k = 0; k <= body_sub.size() && !located; ++k) {
+                    if (k == body_sub.size() || body_sub[k] == '\n') {
+                        // contenido util de la linea [a, e2) tras recortar
+                        size_t a = start, e2 = k;
+                        while (a < e2 &&
+                               (body_sub[a] == ' ' || body_sub[a] == '\t' ||
+                                body_sub[a] == '\r'))
+                            ++a;
+                        while (e2 > a && (body_sub[e2 - 1] == ' ' ||
+                                          body_sub[e2 - 1] == '\t' ||
+                                          body_sub[e2 - 1] == '\r'))
+                            --e2;
+                        std::string ln = vx::asm_body_subst_greedy(
+                            body_sub.substr(a, e2 - a), fn_->asm_reg_bindings);
+                        const bool is_comment =
+                            ln.empty() || ln[0] == ';' ||
+                            (ln.size() >= 2 && ln[0] == '/' && ln[1] == '/');
+                        if (!is_comment) {
+                            vx::AsmAssembleResult lr =
+                                vx::g_asm_backend->assemble(ln, asm_arch);
+                            if (!lr.ok &&
+                                lr.error.find("ymbol") == std::string::npos &&
+                                lr.error.find("ndefined") ==
+                                    std::string::npos &&
+                                lr.error.find("elocation") ==
+                                    std::string::npos) {
+                                eloc.line = s->body_loc.line + line_rel;
+                                eloc.column = (line_rel == 0)
+                                                  ? s->body_loc.column +
+                                                        (uint32_t)(a - start)
+                                                  : (uint32_t)(a - start) + 1;
+                                detail = lr.error;
+                                located = true;
+                            }
                         }
+                        ++line_rel;
+                        start = k + 1;
                     }
-                    ++line_rel;
-                    start = k + 1;
                 }
             }
+            error_at(eloc, "inline asm: " + human_asm_error(detail) + " -- " +
+                               detail);
+            return false;
         }
-        error_at(eloc, "inline asm: " + human_asm_error(detail) + " -- " +
-                           detail);
-        return false;
     }
-}
     return true;
 }
 
@@ -1632,100 +1631,100 @@ if (vx::g_asm_backend && !body_sub.empty()) {
  */
 bool Lowering::try_lift_asm_block(ast::AsmStmt *s, const std::string &asm_name,
                                   vx::AsmMotivoOpaco &motivo_opaco) {
-/* Interruptor para PODER COMPARAR: con `VESTA_ASM_NO_LIFT=1` no se eleva
- * ningun bloque y todos se emiten opacos.
- *
- * Elevar un `asm` es una transformacion como cualquier otra, y una
- * transformacion se comprueba comparando el antes con el despues.  Sin
- * poder apagarla, la unica manera de saber si cambio el comportamiento era
- * reescribir el programa a mano con `volatile` -- que ademas cambia OTRA
- * cosa (la optimizacion), asi que ni siquiera era la misma comparacion.
- * Esto ya se pago: un elevado que producia un IR de aspecto impecable hacia
- * que el programa devolviera otro numero, y solo se vio escribiendo el caso
- * a mano.  Que el IR tenga buena pinta no es que este bien. */
-static const bool sin_elevado = util::flag_on(util::FlagId::AsmNoLift);
-if (!sin_elevado && s->level == ast::AsmLevel::Analyzable) {
-    std::unordered_map<std::string, ir::IrValueId> slot_of;
-    for (const auto &b : fn_->asm_reg_bindings)
-        if (lookup(b.name) == b.alloca_value) {
-            std::string c = asm_canonical_reg(b.reg);
-            if (!c.empty()) slot_of[c] = b.alloca_value;
-        }
-    if (vx::asm_lift_emit(*fn_, current_block_, vx::instr_db::Isa::X86,
-                          asm_name, slot_of, s->loc.line))
-        return true; // patron liftado -> NO se emite el INLINE_ASM.
-
-    // Lift GENERAL instruccion-a-instruccion: el asm entero straight-line
-    // (mov/lea/ALU/neg-not/inc-dec, [reg]) pasa a IR SSA real (ADD, LOAD,
-    // STORE...) que participa del optimizador -> del asm del usuario sale
-    // codigo mas eficiente.  Los registros ligados por register() se cargan
-    // de su slot (al ancho de su tipo) y se escriben de vuelta.  Cualquier
-    // forma fuera del subset -> false y cae al ASM_MICRO / INLINE_ASM.
-    {
-        std::unordered_map<std::string, vx::AsmBoundReg> bound;
+    /* Interruptor para PODER COMPARAR: con `VESTA_ASM_NO_LIFT=1` no se eleva
+     * ningun bloque y todos se emiten opacos.
+     *
+     * Elevar un `asm` es una transformacion como cualquier otra, y una
+     * transformacion se comprueba comparando el antes con el despues.  Sin
+     * poder apagarla, la unica manera de saber si cambio el comportamiento era
+     * reescribir el programa a mano con `volatile` -- que ademas cambia OTRA
+     * cosa (la optimizacion), asi que ni siquiera era la misma comparacion.
+     * Esto ya se pago: un elevado que producia un IR de aspecto impecable hacia
+     * que el programa devolviera otro numero, y solo se vio escribiendo el caso
+     * a mano.  Que el IR tenga buena pinta no es que este bien. */
+    static const bool sin_elevado = util::flag_on(util::FlagId::AsmNoLift);
+    if (!sin_elevado && s->level == ast::AsmLevel::Analyzable) {
+        std::unordered_map<std::string, ir::IrValueId> slot_of;
         for (const auto &b : fn_->asm_reg_bindings)
             if (lookup(b.name) == b.alloca_value) {
-                /* Una ligadura sin nombre de registro es la forma NORMAL
-                 * de escribir: `reg d = p` deja que el compilador elija, y
-                 * el cuerpo la nombra con su marcador.  Descartarla dejaba
-                 * al lift general ciego justo a lo que mas se usa -- un
-                 * `mov [d], b`, que en el IR es un almacenamiento de toda
-                 * la vida, acababa como instruccion sin representar. */
-                const std::string c = asm_canonical_reg(b.reg);
-                if (c.empty()) continue;
-                // Ancho en bits desde el eje de RANURA del vocabulario
-                // unico: aqui habia otra copia de esa tabla.
-                const int wbits =
-                    static_cast<int>(ir::type_slot_bytes(b.type) * 8u);
-                bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
-                /* Y por su MARCADOR.  Una ligadura automatica lleva
-                 * ademas un registro elegido por defecto para el
-                 * interprete, asi que el mapa quedaba indexado por ese
-                 * nombre mientras el cuerpo la nombra con su marcador:
-                 * no se encontraban, y la instruccion se quedaba sin
-                 * representar aunque el IR la tenga. */
-                if (b.reg_auto && b.ph_index >= 0)
-                    bound["$" + std::to_string(b.ph_index)] =
-                        vx::AsmBoundReg{b.alloca_value, wbits};
+                std::string c = asm_canonical_reg(b.reg);
+                if (!c.empty()) slot_of[c] = b.alloca_value;
             }
-        uint32_t asm_exit = current_block_;
-        if (vx::asm_lift_general(*fn_, current_block_,
-                                 vx::instr_db::Isa::X86, asm_name,
-                                 bound, s->loc.line, &asm_exit)) {
-            // Si el asm tenia ramas, el lift creo un CFG y devuelve el
-            // bloque de CONTINUACION: el codigo siguiente se baja ahi.
-            current_block_ = asm_exit;
-            /* Y queda anotado que se elevo.  Es el UNICO momento en que se
-             * sabe: a partir de aqui son operaciones normales y nada las
-             * distingue de las que escribio el programador. */
+        if (vx::asm_lift_emit(*fn_, current_block_, vx::instr_db::Isa::X86,
+                              asm_name, slot_of, s->loc.line))
+            return true; // patron liftado -> NO se emite el INLINE_ASM.
+
+        // Lift GENERAL instruccion-a-instruccion: el asm entero straight-line
+        // (mov/lea/ALU/neg-not/inc-dec, [reg]) pasa a IR SSA real (ADD, LOAD,
+        // STORE...) que participa del optimizador -> del asm del usuario sale
+        // codigo mas eficiente.  Los registros ligados por register() se cargan
+        // de su slot (al ancho de su tipo) y se escriben de vuelta.  Cualquier
+        // forma fuera del subset -> false y cae al ASM_MICRO / INLINE_ASM.
+        {
+            std::unordered_map<std::string, vx::AsmBoundReg> bound;
+            for (const auto &b : fn_->asm_reg_bindings)
+                if (lookup(b.name) == b.alloca_value) {
+                    /* Una ligadura sin nombre de registro es la forma NORMAL
+                     * de escribir: `reg d = p` deja que el compilador elija, y
+                     * el cuerpo la nombra con su marcador.  Descartarla dejaba
+                     * al lift general ciego justo a lo que mas se usa -- un
+                     * `mov [d], b`, que en el IR es un almacenamiento de toda
+                     * la vida, acababa como instruccion sin representar. */
+                    const std::string c = asm_canonical_reg(b.reg);
+                    if (c.empty()) continue;
+                    // Ancho en bits desde el eje de RANURA del vocabulario
+                    // unico: aqui habia otra copia de esa tabla.
+                    const int wbits =
+                        static_cast<int>(ir::type_slot_bytes(b.type) * 8u);
+                    bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
+                    /* Y por su MARCADOR.  Una ligadura automatica lleva
+                     * ademas un registro elegido por defecto para el
+                     * interprete, asi que el mapa quedaba indexado por ese
+                     * nombre mientras el cuerpo la nombra con su marcador:
+                     * no se encontraban, y la instruccion se quedaba sin
+                     * representar aunque el IR la tenga. */
+                    if (b.reg_auto && b.ph_index >= 0)
+                        bound["$" + std::to_string(b.ph_index)] =
+                            vx::AsmBoundReg{b.alloca_value, wbits};
+                }
+            uint32_t asm_exit = current_block_;
+            if (vx::asm_lift_general(*fn_, current_block_,
+                                     vx::instr_db::Isa::X86, asm_name, bound,
+                                     s->loc.line, &asm_exit)) {
+                // Si el asm tenia ramas, el lift creo un CFG y devuelve el
+                // bloque de CONTINUACION: el codigo siguiente se baja ahi.
+                current_block_ = asm_exit;
+                /* Y queda anotado que se elevo.  Es el UNICO momento en que se
+                 * sabe: a partir de aqui son operaciones normales y nada las
+                 * distingue de las que escribio el programador. */
+                vx::anotar_bloque_asm(fn_->name, s->loc.line, asm_name,
+                                      vx::DestinoAsm::ElevadoAIr);
+                return true; // bloque liftado a IR real -> NO se emite el
+                             // INLINE_ASM.
+            }
+        }
+
+        // Si no encaja un patron tipado, intentar el lift GENERAL a ASM_MICRO:
+        // instrucciones opacas SIN operandos de registro (mfence/pause/...)
+        // pasan a ser IR (una ASM_MICRO por instruccion) que lleva sus efectos
+        // de la DB, en vez de la caja opaca INLINE_ASM.  Solo si TODO el bloque
+        // encaja (transaccional); si no, cae al INLINE_ASM de abajo.
+        if (vx::asm_lift_micro(*fn_, current_block_, vx::instr_db::Isa::X86,
+                               asm_name, s->loc.line, slot_of, &motivo_opaco)) {
+            // El interp ejecuta la ASM_MICRO via vrt:asm_micro_exec (trampoline
+            // nativo si hay ensamblador, o emulacion portable del efecto).
+            // Registrar el import para que el linker lo resuelva.  Idempotente.
+            out_mod_->register_native_import("vrt", "asm_micro_exec");
+            /* Y el que enhebra los valores: el interprete no reparte registros,
+             * asi que un bloque cuyos operandos son valores del programa se
+             * ejecuta metiendolos antes y sacandolos despues. */
+            out_mod_->register_native_import("vrt", "asm_micro_ops");
             vx::anotar_bloque_asm(fn_->name, s->loc.line, asm_name,
-                                  vx::DestinoAsm::ElevadoAIr);
-            return true; // bloque liftado a IR real -> NO se emite el
+                                  vx::DestinoAsm::MicroAsm);
+            return true; // bloque liftado a ASM_MICRO -> NO se emite el
                          // INLINE_ASM.
         }
     }
-
-    // Si no encaja un patron tipado, intentar el lift GENERAL a ASM_MICRO:
-    // instrucciones opacas SIN operandos de registro (mfence/pause/...)
-    // pasan a ser IR (una ASM_MICRO por instruccion) que lleva sus efectos
-    // de la DB, en vez de la caja opaca INLINE_ASM.  Solo si TODO el bloque
-    // encaja (transaccional); si no, cae al INLINE_ASM de abajo.
-    if (vx::asm_lift_micro(*fn_, current_block_, vx::instr_db::Isa::X86,
-                           asm_name, s->loc.line, slot_of,
-                           &motivo_opaco)) {
-        // El interp ejecuta la ASM_MICRO via vrt:asm_micro_exec (trampoline
-        // nativo si hay ensamblador, o emulacion portable del efecto).
-        // Registrar el import para que el linker lo resuelva.  Idempotente.
-        out_mod_->register_native_import("vrt", "asm_micro_exec");
-        /* Y el que enhebra los valores: el interprete no reparte registros,
-         * asi que un bloque cuyos operandos son valores del programa se
-         * ejecuta metiendolos antes y sacandolos despues. */
-        out_mod_->register_native_import("vrt", "asm_micro_ops");
-        vx::anotar_bloque_asm(fn_->name, s->loc.line, asm_name,
-                              vx::DestinoAsm::MicroAsm);
-        return true; // bloque liftado a ASM_MICRO -> NO se emite el INLINE_ASM.
-    }
-}
     return false;
 }
 

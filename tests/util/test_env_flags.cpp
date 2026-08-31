@@ -10,9 +10,9 @@
  * @brief Que los mandos del entorno esten bien declarados y que sus huellas
  *        digan LO QUE TIENEN QUE DECIR.  Ver util/env_flags.h.
  *
- * Lo que se comprueba aqui no es que el codigo corra: es que la huella reaccione
- * exactamente a lo que cambia el binario y a nada mas.  Las dos formas de
- * equivocarse son opuestas y las dos son caras:
+ * Lo que se comprueba aqui no es que el codigo corra: es que la huella
+ * reaccione exactamente a lo que cambia el binario y a nada mas.  Las dos
+ * formas de equivocarse son opuestas y las dos son caras:
  *
  *   de menos  un mando cambia el codigo emitido y no entra en la huella -> la
  *             cache sirve un artefacto compilado con otra configuracion.  No da
@@ -120,8 +120,8 @@ static void test_informe_no_esta_puesto_por_defecto() {
         if (fi.kind != FlagKind::BoolOn) continue;
         /* Lista de los que SI pueden: se nombran uno a uno para que anadir
          * otro sea una decision y no un descuido. */
-        const bool permitido =
-            std::strcmp(fi.name, "VESTA_ASA_BOUNDS") == 0; // solo avisa si falla
+        const bool permitido = std::strcmp(fi.name, "VESTA_ASA_BOUNDS") ==
+                               0; // solo avisa si falla
         CHECK(permitido,
               "un informe encendido por defecto imprime siempre y rompe "
               "cualquier comparacion de salidas");
@@ -221,8 +221,7 @@ static void test_el_valor_cuenta() {
 /// con la primera apagaria catorce caminos que hoy son el normal.
 static void test_encendidos_por_defecto() {
     set_env("VESTA_SCHED_ALIAS", nullptr);
-    CHECK(flag_on(FlagId::SchedAlias),
-          "un BoolOn esta encendido sin ponerlo");
+    CHECK(flag_on(FlagId::SchedAlias), "un BoolOn esta encendido sin ponerlo");
     set_env("VESTA_SCHED_ALIAS", "0");
     CHECK(!flag_on(FlagId::SchedAlias), "\"0\" lo apaga");
     set_env("VESTA_SCHED_ALIAS", "1");

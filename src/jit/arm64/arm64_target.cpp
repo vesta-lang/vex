@@ -67,7 +67,9 @@ bool ir_is_float(ir::IrType t) {
  * (ir/ir_type_info.h).  El signo se decidia aqui comparando el VALOR numerico
  * del enum (`t >= I8 && t <= I64`), que ademas de repetir la tabla se rompia
  * en silencio si alguien reordenaba IrType o metia un tipo entre medias. */
-bool ir_signed(ir::IrType t) { return ir::type_is_signed(t); }
+bool ir_signed(ir::IrType t) {
+    return ir::type_is_signed(t);
+}
 
 /// IrOp ALU entero -> MOp (3-operandos; el encoder arm64 lo traduce).
 bool alu_mop(ir::IrOp op, MOp &out) {
@@ -141,9 +143,10 @@ uint8_t fcc_index(ir::IrOp op) {
 /// vreg de un IrValueId con la clase (FP para floats) y ancho de su tipo.
 MOperand vr(const ir::IrFunction &fn, ir::IrValueId v) {
     const bool isf = v < fn.values.size() && ir_is_float(fn.values[v].type);
-    const uint8_t w = v < fn.values.size()
-                          ? static_cast<uint8_t>(ir::type_access_bytes(fn.values[v].type))
-                          : 8;
+    const uint8_t w =
+        v < fn.values.size()
+            ? static_cast<uint8_t>(ir::type_access_bytes(fn.values[v].type))
+            : 8;
     return MOperand::make_vreg(static_cast<uint32_t>(v),
                                isf ? RegClass::FP : RegClass::GP, w);
 }
@@ -250,7 +253,8 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 // Ancho de los temporales = ancho de la operacion (AArch64
                 // exige que todos los operandos de sdiv/mul/sub sean w o x, no
                 // mezclados).
-                const uint8_t mw = static_cast<uint8_t>(ir::type_access_bytes(in.type));
+                const uint8_t mw =
+                    static_cast<uint8_t>(ir::type_access_bytes(in.type));
                 const uint32_t q = out.vreg_count++; // cociente
                 const uint32_t p = out.vreg_count++; // producto q*b
                 MOperand qv = MOperand::make_vreg(q, RegClass::GP, mw);
@@ -274,7 +278,8 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 // encoder emite sxt/uxt/mov segun src/dst).  El signo: SEXT o
                 // CAST desde un tipo con signo (extension); TRUNC toma el signo
                 // del tipo destino.
-                const int sb = ir::type_access_bytes(st), db = ir::type_access_bytes(in.type);
+                const int sb = ir::type_access_bytes(st),
+                          db = ir::type_access_bytes(in.type);
                 bool sign;
                 if (in.op == ir::IrOp::TRUNC || db < sb)
                     sign = ir_signed(in.type);
@@ -298,7 +303,8 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
             case ir::IrOp::LOAD: {
                 // %dst = load %addr  (memoria host; ancho segun el tipo).
                 if (in.operands.size() != 1) return false;
-                const uint8_t w = static_cast<uint8_t>(ir::type_access_bytes(in.type));
+                const uint8_t w =
+                    static_cast<uint8_t>(ir::type_access_bytes(in.type));
                 O.push_back(MInstr::make_load(vr(fn, in.dst),
                                               vr(fn, in.operands[0]), w,
                                               ir_signed(in.type)));
@@ -308,7 +314,8 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 // store %val, %addr  (operands[0]=val, operands[1]=addr).
                 if (in.operands.size() != 2) return false;
                 const ir::IrType vt = fn.values[in.operands[0]].type;
-                const uint8_t w = static_cast<uint8_t>(ir::type_access_bytes(vt));
+                const uint8_t w =
+                    static_cast<uint8_t>(ir::type_access_bytes(vt));
                 O.push_back(MInstr::make_store(vr(fn, in.operands[1]),
                                                vr(fn, in.operands[0]), w));
                 break;

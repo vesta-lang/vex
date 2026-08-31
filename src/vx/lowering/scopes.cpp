@@ -22,7 +22,7 @@
  */
 #include "vx/lowering.h"
 #include "util/thread_slot.h" // el estado por hilo NO va en thread_local
-#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -196,9 +196,8 @@ Lowering::ChildFunctionScope::ChildFunctionScope(Lowering &lo)
       terminated_(lo.block_terminated_), scopes_(std::move(lo.scopes_)),
       addr_taken_(std::move(lo.address_taken_locals_)),
       host_bearing_(std::move(lo.host_bearing_locals_)),
-      cleanups_(std::move(lo.cleanup_stack_)),
-      sret_active_(lo.sret_active_), sret_retbuf_(lo.sret_retbuf_),
-      sret_buf_size_(lo.sret_buf_size_),
+      cleanups_(std::move(lo.cleanup_stack_)), sret_active_(lo.sret_active_),
+      sret_retbuf_(lo.sret_retbuf_), sret_buf_size_(lo.sret_buf_size_),
       returns_function_(lo.current_fn_returns_function_),
       async_fut_id_(lo.async_fut_id_), is_rspawn_body_(lo.is_rspawn_body_),
       is_spawn_body_(lo.is_spawn_body_) {

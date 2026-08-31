@@ -7,7 +7,7 @@ from ..contexto import Ctx
 from ..familias import familia_modular_vx
 from ..informe import barra, cabecera_fase, imprimir_tabla
 from ..medida import compila_de_verdad, medir_frio
-from ..ordenes import entorno_cache
+from ..ordenes import SECUENCIAL, entorno_cache
 from ..topologia import mutar, orden_multi
 
 
@@ -42,8 +42,13 @@ def fase(ctx: Ctx) -> None:
             ficheros = familia_modular_vx(familia, cuenta, d)
             if not ficheros:
                 continue
-            cmd = orden_multi(ln, ficheros, d / "out", vm)
-            env = entorno_cache(ln, dir_cache, entorno_base)
+            # Eje SECUENCIAL: esta fase compara FAMILIAS de codigo entre si,
+            # y el paralelismo anadiria una variable que no es la que mide.
+            cmd = orden_multi(ln, ficheros, d / "out", vm, SECUENCIAL,
+                              ctx.nucleos)
+            if not cmd:
+                continue
+            env = entorno_cache(ln, dir_cache, entorno_base, SECUENCIAL)
             ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
                                            args.timeout)
             if not ok:

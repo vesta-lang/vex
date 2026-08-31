@@ -70,7 +70,8 @@ int main() {
                 }
         });
     }
-    for (auto &t : workers) t.join();
+    for (auto &t : workers)
+        t.join();
     check(wrong.load() == 0, "cada hilo ve SOLO lo suyo");
     check(g_slot.get() == &a, "el hilo principal conserva el suyo");
 

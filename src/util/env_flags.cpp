@@ -40,8 +40,8 @@ static_assert(sizeof(kFlags) / sizeof(kFlags[0]) == kFlagCount,
 
 /// Lo leido del entorno para UN mando.
 struct FlagValue {
-    std::string text; ///< tal cual venia; vacio si no estaba puesto.
-    long number = 0;  ///< ya convertido, para no repetir el parseo.
+    std::string text;     ///< tal cual venia; vacio si no estaba puesto.
+    long number = 0;      ///< ya convertido, para no repetir el parseo.
     bool present = false; ///< estaba definido (aunque fuera a "0").
     bool on = false;      ///< definido, no vacio y distinto de "0".
 };
@@ -86,7 +86,9 @@ const std::string &empty_text() {
     return s;
 }
 
-inline size_t idx(FlagId id) { return static_cast<size_t>(id); }
+inline size_t idx(FlagId id) {
+    return static_cast<size_t>(id);
+}
 
 } // namespace
 
@@ -99,7 +101,9 @@ bool flag_applies_here(FlagOs os) {
 #endif
 }
 
-const FlagInfo &flag_info(FlagId id) { return kFlags[idx(id)]; }
+const FlagInfo &flag_info(FlagId id) {
+    return kFlags[idx(id)];
+}
 
 bool flag_on(FlagId id) {
     const FlagValue &fv = table().v[idx(id)];
@@ -111,7 +115,9 @@ bool flag_on(FlagId id) {
     return fv.on;
 }
 
-bool flag_present(FlagId id) { return table().v[idx(id)].present; }
+bool flag_present(FlagId id) {
+    return table().v[idx(id)].present;
+}
 
 long flag_int(FlagId id, long si_falta) {
     const FlagValue &fv = table().v[idx(id)];
@@ -205,6 +211,8 @@ std::string emitted_flags_summary() {
     return out;
 }
 
-void reload_flags_for_testing() { table().load(); }
+void reload_flags_for_testing() {
+    table().load();
+}
 
 } // namespace util

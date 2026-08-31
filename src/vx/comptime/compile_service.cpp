@@ -52,8 +52,8 @@ CompiledIr compile_ir_to_bytecode(const ir::IrModule &mod,
     r.subject = diag_name;
 
     // 1) IR -> texto `.vel`.
-    ir::EmitResult e = ir::ir_emit_module(const_cast<ir::IrModule &>(mod),
-                                          emit_opts);
+    ir::EmitResult e =
+        ir::ir_emit_module(const_cast<ir::IrModule &>(mod), emit_opts);
     if (!e.ok) {
         r.failure = CompileFailure::Emit;
         return r;
@@ -64,9 +64,9 @@ CompiledIr compile_ir_to_bytecode(const ir::IrModule &mod,
     /* El nombre sale del CONTENIDO, no de un contador: dos compilaciones del
      * mismo texto usan el mismo intermedio, y dos distintas no se pisan aunque
      * corran a la vez. */
-    const std::string base = std::string(kIntermediateDir) + "/" + diag_name +
-                             "_" +
-                             std::to_string(std::hash<std::string>{}(e.vel_text));
+    const std::string base =
+        std::string(kIntermediateDir) + "/" + diag_name + "_" +
+        std::to_string(std::hash<std::string>{}(e.vel_text));
 
     // 2) Texto -> `.velb`.  Desde la fuente EN MEMORIA: el texto lo acaba de
     //    producir la linea de arriba, asi que escribirlo para que la siguiente

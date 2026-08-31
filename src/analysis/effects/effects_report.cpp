@@ -447,14 +447,13 @@ static void print_formas_de(std::ostream &os,
                             analysis::asa::nombre_forma(f))
                    << " / "
                    << tinte(color,
-                            a.sello.certeza ==
-                                    analysis::asa::Certeza::Demostrada
+                            a.seal.certainty == analysis::asa::Certainty::Proven
                                 ? col::kVerde
-                                : (a.sello.certeza ==
-                                           analysis::asa::Certeza::Inferida
+                                : (a.seal.certainty ==
+                                           analysis::asa::Certainty::Inferred
                                        ? col::kCian
                                        : col::kApagado),
-                            analysis::asa::nombre_certeza(a.sello.certeza))
+                            analysis::asa::certainty_name(a.seal.certainty))
                    << "\n";
                 for (analysis::asa::MotivoForma mo : a.motivos_forma())
                     os << "        porque: " << analysis::asa::nombre_motivo(mo)
@@ -475,11 +474,25 @@ static void print_formas_de(std::ostream &os,
                     os << "        sale por "
                        << analysis::asa::nombre_frontera(fr.codigo) << " en "
                        << fr.sitio.funcion << ":" << fr.sitio.linea << "\n";
-                for (const analysis::asa::Limitacion &l : a.limitaciones)
+                for (const analysis::asa::Limitacion &l : a.limitaciones) {
                     os << "        no pude seguir: "
                        << analysis::asa::nombre_limitacion(l.codigo) << " en "
                        << l.sitio.funcion << ":" << l.sitio.linea
-                       << (l.destino.empty() ? "" : " -> " + l.destino) << "\n";
+                       << (l.destino.empty() ? "" : " -> " + l.destino);
+                    /* Y de que CLASE es, que es lo que dice si hay algo que
+                     * hacer: "depende de la ejecucion" admite una guarda y
+                     * "forma no reconocida" se arregla ampliando el analisis.
+                     * Sin esto, todas las limitaciones se leian igual. */
+                    if (l.reason != analysis::asa::UnknownReason::NotAsked)
+                        os << "  ["
+                           << analysis::asa::unknown_reason_name(l.reason)
+                           << (l.reason_code != nullptr &&
+                                       l.reason_code[0] != '\0'
+                                   ? std::string(": ") + l.reason_code
+                                   : std::string())
+                           << "]";
+                    os << "\n";
+                }
             }
         }
     }
@@ -525,7 +538,7 @@ print_cobertura_formas(std::ostream &os,
             if (a.forma() != analysis::asa::FormaDeValor::SinEvidencia &&
                 a.forma() != analysis::asa::FormaDeValor::Desconocida)
                 ++con_forma;
-            if (a.sello.certeza == analysis::asa::Certeza::Demostrada)
+            if (a.seal.certainty == analysis::asa::Certainty::Proven)
                 ++demostrados;
             fronteras += static_cast<uint32_t>(a.fronteras.size());
             limitaciones += static_cast<uint32_t>(a.limitaciones.size());
@@ -713,7 +726,7 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
                 if (f == analysis::asa::FormaDeValor::Agregado ||
                     f == analysis::asa::FormaDeValor::Compuesto)
                     ++con_forma;
-                if (a.sello.certeza == analysis::asa::Certeza::Demostrada)
+                if (a.seal.certainty == analysis::asa::Certainty::Proven)
                     ++demostrados;
                 if (!a.fronteras.empty() || !a.limitaciones.empty())
                     ++sin_cerrar;

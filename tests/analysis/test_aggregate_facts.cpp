@@ -151,7 +151,7 @@ static void caso_a() {
     const AggregateFacts f = c.hechos();
     check(f.forma() == FormaDeValor::Agregado,
           "A saco: sin nada que lo consuma entero, tocar partes es un saco");
-    check(f.sello.certeza == Certeza::Demostrada,
+    check(f.seal.certainty == Certainty::Proven,
           "A saco: con el universo cerrado, la conclusion esta demostrada");
     check(f.offsets_tocados() == 2, "A saco: se ven los dos desplazamientos");
     check(f.participaciones.empty(),
@@ -169,7 +169,7 @@ static void caso_b() {
     check(f.participaciones.size() == 1, "B unidad: una participacion");
     check(f.participaciones.front().operacion == "op",
           "B unidad: la procedencia dice en QUE operacion");
-    check(f.sello.certeza == Certeza::Demostrada,
+    check(f.seal.certainty == Certainty::Proven,
           "B unidad: universo cerrado -> demostrada");
 }
 
@@ -203,7 +203,7 @@ static void caso_d() {
     for (MotivoForma m : f.motivos_forma())
         if (m == MotivoForma::AccesoIndependienteDeOperacion) motivo_ok = true;
     check(motivo_ok, "D conflicto: y DICE por que -- acceso independiente");
-    check(f.sello.certeza == Certeza::Desconocida,
+    check(f.seal.certainty == Certainty::Unknown,
           "D conflicto: sin forma que sostener, la certeza tampoco afirma");
 }
 

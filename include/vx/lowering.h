@@ -84,7 +84,6 @@ struct ComptimeEvalResult;
  */
 class Lowering {
   public:
-
     /**
      * @brief Construye el lowering sobre un modulo AST y un diags.
      *
@@ -331,7 +330,6 @@ class Lowering {
     bool emit_naked_dispatch(const std::string &label, ast::CallExpr *e,
                              ir::IrType ret_ir, ir::IrValueId &out_dst);
 
-
     /**
      * @brief Cuando se entra a una vuelta del bucle.
      *
@@ -388,12 +386,12 @@ class Lowering {
      * pieza pero en otra figura.
      */
     struct VecSkeleton {
-        ir::IrBlockId entry = 0;  ///< De donde se viene.
-        ir::IrBlockId mhdr = 0;   ///< Cabecera del bucle ancho.
-        ir::IrBlockId mbody = 0;  ///< Su cuerpo: el idioma, de W en W.
-        ir::IrBlockId thdr = 0;   ///< Cabecera del que recoge los que sobran.
-        ir::IrBlockId tbody = 0;  ///< Su cuerpo: lo mismo, de uno en uno.
-        ir::IrBlockId exit = 0;   ///< Donde sigue el programa.
+        ir::IrBlockId entry = 0; ///< De donde se viene.
+        ir::IrBlockId mhdr = 0;  ///< Cabecera del bucle ancho.
+        ir::IrBlockId mbody = 0; ///< Su cuerpo: el idioma, de W en W.
+        ir::IrBlockId thdr = 0;  ///< Cabecera del que recoge los que sobran.
+        ir::IrBlockId tbody = 0; ///< Su cuerpo: lo mismo, de uno en uno.
+        ir::IrBlockId exit = 0;  ///< Donde sigue el programa.
         ir::IrValueId phi_main = ir::IR_NO_VALUE; ///< El indice en el ancho.
         ir::IrValueId phi_tail = ir::IR_NO_VALUE; ///< El indice en el de uno.
         ir::IrValueId v_W = ir::IR_NO_VALUE;      ///< Los carriles, como valor.
@@ -439,7 +437,8 @@ class Lowering {
      * @brief Cierra el cuerpo de un bucle contado y sale a su bloque de salida.
      *
      * @param f El marco.
-     * @param carried_next Con que sigue cada valor que viaja, en el mismo orden.
+     * @param carried_next Con que sigue cada valor que viaja, en el mismo
+     * orden.
      * @param ln Linea del fuente.
      */
     void vec_loop_close(VecLoopFrame &f,
@@ -562,11 +561,11 @@ class Lowering {
     void pack_variadic_args(std::vector<ir::IrValueId> &arg_ids, size_t fixed,
                             ir::IrType elem_ty, uint32_t line);
 
-    std::vector<DeclaredParam> declare_params(
-        ir::IrFunction &fn,
-        const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
-        std::vector<std::pair<std::string, ir::IrValueId>> &bindings,
-        size_t reserved_slots = 0);
+    std::vector<DeclaredParam>
+    declare_params(ir::IrFunction &fn,
+                   const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
+                   std::vector<std::pair<std::string, ir::IrValueId>> &bindings,
+                   size_t reserved_slots = 0);
 
     /**
      * @brief Cuantos huecos de argumento ocupa esta lista de parametros.
@@ -644,7 +643,8 @@ class Lowering {
      * @brief Ranura de un metodo de interfaz en la tabla nativa.
      *
      * @param iface  Nombre de la interfaz.
-     * @param midx   Posicion del metodo dentro de la declaracion de la interfaz.
+     * @param midx   Posicion del metodo dentro de la declaracion de la
+     * interfaz.
      * @return La ranura, dentro del tramo reservado a esa interfaz.
      */
     uint32_t native_iface_slot(const std::string &iface, uint32_t midx) const;
@@ -680,8 +680,7 @@ class Lowering {
      */
     std::vector<std::pair<std::string, std::string>>
     spec_devirt_impls(const std::string &static_class,
-                      const std::string &method_name,
-                      bool is_interface) const;
+                      const std::string &method_name, bool is_interface) const;
 
     /**
      * @brief Emite en @p setup la resolucion del @c ClassInfo* de una clase
@@ -1302,8 +1301,7 @@ class Lowering {
      * @param sem_type El tipo ya resuelto (alias aplicados).
      * @return @c true si era esta forma y quedo bajada.
      */
-    bool try_lower_struct_init_list(ast::VarDeclStmt *vd,
-                                    const Type &sem_type);
+    bool try_lower_struct_init_list(ast::VarDeclStmt *vd, const Type &sem_type);
 
     /**
      * @brief Declara una variable de tipo struct (o enum, mismo camino).
@@ -1416,12 +1414,12 @@ class Lowering {
      * @param prefix      Con que empiezan los nombres de los bloques nuevos.
      * @param source_line Linea fuente, para la depuracion.
      */
-    void emit_case_bst(ir::IrValueId value,
-                       const std::vector<std::pair<int64_t, ir::IrBlockId>>
-                           &cases,
-                       size_t lo, size_t hi, ir::IrBlockId cur,
-                       ir::IrBlockId default_bb, const char *prefix,
-                       uint32_t source_line);
+    void
+    emit_case_bst(ir::IrValueId value,
+                  const std::vector<std::pair<int64_t, ir::IrBlockId>> &cases,
+                  size_t lo, size_t hi, ir::IrBlockId cur,
+                  ir::IrBlockId default_bb, const char *prefix,
+                  uint32_t source_line);
 
     void scan_read_names_expr(const ast::Expr *e,
                               std::unordered_set<std::string> &out);
@@ -1442,8 +1440,8 @@ class Lowering {
     /// @brief @c true si @p name esta atado en ALGUN ambito, no solo el ultimo.
     bool name_visible_in_any_scope(const std::string &name) const;
 
-    bool try_lower_address_taken_var(ast::VarDeclStmt *vd,
-                                     const Type &sem_type, ir::IrType vt);
+    bool try_lower_address_taken_var(ast::VarDeclStmt *vd, const Type &sem_type,
+                                     ir::IrType vt);
 
     bool try_lower_var_init(ast::VarDeclStmt *vd, const Type &sem_type,
                             ir::IrType vt, ir::IrValueId &v);
@@ -1682,17 +1680,17 @@ class Lowering {
      * @param args        Argumentos, en orden.
      * @param ret         Tipo del resultado, o VOID.
      * @param source_line Linea fuente, para la depuracion.
-     * @param efectos     Lo que la funcion hace, si se sabe.  Sin esto el
+     * @param effects     Lo que la funcion hace, si se sabe.  Sin esto el
      *                    optimizador ha de suponer lo peor -- que lee y
      *                    escribe cualquier cosa -- y no puede mover nada a su
      *                    alrededor.
      * @return El valor SSA del resultado, o IR_NO_VALUE si no devuelve.
      */
-    ir::IrValueId emit_native_call(const std::string &lib,
-                                   const std::string &fn,
-                                   std::vector<ir::IrValueId> args,
-                                   ir::IrType ret, uint32_t source_line,
-                                   const ir::IrNativeEffects *efectos = nullptr);
+    ir::IrValueId
+    emit_native_call(const std::string &lib, const std::string &fn,
+                     std::vector<ir::IrValueId> args, ir::IrType ret,
+                     uint32_t source_line,
+                     const ir::IrNativeEffects *effects = nullptr);
 
     /**
      * @brief Escribe un qword en una direccion.
@@ -2267,8 +2265,7 @@ class Lowering {
     /// (`Clase__metodo`).  Se recoge al principio de @c run() porque cada sitio
     /// de llamada la consulta para decidir si puede devirtualizar/especular:
     /// llamar directo a un metodo con aspectos se saltaria su cadena.
-    std::unordered_map<std::string,
-                       std::vector<ir::IrModule::ChainedAdvice>>
+    std::unordered_map<std::string, std::vector<ir::IrModule::ChainedAdvice>>
         advice_chains_;
     /// A que llama el `proceed()` de cada `@Around`, por nombre IR: el
     /// siguiente `@Around` de su cadena, o el metodo si es el mas interno.
@@ -3592,7 +3589,8 @@ class Lowering {
     void scan_escaping_locals(ast::Stmt *body);
 
     /// @brief Quien puede contener un valor que vino de quien, por asignacion.
-    using AliasGraph = std::unordered_map<std::string, std::vector<std::string>>;
+    using AliasGraph =
+        std::unordered_map<std::string, std::vector<std::string>>;
 
     /// @brief Marca @p e como escapado, si es un nombre.
     void mark_escaping_if_ident(ast::Expr *e);
@@ -4478,14 +4476,15 @@ class Lowering {
         ir::IrFunction *parent_fn() const { return fn_; }
 
       private:
-        Lowering &lo_;         ///< A quien se le devuelve el contexto.
-        ir::IrFunction *fn_;   ///< En que funcion se emitia.
-        ir::IrBlockId block_;  ///< En que bloque.
-        bool terminated_;      ///< Si ese bloque ya habia terminado.
+        Lowering &lo_;        ///< A quien se le devuelve el contexto.
+        ir::IrFunction *fn_;  ///< En que funcion se emitia.
+        ir::IrBlockId block_; ///< En que bloque.
+        bool terminated_;     ///< Si ese bloque ya habia terminado.
         std::vector<std::unordered_map<std::string, ir::IrValueId>> scopes_;
-        std::unordered_set<std::string> addr_taken_;   ///< Con direccion tomada.
-        std::unordered_set<std::string> host_bearing_; ///< Con puntero del host.
-        std::vector<CleanupAction> cleanups_;          ///< Lo que queda por soltar.
+        std::unordered_set<std::string> addr_taken_; ///< Con direccion tomada.
+        std::unordered_set<std::string>
+            host_bearing_;                    ///< Con puntero del host.
+        std::vector<CleanupAction> cleanups_; ///< Lo que queda por soltar.
 
         /**
          * @name Como termina la funcion en la que se estaba
@@ -4503,13 +4502,13 @@ class Lowering {
          * llamo -- son las mismas llaves, pero no es la misma funcion --.
          * @{
          */
-        bool sret_active_;               ///< Si devolvia por hueco prestado.
-        ir::IrValueId sret_retbuf_;      ///< Cual era ese hueco.
-        uint64_t sret_buf_size_;         ///< Cuanto medía.
-        bool returns_function_;          ///< Si devolvia una funcion.
-        ir::IrValueId async_fut_id_;     ///< El futuro que resolvia al salir.
-        bool is_rspawn_body_;            ///< Si era un proceso en otro nodo.
-        bool is_spawn_body_;             ///< Si era un proceso de aqui.
+        bool sret_active_;           ///< Si devolvia por hueco prestado.
+        ir::IrValueId sret_retbuf_;  ///< Cual era ese hueco.
+        uint64_t sret_buf_size_;     ///< Cuanto medía.
+        bool returns_function_;      ///< Si devolvia una funcion.
+        ir::IrValueId async_fut_id_; ///< El futuro que resolvia al salir.
+        bool is_rspawn_body_;        ///< Si era un proceso en otro nodo.
+        bool is_spawn_body_;         ///< Si era un proceso de aqui.
         /** @} */
     };
     /// Contador para etiquetas unicas en cleanups que emiten labels

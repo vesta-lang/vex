@@ -84,7 +84,8 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/module/vxi_format.h"
 #include "vx/source_hash.h" // la identidad de un fuente son sus tokens
 #include "analysis/asa/fact_file.h"
-#include "util/fs_utils.h" // fs::get_executable_path()
+#include "analysis/asa/producers.h" // produce() + FactStore::find
+#include "util/fs_utils.h"          // fs::get_executable_path()
 
 #include <atomic>
 #include <cstdlib>
@@ -351,7 +352,8 @@ static uint64_t compiler_fingerprint_() {
         // la huella queda fija en el valor que se le pase, asi que se puede
         // instrumentar sin perder la cache que reproduce el fallo.
         {
-            const std::string &fixed = util::flag_text(util::FlagId::CacheFingerprint);
+            const std::string &fixed =
+                util::flag_text(util::FlagId::CacheFingerprint);
             if (!fixed.empty()) return vxi_fnv1a(fixed);
         }
         std::error_code ec;
@@ -504,6 +506,65 @@ recuperar_hechos_(const std::string &ruta, analysis::asa::FactStore &destino,
                   const std::vector<analysis::asa::DomainCost> &vigentes) {
     return analysis::asa::read_facts_file(ruta, huella, destino, vigentes,
                                           compiler_fingerprint_());
+}
+
+/**
+ * @brief Deja en @p store los hechos de @p wanted, vengan de donde vengan.
+ *
+ * Es la puerta que usan los consumidores, y esconde a proposito de DoNDE sale
+ * el conocimiento: de la cache de una compilacion anterior, o producido ahora.
+ * Un consumidor que tuviera que saberlo acabaria decidiendo por su cuenta
+ * cuando fiarse de la cache, y esa decision estaria escrita en tantos sitios
+ * como consumidores haya.
+ *
+ * El orden es el que ahorra trabajo: primero se LEE lo guardado -- que marca
+ * sus dominios en el almacen --, y solo despues se produce, que se salta lo que
+ * ya esta.  Si no habia nada, se produce todo y se guarda para la proxima.
+ *
+ * Que no haya cache NO es un error: es la primera compilacion, o el modulo
+ * cambio, o alguien la limpio.  El motivo viaja dentro del resultado.
+ *
+ * @param mod         Modulo del que se sabe.
+ * @param store       Almacen de esta compilacion.
+ * @param wanted      Dominios que alguien va a consultar.  Vacio = todos.
+ * @param path        Fichero de hechos, o vacio para no tocar disco.
+ * @param fingerprint Identidad del modulo: si no coincide, lo guardado no vale.
+ */
+static void ensure_facts_(const ir::IrModule &mod,
+                          analysis::asa::FactStore &store,
+                          const std::vector<const char *> &wanted,
+                          const std::string &path, uint64_t fingerprint) {
+    /* Sin ruta no hay cache entre compilaciones: se produce y ya.  Pasa en los
+     * caminos que no tienen un fichero al que atribuir el modulo. */
+    if (path.empty()) {
+        analysis::asa::produce(mod, store, wanted);
+        return;
+    }
+
+    /* Lo de antes.  `vigentes` va vacio: los dominios todavia no saben decir de
+     * que dependen, y el formato ya contempla ese caso -- huella cero significa
+     * "no puedo comprobarlo", y entonces se acepta lo que haya, que es lo mismo
+     * que hoy y no peor.  Cuando los dominios sepan decirlo, la cache se vuelve
+     * granular sin tocar esto. */
+    recuperar_hechos_(path, store, fingerprint, {});
+
+    /* Y lo que falte.  `producir` se salta los dominios que la lectura ya
+     * marco, asi que esto es exactamente el trabajo que la cache no cubrio. */
+    const std::vector<analysis::asa::ProductionSummary> summaries =
+        analysis::asa::produce(mod, store, wanted);
+    if (summaries.empty()) return; // todo vino de la cache: nada que guardar
+
+    /* Se guarda lo que costo, para que el nivel de cache decida que merece ir a
+     * disco.  Un dominio que se produce en 3 us no compensa escribirlo. */
+    std::vector<analysis::asa::DomainCost> costs;
+    costs.reserve(summaries.size());
+    for (const analysis::asa::ProductionSummary &r : summaries) {
+        analysis::asa::DomainCost c;
+        c.domain = r.domain;
+        c.micros = r.micros;
+        costs.push_back(c);
+    }
+    guardar_hechos_(path, store, fingerprint, costs);
 }
 
 /// Idem para el cache de IR del dep (.vxir).  @c tgt_suffix separa el cache por
@@ -1538,11 +1599,12 @@ CompileResult compile_vx_project(
         bool hay_comptime = false;
         /* Primero, QUE llama el codigo comptime y no encuentra en su modulo.
          *
-         * El cierre de cada modulo es local: solo ve sus decls.  Una funcion que
-         * el comptime de un modulo llama por un `import` no viaja en el conjunto
-         * del que la DEFINE, y al compilarlo todo junto el que la exporta ya no
-         * la tiene.  Se juntan las de todos y se pide el conjunto otra vez,
-         * diciendole a cada uno que ademas incluya las que le tocan. */
+         * El cierre de cada modulo es local: solo ve sus decls.  Una funcion
+         * que el comptime de un modulo llama por un `import` no viaja en el
+         * conjunto del que la DEFINE, y al compilarlo todo junto el que la
+         * exporta ya no la tiene.  Se juntan las de todos y se pide el conjunto
+         * otra vez, diciendole a cada uno que ademas incluya las que le tocan.
+         */
         std::unordered_set<std::string> pedidas;
         for (auto &w : work) {
             if (!w.ast) continue;
@@ -1552,7 +1614,8 @@ CompileResult compile_vx_project(
         }
         if (util::flag_on(util::FlagId::McVerbose)) {
             std::fprintf(stderr, "[pedidas] %zu:", pedidas.size());
-            for (const auto &n : pedidas) std::fprintf(stderr, " %s", n.c_str());
+            for (const auto &n : pedidas)
+                std::fprintf(stderr, " %s", n.c_str());
             std::fprintf(stderr, "%c", 10);
         }
         for (auto &w : work) {
@@ -1579,15 +1642,17 @@ CompileResult compile_vx_project(
              * solo aportan tipos --, que son justo los que hacen falta mirar
              * cuando una cadena de tipos no resuelve. */
             if (!util::flag_text(util::FlagId::VolcarUnidad).empty()) {
-                const std::string &dd = util::flag_text(util::FlagId::VolcarUnidad);
+                const std::string &dd =
+                    util::flag_text(util::FlagId::VolcarUnidad);
                 std::error_code oec;
                 std::filesystem::create_directories(dd, oec);
-                std::ofstream fo(dd + "/overlay_" + w.module_name + "_" +
-                                 std::to_string(static_cast<unsigned long long>(
-                                     vxi_fnv1a(w.canonical_path.data(),
-                                               w.canonical_path.size())) %
-                                                100000ULL) +
-                                 ".vx");
+                std::ofstream fo(
+                    dd + "/overlay_" + w.module_name + "_" +
+                    std::to_string(
+                        static_cast<unsigned long long>(vxi_fnv1a(
+                            w.canonical_path.data(), w.canonical_path.size())) %
+                        100000ULL) +
+                    ".vx");
                 if (fo) fo << texto;
             }
         }
@@ -1598,9 +1663,8 @@ CompileResult compile_vx_project(
             CompileOptions o_ct = opts;
             o_ct.building_comptime_artifact = true;
             o_ct.native_poo = false; // lo ejecuta la VM, no codigo nativo.
-            CompileResult cr_ct =
-                compile_vx_project(root_path, o_ct, &overlay_ct,
-                                   extra_search_paths);
+            CompileResult cr_ct = compile_vx_project(
+                root_path, o_ct, &overlay_ct, extra_search_paths);
             if (util::flag_on(util::FlagId::McVerbose) && !cr_ct.ok) {
                 int n = 0;
                 for (const auto &dg : cr_ct.diagnostics.all()) {
@@ -1618,9 +1682,8 @@ CompileResult compile_vx_project(
                 std::filesystem::create_directories(dir, cec);
                 const std::string pref =
                     dir + "/ct_" +
-                    std::to_string(static_cast<unsigned long long>(
-                        vxi_fnv1a(cr_ct.vel_text.data(),
-                                  cr_ct.vel_text.size())));
+                    std::to_string(static_cast<unsigned long long>(vxi_fnv1a(
+                        cr_ct.vel_text.data(), cr_ct.vel_text.size())));
                 if (asm_multi_process::run_worker_from_source(
                         std::string(cr_ct.vel_text), pref + ".vel.tmp", pref,
                         /*skip_preprocessor=*/true, /*keep_labels=*/false,
@@ -1628,8 +1691,7 @@ CompileResult compile_vx_project(
                         /*emit_map=*/false) == EXIT_SUCCESS) {
                     if (util::read_whole_file(pref + ".velb",
                                               artefacto_comptime) &&
-                        !artefacto_comptime.empty())
-                    {
+                        !artefacto_comptime.empty()) {
                         opts_modulos.comptime_artifact = &artefacto_comptime;
                         /* Cuantos modulos entraron y cuanto ocupa lo producido.
                          * Es la medida que dice si el conjunto llego COMPLETO:
@@ -1637,10 +1699,9 @@ CompileResult compile_vx_project(
                          * de los que el programa necesita, y entonces lo que
                          * dependa de ellos sale con valores de relleno. */
                         if (util::flag_on(util::FlagId::McVerbose))
-                            std::fprintf(stderr,
-                                         "[conjunto] %zu modulos -> %zu B%c",
-                                         work.size(),
-                                         artefacto_comptime.size(), 10);
+                            std::fprintf(
+                                stderr, "[conjunto] %zu modulos -> %zu B%c",
+                                work.size(), artefacto_comptime.size(), 10);
                     }
                 }
             }
@@ -1970,6 +2031,20 @@ CompileResult compile_vx_project(
         cas_config_fp = bcfg.ir_fingerprint();
     }
 
+    /* Lo que se sabe del programa vive TODA la compilacion, no lo que dure un
+     * consumidor.  Declararlo dentro de quien pregunta -- como estaba -- hacia
+     * que el conocimiento naciera y muriera con la pregunta, asi que el
+     * siguiente que llegara volveria a calcularlo: justo lo contrario de
+     * centralizarlo. */
+    analysis::asa::FactStore facts;
+    /* Y su identidad, para que sobreviva a la compilacion.  Es la MISMA clave
+     * con la que se identifica el modulo en el almacen por contenido: el
+     * fuente, de que depende, y con que se compilo.  Cero mientras no se sepa,
+     * y entonces no se toca el disco -- un fichero de hechos sin identidad no
+     * se puede comprobar, y aceptar hechos de otro programa es peor que no
+     * tener cache. */
+    uint64_t root_facts_key = 0;
+
     auto compile_one_module = [&](size_t i) -> void {
         auto &pm = work[i];
         const bool is_root = (i + 1 == work.size());
@@ -2011,8 +2086,8 @@ CompileResult compile_vx_project(
          * el puesto.  Vale cero cuando no hay ninguno -- el caso normal --, asi
          * que no invalida nada de lo ya guardado. */
         if (const uint64_t env_fp = util::emitted_fingerprint()) {
-            source_hash ^= env_fp + 0x9E3779B97F4A7C15ULL +
-                           (source_hash << 6) + (source_hash >> 2);
+            source_hash ^= env_fp + 0x9E3779B97F4A7C15ULL + (source_hash << 6) +
+                           (source_hash >> 2);
         }
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             const uint64_t instrument_hash = vxi_fnv1a(opts.instrument_mode);
@@ -2062,6 +2137,27 @@ CompileResult compile_vx_project(
         // aqui para reusarla tambien en el write path (mas abajo).  Solo DEPS
         // (el root se ensambla, no se cachea como artefacto reusable).
         uint64_t cas_key = 0;
+        /* La identidad del RAIZ, para la cache de hechos.  El almacen por
+         * contenido solo la calcula para los deps -- el raiz no se guarda ahi
+         * --, pero los hechos SI son suyos: se producen sobre el modulo ya
+         * fusionado, que es el raiz con todo lo que arrastra.
+         *
+         * Se calcula igual, con la misma funcion, para que dos cosas que son la
+         * misma identidad no se separen nunca.  Lo escribe SOLO la tarea del
+         * raiz y se lee cuando todas han terminado, asi que no compite con
+         * nadie aunque los modulos se compilen en paralelo. */
+        if (is_root && pm.ast) {
+            std::vector<uint64_t> dep_hashes;
+            auto imps = collect_imports_(*pm.ast, &ns_to_modname);
+            for (const auto &req : imps) {
+                auto itd = by_name.find(req.module_name);
+                if (itd != by_name.end())
+                    dep_hashes.push_back(work[itd->second].vxi.abi_hash);
+            }
+            std::sort(dep_hashes.begin(), dep_hashes.end());
+            root_facts_key = module_content_key_(
+                source_hash, dep_hashes, cache_tgt_suffix, cas_config_fp);
+        }
         bool cas_key_ok = false;
         if (cas && !is_root && pm.ast) {
             std::vector<uint64_t> dep_hashes;
@@ -2423,7 +2519,8 @@ CompileResult compile_vx_project(
                  * `namespace` y con la concatenacion de dos modulos, y los dos
                  * compilan bien. */
                 if (!util::flag_text(util::FlagId::VolcarUnidad).empty()) {
-                    const std::string &d = util::flag_text(util::FlagId::VolcarUnidad);
+                    const std::string &d =
+                        util::flag_text(util::FlagId::VolcarUnidad);
                     std::error_code vec;
                     std::filesystem::create_directories(d, vec);
                     /* Con la HUELLA de su ruta en el nombre.  El nombre de
@@ -2433,10 +2530,11 @@ CompileResult compile_vx_project(
                      * distinto del que se estaba mirando. */
                     std::ofstream f(
                         std::string(d) + "/" + pm.module_name + "_" +
-                        std::to_string(static_cast<unsigned long long>(
-                            vxi_fnv1a(pm.canonical_path.data(),
-                                      pm.canonical_path.size())) %
-                                       100000ULL) +
+                        std::to_string(
+                            static_cast<unsigned long long>(
+                                vxi_fnv1a(pm.canonical_path.data(),
+                                          pm.canonical_path.size())) %
+                            100000ULL) +
                         ".unidad.vx");
                     if (f) f << cu.unit_source;
                 }
@@ -3228,13 +3326,29 @@ CompileResult compile_vx_project(
                 std::vector<std::thread> threads;
                 threads.reserve(end_idx - base);
                 for (size_t k = base; k < end_idx; ++k) {
+                    std::string cc_modo;
+                    vx::get_aot_condcomp_mode(cc_modo);
+                    std::string cc_tier;
+                    bool cc_sin_libc = false;
+                    vx::get_aot_condcomp_tier(cc_tier, cc_sin_libc);
                     threads.emplace_back([&compile_one_module, idx = mods[k],
-                                          cc_tgt_os, cc_tgt_arch]() {
+                                          cc_tgt_os, cc_tgt_arch, cc_modo,
+                                          cc_tier, cc_sin_libc]() {
                         // HALLAZGO-2: re-aplicar el target de @Target en
                         // este worker antes de parsear (el thread_local del
                         // parser arranca vacio en un thread nuevo).
                         if (!cc_tgt_os.empty() || !cc_tgt_arch.empty())
                             vx::set_aot_condcomp_target(cc_tgt_os, cc_tgt_arch);
+                        /* Los otros dos ejes van por el MISMO thread_local y
+                         * arrancan igual de vacios aqui.  Sin esto, un modulo
+                         * compilado en paralelo veia `mode:aot` falso y
+                         * cualquier `tier:` falso -- y una variante marcada
+                         * para el tier del binario desaparecia sin decir nada,
+                         * segun en que hilo cayera el modulo. */
+                        if (!cc_modo.empty())
+                            vx::set_aot_condcomp_mode(cc_modo);
+                        if (!cc_tier.empty())
+                            vx::set_aot_condcomp_tier(cc_tier, cc_sin_libc);
                         compile_one_module(idx);
                     });
                 }
@@ -3276,10 +3390,9 @@ CompileResult compile_vx_project(
             res.comptime_unit_names.insert(res.comptime_unit_names.end(),
                                            pm.comptime_unit_names.begin(),
                                            pm.comptime_unit_names.end());
-            res.comptime_unit_hash ^= pm.comptime_unit_hash +
-                                      0x9e3779b97f4a7c15ULL +
-                                      (res.comptime_unit_hash << 6) +
-                                      (res.comptime_unit_hash >> 2);
+            res.comptime_unit_hash ^=
+                pm.comptime_unit_hash + 0x9e3779b97f4a7c15ULL +
+                (res.comptime_unit_hash << 6) + (res.comptime_unit_hash >> 2);
         }
         res.comptime_unit_not_collected.insert(
             res.comptime_unit_not_collected.end(),
@@ -3403,10 +3516,10 @@ CompileResult compile_vx_project(
         std::unordered_map<std::string, std::string> init_renames;
         for (auto &fn : dep_ir.functions) {
             if (fn.name.rfind("__module_init", 0) != 0) continue;
-            const std::string renamed = (fn.name == "__module_init")
-                                            ? dep_mod_init
-                                            : fn.name + "_" +
-                                                  work[i].module_name;
+            const std::string renamed =
+                (fn.name == "__module_init")
+                    ? dep_mod_init
+                    : fn.name + "_" + work[i].module_name;
             init_renames.emplace(fn.name, renamed);
             fn.name = renamed;
         }
@@ -3499,7 +3612,7 @@ CompileResult compile_vx_project(
          * funcion a "puede hacer cualquier cosa" en el modulo fusionado -- que
          * es el que se analiza. */
         for (auto &ni : dep_ir.native_imports) {
-            merged.register_native_import(ni.lib, ni.name, ni.efectos);
+            merged.register_native_import(ni.lib, ni.name, ni.effects);
         }
     }
 
@@ -3869,7 +3982,9 @@ CompileResult compile_vx_project(
             vx::get_aot_condcomp_target(fp_os, fp_arch);
             if (fp_arch.empty()) fp_arch = "x86_64";
             auto fps = analyze::compute_module_fingerprints(merged, fp_arch);
-            analyze::compose_fingerprints(fps, &res.contracts);
+            /* Con el modulo: lo que las importaciones DECLAREN de una nativa
+             * cuenta, en vez de volver opaco el cierre entero. */
+            analyze::compose_fingerprints(fps, &res.contracts, &merged);
             // En modo --analyze (`emit_ir_preopt`) una violacion NO se emite
             // como error ni aborta: analyze mide y ensena (el reporte muestra
             // la discrepancia aparte), no construye.  Si emitiera el error, la
@@ -3877,19 +3992,15 @@ CompileResult compile_vx_project(
             // mostrar para corregirlo.  El build real (`--vesta`, sin
             // emit_ir_preopt) SI emite el error y aborta.
             if (!opts.emit_ir_preopt) {
-                auto checks = analyze::verify_contracts(fps, res.contracts);
-                bool violated = false;
-                for (const auto &ck : checks) {
-                    if (ck.status != analyze::ContractCheck::VIOLATED) continue;
-                    SourceLoc loc;
-                    loc.file = root_path;
-                    res.diagnostics.error(std::move(loc),
-                                          "contrato " + ck.contract +
-                                              " incumplido en '" + ck.function +
-                                              "': " + ck.detail);
-                    violated = true;
-                }
-                if (violated) {
+                /* Los tres veredictos por UNA sola puerta.  Aqui habia una
+                 * copia del criterio que se quedaba solo con el incumplimiento
+                 * y descartaba el indecidible sin decir nada -- y habia otras
+                 * dos copias iguales en `compiler.cpp`. */
+                const analyze::ContractReport rep =
+                    analyze::report_contract_checks(
+                        analyze::verify_contracts(fps, res.contracts),
+                        root_path, res.diagnostics);
+                if (rep.violated != 0) {
                     res.ok = false;
                     return res;
                 }
@@ -4016,9 +4127,23 @@ CompileResult compile_vx_project(
         }
     {
         util::CronoTramo t_("fase-opt:asm-precondiciones");
+        /* Antes de preguntar, que este lo que se va a preguntar -- venga de la
+         * compilacion anterior o de producirlo ahora.  El consumidor no
+         * distingue una cosa de la otra a proposito: si tuviera que decidir
+         * cuando fiarse de la cache, esa decision acabaria escrita en tantos
+         * sitios como consumidores haya, y bastaria que uno se separara para
+         * que el mismo programa dijera cosas distintas segun quien preguntara.
+         *
+         * Sin identidad del modulo no se toca el disco: comprobar que lo
+         * guardado es de ESTE programa es lo unico que hace sana una cache. */
+        ensure_facts_(merged, facts, {"asa.layout"},
+                      root_facts_key != 0
+                          ? rutas_cache_(root_path, std::string()).hechos
+                          : std::string(),
+                      root_facts_key);
         vx_report_asm_preconditions(merged, res.diagnostics, root_path,
                                     hay_main, opts.emit_ir_preopt,
-                                    opts.native_poo ? "aot" : "vm");
+                                    opts.native_poo ? "aot" : "vm", facts);
     }
 
     if (opts.dump_ir) {
@@ -4133,7 +4258,8 @@ CompileResult compile_vx_project(
                          * `std.syscall.windows` tiene
                          *
                          *     invoke_syscall invoke_method = invoke;
-                         *     resolve_syscall resolve_method = resolve_ntdll_export;
+                         *     resolve_syscall resolve_method =
+                         * resolve_ntdll_export;
                          *
                          * -- valores por defecto de campo --, asi que `invoke`
                          * y `resolve_ntdll_export` se referencian por nombre y
@@ -4199,7 +4325,8 @@ CompileResult compile_vx_project(
                          *
                          *  - sin comillas, el ensamblador se para en el `.` con
                          *    "se esperaba un )".  Es la convencion del `.vel`
-                         *    para una etiqueta con punto (`@Absolute("code.X")`).
+                         *    para una etiqueta con punto
+                         * (`@Absolute("code.X")`).
                          *  - al PRINCIPIO, las anotaciones se procesan en orden
                          *    y todavia no hay ninguna seccion definida, asi que
                          *    la etiqueta no se puede resolver ("no se ha
@@ -4566,19 +4693,58 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
  */
 void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                                  const std::string &file, bool programa_cerrado,
-                                 bool decir_lo_no_acotado,
-                                 const char *backend) {
+                                 bool decir_lo_no_acotado, const char *backend,
+                                 analysis::asa::FactStore &facts) {
     /* Con QUE garantia se coloca la seccion de datos NO es una propiedad del
-     * programa: depende de donde acabe corriendo.  Por eso se pregunta aqui,
-     * con el destino en la mano, en vez de llevar un numero dentro.
+     * programa: depende de donde acabe corriendo.  Por eso se pregunta con el
+     * destino en la mano, en vez de llevar un numero dentro.
      *
-     * Corriendo en la maquina el bloque lo reserva el cargador y el numero es
-     * firme.  Compilando a nativo la seccion la coloca el guion de enlazado
-     * del usuario, asi que no se afirma: se devuelve 0 y se usa la garantia
-     * generica.  Consecuencia buscada -- el mismo programa puede avisar
-     * compilando a nativo y no avisar en la maquina, porque en un sitio la
-     * alineacion se demuestra y en el otro no. */
-    const uint32_t garantia = analysis::alineacion_seccion_datos(backend);
+     * Y se PREGUNTA AL ASA en vez de recalcularlo.  Antes esta linea llamaba
+     * directamente a `alineacion_seccion_datos(backend)`, que es el mismo
+     * calculo que el dominio `disposicion` ya hace y deposita como hecho: dos
+     * sitios respondiendo lo mismo, que es justo lo que el primer invariante
+     * -- un hecho, un productor -- existe para impedir.  El dia que la garantia
+     * cambie, con dos calculos uno de los dos se queda viejo y nadie se entera.
+     *
+     * Se produce SOLO ese dominio: en la medicion costaba 0 us, mientras que
+     * producirlo todo se iba a ~544 us por modulo, y el 80% eran los rangos que
+     * aqui no se consultan.
+     *
+     * Si el hecho no aparece, se cae al calculo directo.  No es un respaldo
+     * silencioso: `find` dice si habia hechos con ese codigo fuera de alcance,
+     * y eso distingue "aun no se produce" de "se produce y no vale aqui". */
+    analysis::asa::produce(mod, facts, {"asa.layout"});
+    analysis::asa::Scope here;
+    here.backend = backend;
+    /* El bytecode es una ISA mas, y el hecho del cargador se sella por ella. */
+    if (backend != nullptr &&
+        (std::strcmp(backend, analysis::asa::kBackendVm) == 0 ||
+         std::strcmp(backend, analysis::asa::kBackendJit) == 0))
+        here.isa = analysis::asa::kIsaVelb;
+    const auto found = facts.find("layout.section_alignment", here);
+    const uint32_t computed = analysis::alineacion_seccion_datos(backend);
+    const uint32_t garantia =
+        found ? static_cast<uint32_t>(found.fact->what.a) : computed;
+    /* Y SI LAS DOS FUENTES NO DICEN LO MISMO, eso no es una duda del analisis:
+     * es un FALLO DEL COMPILADOR, y tiene que gritar.
+     *
+     * Mientras el respaldo exista hay dos caminos que contestan a la misma
+     * pregunta, y el dia que uno se quede viejo el otro lo TAPA en silencio --
+     * que es exactamente como este hecho estuvo meses mudo.  Comparar cuesta
+     * una instruccion y convierte un fallo invisible en uno ruidoso.
+     *
+     * Solo se compara cuando el hecho VALE aqui: si no vale, el respaldo es la
+     * respuesta buena y no hay nada que contrastar. */
+    if (found && static_cast<uint32_t>(found.fact->what.a) != computed) {
+        SourceLoc loc;
+        loc.file = file;
+        diags.diag(loc, DiagLevel::WARN,
+                   analysis::asa::unknown_reason_code(
+                       analysis::asa::UnknownReason::SourcesDisagree),
+                   {"layout.section_alignment",
+                    std::to_string(found.fact->what.a),
+                    std::to_string(computed)});
+    }
     const uint32_t cabecera = analysis::alineacion_payload_reserva(backend);
     /* Lo que le llega a cada funcion desde sus sitios de llamada.  Sin esto,
      * un parametro no vale nada y la comprobacion se queda en la frontera --

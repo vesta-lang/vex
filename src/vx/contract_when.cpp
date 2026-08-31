@@ -179,8 +179,8 @@ const std::vector<std::string> &known_archs() {
     // solo tres, y `arch:x86_16` ya se escribia en siete sitios del arbol sin
     // figurar aqui: un registro que dice ser cerrado y no lo esta no puede
     // distinguir una arquitectura que falta de uno mal escrito.
-    static const std::vector<std::string> k = {"x86_64", "x86",     "x86_16",
-                                              "arm64",  "arm32",  "riscv64"};
+    static const std::vector<std::string> k = {"x86_64", "x86",   "x86_16",
+                                               "arm64",  "arm32", "riscv64"};
     return k;
 }
 

@@ -150,11 +150,6 @@ void render_function_body_subgraph(std::ostringstream &os,
                                    const std::string &title,
                                    const ast::BlockStmt *body);
 
-
-
-
-
-
 size_t count_stmts(const ast::Stmt *s) {
     if (!s) return 0;
     if (s->kind == ast::NodeKind::BlockStmt) {
@@ -1157,8 +1152,6 @@ void render_function_body_subgraph(std::ostringstream &os,
 // =====================================================================
 //  GENERADOR 2: SSA IR -> Graphviz
 // =====================================================================
-
-
 
 /**
  * @brief Renderiza un IrBlock como un nodo `record` con su contenido.

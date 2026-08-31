@@ -6,16 +6,15 @@
  */
 
 /**
- * @file analysis/asa/base_hechos.h
+ * @file analysis/asa/fact_base.h
  * @brief La base de hechos: lo que se sabe del programa, en UN sitio, con su
  *        procedencia y su certeza, para que quien lo necesite CONSULTE en vez
- * de redescubrirlo.
+ *        de redescubrirlo.
  *
  * Es la Regla 1 hecha objeto: un pase CONSUME la base, no la CONSTRUYE.  Vive
- * en
- * @c analysis/ y no en @c jit/ porque no es del JIT: el compilador en caliente
- * es UN consumidor, y lo mismo valen el volcado (@c analysis/asa/dump.h), el
- * nativo o una herramienta.
+ * en @c analysis/ y no en @c jit/ porque no es del JIT: el compilador en
+ * caliente es UN consumidor, y lo mismo valen el volcado
+ * (@c analysis/asa/dump.h), el nativo o una herramienta.
  *
  * POR QUE IMPORTA MAS ALLA DE AHORRAR UN COMPUTO.  Un consumidor que construye
  * lo que necesita solo puede preguntar por lo que sabe construir: se queda con
@@ -38,10 +37,10 @@
  * el consumidor se monta la suya como ultimo recurso: correcto, solo sin
  * reparto.
  *
- * MUTAR EL IR CADUCA LOS HECHOS: quien lo toque avisa con @c invalidar.
+ * MUTAR EL IR CADUCA LOS HECHOS: quien lo toque avisa con @c invalidate.
  */
-#ifndef ANALYSIS_ASA_BASE_HECHOS_H
-#define ANALYSIS_ASA_BASE_HECHOS_H
+#ifndef ANALYSIS_ASA_FACT_BASE_H
+#define ANALYSIS_ASA_FACT_BASE_H
 
 #include "analysis/asa/fact.h"
 #include "analysis/facts/ir_facts.h"
@@ -70,24 +69,24 @@ namespace asa {
 ///
 /// Se DECLARAN aqui y se definen una sola vez en el .cpp, y eso no es
 /// cosmetico: ASA identifica al productor por la DIRECCION del literal
-/// (@c Dependencias::depende_de compara punteros).  Con @c constexpr cada
-/// unidad de traduccion plegaria la lectura a SU propio literal -- los
-/// literales no se unifican entre ficheros objeto -- y el mismo productor
-/// dejaria de reconocerse a si mismo visto desde otro fichero.
-extern const char *const kProductorEstructura;
-extern const char *const kProductorRangos;
-extern const char *const kProductorMemoria;
-extern const char *const kProductorFrontera;
-extern const char *const kProductorBucles;
+/// (@c Support::depends_on compara punteros).  Con @c constexpr cada unidad de
+/// traduccion plegaria la lectura a SU propio literal -- los literales no se
+/// unifican entre ficheros objeto -- y el mismo productor dejaria de
+/// reconocerse a si mismo visto desde otro fichero.
+extern const char *const kProducerStructure;
+extern const char *const kProducerRanges;
+extern const char *const kProducerMemory;
+extern const char *const kProducerBoundary;
+extern const char *const kProducerLoops;
 /// Como se COLOCA la memoria del programa: lo unico que un compilador con
 /// enlazador propio sabe y uno tradicional no.
-extern const char *const kProductorDisposicion;
+extern const char *const kProducerLayout;
 /// El FLUJO DE CONTROL dentro de un bloque `asm`: cuantos bloques basicos
 /// tiene, de que clase es cada terminador y que destinos quedan sin resolver.
-extern const char *const kProductorAsmFlujo;
+extern const char *const kProducerAsmFlow;
 
 /// Clave con la que se guarda lo que es del MODULO entero y no de una funcion.
-extern const char *const kUnidadModulo;
+extern const char *const kModuleUnit;
 
 /**
  * @brief Da de alta los nombres de arriba como CANONICOS.
@@ -102,15 +101,15 @@ void register_asa_canonical_names();
 /**
  * @brief Una entrada de la base, tal y como se vuelca.
  *
- * Es DATO, no frase: quien quiera enseñarlo lo formatea.  Lleva el sello de ASA
+ * Es DATO, no frase: quien quiera ensenarlo lo formatea.  Lleva el sello de ASA
  * -- certeza, procedencia y de que otros hechos se dedujo -- porque un hecho
  * sin origen no se puede explicar ni depurar, y porque de la certeza depende lo
  * que el consumidor tiene derecho a hacer con el.
  */
-struct HechoRegistrado {
-    const char *dominio = kProductorEstructura;
-    std::string funcion;
-    Sello sello;
+struct RecordedFact {
+    const char *domain = kProducerStructure;
+    std::string function;
+    Seal seal;
 };
 
 /**
@@ -120,7 +119,7 @@ struct HechoRegistrado {
  * las anota el @c AnalysisManager solo: cuando el computo de uno pide otro por
  * la base, queda registrado, y asi invalidar el de abajo arrastra al de arriba.
  */
-class BaseDeHechos {
+class FactBase {
   public:
     /// Al morir cuenta lo que repartio si se pide con @c
     /// VESTA_ASA_HECHOS_DEBUG: una base compartida que no ahorra ninguna
@@ -134,38 +133,38 @@ class BaseDeHechos {
      * y no dentro del fichero de hechos, que es el formato y no tiene por que
      * conocer a los productores de nadie.
      */
-    BaseDeHechos();
-    ~BaseDeHechos();
-    BaseDeHechos(const BaseDeHechos &) = delete;
-    BaseDeHechos &operator=(const BaseDeHechos &) = delete;
+    FactBase();
+    ~FactBase();
+    FactBase(const FactBase &) = delete;
+    FactBase &operator=(const FactBase &) = delete;
 
     /**
      * @brief Hechos estructurales de @p fn: def-use, sitios de llamada, bucles.
      * @param fn Funcion IR a consultar.
      * @return Los hechos, cacheados mientras viva la base.
      */
-    const IrFacts &estructura(const ir::IrFunction &fn);
+    const IrFacts &structure(const ir::IrFunction &fn);
 
     /**
      * @brief Entre que dos numeros esta cada valor de @p fn.
      * @param fn Funcion IR a consultar.
      * @return Los rangos por valor SSA, cacheados mientras viva la base.
      */
-    const RangeFacts &rangos(const ir::IrFunction &fn);
+    const RangeFacts &ranges(const ir::IrFunction &fn);
 
     /**
      * @brief A que memoria puede referirse cada puntero de @p fn.
      * @param fn Funcion IR a consultar.
      * @return La tabla points-to, cacheada mientras viva la base.
      */
-    const PointsTo &memoria(const ir::IrFunction &fn);
+    const PointsTo &memory(const ir::IrFunction &fn);
 
     /**
      * @brief Forma del CFG de @p fn: bucles, cabeceras y profundidad.
      * @param fn Funcion IR a consultar.
      * @return Los hechos de bucle, cacheados mientras viva la base.
      */
-    const LoopFacts &bucles(const ir::IrFunction &fn);
+    const LoopFacts &loops(const ir::IrFunction &fn);
 
     /**
      * @brief Lo que cruza la frontera de cada funcion del modulo.
@@ -177,31 +176,31 @@ class BaseDeHechos {
      * @param mod Modulo completo.
      * @return Los resumenes de entrada y salida por funcion.
      */
-    const RangeSummaries &frontera(const ir::IrModule &mod);
+    const RangeSummaries &boundary(const ir::IrModule &mod);
 
     /**
      * @brief Los hechos de @p fn han caducado porque su IR cambio.
      * @param fn Funcion IR cuyo conocimiento se descarta (en cascada).
      */
-    void invalidar(const ir::IrFunction &fn);
+    void invalidate(const ir::IrFunction &fn);
 
     /**
-     * @brief El sello del conocimiento de @p productor sobre @p fn.
+     * @brief El sello del conocimiento de @p producer sobre @p fn.
      *
      * La certeza NO la pone quien pregunta, viaja DENTRO del hecho, y de ella
-     * se sigue lo que el consumidor puede hacer: sobre un hecho @c Demostrado
-     * se puede quitar una comprobacion; sobre uno @c Inferido -- el analisis
-     * paro por presupuesto, o mañana: lo observado en ejecucion -- hay que
-     * dejar red, o sea una guarda.
+     * se sigue lo que el consumidor puede hacer: sobre un hecho @c Proven se
+     * puede quitar una comprobacion; sobre uno @c Inferred -- el analisis paro
+     * por presupuesto, o manana: lo observado en ejecucion -- hay que dejar
+     * red, o sea una guarda.
      *
-     * @param productor Uno de los @c kProductor*.
-     * @param fn        Funcion IR consultada.
-     * @return El sello, o uno @c Desconocido si nadie ha preguntado todavia.
+     * @param producer Uno de los @c kProducer*.
+     * @param fn       Funcion IR consultada.
+     * @return El sello, o uno @c Unknown si nadie ha preguntado todavia.
      */
-    Sello sello(const char *productor, const ir::IrFunction &fn) const;
+    Seal seal(const char *producer, const ir::IrFunction &fn) const;
 
-    /// Igual que @c sello pero para lo que es del modulo entero (la frontera).
-    Sello sello_de_modulo(const char *productor) const;
+    /// Igual que @c seal pero para lo que es del modulo entero (la frontera).
+    Seal module_seal(const char *producer) const;
 
     /**
      * @brief Todo lo que la base sabe, en DATOS y en orden estable.
@@ -213,49 +212,49 @@ class BaseDeHechos {
      *
      * @return Una entrada por hecho vivo.
      */
-    std::vector<HechoRegistrado> volcado() const;
+    std::vector<RecordedFact> dump() const;
 
-    /// Preguntas atendidas.  Con @c computos mide el reparto de verdad, que es
-    /// lo unico que distingue una base compartida de un computo con otro
+    /// Preguntas atendidas.  Con @c computations mide el reparto de verdad, que
+    /// es lo unico que distingue una base compartida de un computo con otro
     /// nombre.
-    size_t consultas() const { return consultas_; }
+    size_t queries() const { return queries_; }
     /// Analisis que hubo que ejecutar de verdad (los demas salieron de la
     /// cache).
-    size_t computos() const { return computos_; }
+    size_t computations() const { return computations_; }
 
   private:
     /// Identidad de @p fn dentro del modulo.  Sin nombre no hay identidad
     /// estable, y entonces vale su direccion: es unica mientras la funcion
     /// viva, que es lo que dura la base.
-    static std::string clave_de(const ir::IrFunction &fn);
+    static std::string key_of(const ir::IrFunction &fn);
 
     /// Anota el sello de un hecho recien producido.
-    void sellar(const char *productor, const std::string &clave, Certeza c,
-                const char *apoyo = nullptr);
+    void mark(const char *producer, const std::string &key, Certainty c,
+              const char *support = nullptr);
 
     /// Sellos por (productor, unidad).  Se guardan aparte del resultado porque
     /// el gestor cachea el DATO del dominio; la procedencia es del hecho, y la
     /// llevan todos por igual.
-    std::unordered_map<const char *, std::unordered_map<std::string, Sello>>
-        sellos_;
+    std::unordered_map<const char *, std::unordered_map<std::string, Seal>>
+        seals_;
 
-    AnalysisManager gestor_;
-    size_t consultas_ = 0;
-    size_t computos_ = 0;
+    AnalysisManager manager_;
+    size_t queries_ = 0;
+    size_t computations_ = 0;
 };
 
 /**
- * @brief Vuelca @p entradas por @p salida en una linea por hecho.
+ * @brief Vuelca @p entries por @p out en una linea por hecho.
  *
  * Formato de DEPURACION, no de usuario: los mensajes de usuario salen del
  * catalogo multi-idioma.
  *
- * @param entradas Lo devuelto por @c BaseDeHechos::volcado.
- * @param salida   Fichero abierto donde escribir.
+ * @param entries Lo devuelto por @c FactBase::dump.
+ * @param out     Fichero abierto donde escribir.
  */
-void volcar_hechos(const std::vector<HechoRegistrado> &entradas, FILE *salida);
+void dump_facts(const std::vector<RecordedFact> &entries, FILE *out);
 
 } // namespace asa
 } // namespace analysis
 
-#endif // ANALYSIS_ASA_BASE_HECHOS_H
+#endif // ANALYSIS_ASA_FACT_BASE_H

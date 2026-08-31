@@ -16,6 +16,27 @@ from typing import Optional
 
 from .comun import ELEGIDO
 
+# ---------------------------------------------------------------------------
+#  Los DOS ejes de paralelismo.  No es una eleccion entre ellos: son dos
+#  preguntas distintas y las dos se publican.
+#
+#    secuencial  cada herramienta con un solo hilo.  Mide la EFICIENCIA del
+#                compilador: cuanto trabajo hace por unidad de trabajo.
+#    maquina     cada herramienta como la usaria un proyecto de verdad --
+#                Vesta con su paralelismo automatico, `make -j`, `go build`
+#                con sus paquetes en paralelo.  Mide lo que SUFRE el usuario.
+#
+#  La distancia entre los dos es cuanto aprovecha cada herramienta la maquina,
+#  que es un resultado por si mismo y antes no aparecia en ningun sitio.
+#  Publicar solo el segundo y llamarlo "tiempo de compilacion" comparaba ocho
+#  hilos contra uno sin decirlo.
+# ---------------------------------------------------------------------------
+
+SECUENCIAL = "secuencial"
+MAQUINA = "maquina"
+PARALELISMO = (SECUENCIAL, MAQUINA)
+
+
 def orden_compilar(lang: str, fuente: Path, salida: Path, vm: Path) -> list[str]:
     """Compilacion COMPLETA hasta binario ejecutable."""
     if lang == "c":
@@ -23,7 +44,19 @@ def orden_compilar(lang: str, fuente: Path, salida: Path, vm: Path) -> list[str]
     if lang == "cpp":
         return [ELEGIDO["cpp"], "-O2", "-std=c++17", str(fuente), "-o", str(salida)]
     if lang == "rust":
-        return ["rustc", "-O", str(fuente), "-o", str(salida)]
+        # `-C incremental` es la cache de rustc.  Sin ella, este banco medía
+        # a Rust SIN cache y publicaba su aporte como 1.00x -- que se leia
+        # como "Rust no cachea" cuando lo que pasaba es que no se le habia
+        # dado donde.  El `CARGO_HOME` que se redirigia no pintaba nada: aqui
+        # se invoca `rustc` a pelo y cargo no llega a correr.
+        # Medido con 5954 lineas: sin el flag, frio y caliente dan lo mismo
+        # (236 y 267 ms); con el, 277 en frio y 175-187 en caliente.
+        # Va bajo el directorio del caso, como el `--nimcache` de Nim y por el
+        # mismo motivo: si viviera en el sitio de siempre, "en frio" no seria
+        # frio.
+        return ["rustc", "-O", "-C",
+                "incremental=" + str(salida.parent / "rustc-inc"),
+                str(fuente), "-o", str(salida)]
     if lang == "go":
         return ["go", "build", "-o", str(salida), str(fuente)]
     if lang == "java":
@@ -63,8 +96,17 @@ def orden_comprobar(lang: str, fuente: Path, salida: Path,
     if lang == "cpp":
         return [ELEGIDO["cpp"], "-fsyntax-only", "-std=c++17", str(fuente)]
     if lang == "rust":
-        return ["rustc", "--emit=metadata", "-o", str(salida) + ".rmeta",
-                str(fuente)]
+        # Tambien aqui su cache.  Esta fase mide en CALIENTE, y sin el flag
+        # rustc no se calienta nunca mientras Vesta si reaprovecha la suya:
+        # seria comparar el enesimo intento de uno con el primero del otro.
+        # Medido con 5954 lineas: 144 ms sin el flag, 93-102 con el.
+        # Directorio APARTE del de `orden_compilar`: comparten el del caso, y
+        # si compartieran tambien la cache, "cuanto tardo en ver el error"
+        # podria salir caliente por una compilacion completa anterior --
+        # contaminacion entre dos fases que miden cosas distintas.
+        return ["rustc", "--emit=metadata", "-C",
+                "incremental=" + str(salida.parent / "rustc-inc-chk"),
+                "-o", str(salida) + ".rmeta", str(fuente)]
     if lang == "python":
         return [sys.executable, "-m", "py_compile", str(fuente)]
     if lang == "vesta":
@@ -77,19 +119,39 @@ def orden_comprobar(lang: str, fuente: Path, salida: Path,
     return None
 
 
-def entorno_cache(lang: str, dir_cache: Path, base: dict) -> dict:
+def entorno_cache(lang: str, dir_cache: Path, base: dict,
+                  paralelo: str = "") -> dict:
     """Entorno con la cache de @p lang apuntando a @p dir_cache.
 
     Redirigir la cache es lo unico que permite decir "en frio" con propiedad:
     borrar un directorio del repositorio deja frio a Vesta y calientes a Go y
     Rust, y la comparacion resultante mide el estado de la maquina, no los
     compiladores.
+
+    @p paralelo elige el EJE (ver `PARALELISMO`).  En `secuencial` se le pide a
+    cada herramienta que use un solo hilo; en `maquina` se la deja hacer lo que
+    haria en un uso normal.  Sin esto, la fase multi-modulo comparaba Vesta
+    -- que por defecto reparte los modulos de un mismo nivel topologico hasta
+    en 8 hilos -- contra una sola invocacion secuencial de gcc, y el lector
+    supone recursos iguales.
     """
     e = dict(base)
     dir_cache.mkdir(parents=True, exist_ok=True)
+    if paralelo == SECUENCIAL:
+        # `VX_PARALLEL_COMPILE=1` fuerza secuencial en el compilador Vesta
+        # (0 o ausente = auto, hasta 8 hilos).  Es su propia valvula de
+        # diagnostico, documentada en src/vx/compiler_project.cpp.
+        e["VX_PARALLEL_COMPILE"] = "1"
+    elif paralelo == MAQUINA:
+        e.pop("VX_PARALLEL_COMPILE", None)   # auto
     if lang == "go":
         e["GOCACHE"] = str(dir_cache / "go")
     elif lang == "rust":
+        # Se conserva por si algun dia se compila via cargo, pero HOY no hace
+        # nada: el banco invoca `rustc` directamente y cargo no llega a
+        # correr.  La cache que rustc si usa es la de `-C incremental`, que va
+        # en la propia orden (ver `orden_compilar`) porque es un argumento y no
+        # una variable de entorno.
         e["CARGO_HOME"] = str(dir_cache / "cargo")
     elif lang == "vesta":
         # El compilador Vesta cachea en el arbol: `.cache/` junto al proyecto y
@@ -110,6 +172,12 @@ def enfriar(lang: str, dir_trabajo: Path, dir_cache: Path) -> None:
         # daban el MISMO tiempo, que es imposible si de verdad estuviera
         # compilando las dos.
         shutil.rmtree(dir_trabajo / "nimcache", ignore_errors=True)
+    if lang == "rust":
+        # La cache incremental de rustc, que `orden_compilar` puso aqui.  Sin
+        # borrarla, la segunda medida "en frio" ya seria caliente -- el mismo
+        # fallo que se arreglo en Nim.
+        shutil.rmtree(dir_trabajo / "rustc-inc", ignore_errors=True)
+        shutil.rmtree(dir_trabajo / "rustc-inc-chk", ignore_errors=True)
     if lang in ("vesta", "vesta_aot"):
         shutil.rmtree(dir_trabajo / ".cache", ignore_errors=True)
         shutil.rmtree(dir_trabajo / ".vx_cache", ignore_errors=True)

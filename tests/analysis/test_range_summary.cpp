@@ -195,11 +195,11 @@ static void probar_indirecta_resuelta() {
     for (const ir::IrInstr &in : main_fn.blocks[0].instrs)
         if (in.op == ir::IrOp::CALLIND) callind = &in;
     check(callind != nullptr &&
-              funcion_apuntada(main_fn, hm, callind->func_ptr) == "destino",
+              pointed_function(main_fn, hm, callind->func_ptr) == "destino",
           "indirecta: se resuelve a que funcion apunta el puntero");
 
-    const DireccionTomada d = seguir_direccion(mod, "destino");
-    check(d.tomada && d.todas_se_ven && d.indirectas.size() == 1,
+    const AddressTaken d = follow_address(mod, "destino");
+    check(d.taken && d.all_visible && d.indirect.size() == 1,
           "indirecta: la direccion se toma, pero TODOS sus usos son llamadas "
           "visibles");
 

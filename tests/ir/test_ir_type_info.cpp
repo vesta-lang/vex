@@ -38,11 +38,11 @@ static int g_checks = 0, g_fail = 0;
 /// tipo nuevo y no se anade aqui, los tests de barrido dejan de cubrirlo -- el
 /// switch exhaustivo del modulo es lo que avisa en ese caso.
 static const IrType kAllTypes[] = {
-    IrType::VOID, IrType::I8,  IrType::I16, IrType::I32,    IrType::I64,
-    IrType::U8,   IrType::U16, IrType::U32, IrType::U64,    IrType::F32,
+    IrType::VOID, IrType::I8,  IrType::I16,    IrType::I32, IrType::I64,
+    IrType::U8,   IrType::U16, IrType::U32,    IrType::U64, IrType::F32,
     IrType::F64,  IrType::PTR, IrType::HANDLE, IrType::BOOL};
-static const int kTypeCount = static_cast<int>(sizeof(kAllTypes) /
-                                               sizeof(kAllTypes[0]));
+static const int kTypeCount =
+    static_cast<int>(sizeof(kAllTypes) / sizeof(kAllTypes[0]));
 
 // --------------------------------------------------------------------------
 //  Oraculos: las tablas VIEJAS, copiadas tal cual de donde vivian.
@@ -170,8 +170,7 @@ static void test_axes_differ_only_where_documented() {
           "y en el marco se cuenta por lo que ocupa el dato");
 
     // VOID: no hay valor, pero el acceso se trata conservadoramente.
-    CHECK(ir::type_storage_bytes(IrType::VOID) == 0,
-          "void no reserva marco");
+    CHECK(ir::type_storage_bytes(IrType::VOID) == 0, "void no reserva marco");
     CHECK(ir::type_access_bytes(IrType::VOID) == 8,
           "pero el eje de acceso NUNCA sub-estima");
 
@@ -239,11 +238,9 @@ static void test_mask_matches_slot() {
     for (int i = 0; i < kTypeCount; ++i) {
         const IrType t = kAllTypes[i];
         const uint32_t bytes = ir::type_slot_bytes(t);
-        const uint64_t expected = bytes >= 8
-                                      ? ~static_cast<uint64_t>(0u)
-                                      : ((static_cast<uint64_t>(1u)
-                                          << (bytes * 8u)) -
-                                         1u);
+        const uint64_t expected =
+            bytes >= 8 ? ~static_cast<uint64_t>(0u)
+                       : ((static_cast<uint64_t>(1u) << (bytes * 8u)) - 1u);
         CHECK(ir::type_mask(t) == expected,
               "la mascara debe cubrir exactamente la ranura del tipo");
     }
@@ -298,7 +295,8 @@ static void test_value_axis() {
     // permisivo que luego nadie distingue de una respuesta buena.
     CHECK(ir::value_bytes(fn, ir::IR_NO_VALUE) == 0,
           "un valor inexistente no tiene anchura");
-    CHECK(ir::value_bytes(fn, static_cast<ir::IrValueId>(fn.values.size())) == 0,
+    CHECK(ir::value_bytes(fn, static_cast<ir::IrValueId>(fn.values.size())) ==
+              0,
           "un identificador fuera de rango tampoco");
 }
 

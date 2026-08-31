@@ -23,6 +23,7 @@
 #ifndef ANALYSIS_MEMORY_POINTS_TO_H
 #define ANALYSIS_MEMORY_POINTS_TO_H
 
+#include "analysis/asa/fact.h"          // UnknownReason: por que no se supo
 #include "analysis/effects/effects.h"   // AbstractLoc
 #include "analysis/facts/ir_facts.h"    // IrFacts (def_of, param_of)
 #include "analysis/facts/value_range.h" // acotar el desplazamiento variable
@@ -79,6 +80,28 @@ struct PointsToEntry {
      * con el intervalo mejor.
      */
     int64_t off_base = 0;
+    /**
+     * @brief POR QUE no se localizo.  Solo vale con @c kind == Unknown.
+     *
+     * El resolvedor tiene TRECE formas de rendirse y todas daban el mismo
+     * `Unknown`.  Quien pregunta -- el DSE, el escape analysis, la
+     * vectorizacion -- no podia distinguir "la raiz depende del camino"
+     * (especulable con guarda) de "esa operacion no la modelamos" (que se
+     * arregla ampliando ESTO) ni de "viene de fuera" (que lo sabe el llamante).
+     *
+     * Ojo: `Unknown` es ademas el valor POR DEFECTO de esta estructura, asi que
+     * un valor que nadie resolvio queda con @c NotAsked -- que es justo lo que
+     * hay que poder distinguir de una renuncia razonada.
+     *
+     * Van al FINAL a proposito: media docena de sitios construyen esta
+     * estructura con inicializacion posicional (`{kind, root, off, exacto}`), y
+     * meter un campo en medio los rompe en silencio -- el compilador solo avisa
+     * porque los tipos no encajan; si encajaran, cambiaria el significado de
+     * cada uno sin decir nada.
+     */
+    asa::UnknownReason reason = asa::UnknownReason::NotAsked;
+    /// Codigo estable del caso EXACTO, del vocabulario de este dominio.
+    const char *reason_code = "";
 };
 
 /**
@@ -173,15 +196,15 @@ effects::AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr,
  * @param slot  Valor del @c ALLOCA.
  * @return El valor guardado, o @c ir::IR_NO_VALUE si no es unico o no se sabe.
  */
-ir::IrValueId valor_unico_del_hueco(const ir::IrFunction &fn,
-                                    ir::IrValueId slot);
+ir::IrValueId single_value_of_slot(const ir::IrFunction &fn,
+                                   ir::IrValueId slot);
 
 /**
  * @brief Lo mismo para VARIOS huecos, con un solo recorrido de la funcion.
  *
  * Preguntarlo hueco a hueco cuesta un recorrido por cada uno, y quien pregunta
  * suele tener todos a mano a la vez.  La regla es EXACTAMENTE la misma que en
- * @ref valor_unico_del_hueco -- una sola escritura o nada --; esta aqui, y no
+ * @ref single_value_of_slot -- una sola escritura o nada --; esta aqui, y no
  * copiada en quien lo necesite, porque una regla en dos sitios acaba siendo dos
  * reglas.
  *
@@ -191,8 +214,8 @@ ir::IrValueId valor_unico_del_hueco(const ir::IrFunction &fn,
  *         @c ir::IR_NO_VALUE donde no se pueda afirmar cual es.
  */
 std::vector<ir::IrValueId>
-valores_unicos_de_huecos(const ir::IrFunction &fn,
-                         const std::vector<ir::IrValueId> &slots);
+single_values_of_slots(const ir::IrFunction &fn,
+                       const std::vector<ir::IrValueId> &slots);
 
 } // namespace analysis
 

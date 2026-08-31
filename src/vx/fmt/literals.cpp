@@ -289,9 +289,16 @@ bool int_value(std::string_view text, unsigned long long &valor) {
     size_t i = 0;
     if (text.size() > 2 && text[0] == '0') {
         const char b = text[1];
-        if (b == 'x' || b == 'X') { base = 16; i = 2; }
-        else if (b == 'b' || b == 'B') { base = 2; i = 2; }
-        else if (b == 'o' || b == 'O') { base = 8; i = 2; }
+        if (b == 'x' || b == 'X') {
+            base = 16;
+            i = 2;
+        } else if (b == 'b' || b == 'B') {
+            base = 2;
+            i = 2;
+        } else if (b == 'o' || b == 'O') {
+            base = 8;
+            i = 2;
+        }
     }
     valor = 0;
     bool alguno = false;
@@ -299,10 +306,14 @@ bool int_value(std::string_view text, unsigned long long &valor) {
         const char c = text[i];
         if (c == '_') continue;
         int d;
-        if (c >= '0' && c <= '9') d = c - '0';
-        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
-        else return false;
+        if (c >= '0' && c <= '9')
+            d = c - '0';
+        else if (c >= 'a' && c <= 'f')
+            d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F')
+            d = c - 'A' + 10;
+        else
+            return false;
         if (d >= base) return false;
         const unsigned long long antes = valor;
         valor = valor * (unsigned long long)base + (unsigned long long)d;
@@ -404,7 +415,7 @@ std::string canonical_literal(std::string_view text) {
  * @return Las reescrituras hechas, para que `P2` sepa que diferencia esperar.
  */
 std::vector<Rewrite> add_type_suffixes(std::vector<Piece> &pieces,
-                                      std::vector<std::string> &textos) {
+                                       std::vector<std::string> &textos) {
     std::vector<Rewrite> hechas;
     /* Dentro de un bloque `asm` no se toca NADA.
      *
@@ -418,8 +429,10 @@ std::vector<Rewrite> add_type_suffixes(std::vector<Piece> &pieces,
         const TokenKind aqui = kind_of(pieces[i]);
         if (aqui == TokenKind::KW_ASM) asm_viene = true;
         if (aqui == TokenKind::LBRACE) {
-            if (asm_prof > 0) ++asm_prof;
-            else if (asm_viene) asm_prof = 1;
+            if (asm_prof > 0)
+                ++asm_prof;
+            else if (asm_viene)
+                asm_prof = 1;
             asm_viene = false;
         } else if (aqui == TokenKind::RBRACE && asm_prof > 0) {
             --asm_prof;

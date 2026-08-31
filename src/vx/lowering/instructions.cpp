@@ -40,9 +40,8 @@ ir::IrValueId Lowering::emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
     // GC_HANDLE_FOR_PTR devuelve un GcHandle uint32 zero-extended a i64.
     // No es is_host_ptr (es un indice opaco), no es is_gc_object (no es
     // el host_ptr al payload).
-    const ir::IrValueId v_h =
-        emit_ir_unop(ir::IrOp::GC_HANDLE_FOR_PTR, v_host_ptr,
-                     ir::IrType::I64, source_line);
+    const ir::IrValueId v_h = emit_ir_unop(
+        ir::IrOp::GC_HANDLE_FOR_PTR, v_host_ptr, ir::IrType::I64, source_line);
     return v_h;
 }
 
@@ -72,8 +71,8 @@ void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
         // sin GC ni handle table.  Baja a CALL a la primitiva nativa
         // (__vx_monenter/__vx_monexit) que el auto-bundle de vx_sync.vx
         // fusiona en el .o.  v_obj_or_handle es el host_ptr al ObjectHeader.
-        emit_call(enter ? "__vx_monenter" : "__vx_monexit",
-                  {v_obj_or_handle}, ir::IrType::VOID, source_line);
+        emit_call(enter ? "__vx_monenter" : "__vx_monexit", {v_obj_or_handle},
+                  ir::IrType::VOID, source_line);
         return;
     }
     // Resto de tiers (Full/JIT/interp): IR op MONENTER/MONEXIT sobre el handle.
@@ -588,6 +587,5 @@ uint64_t Lowering::shared_global_slot_for(const std::string &mangled_label,
     if (nbytes < 8) nbytes = 8;
     return get_or_create_runtime_global_slot(mangled_label, nbytes);
 }
-
 
 } // namespace vx

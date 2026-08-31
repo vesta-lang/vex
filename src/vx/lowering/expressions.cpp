@@ -108,8 +108,9 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 args.push_back(emit_getproc(e->loc.line));
                 args.push_back(
                     emit_const(ir::IrType::I64, name_hash, e->loc.line));
-                const ir::IrValueId dst = emit_calln("vrt:naked_fnaddr",
-                          std::move(args), ir::IrType::PTR, e->loc.line);
+                const ir::IrValueId dst =
+                    emit_calln("vrt:naked_fnaddr", std::move(args),
+                               ir::IrType::PTR, e->loc.line);
                 return dst;
             }
             const ir::IrValueId code = fn_->new_value(ir::IrType::PTR);
@@ -392,8 +393,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         // `a != b` sin __ne__ propio: niega el BOOL de __eq__ con
         // `cmp.eq result, 0` (= NOT logico).
         const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, e->loc.line);
-        const ir::IrValueId v_neg =
-            emit_ir_binop(ir::IrOp::CMP_EQ, v_call, zero, ir::IrType::BOOL, e->loc.line);
+        const ir::IrValueId v_neg = emit_ir_binop(
+            ir::IrOp::CMP_EQ, v_call, zero, ir::IrType::BOOL, e->loc.line);
         return v_neg;
     }
 
@@ -481,8 +482,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                 ir::IrValueId v_b =
                     emit_load_typed(v_rhs_at, field_ir, e->loc.line);
                 // cmp_eq a, b -> v_field_eq
-                ir::IrValueId v_field_eq =
-                    emit_ir_binop(ir::IrOp::CMP_EQ, v_a, v_b, ir::IrType::BOOL, e->loc.line);
+                ir::IrValueId v_field_eq = emit_ir_binop(
+                    ir::IrOp::CMP_EQ, v_a, v_b, ir::IrType::BOOL, e->loc.line);
                 // v_acc = v_acc & v_field_eq
                 ir::IrValueId v_new_acc =
                     emit_ir_binop(ir::IrOp::AND, v_acc, v_field_eq,
@@ -493,9 +494,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             if (e->op == ast::BinOp::Neq) {
                 ir::IrValueId v_one =
                     emit_const(ir::IrType::I64, 1, e->loc.line);
-                ir::IrValueId v_neg =
-                    emit_ir_binop(ir::IrOp::XOR, v_acc, v_one,
-                                  ir::IrType::I64, e->loc.line);
+                ir::IrValueId v_neg = emit_ir_binop(
+                    ir::IrOp::XOR, v_acc, v_one, ir::IrType::I64, e->loc.line);
                 v_acc = v_neg;
             }
             return v_acc;
@@ -879,9 +879,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         if (e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq ||
             e->op == ast::BinOp::Lt || e->op == ast::BinOp::Gt ||
             e->op == ast::BinOp::Le || e->op == ast::BinOp::Ge) {
-            ir::IrValueId v_cmp =
-                emit_ir_binop(ir::IrOp::STRCMP, v_a, v_b,
-                              ir::IrType::I64, e->loc.line);
+            ir::IrValueId v_cmp = emit_ir_binop(ir::IrOp::STRCMP, v_a, v_b,
+                                                ir::IrType::I64, e->loc.line);
             ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
             ir::IrValueId v_bool = fn_->new_value(ir::IrType::BOOL);
             ir::IrOp map_op;
@@ -934,9 +933,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         if (esz != 1) {
             const ir::IrValueId sz_v =
                 emit_const(ir::IrType::I64, (uint64_t)esz, e->loc.line);
-            const ir::IrValueId scaled =
-                emit_ir_binop(ir::IrOp::MUL, idx_v, sz_v,
-                              ir::IrType::I64, e->loc.line);
+            const ir::IrValueId scaled = emit_ir_binop(
+                ir::IrOp::MUL, idx_v, sz_v, ir::IrType::I64, e->loc.line);
             offset = scaled;
         }
         const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
@@ -972,9 +970,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         if (esz == 1) return diff;
         const ir::IrValueId sz_v =
             emit_const(ir::IrType::I64, (uint64_t)esz, e->loc.line);
-        const ir::IrValueId q =
-            emit_ir_binop(ir::IrOp::DIV, diff, sz_v,
-                          ir::IrType::I64, e->loc.line);
+        const ir::IrValueId q = emit_ir_binop(ir::IrOp::DIV, diff, sz_v,
+                                              ir::IrType::I64, e->loc.line);
         return q;
     }
 
@@ -1576,17 +1573,16 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         if (op_type.kind == PrimitiveKind::FUTURE && op_type.pointee) {
             const PrimitiveKind tk = op_type.pointee->kind;
             if (tk == PrimitiveKind::F64) {
-                ir::IrValueId v_dst =
-                    emit_ir_unop(ir::IrOp::BITCAST, v_raw, ir::IrType::F64, e->loc.line);
+                ir::IrValueId v_dst = emit_ir_unop(
+                    ir::IrOp::BITCAST, v_raw, ir::IrType::F64, e->loc.line);
                 return v_dst;
             }
             if (tk == PrimitiveKind::F32) {
                 // i64 -> trunc i32 -> bitcast f32.
-                ir::IrValueId v_i32 =
-                    emit_ir_unop(ir::IrOp::TRUNC, v_raw,
-                                 ir::IrType::I32, e->loc.line);
-                ir::IrValueId v_dst =
-                    emit_ir_unop(ir::IrOp::BITCAST, v_i32, ir::IrType::F32, e->loc.line);
+                ir::IrValueId v_i32 = emit_ir_unop(
+                    ir::IrOp::TRUNC, v_raw, ir::IrType::I32, e->loc.line);
+                ir::IrValueId v_dst = emit_ir_unop(
+                    ir::IrOp::BITCAST, v_i32, ir::IrType::F32, e->loc.line);
                 return v_dst;
             }
             // Tipos enteros mas estrechos (i8..i32, u8..u32, bool, char):
@@ -1609,14 +1605,17 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
     return dst;
 }
 
-ir::IrValueId Lowering::emit_branching_select(
-    ir::IrValueId cond, const std::function<ir::IrValueId()> &on_true,
-    const std::function<ir::IrValueId()> &on_false, const char *tag,
-    uint32_t line) {
+ir::IrValueId
+Lowering::emit_branching_select(ir::IrValueId cond,
+                                const std::function<ir::IrValueId()> &on_true,
+                                const std::function<ir::IrValueId()> &on_false,
+                                const char *tag, uint32_t line) {
     if (cond == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
     const std::string n = std::to_string(ternary_counter_++);
-    const ir::IrBlockId then_bb = fn_->new_block(std::string(tag) + "_then_" + n);
-    const ir::IrBlockId else_bb = fn_->new_block(std::string(tag) + "_else_" + n);
+    const ir::IrBlockId then_bb =
+        fn_->new_block(std::string(tag) + "_then_" + n);
+    const ir::IrBlockId else_bb =
+        fn_->new_block(std::string(tag) + "_else_" + n);
     const ir::IrBlockId merge_bb =
         fn_->new_block(std::string(tag) + "_merge_" + n);
     emit_br_cond(cond, then_bb, else_bb, line);

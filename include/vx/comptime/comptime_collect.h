@@ -48,8 +48,8 @@ struct ComptimeUnit {
      *
      * Viene de otro por un `import`.  El cierre de aqui es LOCAL -- solo ve las
      * decls de este fichero --, asi que estas se perdian: la funcion no viajaba
-     * en el conjunto de quien la DEFINE, y al compilar el conjunto el modulo que
-     * la exporta ya no la tenia ("el modulo 'atomic' no exporta
+     * en el conjunto de quien la DEFINE, y al compilar el conjunto el modulo
+     * que la exporta ya no la tenia ("el modulo 'atomic' no exporta
      * 'vx_cpu_relax'").  Publicarlas deja que quien orquesta cierre el circulo:
      * junta las de todos y vuelve a pedir el conjunto de cada modulo diciendole
      * que ademas incluya las suyas.
@@ -118,9 +118,10 @@ struct ComptimeUnit {
  *               conjunto (clave de cache del artefacto).  Vacio -> hash 0.
  * @return El conjunto comptime.  @c empty() si no hay nada que compilar aparte.
  */
-ComptimeUnit collect_comptime_unit(
-    const ast::ModuleNode &mod, const std::string &source = "",
-    const std::unordered_set<std::string> *tambien = nullptr);
+ComptimeUnit
+collect_comptime_unit(const ast::ModuleNode &mod,
+                      const std::string &source = "",
+                      const std::unordered_set<std::string> *tambien = nullptr);
 
 /**
  * @brief Vuelca el conjunto a un stream, legible, para diagnostico.

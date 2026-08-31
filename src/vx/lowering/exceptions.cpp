@@ -86,10 +86,10 @@ static void scan_assigned_in_expr(
     }
 }
 
-static void scan_assigned_names(
-    const ast::Stmt *st,
-    const std::unordered_map<std::string, ir::IrValueId> &outer,
-    std::unordered_set<std::string> &out) {
+static void
+scan_assigned_names(const ast::Stmt *st,
+                    const std::unordered_map<std::string, ir::IrValueId> &outer,
+                    std::unordered_set<std::string> &out) {
     if (!st) return;
     // Casos relevantes: ExprStmt con AssignExpr o BinaryExpr con
     // op=ASSIGN; BlockStmt con multiples stmts; If con then/else;
@@ -127,7 +127,8 @@ static void scan_assigned_names(
         scan_assigned_names(ts->body.get(), outer, out);
         for (auto &cc : ts->catches)
             scan_assigned_names(cc.body.get(), outer, out);
-        if (ts->finally_body) scan_assigned_names(ts->finally_body.get(), outer, out);
+        if (ts->finally_body)
+            scan_assigned_names(ts->finally_body.get(), outer, out);
         break;
     }
     case ast::NodeKind::VarDeclStmt: {
@@ -757,8 +758,8 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         const ir::IrValueId v_type0 =
             emit_const(ir::IrType::I64, 0, s->loc.line);
         vcall("__vx_push_frame", {v_buf, v_type0});
-        const ir::IrValueId v_r = emit_call("__vx_setjmp",
-                  {v_buf}, ir::IrType::I64, s->loc.line);
+        const ir::IrValueId v_r =
+            emit_call("__vx_setjmp", {v_buf}, ir::IrType::I64, s->loc.line);
         emit_br_cond(v_r, nhandler, nbody, s->loc.line);
 
         // Cleanup para return temprano: pop_frame + monexit.
@@ -793,10 +794,10 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             // rethrow nativo: leer value+type del estado de excepcion y
             // re-lanzar (longjmp al frame externo).  El frame propio ya
             // fue popeado arriba.
-            const ir::IrValueId v_v = emit_call("__vx_get_value",
-                      {}, ir::IrType::I64, s->loc.line);
-            const ir::IrValueId v_ty = emit_call("__vx_get_type",
-                      {}, ir::IrType::I64, s->loc.line);
+            const ir::IrValueId v_v =
+                emit_call("__vx_get_value", {}, ir::IrType::I64, s->loc.line);
+            const ir::IrValueId v_ty =
+                emit_call("__vx_get_type", {}, ir::IrType::I64, s->loc.line);
             ir::IrInstr th{};
             th.op = ir::IrOp::THROW;
             th.type = ir::IrType::VOID;
@@ -977,8 +978,8 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
 
     // 3. Comparacion tag == 0 (=Err).
     const ir::IrValueId zero_v = emit_const(ir::IrType::I32, 0, src_line);
-    const ir::IrValueId cond_v =
-        emit_ir_binop(ir::IrOp::CMP_EQ, tag_v, zero_v, ir::IrType::BOOL, src_line);
+    const ir::IrValueId cond_v = emit_ir_binop(ir::IrOp::CMP_EQ, tag_v, zero_v,
+                                               ir::IrType::BOOL, src_line);
 
     // 4. Crear bloques: err_bb (early-return), ok_bb (extract value).
     const ir::IrBlockId err_bb =
@@ -1077,12 +1078,11 @@ void Lowering::emit_try_frame_native(
     // (offsets prev/type) lo conoce vx_exc.vx via comptime const.
     const ir::IrValueId v_buf = stack_alloc_buf(96, s->loc.line, true);
     // type = 0 (catch-all).  v2: findclass del tipo del catch.
-    const ir::IrValueId v_type =
-        emit_const(ir::IrType::I64, 0, s->loc.line);
-        emit_call("__vx_push_frame",
-                  {v_buf, v_type}, ir::IrType::VOID, s->loc.line);
-    const ir::IrValueId v_r = emit_call("__vx_setjmp",
-              {v_buf}, ir::IrType::I64, s->loc.line);
+    const ir::IrValueId v_type = emit_const(ir::IrType::I64, 0, s->loc.line);
+    emit_call("__vx_push_frame", {v_buf, v_type}, ir::IrType::VOID,
+              s->loc.line);
+    const ir::IrValueId v_r =
+        emit_call("__vx_setjmp", {v_buf}, ir::IrType::I64, s->loc.line);
     // Bloques del dispatch por tipo (type matching v2): tras el setjmp,
     // si el longjmp reanudo (r!=0) saltamos a dispatch_bb que popea el
     // frame, lee el type-id y elige el catch que matchea (o re-throw).
@@ -1125,8 +1125,7 @@ void Lowering::emit_try_frame_native(
     // intervalo cubre la clase y sus subclases).
     const size_t n_catches = s->catches.size();
     ir::IrBlockId cur_check = dispatch_bb;
-    for (size_t ci = 0; ci < n_catches && cur_check != ir::IR_NO_BLOCK;
-         ++ci) {
+    for (size_t ci = 0; ci < n_catches && cur_check != ir::IR_NO_BLOCK; ++ci) {
         const ast::CatchClause &cc = s->catches[ci];
         current_block_ = cur_check;
         auto itv = cc.exc_class_name.empty()
@@ -1141,10 +1140,10 @@ void Lowering::emit_try_frame_native(
             break;
         }
         const uint32_t lo = itv->second.first, hi = itv->second.second;
-        const ir::IrValueId v_lo = emit_const(
-            ir::IrType::I64, static_cast<int64_t>(lo), cc.loc.line);
-        const ir::IrValueId v_hi = emit_const(
-            ir::IrType::I64, static_cast<int64_t>(hi), cc.loc.line);
+        const ir::IrValueId v_lo =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(lo), cc.loc.line);
+        const ir::IrValueId v_hi =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(hi), cc.loc.line);
         const ir::IrValueId v_ge = fn_->new_value(ir::IrType::BOOL);
         {
             ir::IrInstr cm{};
@@ -1187,10 +1186,8 @@ void Lowering::emit_try_frame_native(
     // THROW hace longjmp al handler de outer (propagacion).
     current_block_ = rethrow_bb;
     {
-        const ir::IrValueId v_v =
-            emit_i64_call(rethrow_bb, "__vx_get_value");
-        const ir::IrValueId v_ty =
-            emit_i64_call(rethrow_bb, "__vx_get_type");
+        const ir::IrValueId v_v = emit_i64_call(rethrow_bb, "__vx_get_value");
+        const ir::IrValueId v_ty = emit_i64_call(rethrow_bb, "__vx_get_type");
         ir::IrInstr th{};
         th.op = ir::IrOp::THROW;
         th.type = ir::IrType::VOID;

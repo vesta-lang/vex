@@ -18,7 +18,6 @@
 #include "vxdbg/reachable.h"
 #include "vxdbg/store.h"
 
-
 #include <filesystem>
 
 #include <map>

@@ -364,7 +364,8 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
             ir::IrValueId val =
                 child_fn.new_value(ir::IrType::I64, "%" + captures[i]);
             if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
-                spawn_captured_ssa_values_[i] < parent.parent_fn()->values.size()) {
+                spawn_captured_ssa_values_[i] <
+                    parent.parent_fn()->values.size()) {
                 const auto &src_val =
                     parent.parent_fn()->values[spawn_captured_ssa_values_[i]];
                 if (src_val.is_host_ptr)
@@ -397,7 +398,8 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
             child_fn.values[v].is_param = true;
             // Si el SSA value original era host_ptr CLASS, propagarlo.
             if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
-                spawn_captured_ssa_values_[i] < parent.parent_fn()->values.size()) {
+                spawn_captured_ssa_values_[i] <
+                    parent.parent_fn()->values.size()) {
                 const auto &src_val =
                     parent.parent_fn()->values[spawn_captured_ssa_values_[i]];
                 if (src_val.is_host_ptr) child_fn.values[v].is_host_ptr = true;
@@ -864,11 +866,11 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         const ir::IrType pt_ir = fn_->values[v_param].type;
         ir::IrValueId v_qword = v_param;
         if (pt_ir == ir::IrType::F64) {
-            v_qword =
-                emit_ir_unop(ir::IrOp::BITCAST, v_param, ir::IrType::I64, fd->loc.line);
+            v_qword = emit_ir_unop(ir::IrOp::BITCAST, v_param, ir::IrType::I64,
+                                   fd->loc.line);
         } else if (pt_ir == ir::IrType::F32) {
-            ir::IrValueId v_i32 =
-                emit_ir_unop(ir::IrOp::BITCAST, v_param, ir::IrType::I32, fd->loc.line);
+            ir::IrValueId v_i32 = emit_ir_unop(ir::IrOp::BITCAST, v_param,
+                                               ir::IrType::I32, fd->loc.line);
             v_qword = cast_if_needed(v_i32, ir::IrType::I32, ir::IrType::I64,
                                      fd->loc.line);
         } else if (pt_ir != ir::IrType::I64 && pt_ir != ir::IrType::U64 &&
@@ -899,7 +901,8 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             real_args.push_back(v);
         const uint64_t argc = real_args.size();
         // argbuf = ALLOCA(argc*8) en host-stack.
-    const ir::IrValueId v_buf = stack_alloc_buf(argc * 8, fd->loc.line, true);
+        const ir::IrValueId v_buf =
+            stack_alloc_buf(argc * 8, fd->loc.line, true);
         // STORE cada arg en argbuf[i].
         for (size_t k = 0; k < real_args.size(); ++k) {
             ir::IrValueId slot = v_buf;
@@ -963,9 +966,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     pop_scope();
     propagate_is_gc_object_through_phis(wrapper_fn);
     out.add_function(std::move(wrapper_fn));
-
 }
-
 
 /**
  * @brief Termina el cuerpo de un proceso: parar, o retornar en nativo.

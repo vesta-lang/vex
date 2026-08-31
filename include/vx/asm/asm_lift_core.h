@@ -14,7 +14,7 @@
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_cfg.h"
 #include "vx/asm/asm_lift_general.h" // AsmBoundReg
-#include "util/env_flags.h"   // el mando que hace hablar al elevado
+#include "util/env_flags.h"          // el mando que hace hablar al elevado
 #include <cstdio>
 
 #include <cctype>

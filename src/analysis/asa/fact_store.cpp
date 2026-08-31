@@ -13,113 +13,209 @@
 
 #include "analysis/asa/fact_store.h"
 
+#include <cstring>
+
 namespace analysis {
 namespace asa {
 
-const FactId kSinHecho = 0xFFFFFFFFu;
+const FactId kNoFact = 0xFFFFFFFFu;
 
-const char *nombre_fuente(Fuente f) {
-    switch (f) {
-    case Fuente::Ejecucion: return "ejecucion";
-    case Fuente::Perfil: return "perfil";
-    case Fuente::Declarado: return "declarado";
-    default: return "estatico";
+/* Los nombres ESTABLES van en ingles, como todo el vocabulario: viajan al
+ * volcado, al fichero de hechos y al MCP, donde los lee gente y herramientas
+ * que no tienen por que saber espanol.  Lo que ve el usuario NO sale de aqui --
+ * sale del catalogo multi-idioma --, y por eso estos no se traducen nunca. */
+const char *source_name(Source s) {
+    switch (s) {
+    case Source::Runtime: return "runtime";
+    case Source::Profile: return "profile";
+    case Source::Declared: return "declared";
+    default: return "static";
     }
 }
 
-const char *nombre_clase_sujeto(Sujeto::Clase c) {
-    switch (c) {
-    case Sujeto::Clase::Modulo: return "modulo";
-    case Sujeto::Clase::Funcion: return "funcion";
-    case Sujeto::Clase::Valor: return "valor";
-    case Sujeto::Clase::Bloque: return "bloque";
-    case Sujeto::Clase::Instruccion: return "instruccion";
-    default: return "simbolo";
+const char *unknown_reason_name(UnknownReason r) {
+    switch (r) {
+    case UnknownReason::NothingToSay: return "nothing-to-say";
+    case UnknownReason::RuntimeDependent: return "runtime-dependent";
+    case UnknownReason::ShapeNotRecognized: return "shape-not-recognized";
+    case UnknownReason::BudgetExceeded: return "budget-exceeded";
+    case UnknownReason::OpaqueBoundary: return "opaque-boundary";
+    case UnknownReason::MissingDependency: return "missing-dependency";
+    case UnknownReason::SourcesDisagree: return "sources-disagree";
+    default: return "not-asked";
+    }
+}
+
+const char *unknown_reason_code(UnknownReason r) {
+    switch (r) {
+    case UnknownReason::NothingToSay: return "VXA061";
+    case UnknownReason::RuntimeDependent: return "VXA062";
+    case UnknownReason::ShapeNotRecognized: return "VXA063";
+    case UnknownReason::BudgetExceeded: return "VXA064";
+    case UnknownReason::OpaqueBoundary: return "VXA065";
+    case UnknownReason::MissingDependency: return "VXA066";
+    case UnknownReason::SourcesDisagree: return "VXA067";
+    default: return "VXA060"; // NotAsked
+    }
+}
+
+const char *subject_kind_name(Subject::Kind k) {
+    switch (k) {
+    case Subject::Kind::Module: return "module";
+    case Subject::Kind::Function: return "function";
+    case Subject::Kind::Value: return "value";
+    case Subject::Kind::Block: return "block";
+    case Subject::Kind::Instruction: return "instruction";
+    default: return "symbol";
     }
 }
 
 /* Los nombres canonicos son POCOS -- un punado de productores y dominios -- y
  * se consultan una vez por hecho leido.  Tabla asociativa, no lista: la lectura
  * de un modulo grande hace cientos de miles de consultas. */
-static std::unordered_map<std::string, const char *> &tabla_canonicos() {
+static std::unordered_map<std::string, const char *> &canonical_table() {
     static std::unordered_map<std::string, const char *> t;
     return t;
 }
 
-void register_canonical_name(const char *nombre) {
-    if (nombre == nullptr || nombre[0] == '\0') return;
+void register_canonical_name(const char *name) {
+    if (name == nullptr || name[0] == '\0') return;
     /* El PRIMERO que se registra manda: si dos sitios dieran de alta el mismo
      * texto con literales distintos, cambiar de opinion a mitad partiria la
      * identidad justo de los hechos ya leidos. */
-    tabla_canonicos().emplace(std::string(nombre), nombre);
+    canonical_table().emplace(std::string(name), name);
 }
 
 const char *canonical_name(const std::string &s) {
-    auto it = tabla_canonicos().find(s);
-    return it == tabla_canonicos().end() ? nullptr : it->second;
+    auto it = canonical_table().find(s);
+    return it == canonical_table().end() ? nullptr : it->second;
 }
 
-const char *FactStore::internar(const std::string &s) {
-    auto it = internados_.find(s);
-    if (it != internados_.end()) return it->second;
-    nombres_.push_back(s);
-    const char *p = nombres_.back().c_str();
-    internados_.emplace(s, p);
+const char *FactStore::intern(const std::string &s) {
+    auto it = interned_.find(s);
+    if (it != interned_.end()) return it->second;
+    names_.push_back(s);
+    const char *p = names_.back().c_str();
+    interned_.emplace(s, p);
     return p;
 }
 
-FactId FactStore::anadir(Fact f) {
-    const FactId id = static_cast<FactId>(hechos_.size());
-    if (f.de_quien.funcion != nullptr && f.de_quien.funcion[0] != '\0')
-        por_funcion_[f.de_quien.funcion].push_back(id);
-    por_dominio_[f.que.dominio].push_back(id);
-    hechos_.push_back(std::move(f));
+FactId FactStore::add(Fact f) {
+    const FactId id = static_cast<FactId>(facts_.size());
+    if (f.about.function != nullptr && f.about.function[0] != '\0')
+        by_function_[f.about.function].push_back(id);
+    by_domain_[f.what.domain].push_back(id);
+    facts_.push_back(std::move(f));
+    queried_.push_back(0); // nadie lo ha mirado todavia
     return id;
 }
 
-const std::vector<FactId> &
-FactStore::de_funcion(const std::string &funcion) const {
-    static const std::vector<FactId> kVacio;
-    auto it = por_funcion_.find(funcion);
-    return it == por_funcion_.end() ? kVacio : it->second;
+FactStore::Query FactStore::find(const char *code, const Scope &here) const {
+    return find(code, nullptr, here);
 }
 
-const std::vector<FactId> &FactStore::de_dominio(const char *dominio) const {
-    static const std::vector<FactId> kVacio;
-    auto it = por_dominio_.find(dominio);
-    return it == por_dominio_.end() ? kVacio : it->second;
-}
-
-std::vector<FactId> FactStore::explicar(FactId id) const {
-    std::vector<FactId> orden;
-    if (id >= hechos_.size()) return orden;
-    /* Anchura y sin repetir: la derivacion es un grafo, no un arbol -- dos
-     * hechos pueden apoyarse en el mismo --, y repetirlo haria crecer la
-     * explicacion sin anadir nada. */
-    std::vector<uint8_t> visto(hechos_.size(), 0);
-    orden.push_back(id);
-    visto[id] = 1;
-    for (size_t i = 0; i < orden.size(); ++i) {
-        const Fact &f = hechos_[orden[i]];
-        for (FactId d : f.prueba.de) {
-            if (d >= hechos_.size() || visto[d]) continue;
-            visto[d] = 1;
-            orden.push_back(d);
+FactStore::Query FactStore::find(const char *code, const char *function,
+                                 const Scope &here) const {
+    Query r;
+    if (code == nullptr) return r;
+    /* Se recorren TODOS los del codigo aunque el primero valga: lo que se
+     * devuelve no es solo el hecho, es tambien cuantos habia que no valian. Ese
+     * numero es la mitad util de la respuesta cuando no hay hecho, y sin
+     * contarlo la consulta no sabria distinguir "no existe" de "existe y no
+     * vale aqui" -- que es exactamente el fallo que esta puerta viene a
+     * impedir. */
+    for (size_t i = 0; i < facts_.size(); ++i) {
+        const Fact &f = facts_[i];
+        if (f.what.code == nullptr) continue;
+        if (f.what.code != code && std::strcmp(f.what.code, code) != 0)
+            continue;
+        /* Y de la funcion pedida, si se pidio una.  Por texto y no por puntero:
+         * quien pregunta suele tener el nombre a mano, no el mismo literal que
+         * el almacen interno, y exigir la misma direccion convertiria una
+         * consulta correcta en un "no hay nada" mudo. */
+        if (function != nullptr) {
+            if (f.about.function == nullptr) continue;
+            if (f.about.function != function &&
+                std::strcmp(f.about.function, function) != 0)
+                continue;
         }
-    }
-    return orden;
-}
-
-FactStore::Recuento FactStore::recuento() const {
-    Recuento r;
-    for (const Fact &f : hechos_) {
-        switch (f.sello.certeza) {
-        case Certeza::Demostrada: ++r.demostradas; break;
-        case Certeza::Inferida: ++r.inferidas; break;
-        default: ++r.desconocidas; break;
+        if (!f.scope.holds_in(here)) {
+            ++r.out_of_scope;
+            continue;
+        }
+        if (r.fact == nullptr) {
+            r.fact = &f;
+            queried_[i] = 1;
         }
     }
     return r;
+}
+
+bool FactStore::has_domain(const char *domain) const {
+    if (domain == nullptr) return false;
+    /* Por texto y no por puntero: quien pregunta suele tener el literal a mano,
+     * no el mismo que guardo el registro, y comparar direcciones convertiria un
+     * "ya esta hecho" en un "hazlo otra vez" sin que nadie lo note. */
+    for (const char *d : produced_)
+        if (d == domain || std::strcmp(d, domain) == 0) return true;
+    return false;
+}
+
+void FactStore::mark_domain(const char *domain) {
+    if (domain == nullptr || has_domain(domain)) return;
+    produced_.push_back(domain);
+}
+
+std::vector<FactId> FactStore::never_queried() const {
+    std::vector<FactId> unseen;
+    for (size_t i = 0; i < queried_.size(); ++i)
+        if (queried_[i] == 0) unseen.push_back(static_cast<FactId>(i));
+    return unseen;
+}
+
+const std::vector<FactId> &
+FactStore::of_function(const std::string &function) const {
+    static const std::vector<FactId> kEmpty;
+    auto it = by_function_.find(function);
+    return it == by_function_.end() ? kEmpty : it->second;
+}
+
+const std::vector<FactId> &FactStore::of_domain(const char *domain) const {
+    static const std::vector<FactId> kEmpty;
+    auto it = by_domain_.find(domain);
+    return it == by_domain_.end() ? kEmpty : it->second;
+}
+
+std::vector<FactId> FactStore::explain(FactId id) const {
+    std::vector<FactId> order;
+    if (id >= facts_.size()) return order;
+    /* Anchura y sin repetir: la derivacion es un grafo, no un arbol -- dos
+     * hechos pueden apoyarse en el mismo --, y repetirlo haria crecer la
+     * explicacion sin anadir nada. */
+    std::vector<uint8_t> seen(facts_.size(), 0);
+    order.push_back(id);
+    seen[id] = 1;
+    for (size_t i = 0; i < order.size(); ++i) {
+        const Fact &f = facts_[order[i]];
+        for (FactId d : f.proof.from) {
+            if (d >= facts_.size() || seen[d]) continue;
+            seen[d] = 1;
+            order.push_back(d);
+        }
+    }
+    return order;
+}
+
+FactStore::Counts FactStore::counts() const {
+    Counts c;
+    for (const Fact &f : facts_) {
+        switch (f.seal.certainty) {
+        case Certainty::Proven: ++c.proven; break;
+        case Certainty::Inferred: ++c.inferred; break;
+        default: ++c.unknown; break;
+        }
+    }
+    return c;
 }
 
 } // namespace asa

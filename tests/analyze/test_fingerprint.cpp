@@ -185,11 +185,10 @@ int main() {
      * JIT, un scratch en la pila de la VM en el interprete -- cambia por
      * objetivo y no es lo que @pure promete: la promesa es sobre la memoria del
      * PROGRAMA, no sobre por donde pase el backend para escribirla. */
-    for (const auto &c :
-         {std::make_pair("vec_unop", ir::IrOp::VEC_UNOP),
-          std::make_pair("vec_binop", ir::IrOp::VEC_BINOP),
-          std::make_pair("vec_binop_s", ir::IrOp::VEC_BINOP_S),
-          std::make_pair("vec_fma", ir::IrOp::VEC_FMA)}) {
+    for (const auto &c : {std::make_pair("vec_unop", ir::IrOp::VEC_UNOP),
+                          std::make_pair("vec_binop", ir::IrOp::VEC_BINOP),
+                          std::make_pair("vec_binop_s", ir::IrOp::VEC_BINOP_S),
+                          std::make_pair("vec_fma", ir::IrOp::VEC_FMA)}) {
         const auto f = compute_fingerprint(
             fn_with(c.first, {op(c.second), op(ir::IrOp::RET)}), "x86_64");
         CHECK(!f.pure_local && !f.pure,

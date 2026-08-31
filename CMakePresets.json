@@ -1,0 +1,82 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows",
+      "displayName": "Windows (nativo)",
+      "description": "Construccion normal de Windows.  El compilador lo elige el IDE o el PATH; aqui no se fija ninguno a proposito, para que valga con TDM-GCC, MSYS o lo que tenga cada maquina.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "linux-wsl",
+      "displayName": "Linux via WSL",
+      "description": "Construye el proyecto PARA Linux usando el compilador de WSL.  En CLion hace falta anadir una vez el toolchain: Settings > Build, Execution, Deployment > Toolchains > + > WSL.  Con el puesto, este perfil compila, ejecuta y DEPURA la version de Linux desde el IDE.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-wsl",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "vendor": {
+        "jetbrains.com/clion": {
+          "toolchain": "WSL"
+        }
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-wsl-paquetes",
+      "inherits": "linux-wsl",
+      "displayName": "Linux via WSL (para empaquetar)",
+      "description": "Igual que el anterior pero SIN los tests, que es lo que necesitan los objetivos installer-deb / installer-rpm / installer-tgz: el paso previo de CPack construye el objetivo `all`, asi que con los tests dentro un test roto impediria generar el paquete.",
+      "binaryDir": "${sourceDir}/cmake-build-wsl-pkg",
+      "cacheVariables": {
+        "VESTA_BUILD_TESTS": "OFF",
+        "VESTA_TUNE": "generic"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows",
+      "configurePreset": "windows"
+    },
+    {
+      "name": "instalador-windows",
+      "configurePreset": "windows",
+      "targets": [ "installer" ]
+    },
+    {
+      "name": "linux-wsl",
+      "configurePreset": "linux-wsl"
+    },
+    {
+      "name": "paquetes-deb",
+      "configurePreset": "linux-wsl-paquetes",
+      "targets": [ "installer-deb" ]
+    },
+    {
+      "name": "paquetes-rpm",
+      "configurePreset": "linux-wsl-paquetes",
+      "targets": [ "installer-rpm" ]
+    },
+    {
+      "name": "paquetes-tgz",
+      "configurePreset": "linux-wsl-paquetes",
+      "targets": [ "installer-tgz" ]
+    }
+  ]
+}

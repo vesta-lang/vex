@@ -68,6 +68,8 @@ from compilacion.comun import (  # noqa: E402
     find_vm_candidates,
     prompt_choose_vm,
 )
+from compilacion.comun import get_tool_version  # noqa: E402
+from compilacion import entorno  # noqa: E402
 from compilacion.contexto import Ctx  # noqa: E402
 from compilacion.fases import FASES, seleccionar  # noqa: E402
 from compilacion.generadores import GENERADORES  # noqa: E402
@@ -84,19 +86,42 @@ def main() -> int:
                         "las de por defecto, que dejan fuera las mas largas.")
     p.add_argument("--listar-fases", action="store_true",
                    help="enseña las fases que hay y termina.")
-    p.add_argument("--tamanos", type=str, default="1500,6000",
+    p.add_argument("--tamanos", type=str, default="1500,6000,24000",
                    help="tamanos EN LINEAS de codigo.  En lineas y no en "
                         "funciones porque cada lenguaje escribe un numero "
                         "distinto de lineas por funcion, y pedir lo mismo en "
                         "funciones hacia que unos compilaran 6k lineas y "
                         "otros 5k -- que no es una comparacion.  Cada fila "
-                        "publica las lineas que de verdad compilo.")
+                        "publica las lineas que de verdad compilo.  MISMA "
+                        "lista que `--lineas` a proposito: las figuras "
+                        "monoliticas y las repartidas se leen por parejas, y "
+                        "con bases distintas la pareja no compara nada.")
     p.add_argument("--lineas", type=str, default="1500,6000,24000",
                    help="tamanos EN LINEAS para la fase de crecimiento.  Se "
                         "piden en lineas y no en funciones porque cada "
                         "lenguaje escribe un numero distinto de lineas por "
                         "funcion, y comparar 'mil funciones' seria comparar "
                         "programas de tamanos distintos.")
+    p.add_argument("--grande", action="store_true",
+                   help="anade un cuarto tamano de 80k lineas a `--tamanos` y "
+                        "`--lineas`.  Es el punto que convierte los cruces "
+                        "entre lenguajes en MEDIDA en vez de extrapolacion: "
+                        "sin el, los interesantes (~31k con rustc, ~65k con "
+                        "Go) caen fuera de lo medido.  No va por defecto "
+                        "porque multiplica lo que tarda la tanda.")
+    p.add_argument("--paralelismo", type=str, default="ambos",
+                   choices=("secuencial", "maquina", "ambos"),
+                   help="que ejes correr en las fases de varios modulos.  "
+                        "`secuencial` pone a todos a un hilo y mide la "
+                        "eficiencia del compilador; `maquina` deja a cada uno "
+                        "usar la maquina (Vesta con su paralelismo "
+                        "automatico, `make -j`, `go build -p N`) y mide lo "
+                        "que sufre el usuario.  `ambos` (por defecto) publica "
+                        "los dos: su distancia es cuanto aprovecha cada "
+                        "herramienta la maquina, que no se veia en ningun "
+                        "sitio.  Comparar los ocho hilos de Vesta contra una "
+                        "invocacion secuencial de gcc no era falso, pero "
+                        "tampoco se estaba diciendo.")
     p.add_argument("--sin-graficas", action="store_true",
                    help="no generar las graficas del banco.")
     p.add_argument("--jobs", type=int, default=0,
@@ -110,8 +135,10 @@ def main() -> int:
     p.add_argument("--cxx", type=str, default="",
                    help="compilador de C++ a usar.")
     p.add_argument("--escalado", action="store_true",
-                   help="atajo para incluir la fase `2bis` (escalado), que "
-                        "por su coste no va por defecto.")
+                   help="atajo antiguo para pedir la fase `escalado`.  Hoy no "
+                        "hace falta: TODAS las fases van por defecto (ver "
+                        "`fases/__init__.py`).  Se mantiene para no romper "
+                        "guiones que ya lo usan.")
     p.add_argument("--ficheros", type=int, default=20,
                    help="en cuantos ficheros se reparte el programa para la "
                         "comparacion mono/multi (default 20)")
@@ -194,16 +221,34 @@ def main() -> int:
     base_tmp = Path(os.environ.get("TEMP", "/tmp")) / "vesta_compile_bench"
     shutil.rmtree(base_tmp, ignore_errors=True)
     base_tmp.mkdir(parents=True, exist_ok=True)
+    # `--grande` se aplica a las DOS listas: si solo entrara en una, las
+    # figuras monoliticas y las repartidas volverian a apoyarse en bases
+    # distintas, que es justo lo que igualar los tamanos vino a arreglar.
+    GRANDE = 80000
+    tamanos = [int(t) for t in args.tamanos.split(",") if t.strip()]
+    lineas = [int(t) for t in args.lineas.split(",") if t.strip()]
+    if args.grande:
+        if GRANDE not in tamanos:
+            tamanos.append(GRANDE)
+        if GRANDE not in lineas:
+            lineas.append(GRANDE)
+        args.lineas = ",".join(str(x) for x in lineas)
     ctx = Ctx(
         args=args, vm=vm, raiz=raiz, langs=langs,
-        tamanos=[int(t) for t in args.tamanos.split(",") if t.strip()],
+        tamanos=tamanos,
         jobs=args.jobs if args.jobs > 0 else max(1, (os.cpu_count() or 4) - 2),
         base_tmp=base_tmp, dir_cache=base_tmp / "_cache",
         entorno_base=dict(os.environ),
     )
+    # DONDE se mide, antes de medir nada.  Va al JSON entero y al terminal
+    # resumido: sin esto, dos tandas de maquinas distintas dan ficheros
+    # indistinguibles y no hay forma de saberlo despues.
+    ctx.resultados["entorno"] = entorno.recoger(
+        vm, raiz, base_tmp, herramienta, get_tool_version)
 
     print(f"{C.BOLD}Tiempos de compilacion{C.RESET}")
     print(f"{C.DIM}  fuentes generadas en {base_tmp}{C.RESET}")
+    print(f"{C.DIM}  {entorno.resumen(ctx.resultados['entorno'])}{C.RESET}")
     print(f"{C.DIM}  fases: {', '.join(f.id for f in fases)}{C.RESET}")
 
     # El suelo lo descuentan casi todas las demas.  Si no se pidio, se avisa en
@@ -212,6 +257,19 @@ def main() -> int:
     if not any(f.id == "1" for f in fases) and len(fases) < len(FASES):
         print(f"{C.YELLOW}[aviso]{C.RESET} sin la fase 1 no hay suelo que "
               f"descontar: la columna 'sin arranque' saldra vacia.")
+
+    # Las librerias de dibujo se comprueban AHORA, no al dibujar.  Enterarse de
+    # que faltan cuando la tanda ya ha terminado no sirve de nada: hay que
+    # instalarlas y volver a medirlo todo.  Aqui todavia se esta a tiempo de
+    # cortar con Ctrl-C, instalar y relanzar sin haber gastado nada.
+    if not args.sin_graficas:
+        from compilacion import graficas  # noqa: E402
+        falta = graficas.diagnostico_dependencias()
+        if falta:
+            print(f"{C.YELLOW}[aviso]{C.RESET} {falta}")
+            print(f"{C.DIM}         La tanda sigue y el JSON se escribe igual; "
+                  f"lo unico que no habra son las graficas.  Con "
+                  f"`--sin-graficas` este aviso no sale.{C.RESET}")
 
     for f in fases:
         f.fn(ctx)
@@ -227,12 +285,20 @@ def main() -> int:
             from compilacion import graficas  # noqa: E402
             destino = ruta_json.parent / "bench_plots_compilacion"
             hechas = graficas.dibujar(ctx.resultados, destino)
+            print()
             if hechas:
-                print()
                 print(f"{C.GREEN}[ok]{C.RESET} graficas: {destino}")
-                for k in hechas:
+                for k in sorted(hechas):
                     print("  ", k)
+            else:
+                # Cero figuras CON las librerias puestas solo puede ser que los
+                # datos no dan para ninguna.  Antes esto no imprimia nada y era
+                # indistinguible de "el banco no dibuja graficas".
+                print(f"{C.YELLOW}[aviso]{C.RESET} ninguna grafica: las fases "
+                      f"que corrieron no dejaron datos suficientes.  Cada "
+                      f"figura necesita al menos dos tamanos de su fase.")
         except Exception as e:  # noqa: BLE001
+            print()
             print(f"{C.YELLOW}[aviso]{C.RESET} no pude generar graficas: {e}")
 
     ruta_json.parent.mkdir(parents=True, exist_ok=True)

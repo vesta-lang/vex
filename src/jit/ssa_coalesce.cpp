@@ -37,9 +37,9 @@ namespace jit {
  *
  * En x86 el destino es tambien operando leido -- `add rax, rbx` deja el
  * resultado EN rax, destruyendolo --, asi que un binop de tres operandos del IR
- * se legaliza a `mov dst, op0; OP dst, op1`.  En arm64, arm32 y RISC-V la ALU es
- * de tres direcciones (`add x0, x1, x2` no toca ni x1 ni x2) y esa legalizacion
- * no existe.
+ * se legaliza a `mov dst, op0; OP dst, op1`.  En arm64, arm32 y RISC-V la ALU
+ * es de tres direcciones (`add x0, x1, x2` no toca ni x1 ni x2) y esa
+ * legalizacion no existe.
  */
 DstKind dst_kind_of_isa(sched::EffIsa isa) noexcept {
     return isa == sched::EffIsa::X86 ? DstKind::Destructive
@@ -154,7 +154,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
      * live_out[b] = U_succ [ (live_in[succ] - phi_defs[succ]) U
      *                        {args de phis de succ que vienen de b} ]
      * live_in[b]  = gen[b] U (live_out[b] - kill[b]). */
-    std::vector<uint64_t> live_in(size_t(NB) * W, 0), live_out(size_t(NB) * W, 0);
+    std::vector<uint64_t> live_in(size_t(NB) * W, 0),
+        live_out(size_t(NB) * W, 0);
     bool changed = true;
     /* Fuera de los dos bucles: se reutiliza y se limpia, en vez de pedir y
      * devolver memoria por cada bloque de cada vuelta.  El contenido se
@@ -172,7 +173,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                 const ir::IrBlock &sb = fn.blocks[s];
                 /* live_in[s] menos los phi-defs de s */
                 const uint64_t *lis = crow(live_in, s);
-                for (size_t w = 0; w < W; ++w) nout[w] |= lis[w];
+                for (size_t w = 0; w < W; ++w)
+                    nout[w] |= lis[w];
                 for (const ir::IrInstr &in : sb.instrs) {
                     if (in.op != ir::IrOp::PHI) continue;
                     if (in.dst < NV)
@@ -371,8 +373,9 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
             for (size_t w = 0; w < W; ++w) {
                 uint64_t bits = lo_b[w];
                 while (bits) {
-                    const uint32_t v = static_cast<uint32_t>(w * 64) +
-                                       static_cast<uint32_t>(__builtin_ctzll(bits));
+                    const uint32_t v =
+                        static_cast<uint32_t>(w * 64) +
+                        static_cast<uint32_t>(__builtin_ctzll(bits));
                     bits &= bits - 1;
                     liveset[v] = 1;
                     donde[v] = static_cast<uint32_t>(vivos.size());
@@ -695,8 +698,7 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
     return remap;
 }
 
-bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn,
-                        DstKind dst) {
+bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn, DstKind dst) {
     /* DEFAULT-ON (kill: VESTA_NO_SSA_COALESCE=1).  Coalesce las congruencias de
      * PHI (reduce el trafico de copias de reg en TODO loop con contador/
      * acumulador + if/else/cadenas) usando un GRAFO DE INTERFERENCIA sound

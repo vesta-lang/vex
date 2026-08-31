@@ -42,7 +42,8 @@ ReachStatus references_of_artifact_map(const StoredNode &node,
     for (const auto &sym : map.symbols)
         push_if_set(sym.second, out);
     // Y los mapas de los modulos que contiene, que son otros ArtifactMap: por
-    // ahi se llega al grafo de un modulo que vino de su cache y no se re-emitio.
+    // ahi se llega al grafo de un modulo que vino de su cache y no se
+    // re-emitio.
     for (const auto &h : map.modules)
         if (!h.empty()) out.push_back(h);
     return ReachStatus::Ok;
@@ -66,10 +67,8 @@ ReachStatus references_of_entity(const StoredNode &node,
 ReachStatus collect_references(const StoredNode &node,
                                std::vector<ContentHash> &out) {
     switch (node.header.kind) {
-    case NodeKind::ArtifactMap:
-        return references_of_artifact_map(node, out);
-    case NodeKind::Entity:
-        return references_of_entity(node, out);
+    case NodeKind::ArtifactMap: return references_of_artifact_map(node, out);
+    case NodeKind::Entity: return references_of_entity(node, out);
 
     /* Hojas.  Se nombran una a una y NO se agrupan en el `default`: asi, el dia
      * que aparezca un genero nuevo, cae en el `default` y aborta el recorrido
@@ -84,8 +83,7 @@ ReachStatus collect_references(const StoredNode &node,
         // Tramos por simbolo y linea: cadenas y numeros, ningun nodo.
         return ReachStatus::Ok;
 
-    default:
-        return ReachStatus::UnknownKind;
+    default: return ReachStatus::UnknownKind;
     }
 }
 
@@ -129,9 +127,9 @@ size_t read_published_roots(const std::string &cache_dir,
         const size_t nl2 = body.find('\n', nl1 + 1);
         if (nl2 == std::string::npos) continue;
         const size_t nl3 = body.find('\n', nl2 + 1);
-        const std::string spans_hex =
-            nl3 == std::string::npos ? body.substr(nl2 + 1)
-                                     : body.substr(nl2 + 1, nl3 - nl2 - 1);
+        const std::string spans_hex = nl3 == std::string::npos
+                                          ? body.substr(nl2 + 1)
+                                          : body.substr(nl2 + 1, nl3 - nl2 - 1);
         const ContentHash spans = ContentHash::from_hex(spans_hex);
         // Los tramos son opcionales: una compilacion sin ellos publica la
         // huella vacia.
@@ -217,8 +215,8 @@ ReachReport compute_live_set(const NodeStore &store,
                 pending.push_back(r);
                 // Solo en modo mirar; con el apagado esta rama no se toca.
                 if (anotar_procedencia)
-                    quien_cita.emplace(r,
-                                       std::make_pair(current, node.header.kind));
+                    quien_cita.emplace(
+                        r, std::make_pair(current, node.header.kind));
             }
         }
     }

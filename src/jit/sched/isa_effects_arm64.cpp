@@ -163,7 +163,9 @@ bool is_narrow_write(const MInstr & /*mi*/, const MOperand & /*o*/) {
 }
 
 /// El descriptor del objetivo, de donde sale la convencion de llamada.
-const TargetRegInfo &reg_info() { return target_arm64(); }
+const TargetRegInfo &reg_info() {
+    return target_arm64();
+}
 
 const IsaEffects kArm64 = {
     "arm64", mnemonic, regset_key, reg_info, pseudo, is_narrow_write,
@@ -171,7 +173,9 @@ const IsaEffects kArm64 = {
 
 } // namespace
 
-const IsaEffects &isa_effects_arm64() { return kArm64; }
+const IsaEffects &isa_effects_arm64() {
+    return kArm64;
+}
 
 } // namespace sched
 } // namespace jit

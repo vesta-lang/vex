@@ -82,7 +82,8 @@ bool read_whole_file(const std::string &path, std::vector<uint8_t> &out);
  * @param bytes Contenido.
  * @return true solo si se escribio ENTERO.
  */
-bool write_whole_file(const std::string &path, const std::vector<uint8_t> &bytes);
+bool write_whole_file(const std::string &path,
+                      const std::vector<uint8_t> &bytes);
 
 /**
  * @brief Lee SOLO un tramo de un fichero.

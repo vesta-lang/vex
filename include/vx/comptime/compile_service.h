@@ -10,27 +10,28 @@
  * @brief "Compila este IR y damelo LISTO PARA EJECUTAR".
  *
  * EL PROBLEMA QUE RESUELVE.  Esa cadena -- emitir, ensamblar, cargar -- estaba
- * escrita a mano en DOS sitios: el precomputo del arranque (`compiler.cpp`) y el
- * camino de las macros (`main.cpp`).  Dos copias del mismo trabajo significan
- * dos sitios donde arreglar un fallo y dos que se separan solos; y ya hay un
- * tercer consumidor a la vista -- la ejecucion comptime PEREZOSA, que necesita
- * compilar UNA funcion en el momento en que se la llama, que es lo que permitira
- * quitar el tree-walker y con el la doble compilacion.
+ * escrita a mano en DOS sitios: el precomputo del arranque (`compiler.cpp`) y
+ * el camino de las macros (`main.cpp`).  Dos copias del mismo trabajo
+ * significan dos sitios donde arreglar un fallo y dos que se separan solos; y
+ * ya hay un tercer consumidor a la vista -- la ejecucion comptime PEREZOSA, que
+ * necesita compilar UNA funcion en el momento en que se la llama, que es lo que
+ * permitira quitar el tree-walker y con el la doble compilacion.
  *
  * QUE HACE, exactamente lo que hacian las dos copias y nada mas:
  *
- *      modulo IR --(emitir)--> texto .vel --(ensamblar)--> .velb --(cargar)--> runtime
+ *      modulo IR --(emitir)--> texto .vel --(ensamblar)--> .velb --(cargar)-->
+ * runtime
  *
  * QUE NO HACE, y es a proposito: no decide QUE compilar.  Recibe un modulo ya
  * formado.  Quien elige la particion es otro.
  *
  * DEUDA CONOCIDA, dicha y no escondida: el camino pasa por TEXTO.  El emisor
  * serializa el IR a una cadena que el ensamblador vuelve a lexar y parsear acto
- * seguido, y ademas el `.velb` va a disco para volver a leerse.  Se conserva asi
- * a proposito en esta primera version: el objetivo era que las dos copias hagan
- * lo MISMO, comprobable porque el `.velb` sale identico.  Quitar el paso por
- * texto es un cambio aparte -- una emision, dos destinos -- y con este servicio
- * en medio se hace en UN sitio en vez de en dos.
+ * seguido, y ademas el `.velb` va a disco para volver a leerse.  Se conserva
+ * asi a proposito en esta primera version: el objetivo era que las dos copias
+ * hagan lo MISMO, comprobable porque el `.velb` sale identico.  Quitar el paso
+ * por texto es un cambio aparte -- una emision, dos destinos -- y con este
+ * servicio en medio se hace en UN sitio en vez de en dos.
  */
 #ifndef VESTA_VX_COMPTIME_COMPILE_SERVICE_H
 #define VESTA_VX_COMPTIME_COMPILE_SERVICE_H
@@ -63,11 +64,11 @@ class ComptimeRuntime;
  * formateo ocurre al imprimir y en el idioma activo.
  */
 enum class CompileFailure : uint8_t {
-    None,      ///< salio bien.
-    Emit,      ///< el emisor no produjo codigo.
-    Assemble,  ///< el ensamblador rechazo el codigo.
-    Read,      ///< el bytecode no se pudo leer o salio vacio.
-    Load,      ///< el runtime comptime no acepto el bytecode.
+    None,     ///< salio bien.
+    Emit,     ///< el emisor no produjo codigo.
+    Assemble, ///< el ensamblador rechazo el codigo.
+    Read,     ///< el bytecode no se pudo leer o salio vacio.
+    Load,     ///< el runtime comptime no acepto el bytecode.
 };
 
 /// @brief Codigo del catalogo que corresponde a @p f, o @c nullptr si @c None.
@@ -94,7 +95,8 @@ struct CompiledIr {
  * @param ir_section   Seccion @c @ir a incrustar en el `.velb`, o @c nullptr.
  *                     La necesita quien vaya a compilar en JIT lo cargado.
  * @param diag_name  Nombre para los diagnosticos y para el fichero temporal.
- *                     NO se abre nada con el: solo distingue un trabajo de otro.
+ *                     NO se abre nada con el: solo distingue un trabajo de
+ * otro.
  * @return El bytecode, o el motivo de no tenerlo.
  */
 CompiledIr compile_ir_to_bytecode(const ir::IrModule &mod,

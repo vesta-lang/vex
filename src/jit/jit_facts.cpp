@@ -9,7 +9,7 @@
  * @file jit/jit_facts.cpp
  * @brief La pregunta que el JIT le hace a la base de hechos del ASA (ver
  *        @c jit/jit_facts.h).  La base en si vive en
- *        @c src/analysis/asa/base_hechos.cpp.
+ *        @c src/analysis/asa/fact_base.cpp.
  */
 
 #include "jit/jit_facts.h"

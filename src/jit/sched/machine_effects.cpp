@@ -60,8 +60,8 @@ void add(std::vector<uint32_t> &v, uint32_t k) {
 /// No es una duda que se pueda resolver poniendo una barrera y siguiendo.  Una
 /// barrera dice "no se reordena por si acaso", y eso es exactamente lo que este
 /// modulo existe para no hacer: aqui se SABE lo que toca cada instruccion, y si
-/// una llega sin que nadie sepa contestar por ella, lo que hay es un objetivo al
-/// que se le olvido declarar algo suyo.  Seguir con una respuesta inventada
+/// una llega sin que nadie sepa contestar por ella, lo que hay es un objetivo
+/// al que se le olvido declarar algo suyo.  Seguir con una respuesta inventada
 /// significa que el codigo que salga sera correcto por casualidad o no lo sera,
 /// y en ninguno de los dos casos se enteraria nadie.
 ///
@@ -96,7 +96,6 @@ void add_mem_addr_reads(MEffects &e, const MOperand &o) {
     const uint8_t index = (o.width >> 2) & 0x3F;
     if (index != static_cast<uint8_t>(MReg::NONE)) add(e.reads, index);
 }
-
 
 /// El MInstr referencia N operandos explicitos (dst + src1 + src2 no-vacios).
 const MOperand &minstr_slot(const MInstr &mi, int slot) {
@@ -323,8 +322,7 @@ OpRoles mop_roles(MOp op) {
  *        (idiv/div/cqo) NO es ambiguo -> el match es fiable.
  */
 void add_div_implicit_from_db(const MInstr &mi, const char *mnem, Isa isa,
-                              const IsaEffects &t,
-                              MEffects &e) {
+                              const IsaEffects &t, MEffects &e) {
     std::vector<ParsedOp> ops;
     const int nexp = explicit_operand_count(mi);
     for (int s = 0; s < nexp; ++s) {
@@ -425,16 +423,17 @@ void real_effects(const MInstr &mi, const char *mnem, Isa isa,
  * justo el fallo que este modulo existe para evitar.
  */
 void abi_reads(const TargetRegInfo &t, bool is_return, MEffects &e) {
-
     const auto anade = [&e](uint8_t r) {
         add(e.reads, static_cast<uint32_t>(r));
     };
     for (size_t c = 0; c < TargetRegInfo::NCLASS; ++c) {
         if (is_return) {
             anade(t.ret_reg[c]);
-            for (const uint8_t r : t.callee_saved[c]) anade(r);
+            for (const uint8_t r : t.callee_saved[c])
+                anade(r);
         } else {
-            for (const uint8_t r : t.arg_regs[c]) anade(r);
+            for (const uint8_t r : t.arg_regs[c])
+                anade(r);
         }
     }
     /* Y la pila, que la leen los dos en cualquier arquitectura.  Tambien se
@@ -487,7 +486,7 @@ bool generic_pseudo(const MInstr &mi, MEffects &e) {
         e.writes_mem = true;
         break;
 
-    /* ALLOCA: dst = puntero a espacio reservado del frame. */
+        /* ALLOCA: dst = puntero a espacio reservado del frame. */
         add(e.writes, reg_key(mi.dst));
         add(e.reads, reg_key(mi.src1));
         add(e.reads, reg_key(mi.src2));
@@ -495,7 +494,7 @@ bool generic_pseudo(const MInstr &mi, MEffects &e) {
         e.writes_mem = true;
         e.writes_flags = true;
         break;
-    /* Atomicos fisicos (post-rewrite): dst=mem[addr], src1=reg. */
+        /* Atomicos fisicos (post-rewrite): dst=mem[addr], src1=reg. */
         add(e.reads, reg_key(mi.src1));
         add(e.writes, reg_key(mi.src1)); // xadd deja el valor viejo en el reg
         add_mem_addr_reads(e, mi.dst);
@@ -571,14 +570,14 @@ bool generic_pseudo(const MInstr &mi, MEffects &e) {
      * respuesta nombra registros suyos.  Aqui NO hay caso por defecto a
      * proposito: el que habia daba por leidos y escritos todos los operandos,
      * la memoria y las banderas, mas barrera -- o sea, "no se sabe" con otro
-     * nombre --, y eso tapa exactamente lo que este modulo existe para saber. */
+     * nombre --, y eso tapa exactamente lo que este modulo existe para saber.
+     */
     default: return false;
     }
     return true;
 }
 
 } // namespace
-
 
 /// @brief Una escritura ESTRECHA no se lleva por delante el registro entero.
 ///
@@ -734,8 +733,7 @@ MEffects machine_effects(const MFunction &mf, const MInstr &mi, EffIsa isa) {
      * nadie la puso, no se coge una cualquiera: se dice.  Coger la del
      * anfitrion es lo que hacia que un ELF de Linux generado desde Windows
      * creyera muertos sus dos primeros argumentos. */
-    if (mf.target == nullptr)
-        isa_effects_bug("VXA070", mi, isa, mf.name);
+    if (mf.target == nullptr) isa_effects_bug("VXA070", mi, isa, mf.name);
     MEffects e = effects_for(mi, isa, *mf.target, mf.pinned_regs, mf.name);
     if (mi.op != MOp::INLINE_ASM_RAW) return e;
     /* Un `asm` no es opaco: sus registros estan en su bloque, no en los
@@ -753,14 +751,18 @@ MEffects machine_effects(const MFunction &mf, const MInstr &mi, EffIsa isa) {
         v.push_back(id);
     };
     if (!b.in_phys.empty() || !b.out_phys.empty()) {
-        for (const uint8_t r : b.in_phys) anade(e.reads, r);
-        for (const uint8_t r : b.out_phys) anade(e.writes, r);
+        for (const uint8_t r : b.in_phys)
+            anade(e.reads, r);
+        for (const uint8_t r : b.out_phys)
+            anade(e.writes, r);
     } else {
-        for (const uint32_t v : b.in_vregs) anade(e.reads, MEffects::VREG_BASE + v);
+        for (const uint32_t v : b.in_vregs)
+            anade(e.reads, MEffects::VREG_BASE + v);
         for (const uint32_t v : b.out_vregs)
             anade(e.writes, MEffects::VREG_BASE + v);
     }
-    for (const uint8_t r : b.clobbers) anade(e.writes, r);
+    for (const uint8_t r : b.clobbers)
+        anade(e.writes, r);
     e.reads_flags = e.reads_flags || b.clobbers_flags;
     e.writes_flags = e.writes_flags || b.clobbers_flags;
     e.reads_mem = e.reads_mem || b.clobbers_mem;

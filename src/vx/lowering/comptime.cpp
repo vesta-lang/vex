@@ -25,7 +25,7 @@
 #include "vx/comptime/comptime_introspect.h"
 #include "ffi/virtual_lib_registry.h"
 #include "util/thread_slot.h" // el estado por hilo NO va en thread_local
-#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -374,8 +374,8 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         emit_store_typed(addr_done2, one, ir::IrType::I64, ln);
     }
     /* La arista se anotaba desde `init_bb` y el salto sale del bloque ACTUAL.
-     * Hoy son el mismo -- nada entre medias abre un bloque nuevo --, pero dejaba
-     * el grafo a merced de que siguiera siendo asi: bastaria meter un
+     * Hoy son el mismo -- nada entre medias abre un bloque nuevo --, pero
+     * dejaba el grafo a merced de que siguiera siendo asi: bastaria meter un
      * condicional en este init para que la arista dijera que el salto sale de
      * un sitio del que ya no sale. */
     emit_br(cont_bb, ln);
@@ -644,9 +644,8 @@ bool Lowering::materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
         const ir::IrValueId v_val = emit_const(wt, raw, source_line);
         const ir::IrValueId v_off =
             emit_const(ir::IrType::I64, off, source_line);
-        const ir::IrValueId v_addr =
-            emit_ir_binop(ir::IrOp::ADD, v_dst, v_off,
-                          ir::IrType::PTR, source_line);
+        const ir::IrValueId v_addr = emit_ir_binop(
+            ir::IrOp::ADD, v_dst, v_off, ir::IrType::PTR, source_line);
         fn_->values[v_addr].is_host_ptr = fn_->values[v_dst].is_host_ptr;
 
         emit_store_typed(v_addr, v_val, wt, source_line);
@@ -714,13 +713,13 @@ uint64_t Lowering::get_or_create_comptime_global_slot(const std::string &name) {
  * "soportada" anadiendo un FFI runtime + bridge de memoria.
  */
 std::string macro_body_unsupported_reason(const TypeChecker &tc,
-                                                 const ast::Stmt *s);
+                                          const ast::Stmt *s);
 
 std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
-                                                      const ast::Expr *e);
+                                               const ast::Expr *e);
 
-/* Force-lower de comptime helpers: cuando el estado de force-lower esta puesto, el
- * chequeo de lowereabilidad NO rechaza las llamadas a comptime fns no-macro,
+/* Force-lower de comptime helpers: cuando el estado de force-lower esta puesto,
+ * el chequeo de lowereabilidad NO rechaza las llamadas a comptime fns no-macro,
  * sino que RECURRE en su body (chequeo transitivo) y, si son lowereables,
  * recolecta su nombre ahi para que @c lower_function las
  * baje a runtime (`code.<helper>`), permitiendo que el `__macro_<X>` que las
@@ -729,7 +728,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
  * (Definidos arriba, antes de Lowering::run.) */
 
 std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
-                                                      const ast::Expr *e) {
+                                               const ast::Expr *e) {
     if (!e) return "";
     switch (e->kind) {
     case ast::NodeKind::IdentExpr: {
@@ -869,8 +868,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
                  * (AST-only), comportamiento previo. */
                 auto *force_lower = macro_force_lower();
                 auto *visiting = macro_visiting();
-                if (force_lower && fn_it->second &&
-                    fn_it->second->body) {
+                if (force_lower && fn_it->second && fn_it->second->body) {
                     const std::string &hn = fn_it->first; // nombre registrado
                     if (visiting->count(hn)) {
                         return ""; // ciclo: asumir OK (el otro nivel decide)
@@ -975,7 +973,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
 }
 
 std::string macro_body_unsupported_reason(const TypeChecker &tc,
-                                                 const ast::Stmt *s) {
+                                          const ast::Stmt *s) {
     if (!s) return "";
     switch (s->kind) {
     case ast::NodeKind::BlockStmt: {
@@ -1091,7 +1089,7 @@ std::string macro_body_unsupported_reason(const TypeChecker &tc,
  * se dejan a AST-eval.  Un macro con `expr` param que solo lo usa como string
  * (p.ej. `bf_compile_body(src)`) NO forwardea y SI va a la VM. */
 bool macro_body_forwards_expr_capture_expr(const TypeChecker &tc,
-                                                  const ast::Expr *e) {
+                                           const ast::Expr *e) {
     if (!e) return false;
     switch (e->kind) {
     case ast::NodeKind::CallExpr: {
@@ -1132,7 +1130,7 @@ bool macro_body_forwards_expr_capture_expr(const TypeChecker &tc,
 }
 
 bool macro_body_forwards_expr_capture(const TypeChecker &tc,
-                                             const ast::Stmt *s) {
+                                      const ast::Stmt *s) {
     if (!s) return false;
     switch (s->kind) {
     case ast::NodeKind::BlockStmt: {

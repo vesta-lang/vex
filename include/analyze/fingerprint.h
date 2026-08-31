@@ -24,6 +24,8 @@
 #ifndef VESTA_ANALYZE_FINGERPRINT_H
 #define VESTA_ANALYZE_FINGERPRINT_H
 
+#include "vx/diagnostic.h" // los veredictos salen como diagnosticos del catalogo
+
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -64,6 +66,21 @@ struct FunctionFingerprint {
     bool has_dynamic_call =
         false; ///< CALLVIRT/CALLM/CALLCLOSURE/CALLIND (efecto opaco).
     bool pure_local = true; ///< sin efectos de dato observables PROPIOS.
+    /**
+     * @brief Igual, pero sin contar las llamadas a nativas.
+     *
+     * Una `CALLN` tumba la pureza LOCAL porque quien la mira sin componer no
+     * tiene forma de saber que hace la nativa, y suponer que no hace nada seria
+     * aprobar por omision.  Pero al COMPONER si se puede preguntar: si lo
+     * declarado dice que solo lee sus argumentos, quien la llama sigue siendo
+     * puro.
+     *
+     * Dos campos y no uno porque responden a dos preguntas distintas: "es pura
+     * por si misma, con lo que se sabe aqui" y "lo seria si sus nativas no
+     * contaran".  Quien no compone lee la primera -- conservadora -- y no puede
+     * equivocarse por descuido.
+     */
+    bool pure_local_ignoring_natives = true;
     std::vector<std::string>
         calls; ///< callees ESTATICOS (CALL/TAILCALL/CALLN).
 
@@ -78,6 +95,22 @@ struct FunctionFingerprint {
     bool recursive = false;    ///< en un ciclo del callgraph (o self).
     bool effects_known =
         true; ///< false => hay dinamica/externa -> totales conservadores.
+    /**
+     * @brief QUIEN hace opaco el cierre.  Solo vale con @c !effects_known.
+     *
+     * Sin esto, "no se pueden demostrar tus efectos" es un callejon: el usuario
+     * no sabe a que funcion mirar, y el compilador SI lo sabe -- lo acaba de
+     * decidir --.  Se anota donde se decide y no donde se lee, que es la unica
+     * forma de que no haya que volver a recorrer el cierre para averiguarlo.
+     *
+     * Vacio con @c opaque_dynamic puesto: entonces el culpable no es un nombre
+     * sino una llamada cuyo destino no se resuelve.
+     */
+    std::string opaque_callee;
+    /// Hay una llamada DINAMICA alcanzable: el destino no se sabe, asi que
+    /// tampoco sus efectos.  Se distingue del callee con nombre porque se
+    /// arreglan distinto -- uno se declara, el otro hay que resolverlo.
+    bool opaque_dynamic = false;
     bool pure =
         false; ///< @pure: sin efectos de dato en TODO el cierre (sound).
 };
@@ -115,11 +148,22 @@ struct FunctionContracts; // definido abajo.
  *        primitiva de asm refleja el marco real de esa primitiva.  El
  *        `stack_bytes` (parcial) medido NO se toca (la verificacion sigue
  *        siendo por cota superior sobre lo medido).
+ * @param mod opcional.  Con el, un callee que NO esta en el programa deja de
+ *        ser automaticamente opaco: si su importacion DECLARA lo que hace
+ *        (@c IrNativeEffects), se aporta lo declarado y el cierre sigue siendo
+ *        conocido.
+ *
+ *        Es la mitad que faltaba de un mecanismo que ya existia: la
+ *        declaracion se podia escribir y el motor semantico la aplicaba, pero
+ *        ESTE camino -- el de los contratos -- ni la miraba, asi que declarar
+ *        no cambiaba nada de lo que el usuario ve.  Un mecanismo que se puede
+ *        usar y no se nota es peor que no tenerlo: parece que no funciona.
  */
 void compose_fingerprints(
     std::vector<FunctionFingerprint> &fps,
     const std::unordered_map<std::string, FunctionContracts> *contracts =
-        nullptr);
+        nullptr,
+    const ir::IrModule *mod = nullptr);
 
 /**
  * @struct FunctionContracts
@@ -178,6 +222,38 @@ struct ContractCheck {
 std::vector<ContractCheck> verify_contracts(
     const std::vector<FunctionFingerprint> &fps,
     const std::unordered_map<std::string, FunctionContracts> &contracts);
+
+/// Lo que salio de mirar los veredictos.
+struct ContractReport {
+    uint32_t violated = 0;   ///< demostrado que NO se cumple: error.
+    uint32_t unverified = 0; ///< no se pudo decidir: aviso, no error.
+};
+
+/**
+ * @brief Convierte los veredictos en diagnosticos.  UN solo sitio.
+ *
+ * Antes esto estaba escrito TRES veces -- dos en @c compiler.cpp y una en
+ * @c compiler_project.cpp --, y las tres copias hacian lo mismo:
+ *
+ *     if (ck.status != VIOLATED) continue;
+ *
+ * O sea que el tercer veredicto -- @c UNVERIFIABLE, "no se puede decidir" -- se
+ * DESCARTABA EN SILENCIO.  El resultado es un contrato decorativo: parece
+ * comprobado porque el compilador no protesto, y eso es peor que no tenerlo,
+ * porque MIENTE CON AUTORIDAD.  Alguien lee `@nothrow` y construye encima.
+ *
+ * Ademas las tres copias construian el mensaje como prosa espanola dentro del
+ * compilador, asi que un contrato incumplido era lo unico del compilador que no
+ * se podia leer en otro idioma.  Ahora sale del catalogo, como todo.
+ *
+ * @param checks Los veredictos.
+ * @param file   Fichero al que atribuirlos.
+ * @param diags  Donde se depositan.
+ * @return Cuantos de cada clase (el llamante decide si aborta).
+ */
+ContractReport report_contract_checks(const std::vector<ContractCheck> &checks,
+                                      const std::string &file,
+                                      vx::Diagnostics &diags);
 
 /**
  * @struct TypeFingerprint

@@ -369,6 +369,14 @@ add_library(vx_lib STATIC
     # El asm como dominio del ASA (productor de hechos): vive junto al informe
     # porque comparte la base de datos de instrucciones.
     ${CMAKE_SOURCE_DIR}/src/analyze/asa_asm.cpp
+    # La huella como dominio del ASA: la verdad INFERIDA (si lanza, si es pura,
+    # cuanto reserva).  Vive aqui porque necesita la maquinaria de efectos.
+    ${CMAKE_SOURCE_DIR}/src/analyze/asa_fingerprint.cpp
+    # El linter: el primer CONSUMIDOR del ASA.  No analiza -- pregunta a la
+    # base de hechos y compara lo demostrado con lo declarado -- y por eso vive
+    # al lado de los dominios que consulta, no dentro de ellos.
+    ${CMAKE_SOURCE_DIR}/src/analyze/linter.cpp
+    ${CMAKE_SOURCE_DIR}/src/analyze/lint_cli.cpp
     # "Compila este IR y damelo listo para ejecutar": la cadena emitir ->
     # ensamblar -> cargar, en UN sitio.  Estaba escrita a mano en el precomputo
     # del arranque y en el camino de las macros; y la necesita ademas la

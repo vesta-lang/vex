@@ -234,8 +234,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         // (igual filtro que en lower_function -- saltamos solo helpers
         // sinteticos; los ctors/dtors/metodos normales se instrumentan).
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
-            fn.name != "__module_init" &&
-            fn.name.rfind("__new_", 0) != 0 &&
+            fn.name != "__module_init" && fn.name.rfind("__new_", 0) != 0 &&
             fn.name.rfind("__async_", 0) != 0 &&
             fn.name.rfind("__lambda_", 0) != 0 &&
             fn.name.rfind("__spawn_", 0) != 0) {
@@ -504,8 +503,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         if (!block_terminated_) {
             // Instrumentacion: vx_trace:leave antes del RET implicito.
             if (instrument_mode_ != "none" && instrument_mode_ != "" &&
-                fn.name != "__module_init" &&
-                fn.name.rfind("__new_", 0) != 0 &&
+                fn.name != "__module_init" && fn.name.rfind("__new_", 0) != 0 &&
                 fn.name.rfind("__async_", 0) != 0 &&
                 fn.name.rfind("__lambda_", 0) != 0 &&
                 fn.name.rfind("__spawn_", 0) != 0) {
@@ -547,7 +545,6 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         fn_ = nullptr;
     }
 }
-
 
 void Lowering::generate_new_helpers(ir::IrModule &out) {
     // Para cada clase declarada en el modulo, generamos una funcion
@@ -679,8 +676,8 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     // Cierre hacia arriba, sin repetir.
                     for (size_t k = 0; k < pendientes.size() && k < 256; ++k) {
                         const std::string n = pendientes[k];
-                        if (std::find(all_ifaces.begin(), all_ifaces.end(), n) !=
-                            all_ifaces.end())
+                        if (std::find(all_ifaces.begin(), all_ifaces.end(),
+                                      n) != all_ifaces.end())
                             continue;
                         all_ifaces.push_back(n);
                         auto itn = tc_.class_layouts().find(n);
@@ -2310,9 +2307,8 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         //   %fn   = LOAD [%slot]            (direccion del metodo)
         //   CALLIND %fn (obj, retbuf?, args)
         {
-            const ir::IrValueId v_fn =
-                emit_vtable_method_ptr(
-                    obj, native_class_slot(mtd->vtable_index), e->loc.line);
+            const ir::IrValueId v_fn = emit_vtable_method_ptr(
+                obj, native_class_slot(mtd->vtable_index), e->loc.line);
             ir::IrInstr ci{};
             ci.op = ir::IrOp::CALLIND;
             ci.type = ret_ir;
@@ -2539,7 +2535,6 @@ void Lowering::export_classes_to_ir(ir::IrModule &out) {
         out.classes.push_back(std::move(icls));
     }
 }
-
 
 /**
  * @brief Intenta bajar la llamada como un metodo ESTATICO de la clase.

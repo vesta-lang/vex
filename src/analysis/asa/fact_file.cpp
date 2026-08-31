@@ -38,8 +38,9 @@ constexpr uint32_t kMagicEnd = 0x4E494658u; ///< 'XFIN': cierra el fichero.
  * fichero, y un fichero roto puede decir cualquier cosa.  Con esto, lo que se
  * pide depende de los bytes que quedan de verdad.
  */
-constexpr size_t kBytesMinimosHecho =
-    4 + 4 + 8 + 8 + 4 + 3 * 4 + 1 + 4 + 4 + 1 + 1 + 4 + 4 + 4 + 4 * 4 + 4 + 4;
+constexpr size_t kBytesMinimosHecho = 4 + 4 + 8 + 8 + 4 + 3 * 4 + 4 /* why */ +
+                                      1 + 4 + 4 + 1 + 1 /* unknown_reason */ +
+                                      1 + 4 + 4 + 4 + 4 * 4 + 4 + 4;
 
 /// Marca de "esta cadena no esta" en la tabla de un registro.  No es la cadena
 /// cero: la cadena vacia es una entrada legitima.
@@ -92,9 +93,9 @@ class StringTable {
  * este build no tiene -- se interna: el hecho se conserva y se puede leer, pero
  * nadie de aqui va a preguntar por el con un literal que no existe.
  */
-const char *canonicalize(FactStore &almacen, const std::string &s) {
+const char *canonicalize(FactStore &store, const std::string &s) {
     if (const char *c = canonical_name(s)) return c;
-    return almacen.internar(s);
+    return store.intern(s);
 }
 
 } // namespace
@@ -184,7 +185,7 @@ std::vector<uint8_t> serialize(const FactStore &almacen, uint64_t huella,
     std::unordered_map<const char *, uint64_t> huella_de;
     for (FactId id = 0; id < static_cast<FactId>(almacen.size()); ++id) {
         const Fact &f = almacen.at(id);
-        const char *const dom = f.que.dominio;
+        const char *const dom = f.what.domain;
         auto ad = admitido.find(dom);
         if (ad == admitido.end()) {
             /* El criterio se resuelve UNA vez por dominio: depende del dominio,
@@ -269,28 +270,38 @@ std::vector<uint8_t> serialize(const FactStore &almacen, uint64_t huella,
         for (FactId id : ids) {
             const Fact &f = almacen.at(id);
             w.u32(id); // identidad dentro del fichero, para las pruebas.
-            w.u32(cad(f.que.codigo));
-            w.i64(f.que.a);
-            w.i64(f.que.b);
-            w.u32(cad(f.que.detalle));
-            w.u32(cad(f.donde.isa));
-            w.u32(cad(f.donde.sistema));
-            w.u32(cad(f.donde.backend));
-            w.u8(static_cast<uint8_t>(f.de_quien.clase));
-            w.u32(cad(f.de_quien.funcion));
-            w.u32(f.de_quien.id);
-            w.u8(static_cast<uint8_t>(f.sello.certeza));
-            w.u8(static_cast<uint8_t>(f.sello.origen.fuente));
-            w.u32(cad(f.sello.origen.productor));
-            w.u32(cad(f.sello.origen.funcion));
-            w.u32(f.sello.origen.sitio);
-            for (int i = 0; i < Dependencias::kMax; ++i) {
-                const char *a = f.sello.apoyos.de[i];
+            w.u32(cad(f.what.code));
+            w.i64(f.what.a);
+            w.i64(f.what.b);
+            w.u32(cad(f.what.detail));
+            w.u32(cad(f.scope.isa));
+            w.u32(cad(f.scope.os));
+            w.u32(cad(f.scope.backend));
+            /* Por que el alcance esta restringido.  Va con el alcance y no
+             * aparte: restringir es afirmar que algo NO vale en otro sitio, y
+             * sin el motivo esa afirmacion no se puede comprobar.  Sin este
+             * campo, todo hecho sellado volvia del disco sin justificar. */
+            w.u32(cad(f.scope.why));
+            w.u8(static_cast<uint8_t>(f.about.kind));
+            w.u32(cad(f.about.function));
+            w.u32(f.about.id);
+            w.u8(static_cast<uint8_t>(f.seal.certainty));
+            /* Y de que CLASE es lo que no se supo.  Es lo que separa "se miro y
+             * no hay nada que decir" de "no dio tiempo" y de "no se miro", que
+             * se arreglan de tres formas distintas.  Sin guardarlo, la cache
+             * convertia cualquiera de las tres en la ultima. */
+            w.u8(static_cast<uint8_t>(f.seal.unknown_reason));
+            w.u8(static_cast<uint8_t>(f.seal.origin.source));
+            w.u32(cad(f.seal.origin.producer));
+            w.u32(cad(f.seal.origin.function));
+            w.u32(f.seal.origin.site);
+            for (int i = 0; i < Support::kMax; ++i) {
+                const char *a = f.seal.support.on[i];
                 w.u32(a == nullptr ? kNoString : cad(a));
             }
-            w.u32(cad(f.prueba.regla));
-            w.u32(static_cast<uint32_t>(f.prueba.de.size()));
-            for (FactId d : f.prueba.de)
+            w.u32(cad(f.proof.rule));
+            w.u32(static_cast<uint32_t>(f.proof.from.size()));
+            for (FactId d : f.proof.from)
                 w.u32(d);
         }
         w.patch_u32(pos_tabla, static_cast<uint32_t>(w.size() - inicio_cuerpo));
@@ -326,7 +337,7 @@ std::vector<uint8_t> serialize(const FactStore &almacen, uint64_t huella,
 ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
                       FactStore &destino,
                       const std::vector<DomainCost> &vigentes,
-                      uint64_t compilador, const Ambito &aqui) {
+                      uint64_t compilador, const Scope &aqui) {
     ReadResult r;
     if (datos == nullptr || n == 0) {
         r.reason = ReadReason::Empty;
@@ -500,39 +511,58 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
         for (uint32_t h = 0; h < n_hechos && L.ok(); ++h) {
             Fact f;
             const uint32_t id_original = L.u32();
-            f.que.dominio = dominio;
-            f.que.codigo = cad(L.u32());
-            f.que.a = L.i64();
-            f.que.b = L.i64();
-            f.que.detalle = cad(L.u32());
-            f.donde.isa = cad(L.u32());
-            f.donde.sistema = cad(L.u32());
-            f.donde.backend = cad(L.u32());
-            f.de_quien.clase = static_cast<Sujeto::Clase>(L.u8());
-            f.de_quien.funcion = cad(L.u32());
-            f.de_quien.id = L.u32();
-            f.sello.certeza = static_cast<Certeza>(L.u8());
-            f.sello.origen.fuente = static_cast<Fuente>(L.u8());
-            f.sello.origen.productor = cad(L.u32());
-            f.sello.origen.funcion = cad(L.u32());
-            f.sello.origen.sitio = L.u32();
-            for (int k = 0; k < Dependencias::kMax; ++k) {
+            f.what.domain = dominio;
+            f.what.code = cad(L.u32());
+            f.what.a = L.i64();
+            f.what.b = L.i64();
+            f.what.detail = cad(L.u32());
+            f.scope.isa = cad(L.u32());
+            f.scope.os = cad(L.u32());
+            f.scope.backend = cad(L.u32());
+            f.scope.why = cad(L.u32());
+            f.about.kind = static_cast<Subject::Kind>(L.u8());
+            f.about.function = cad(L.u32());
+            f.about.id = L.u32();
+            f.seal.certainty = static_cast<Certainty>(L.u8());
+            f.seal.unknown_reason = static_cast<UnknownReason>(L.u8());
+            f.seal.origin.source = static_cast<Source>(L.u8());
+            f.seal.origin.producer = cad(L.u32());
+            f.seal.origin.function = cad(L.u32());
+            f.seal.origin.site = L.u32();
+            for (int k = 0; k < Support::kMax; ++k) {
                 const uint32_t idx = L.u32();
-                f.sello.apoyos.de[k] = (idx == kNoString) ? nullptr : cad(idx);
+                f.seal.support.on[k] = (idx == kNoString) ? nullptr : cad(idx);
             }
-            f.prueba.regla = cad(L.u32());
+            f.proof.rule = cad(L.u32());
             const uint32_t n_apoyos = L.u32();
             if (!L.ok()) break;
-            f.prueba.de.reserve(std::min<size_t>(n_apoyos, L.remaining() / 4));
+            f.proof.from.reserve(std::min<size_t>(n_apoyos, L.remaining() / 4));
             for (uint32_t k = 0; k < n_apoyos && L.ok(); ++k)
-                f.prueba.de.push_back(
+                f.proof.from.push_back(
                     L.u32()); // aun en identidades del fichero.
             if (!L.ok()) break;
-            /* Y aqui el filtro por ambito.  Un hecho que dice valer solo en
-             * otro objetivo no se deposita: afirmarlo aqui seria dar por bueno
-             * en un sitio algo que se comprobo en otro.  Se cuenta, que no
-             * saber por que falta un hecho es lo mismo que no tenerlo. */
-            if (!f.donde.vale_en(aqui)) {
+            /* Y aqui el filtro por ambito, que solo actua si QUIEN LEE dijo
+             * donde esta.
+             *
+             * Cargar NO es preguntar, y confundirlo costo un hecho de cada dos.
+             * El almacen es un deposito: guarda lo que se sabe de todos los
+             * objetivos, y quien filtra es `find`, con el ambito de quien
+             * pregunta en la mano.  Un mismo almacen se consulta desde `vm`,
+             * desde `jit` y desde `aot` en la misma compilacion, asi que
+             * quedarse en la carga solo con lo de UNO haria desaparecer lo de
+             * los otros -- y sin decirlo.
+             *
+             * Con un ambito vacio -- el defecto, "no estoy diciendo donde
+             * estoy" -- no se descarta nada.  Es lo contrario de lo que hacia:
+             * `vale_en` mira si el ambito del HECHO cabe en el de quien
+             * pregunta, asi que un ambito vacio no daba por bueno "todo" sino
+             * SOLO lo universal, y todo hecho sellado -- justo el que costo
+             * trabajo sellar bien -- se perdia en silencio al volver del disco.
+             *
+             * Quien si quiera estrechar al leer pasa su ambito y entonces se
+             * cuenta lo descartado: no saber por que falta un hecho es lo mismo
+             * que no tenerlo. */
+            if (!aqui.universal() && !f.scope.holds_in(aqui)) {
                 ++r.out_of_scope;
                 continue;
             }
@@ -542,6 +572,14 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
         if (!L.ok()) break;
         L.seek(fin_registro);
         ++r.domains;
+        /* Y queda dicho que ese dominio YA ESTA en el almacen.
+         *
+         * Sin esto la cache no ahorraba nada: `producir` no tiene forma de
+         * saber que el conocimiento vino de disco, lo volveria a calcular, y
+         * ademas el almacen acabaria con los hechos por duplicado.  Leer y
+         * producir son dos caminos hacia el mismo sitio, y el almacen tiene que
+         * decir lo mismo se haya llegado por uno o por el otro. */
+        destino.mark_domain(dominio);
     }
 
     if (!L.ok()) {
@@ -554,21 +592,21 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
      * que una que apunte a un hecho que no existe. */
     for (Fact &f : leidos) {
         size_t escribe = 0;
-        for (size_t k = 0; k < f.prueba.de.size(); ++k) {
-            const auto it = remapeo.find(f.prueba.de[k]);
-            const FactId nuevo = (it == remapeo.end()) ? kSinHecho : it->second;
-            if (nuevo == kSinHecho) {
+        for (size_t k = 0; k < f.proof.from.size(); ++k) {
+            const auto it = remapeo.find(f.proof.from[k]);
+            const FactId nuevo = (it == remapeo.end()) ? kNoFact : it->second;
+            if (nuevo == kNoFact) {
                 ++r.lost_proofs;
                 continue;
             }
-            f.prueba.de[escribe++] = nuevo;
+            f.proof.from[escribe++] = nuevo;
         }
-        f.prueba.de.resize(escribe);
+        f.proof.from.resize(escribe);
     }
 
-    destino.reservar(destino.size() + leidos.size());
+    destino.reserve(destino.size() + leidos.size());
     for (Fact &f : leidos)
-        destino.anadir(std::move(f));
+        destino.add(std::move(f));
     r.facts = static_cast<uint32_t>(leidos.size());
     r.ok = true;
     return r;
@@ -577,7 +615,7 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
 ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
                            FactStore &destino,
                            const std::vector<DomainCost> &vigentes,
-                           uint64_t compilador, const Ambito &aqui) {
+                           uint64_t compilador, const Scope &aqui) {
     ReadResult r;
     std::vector<uint8_t> bytes;
     if (!::fs::file_exists(ruta)) {

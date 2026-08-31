@@ -64,9 +64,9 @@ enum class ReachStatus {
  * justo el patron que una muestra al azar esconde.
  */
 struct DanglingSource {
-    ContentHash from;                        ///< quien cita
+    ContentHash from; ///< quien cita
     NodeKind from_kind = NodeKind::Unknown;
-    size_t count = 0;                        ///< cuantas ausentes cita
+    size_t count = 0; ///< cuantas ausentes cita
 };
 
 /// Lo que un recorrido encontro.  Son DATOS: quien lo pida decide que decir.

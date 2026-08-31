@@ -576,10 +576,9 @@ bool publish_vxdbg_artifact(const std::string &artifact_path,
         std::fclose(f);
         if (bytes.empty()) return false;
     }
-    const void *datos =
-        artifact_bytes != nullptr
-            ? static_cast<const void *>(artifact_bytes->data())
-            : static_cast<const void *>(bytes.data());
+    const void *datos = artifact_bytes != nullptr
+                            ? static_cast<const void *>(artifact_bytes->data())
+                            : static_cast<const void *>(bytes.data());
     const size_t tam =
         artifact_bytes != nullptr ? artifact_bytes->size() : bytes.size();
 

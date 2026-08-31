@@ -77,7 +77,8 @@ bool register_jit_unwind(uint8_t *code, size_t bytes, const MFunction &fn,
      * ninguno (hoja sin marco): ahi la suposicion de hoja del sistema ES la
      * correcta, asi que no registrar es lo acertado. */
     if (fn.prologue_instrs == 0 || fn.prologue_bytes == 0) return false;
-    if (fn.prologue_bytes > 255) return false; // no cabe en el campo del sistema
+    if (fn.prologue_bytes > 255)
+        return false; // no cabe en el campo del sistema
 
     const uint8_t fin = static_cast<uint8_t>(fn.prologue_bytes);
 

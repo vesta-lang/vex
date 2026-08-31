@@ -25,7 +25,7 @@
  *  - y que el NIVEL de cache no cambie lo que se sabe, solo cuanto se guarda.
  */
 
-#include "analysis/asa/base_hechos.h"
+#include "analysis/asa/fact_base.h"
 #include "analysis/asa/fact_file.h"
 #include "analysis/asa/fact_store.h"
 
@@ -51,35 +51,35 @@ static int g_fail = 0;
 /// Un almacen pequeño con una derivacion de dos escalones y dos dominios.
 static void poblar(FactStore &a) {
     Fact base;
-    base.que.dominio = kProductorEstructura;
-    base.que.codigo = "estructura.forma";
-    base.que.a = 3;
-    base.que.b = 7;
-    base.que.detalle = a.internar("tres bloques");
-    base.de_quien.clase = Sujeto::Clase::Funcion;
-    base.de_quien.funcion = a.internar("f");
-    base.sello.certeza = Certeza::Demostrada;
-    base.sello.origen.productor = kProductorEstructura;
-    base.sello.origen.funcion = a.internar("f");
-    const FactId id_base = a.anadir(std::move(base));
+    base.what.domain = kProducerStructure;
+    base.what.code = "structure.shape";
+    base.what.a = 3;
+    base.what.b = 7;
+    base.what.detail = a.intern("tres bloques");
+    base.about.kind = Subject::Kind::Function;
+    base.about.function = a.intern("f");
+    base.seal.certainty = Certainty::Proven;
+    base.seal.origin.producer = kProducerStructure;
+    base.seal.origin.function = a.intern("f");
+    const FactId id_base = a.add(std::move(base));
 
     Fact rango;
-    rango.que.dominio = kProductorRangos;
-    rango.que.codigo = "rango.acotado";
-    rango.que.a = -5;
-    rango.que.b = 40;
-    rango.que.detalle = a.internar("del parametro");
-    rango.de_quien.clase = Sujeto::Clase::Valor;
-    rango.de_quien.funcion = a.internar("f");
-    rango.de_quien.id = 12;
-    rango.sello.certeza = Certeza::Inferida;
-    rango.sello.origen.fuente = Fuente::Perfil;
-    rango.sello.origen.productor = kProductorRangos;
-    rango.sello.origen.sitio = 12;
-    rango.sello.apoyos.anadir(kProductorEstructura);
-    rango.prueba.regla = "flujo-de-datos";
-    rango.prueba.de.push_back(id_base);
-    a.anadir(std::move(rango));
+    rango.what.domain = kProducerRanges;
+    rango.what.code = "range.bounded";
+    rango.what.a = -5;
+    rango.what.b = 40;
+    rango.what.detail = a.intern("del parametro");
+    rango.about.kind = Subject::Kind::Value;
+    rango.about.function = a.intern("f");
+    rango.about.id = 12;
+    rango.seal.certainty = Certainty::Inferred;
+    rango.seal.origin.source = Source::Profile;
+    rango.seal.origin.producer = kProducerRanges;
+    rango.seal.origin.site = 12;
+    rango.seal.support.add(kProducerStructure);
+    rango.proof.rule = "flujo-de-datos";
+    rango.proof.from.push_back(id_base);
+    a.add(std::move(rango));
 }
 
 // ===========================================================================
@@ -102,25 +102,24 @@ static void probar_ida_y_vuelta() {
     CHECK(destino.size() == 2, "y quedan depositados en el almacen");
 
     const Fact &f0 = destino.at(0);
-    CHECK(std::string(f0.que.codigo) == "estructura.forma", "el codigo vuelve");
-    CHECK(f0.que.a == 3 && f0.que.b == 7, "los numeros vuelven");
-    CHECK(std::string(f0.que.detalle) == "tres bloques", "el detalle vuelve");
-    CHECK(f0.sello.certeza == Certeza::Demostrada, "la certeza vuelve");
+    CHECK(std::string(f0.what.code) == "structure.shape", "el codigo vuelve");
+    CHECK(f0.what.a == 3 && f0.what.b == 7, "los numeros vuelven");
+    CHECK(std::string(f0.what.detail) == "tres bloques", "el detalle vuelve");
+    CHECK(f0.seal.certainty == Certainty::Proven, "la certeza vuelve");
 
     const Fact &f1 = destino.at(1);
-    CHECK(f1.que.a == -5, "un numero negativo no se estropea al guardarlo");
-    CHECK(f1.sello.origen.fuente == Fuente::Perfil, "la fuente vuelve");
-    CHECK(f1.de_quien.clase == Sujeto::Clase::Valor,
-          "la clase de sujeto vuelve");
-    CHECK(f1.de_quien.id == 12, "y el valor del que habla");
+    CHECK(f1.what.a == -5, "un numero negativo no se estropea al guardarlo");
+    CHECK(f1.seal.origin.source == Source::Profile, "la fuente vuelve");
+    CHECK(f1.about.kind == Subject::Kind::Value, "la clase de sujeto vuelve");
+    CHECK(f1.about.id == 12, "y el valor del que habla");
 
     /* Lo que de verdad importa: el hecho derivado sigue apoyandose EN EL MISMO,
      * y se puede recorrer hacia atras.  Sin esto el fichero guardaria hechos
      * sueltos y no conocimiento. */
-    CHECK(f1.prueba.de.size() == 1, "el apoyo sobrevive");
-    CHECK(f1.prueba.de[0] == 0, "y apunta al hecho que lo sostiene");
-    CHECK(std::string(f1.prueba.regla) == "flujo-de-datos", "la regla vuelve");
-    CHECK(destino.explicar(1).size() == 2, "la derivacion se recorre entera");
+    CHECK(f1.proof.from.size() == 1, "el apoyo sobrevive");
+    CHECK(f1.proof.from[0] == 0, "y apunta al hecho que lo sostiene");
+    CHECK(std::string(f1.proof.rule) == "flujo-de-datos", "la regla vuelve");
+    CHECK(destino.explain(1).size() == 2, "la derivacion se recorre entera");
 }
 
 // ===========================================================================
@@ -134,14 +133,14 @@ static void probar_identidad_de_nombres() {
     FactStore destino;
     read_facts(bytes.data(), bytes.size(), 1, destino);
 
-    CHECK(destino.at(0).que.dominio == kProductorEstructura,
+    CHECK(destino.at(0).what.domain == kProducerStructure,
           "el dominio vuelve a ser el literal, no una copia");
-    CHECK(destino.at(1).sello.origen.productor == kProductorRangos,
+    CHECK(destino.at(1).seal.origin.producer == kProducerRanges,
           "el productor tambien");
-    CHECK(destino.at(1).sello.apoyos.depende_de(kProductorEstructura),
+    CHECK(destino.at(1).seal.support.depends_on(kProducerStructure),
           "y por eso la dependencia se sigue reconociendo");
     /* Y la consulta por dominio, que va indexada por ese mismo puntero. */
-    CHECK(destino.de_dominio(kProductorRangos).size() == 1,
+    CHECK(destino.of_domain(kProducerRanges).size() == 1,
           "un hecho de disco se encuentra buscando por su dominio");
 }
 
@@ -156,15 +155,15 @@ static void probar_anade_sobre_lo_existente() {
 
     FactStore destino;
     Fact previo;
-    previo.que.dominio = kProductorBucles;
-    previo.que.codigo = "bucle.forma";
-    destino.anadir(std::move(previo));
+    previo.what.domain = kProducerLoops;
+    previo.what.code = "loop.shape";
+    destino.add(std::move(previo));
 
     const ReadResult r = read_facts(bytes.data(), bytes.size(), 2, destino);
     CHECK(r.ok && destino.size() == 3, "lo leido se suma a lo que ya habia");
     /* El apoyo se ha corrido: el hecho base ya no es el 0, es el 1. */
-    CHECK(destino.at(2).prueba.de.size() == 1 &&
-              destino.at(2).prueba.de[0] == 1,
+    CHECK(destino.at(2).proof.from.size() == 1 &&
+              destino.at(2).proof.from[0] == 1,
           "los apoyos se recolocan sobre el almacen destino");
 }
 
@@ -207,7 +206,7 @@ static void probar_dominio_desconocido() {
      * fichero de otra version sino uno corrupto, y se estaria comprobando otra
      * cosa -- que es justo lo que pasaba antes de que hubiera sumas. */
     std::vector<uint8_t> tocado = bytes;
-    const std::string marca(kProductorEstructura);
+    const std::string marca(kProducerStructure);
     size_t pos = std::string::npos;
     for (size_t i = 0; i + marca.size() <= tocado.size(); ++i) {
         if (std::memcmp(tocado.data() + i, marca.data(), marca.size()) == 0) {
@@ -247,7 +246,7 @@ static void probar_dominio_desconocido() {
     CHECK(r.facts == 1, "y se lee el que si");
     CHECK(r.lost_proofs == 1,
           "el apoyo que se quedo fuera se PIERDE y se cuenta");
-    CHECK(destino.at(0).prueba.de.empty(),
+    CHECK(destino.at(0).proof.from.empty(),
           "nunca se guarda una referencia a un hecho que no existe");
 }
 
@@ -275,8 +274,8 @@ static void probar_niveles() {
 
     /* Estructura es cara de rehacer; rangos, barato y recomputable. */
     const std::vector<DomainCost> costes = {
-        {kProductorEstructura, 50000, false},
-        {kProductorRangos, 10, true},
+        {kProducerStructure, 50000, false},
+        {kProducerRanges, 10, true},
     };
 
     CHECK(serialize(origen, 5, CacheLevel::Off, costes).empty(),
@@ -310,8 +309,8 @@ static void probar_niveles() {
     /* Y por coste, con el mismo dominio caro pero recomputable, sigue entrando:
      * el criterio es lo que cuesta rehacerlo, no su naturaleza. */
     const std::vector<DomainCost> caro = {
-        {kProductorEstructura, 50000, true},
-        {kProductorRangos, 10, true},
+        {kProducerStructure, 50000, true},
+        {kProducerRanges, 10, true},
     };
     FactStore d_caro;
     const std::vector<uint8_t> b_caro =
@@ -345,16 +344,16 @@ static void probar_granularidad() {
 
     /* Cada dominio guarda la huella de LO QUE EL MIRO. */
     std::vector<DomainCost> escritos = {
-        {kProductorEstructura, 0, true, 0x1111ull},
-        {kProductorRangos, 0, true, 0x2222ull},
+        {kProducerStructure, 0, true, 0x1111ull},
+        {kProducerRanges, 0, true, 0x2222ull},
     };
     const std::vector<uint8_t> bytes =
         serialize(origen, 7, CacheLevel::All, escritos);
 
     /* Cambia lo que miraba UNO de los dos.  Lo suyo caduca; lo del otro no. */
     std::vector<DomainCost> vigentes = {
-        {kProductorEstructura, 0, true, 0x1111ull},
-        {kProductorRangos, 0, true, 0x9999ull},
+        {kProducerStructure, 0, true, 0x1111ull},
+        {kProducerRanges, 0, true, 0x9999ull},
     };
     FactStore destino;
     const ReadResult r =
@@ -362,7 +361,7 @@ static void probar_granularidad() {
     CHECK(r.ok, "que un dominio caduque no invalida el fichero");
     CHECK(r.stale == 1, "caduca solo el registro cuya huella cambio");
     CHECK(r.facts == 1, "y se conserva lo del dominio que no se toco");
-    CHECK(destino.at(0).que.dominio == kProductorEstructura,
+    CHECK(destino.at(0).what.domain == kProducerStructure,
           "lo que sobrevive es justo lo que no dependia de lo que cambio");
 
     /* Sin decir nada, se acepta todo: no se puede comprobar, y suponer lo peor
@@ -372,7 +371,7 @@ static void probar_granularidad() {
           "quien no dice de que depende se queda como estaba");
 
     /* Y un dominio que no supo decir de que dependia tampoco se puede tirar. */
-    std::vector<DomainCost> sin_huella = {{kProductorEstructura, 0, true, 0}};
+    std::vector<DomainCost> sin_huella = {{kProducerStructure, 0, true, 0}};
     const std::vector<uint8_t> b2 =
         serialize(origen, 7, CacheLevel::All, sin_huella);
     FactStore d3;

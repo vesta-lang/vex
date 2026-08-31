@@ -572,7 +572,8 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     generate_new_helpers(out_module);
     // Thunks para `&extern` usado como cfn (se rellenan durante el lowering).
     generate_extern_cfn_thunks(out_module);
-    // Los ayudantes que liberan la ranura de un campo unique al reasignarlo, uno
+    // Los ayudantes que liberan la ranura de un campo unique al reasignarlo,
+    // uno
     //  AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
     // __module_init (las clases son layout estatico compile-time).
     if (!native_poo_) generate_module_init_function(out_module);
@@ -1328,8 +1329,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         emit_cleanups_all();
         // Instrumentacion: vx_trace:exit antes del RET implicito.
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
-            fd->name != "__module_init" &&
-            fd->name.rfind("__new_", 0) != 0 &&
+            fd->name != "__module_init" && fd->name.rfind("__new_", 0) != 0 &&
             fd->name.rfind("__async_", 0) != 0 &&
             fd->name.rfind("__lambda_", 0) != 0 &&
             fd->name.rfind("__spawn_", 0) != 0) {

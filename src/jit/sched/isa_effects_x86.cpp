@@ -84,9 +84,8 @@ uint32_t regset_key(const char *rs, uint16_t regset_idx) {
     }
 
     // --- vector XMM/YMM/ZMM (SSE/AVX/AVX512): 0-15 aliasan MReg XMM ---
-    if (s.size() >= 4 &&
-        (s.rfind("XMM", 0) == 0 || s.rfind("YMM", 0) == 0 ||
-         s.rfind("ZMM", 0) == 0)) {
+    if (s.size() >= 4 && (s.rfind("XMM", 0) == 0 || s.rfind("YMM", 0) == 0 ||
+                          s.rfind("ZMM", 0) == 0)) {
         const int n = suffix_num(s, 3);
         if (n >= 0 && n <= 15)
             return static_cast<uint32_t>(static_cast<int>(MReg::XMM0) + n);
@@ -96,7 +95,6 @@ uint32_t regset_key(const char *rs, uint16_t regset_idx) {
     // --- resto de clases con nombre fijo (K/MM/ST/seg/CR/DR/MSR/MXCSR/...) ---
     // No estan en MReg; se rastrean por su indice de register_set (estable).
     return SPECIAL_BASE + regset_idx;
-
 }
 
 /// @brief Como se llama @p op en el ensamblador de x86.
@@ -106,7 +104,6 @@ uint32_t regset_key(const char *rs, uint16_t regset_idx) {
 /// leyendo el descriptor del objetivo.  PUSH/POP tampoco: tocan la pila y la
 /// memoria de forma implicita, y eso lo contesta @c pseudo.
 const char *mnemonic(MOp op) {
-
     switch (op) {
     /* Movimiento / ALU entera. */
     case MOp::MOV: return "mov";
@@ -226,7 +223,6 @@ const char *mnemonic(MOp op) {
     }
 }
 
-
 /// @brief Clave uniforme de un operando REG/VREG, o @c UINT32_MAX si no lo es.
 uint32_t reg_key(const MOperand &o) {
     if (o.kind == MOperandKind::REG) return o.reg;
@@ -318,8 +314,8 @@ bool pseudo(const MInstr &mi, MEffects &e) {
      * falla una lista escrita a mano. */
     case MOp::REP_MOVSB:
     case MOp::REP_STOSB:
-        add_reg(e.reads, static_cast<uint8_t>(MReg::RDI));  // a donde
-        add_reg(e.reads, static_cast<uint8_t>(MReg::RCX));  // cuantos
+        add_reg(e.reads, static_cast<uint8_t>(MReg::RDI)); // a donde
+        add_reg(e.reads, static_cast<uint8_t>(MReg::RCX)); // cuantos
         add_reg(e.writes, static_cast<uint8_t>(MReg::RDI));
         add_reg(e.writes, static_cast<uint8_t>(MReg::RCX));
         if (mi.op == MOp::REP_MOVSB) {
@@ -376,7 +372,9 @@ const IsaEffects kX86 = {
 
 } // namespace
 
-const IsaEffects &isa_effects_x86() { return kX86; }
+const IsaEffects &isa_effects_x86() {
+    return kX86;
+}
 
 } // namespace sched
 } // namespace jit

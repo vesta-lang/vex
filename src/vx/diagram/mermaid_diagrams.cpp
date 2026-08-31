@@ -152,10 +152,6 @@ void render_function_body_subgraph(std::ostringstream &os,
 
 // Forward decls usadas por fmt_expr_brief.
 
-
-
-
-
 /**
  * @brief Cuenta total de stmts en un body (recursivo) para info de label.
  */
@@ -491,8 +487,6 @@ void render_externs_batch(std::ostringstream &os,
 // =====================================================================
 //  GENERADOR 2: SSA IR -> Mermaid
 // =====================================================================
-
-
 
 /**
  * @brief Renderiza un IrBlock como un nodo Mermaid con su contenido.
@@ -1593,7 +1587,6 @@ std::string mermaid_from_vel_text(const std::string &vel_text) {
     std::unordered_set<std::string> known_labels;
     for (const auto &b : blocks)
         known_labels.insert(b.name);
-
 
     // Emit nodos sin truncamiento de instrs ni de longitud por linea.
     for (size_t bi = 0; bi < blocks.size(); ++bi) {

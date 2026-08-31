@@ -75,9 +75,18 @@ target_include_directories(vesta_test_flags INTERFACE
 target_link_libraries(vesta_test_flags
         INTERFACE sqlite3
         INTERFACE keystone
-        INTERFACE synchronization
         INTERFACE aot_emit
 )
+
+# `synchronization` es de Windows -- da `WaitOnAddress`/`WakeByAddress`, que en
+# POSIX cubre `futex` --, y estaba sin condicion: en Linux el enlazador la
+# buscaba y no la encontraba, asi que NINGUN test enlazaba.  Y eso no se queda
+# en los tests: rompe el objetivo `all`, del que cuelga el paso previo de CPack,
+# con lo que tampoco se podia generar el instalador.  El bloque de OpenSSL de
+# aqui abajo ya distinguia la plataforma; esta linea se le habia escapado.
+if (WIN32)
+    target_link_libraries(vesta_test_flags INTERFACE synchronization)
+endif ()
 
 # `capstone` NO va aqui: es una libreria de OBJETOS, y sus objetos solo entran
 # en el ejecutable si se enlaza DIRECTAMENTE contra el.  Pasando por un target
@@ -111,19 +120,18 @@ target_compile_options(vesta_test_flags INTERFACE
         -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
         -DDEBUG_EMIT        # permitir mostrar el proceso de emision de codigo
         >
-        $<$<CONFIG:Release>:
-        -O3
-        -march=x86-64
-        -mtune=native
-        -ffast-math
-        -fstrict-aliasing
-        -fno-plt
-        -fomit-frame-pointer
-        -fvisibility=hidden
-        -ffunction-sections
-        -fdata-sections
-        -DNDEBUG
-        >
+        # Release y Profile usan LA MISMA lista que el producto, no una copia.
+        #
+        # Aqui habia una copia escrita a mano, y habia divergido: llevaba
+        # `-ffast-math` y `-mtune=native` cuando el producto ya no.  Un test que
+        # compila las MISMAS fuentes con otra semantica no prueba el programa
+        # que se publica, prueba otro -- y la forma de enterarse seria un test
+        # que pasa aqui y falla en produccion, o al reves.
+        #
+        # Profile no estaba contemplado: los tests se compilaban SIN ninguna
+        # opcion en ese modo.
+        $<$<CONFIG:Release>:${VESTA_OPTS_CODIGO_RELEASE};-fomit-frame-pointer>
+        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};-g;-fno-omit-frame-pointer>
         $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
 )
 

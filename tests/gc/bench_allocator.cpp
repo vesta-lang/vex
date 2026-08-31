@@ -61,7 +61,8 @@ int main() {
             live[i] = p;
             sink += reinterpret_cast<uintptr_t>(p);
         }
-        for (size_t i = 0; i < kBatch; ++i) std::free(live[i]);
+        for (size_t i = 0; i < kBatch; ++i)
+            std::free(live[i]);
     }
     const auto t1 = std::chrono::steady_clock::now();
 
@@ -74,7 +75,8 @@ int main() {
             live_raw[i] = p;
             sink += p;
         }
-        for (size_t i = 0; i < kBatch; ++i) raw.free(live_raw[i]);
+        for (size_t i = 0; i < kBatch; ++i)
+            raw.free(live_raw[i]);
     }
     const auto t3 = std::chrono::steady_clock::now();
 
@@ -89,7 +91,8 @@ int main() {
                 raw_ms * 1e6 / ops);
     std::printf("  relacion           : %.2fx %s\n",
                 sys_ms > raw_ms ? sys_ms / raw_ms : raw_ms / sys_ms,
-                sys_ms > raw_ms ? "a favor del nuestro" : "a favor del sistema");
+                sys_ms > raw_ms ? "a favor del nuestro"
+                                : "a favor del sistema");
     // Que el optimizador no borre el trabajo.
     if (sink == 0x1234567) std::printf("(imposible)\n");
     return 0;

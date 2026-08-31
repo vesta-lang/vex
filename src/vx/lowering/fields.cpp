@@ -23,7 +23,7 @@
  */
 #include "vx/lowering.h"
 #include "util/thread_slot.h" // el estado por hilo NO va en thread_local
-#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -218,9 +218,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
 
     // Helpers de emision (u64).
     auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b,
-                   ir::IrType t) {
-        return emit_ir_binop(op, a, b, t, 0);
-    };
+                   ir::IrType t) { return emit_ir_binop(op, a, b, t, 0); };
     // max sin ramas: max(a,b) = b ^ ((a^b) & -(a>b)).
     auto emit_max = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
         ir::IrValueId gt = bin(ir::IrOp::CMP_UGT, a, b, ir::IrType::BOOL);
@@ -669,7 +667,8 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
     }
     const StructFieldInfo *fi_hit = find_field(lay, e->field_name);
     const uint32_t off = fi_hit != nullptr ? fi_hit->offset : 0u;
-    const Type ftyp = fi_hit != nullptr ? fi_hit->type : Type{PrimitiveKind::COUNT};
+    const Type ftyp =
+        fi_hit != nullptr ? fi_hit->type : Type{PrimitiveKind::COUNT};
     const bool ok = (fi_hit != nullptr);
     if (!ok) {
         error_at(e->loc, "lowering: campo '" + e->field_name +
@@ -903,7 +902,8 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     }
     const StructFieldInfo *fi_hit = find_field(lay, target->field_name);
     const uint32_t off = fi_hit != nullptr ? fi_hit->offset : 0u;
-    const Type ftyp = fi_hit != nullptr ? fi_hit->type : Type{PrimitiveKind::COUNT};
+    const Type ftyp =
+        fi_hit != nullptr ? fi_hit->type : Type{PrimitiveKind::COUNT};
     const bool ok = (fi_hit != nullptr);
     if (!ok) {
         error_at(loc, "lowering: campo '" + target->field_name +

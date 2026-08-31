@@ -18,6 +18,7 @@
 #include "util/env_flags.h"
 #include "analysis/asa/aggregate_facts.h"
 
+#include "analysis/asa/fact_base.h" // la base compartida, cuando la hay
 #include "analysis/memory/fn_targets.h"
 #include "analysis/memory/points_to.h"
 #include "ir/ssa_ir.h"
@@ -331,7 +332,7 @@ namespace {
 
 using ir::IrOp;
 
-constexpr const char *kProductor = "asa.forma_de_valor";
+constexpr const char *kProductor = "asa.value_shape";
 /// Cuantas funciones se siguen persiguiendo un valor.  Mas hondo no es mas
 /// verdad: agotarla NO concluye nada, se anota como limitacion.
 constexpr int kProfundidadFrontera = 3;
@@ -340,21 +341,60 @@ constexpr int kProfundidadFrontera = 3;
 /// rehacen.  Sin esto, un valor que pasa por varias operaciones volvia a pagar
 /// el analisis de memoria en cada una.
 struct CacheHechos {
+    /**
+     * @brief Lo que hace falta de una funcion, APUNTADO y no copiado.
+     *
+     * Punteros porque los dos hechos pueden venir de DOS sitios: de la base
+     * compartida -- cuando quien llama la trae -- o de la reserva propia de
+     * abajo.  Con copias no se podria consumir la base sin duplicarla, que es
+     * justo lo que se quiere evitar; y copiar un points-to no es barato.
+     */
     struct Entrada {
+        const IrFacts *hechos = nullptr;
+        const PointsTo *direcciones = nullptr;
+    };
+
+    /**
+     * @brief La base de hechos, si quien llama la tiene.
+     *
+     * Con ella, esta cache deja de calcular: pide.  Sin ella sigue calculando
+     * como siempre -- hay llamantes que no tienen base, y quitarles el camino
+     * seria cambiar una duplicacion por una regresion.
+     *
+     * Es la Regla 1 aplicada donde no se veia: el desperdicio no estaba en dos
+     * criterios distintos, sino en dos COMPUTOS del mismo, uno de ellos
+     * escondido dentro de una cache privada que muere con la llamada.
+     */
+    FactBase *base = nullptr;
+
+    /// Reserva propia: solo se usa para lo que la base no da.
+    struct Propia {
         IrFacts hechos;
         PointsTo direcciones;
     };
-    std::unordered_map<std::string, std::unique_ptr<Entrada>> por_funcion;
+    std::unordered_map<std::string, std::unique_ptr<Propia>> por_funcion;
+    std::unordered_map<std::string, Entrada> vistas;
 
     const Entrada &de(const ir::IrFunction &fn) {
-        auto it = por_funcion.find(fn.name);
-        if (it != por_funcion.end()) return *it->second;
-        auto e = std::unique_ptr<Entrada>(new Entrada());
-        e->hechos = build_ir_facts(fn);
-        e->direcciones = compute_points_to(fn, e->hechos);
-        const Entrada &ref = *e;
-        por_funcion.emplace(fn.name, std::move(e));
-        return ref;
+        auto v = vistas.find(fn.name);
+        if (v != vistas.end()) return v->second;
+
+        Entrada e;
+        if (base != nullptr) {
+            /* De la base, que ya los tiene o los calculara UNA vez para todos
+             * sus consumidores.  Las referencias viven lo que la base, y la
+             * base vive mas que este recorrido. */
+            e.hechos = &base->structure(fn);
+            e.direcciones = &base->memory(fn);
+        } else {
+            auto p = std::unique_ptr<Propia>(new Propia());
+            p->hechos = build_ir_facts(fn);
+            p->direcciones = compute_points_to(fn, p->hechos);
+            e.hechos = &p->hechos;
+            e.direcciones = &p->direcciones;
+            por_funcion.emplace(fn.name, std::move(p));
+        }
+        return vistas.emplace(fn.name, e).first->second;
     }
 };
 
@@ -480,7 +520,9 @@ struct Observado {
         fronteras.push_back(std::move(f));
     }
     void limitar(CodigoLimitacion c, SitioIr s, const std::string &destino = {},
-                 uint32_t profundidad = 0, ir::IrValueId valor = 0) {
+                 uint32_t profundidad = 0, ir::IrValueId valor = 0,
+                 UnknownReason reason = UnknownReason::NotAsked,
+                 const char *reason_code = "") {
         abrir_hacia_arriba(s.universo);
         Limitacion l;
         l.codigo = c;
@@ -488,6 +530,11 @@ struct Observado {
         l.destino = destino;
         l.profundidad = profundidad;
         l.valor = valor;
+        /* De que CLASE es, en el vocabulario comun.  Por defecto "no
+         * preguntado": quien limita sin decirlo queda contado como tal en vez
+         * de pasar por una clase que no es suya. */
+        l.reason = reason;
+        l.reason_code = reason_code;
         limitaciones.push_back(std::move(l));
     }
 };
@@ -605,10 +652,15 @@ void observar(const ir::IrModule &mod, const ir::IrFunction &fn,
              * elige uno de los posibles. */
             std::string destino = in.func_name;
             if (in.op == IrOp::CALLIND) {
-                destino = funcion_apuntada(fn, facts, in.func_ptr);
+                /* Y si no se sabe, se pregunta POR QUE.  Antes las siete formas
+                 * de no saberlo daban la misma limitacion, asi que un destino
+                 * que varia segun el camino -- especulable con guarda -- se
+                 * leia igual que una operacion que no modelamos. */
+                FnTargetUnknown why;
+                destino = pointed_function(fn, facts, in.func_ptr, &why);
                 if (destino.empty()) {
                     o.limitar(CodigoLimitacion::DestinoIndirectoNoUnico, sitio,
-                              {}, 0, in.func_ptr);
+                              {}, 0, in.func_ptr, why.reason, why.code);
                     continue;
                 }
             }
@@ -637,7 +689,7 @@ void observar(const ir::IrModule &mod, const ir::IrFunction &fn,
              */
             const uint32_t u_op = o.abrir_universo(universo, g->name);
             const CacheHechos::Entrada &e = cache.de(*g);
-            observar(mod, *g, e.hechos, e.direcciones, g->params[arg], o,
+            observar(mod, *g, *e.hechos, *e.direcciones, g->params[arg], o,
                      hondura - 1, RelacionAcceso::EnOperacion, u_op, cache);
             if (o.universos[u_op].cerrado) {
                 ParticipacionUnidad p;
@@ -706,14 +758,14 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
         a.pasado_por_abi = o.pasado_por_abi;
         a.devuelto_entero = o.devuelto_entero;
         a.transferido_como_bloque = o.transferido_como_bloque;
-        a.sello.origen = {Fuente::Estatico, kProductor, fn.name.c_str(), p};
-        a.sello.apoyos.anadir("analysis.points_to");
+        a.seal.origin = {Source::Static, kProductor, fn.name.c_str(), p};
+        a.seal.support.add("analysis.points_to");
         const FormaDeValor f = a.forma();
-        a.sello.certeza =
+        a.seal.certainty =
             (f == FormaDeValor::SinEvidencia || f == FormaDeValor::Desconocida)
-                ? Certeza::Desconocida
-                : (a.perfil().universo_completo ? Certeza::Demostrada
-                                                : Certeza::Inferida);
+                ? Certainty::Unknown
+                : (a.perfil().universo_completo ? Certainty::Proven
+                                                : Certainty::Inferred);
         out.agregados.push_back(std::move(a));
     }
     for (const ir::IrBlock &b : fn.blocks) {
@@ -768,11 +820,10 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             a.devuelto_entero = o.devuelto_entero;
             a.transferido_como_bloque = o.transferido_como_bloque;
 
-            a.sello.origen = {Fuente::Estatico, kProductor, fn.name.c_str(),
-                              in.dst};
-            a.sello.apoyos.anadir("analysis.points_to");
-            if (!a.frontera.empty())
-                a.sello.apoyos.anadir("analysis.fn_targets");
+            a.seal.origin = {Source::Static, kProductor, fn.name.c_str(),
+                             in.dst};
+            a.seal.support.add("analysis.points_to");
+            if (!a.frontera.empty()) a.seal.support.add("analysis.fn_targets");
 
             /* La certeza depende de si se pudo observar el universo entero.  No
              * de lo ordenados que sean los accesos ni de lo convencido que este
@@ -782,11 +833,11 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             const FormaDeValor f = a.forma();
             if (f == FormaDeValor::SinEvidencia ||
                 f == FormaDeValor::Desconocida)
-                a.sello.certeza = Certeza::Desconocida;
+                a.seal.certainty = Certainty::Unknown;
             else
-                a.sello.certeza = a.perfil().universo_completo
-                                      ? Certeza::Demostrada
-                                      : Certeza::Inferida;
+                a.seal.certainty = a.perfil().universo_completo
+                                       ? Certainty::Proven
+                                       : Certainty::Inferred;
 
             out.agregados.push_back(std::move(a));
         }
@@ -800,8 +851,22 @@ AggregateFactsMap observar_agregados(const ir::IrModule &mod,
                                      const ir::IrFunction &fn,
                                      const IrFacts &facts) {
     if (fn.blocks.empty()) return AggregateFactsMap{};
-    CacheHechos cache;
+    /* Sin nadie que lo traiga, se calcula aqui.  Quien YA lo tenga -- la base
+     * de hechos lo cachea -- debe usar la forma de abajo: repetir el computo es
+     * la otra manera de desperdiciar lo que el ASA existe para compartir. */
     const PointsTo pt = compute_points_to(fn, facts);
+    return observar_agregados(mod, fn, facts, pt);
+}
+
+AggregateFactsMap observar_agregados(const ir::IrModule &mod,
+                                     const ir::IrFunction &fn,
+                                     const IrFacts &facts, const PointsTo &pt,
+                                     FactBase *base) {
+    if (fn.blocks.empty()) return AggregateFactsMap{};
+    CacheHechos cache;
+    /* Con base, las funciones que se visiten al seguir llamadas se PIDEN en vez
+     * de calcularse.  Sin ella, la cache hace lo de siempre. */
+    cache.base = base;
     return observar_con_cache(mod, fn, facts, pt, cache);
 }
 
@@ -823,7 +888,7 @@ ObservacionModulo observar_modulo(const ir::IrModule &mod) {
         if (fn.blocks.empty()) continue;
         const CacheHechos::Entrada &e = cache.de(fn);
         for (AggregateFacts &a :
-             observar_con_cache(mod, fn, e.hechos, e.direcciones, cache)
+             observar_con_cache(mod, fn, *e.hechos, *e.direcciones, cache)
                  .agregados) {
             IdentidadValor id;
             id.funcion = fn.name;
@@ -928,7 +993,7 @@ void volcar_formas(const ir::IrModule &mod, const char *momento) {
         if (fn.blocks.empty()) continue;
         const CacheHechos::Entrada &e = cache.de(fn);
         const AggregateFactsMap m =
-            observar_con_cache(mod, fn, e.hechos, e.direcciones, cache);
+            observar_con_cache(mod, fn, *e.hechos, *e.direcciones, cache);
         for (const AggregateFacts &a : m.agregados) {
             const PerfilDeUso p = a.perfil();
             // El PERFIL, no solo la forma: es lo que permite ver si el analisis
@@ -944,7 +1009,7 @@ void volcar_formas(const ir::IrModule &mod, const char *momento) {
                 momento, id_estado, fn.name.c_str(), a.declaracion.linea,
                 a.declaracion.indice, a.ancla, static_cast<long long>(a.bytes),
                 a.offsets_tocados(), nombre_forma(a.forma()),
-                nombre_certeza(a.sello.certeza), p.universo_completo ? 1 : 0,
+                certainty_name(a.seal.certainty), p.universo_completo ? 1 : 0,
                 p.unidad ? 1 : 0, p.acceso_en_propietario ? 1 : 0,
                 p.acceso_en_operacion ? 1 : 0, p.acceso_independiente ? 1 : 0,
                 p.acceso_dinamico ? 1 : 0, p.escapa ? 1 : 0,

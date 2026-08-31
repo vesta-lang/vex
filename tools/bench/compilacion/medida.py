@@ -31,6 +31,14 @@ def compila_de_verdad(lang: str, cmd: list[str], env: dict, cwd: Path,
     Se exige lo mismo que se le exigiria a cualquiera: codigo de salida cero Y
     un artefacto en disco.  Cualquiera de las dos por separado se deja enganar.
     """
+    # Orden vacia: el lenguaje no tiene camino de compilacion (`python` genera
+    # fuente y tiene modo de comprobacion, pero no compila a binario, asi que
+    # `orden_compilar` devuelve []).  Se responde como cualquier otro caso que
+    # no compila.  Antes esto llegaba a `subprocess.run([])`, que revienta con
+    # `IndexError` -- no con `OSError`, que es lo unico que se recogia -- y
+    # tumbaba la tanda entera en la primera fase que no llevara la guarda.
+    if not cmd:
+        return (False, "sin orden de compilacion para este lenguaje")
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd),
                            env=env, timeout=timeout)

@@ -89,9 +89,8 @@ ir::IrValueId Lowering::emit_optional_value(ir::IrValueId v_arg, const Type &at,
             (void)enforce_nonnull(v_marca, line);
         }
         // Y el valor, donde la disposicion diga.
-        const ir::IrValueId v_off =
-            emit_const(ir::IrType::I64, static_cast<uint64_t>(lay.value_offset),
-                       line);
+        const ir::IrValueId v_off = emit_const(
+            ir::IrType::I64, static_cast<uint64_t>(lay.value_offset), line);
         const ir::IrValueId v_at = emit_ptr_add(v_arg, v_off, line);
         // BugFix sret-cross-mem: el puntero al valor es de la misma memoria que
         // el buffer.  Sin esto, un Optional en un buffer del anfitrion -- el
@@ -150,7 +149,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     const bool is_value = (b == Builtin::Value);
     const bool is_error = (b == Builtin::Error);
 
-    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
+    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo.
+     */
     if (!(is_isPresent || is_unwrap || is_unwrap_unchecked || is_unwrap_or ||
           is_expect || is_Some || is_None || is_Ok || is_Err || is_isOk ||
           is_value || is_error))
@@ -158,7 +158,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
 
     if (is_Some) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "Some: requiere 1 argumento", out_value);
+            return builtin_error(e->loc, "Some: requiere 1 argumento",
+                                 out_value);
         }
         const ir::IrValueId v_payload = lower_expr(e->args[0].get());
         if (v_payload == ir::IR_NO_VALUE) {
@@ -195,9 +196,9 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             emit_store_typed(v_buf, v_one, ir::IrType::I64, e->loc.line);
         }
         // Y el valor, donde la disposicion diga.
-        const ir::IrValueId v_off = emit_const(
-            ir::IrType::I64, static_cast<uint64_t>(lay.value_offset),
-            e->loc.line);
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64, static_cast<uint64_t>(lay.value_offset),
+                       e->loc.line);
         const ir::IrValueId v_buf8 = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
         // buf+8.  Sin esto, el STORE del payload usa acceso VM (`mov`) sobre un
@@ -258,8 +259,10 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     //   Layout: [+0 i64 tag (1=ok, 0=err)][+8 V][+16 E]. 24 bytes.
     if (is_Ok || is_Err) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, (is_Ok ? "Ok" : "Err") +
-                                             std::string(": requiere 1 argumento"), out_value);
+            return builtin_error(e->loc,
+                                 (is_Ok ? "Ok" : "Err") +
+                                     std::string(": requiere 1 argumento"),
+                                 out_value);
         }
         // Bug fix 2026-05-23: si el payload esperado del Result es STRING
         // y el arg es StringLitExpr no interpolado, promover a StringObject
@@ -313,10 +316,10 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                                : e->result_type.pointee2.get();
         if (pt && pt->kind == PrimitiveKind::STRUCT &&
             !pt->struct_name.empty() && !type_is_overlay(*pt)) {
-            const ir::IrValueId v_len = emit_const(
-                ir::IrType::I64,
-                static_cast<uint64_t>(tc_.payload_slot_bytes(*pt)),
-                e->loc.line);
+            const ir::IrValueId v_len =
+                emit_const(ir::IrType::I64,
+                           static_cast<uint64_t>(tc_.payload_slot_bytes(*pt)),
+                           e->loc.line);
             ir::IrInstr mc{};
             mc.op = ir::IrOp::MEMCPY;
             mc.type = ir::IrType::I8;
@@ -334,7 +337,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     // ----- isOk(r) -----  LOAD i64 at +0; returns 1/0 as i32.
     if (is_isOk) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "isOk: requiere 1 argumento", out_value);
+            return builtin_error(e->loc, "isOk: requiere 1 argumento",
+                                 out_value);
         }
         const ir::IrValueId v_buf = lower_expr(e->args[0].get());
         if (v_buf == ir::IR_NO_VALUE) {
@@ -350,7 +354,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     // ----- error(r) -----  LOAD E from r+16 (sin tag check en MVP).
     if (is_value || is_error) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "value/error: requiere 1 argumento", out_value);
+            return builtin_error(e->loc, "value/error: requiere 1 argumento",
+                                 out_value);
         }
         const ir::IrValueId v_buf = lower_expr(e->args[0].get());
         if (v_buf == ir::IR_NO_VALUE) {
@@ -365,11 +370,11 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         const ir::IrType payload_t = ir_type_from_primitive(payload_st.kind);
         // Donde esta cada cosa lo dice la disposicion, no este sitio.
         const ResultLayout lay = tc_.result_layout(at);
-        const ir::IrValueId v_off = emit_const(
-            ir::IrType::I64,
-            static_cast<uint64_t>(is_value ? lay.value_offset
-                                           : lay.error_offset),
-            e->loc.line);
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64,
+                       static_cast<uint64_t>(is_value ? lay.value_offset
+                                                      : lay.error_offset),
+                       e->loc.line);
         const ir::IrValueId v_at = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr de
         // v_buf al v_at para que el LOAD downstream emita `movh`/`loadzh`.
@@ -394,15 +399,17 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     // hace `unwrap_or` para elegir rama.
     if (is_isPresent) {
         if (e->args.size() != 1) {
-            return builtin_error(e->loc, "isPresent: requiere exactamente 1 argumento", out_value);
+            return builtin_error(e->loc,
+                                 "isPresent: requiere exactamente 1 argumento",
+                                 out_value);
         }
         const ir::IrValueId v_arg = lower_expr(e->args[0].get());
         if (v_arg == ir::IR_NO_VALUE) {
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        out_value = emit_optional_present(v_arg, e->args[0]->result_type,
-                                          e->loc.line);
+        out_value =
+            emit_optional_present(v_arg, e->args[0]->result_type, e->loc.line);
         return true;
     }
 
@@ -434,7 +441,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
              * sitio --, asi que no hay que construir nada en ejecucion. */
             std::string msg;
             if (e->args[1]->kind == ast::NodeKind::StringLitExpr)
-                msg = static_cast<ast::StringLitExpr *>(e->args[1].get())->value;
+                msg =
+                    static_cast<ast::StringLitExpr *>(e->args[1].get())->value;
             const ir::IrValueId v_hay =
                 emit_optional_present(v_arg, at, e->loc.line);
             const ir::IrValueId v_cero =
@@ -447,8 +455,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                     return v_cero;
                 },
                 "expect", e->loc.line);
-            out_value = emit_optional_value(v_arg, at, /*checked=*/true,
-                                            e->loc.line);
+            out_value =
+                emit_optional_value(v_arg, at, /*checked=*/true, e->loc.line);
             return true;
         }
         /* `unwrap_or` NO afirma nada, asi que no puede fallar: se pregunta y se
@@ -473,8 +481,9 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     if (is_unwrap || is_unwrap_unchecked) {
         const char *bn = is_unwrap_unchecked ? "unwrap_unchecked" : "unwrap";
         if (e->args.size() != 1) {
-            return builtin_error(e->loc,
-                                 std::string(bn) + ": requiere exactamente 1 argumento", out_value);
+            return builtin_error(
+                e->loc, std::string(bn) + ": requiere exactamente 1 argumento",
+                out_value);
         }
         const ir::IrValueId v_arg = lower_expr(e->args[0].get());
         if (v_arg == ir::IR_NO_VALUE) {

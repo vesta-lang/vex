@@ -66,31 +66,30 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
      * trabajo que hizo quien reparte. */
     const std::string_view name = builtin_name(b);
 
-    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
-    if (!(
-          b == Builtin::Alignof || b == Builtin::Bitcast ||
-          b == Builtin::ComptimeTypeAlignof ||
-          b == Builtin::ComptimeTypeKind || b == Builtin::ComptimeTypeSizeof ||
-          b == Builtin::Extent || b == Builtin::FieldCount ||
-          b == Builtin::FieldGet || b == Builtin::FieldName ||
-          b == Builtin::FieldSet || b == Builtin::FieldType ||
-          b == Builtin::FindType || b == Builtin::ForEachField ||
-          b == Builtin::ForEachMethod || b == Builtin::HasField ||
-          b == Builtin::HasMethod || b == Builtin::InBounds ||
-          b == Builtin::IsBool || b == Builtin::IsChar ||
-          b == Builtin::IsClass || b == Builtin::IsEnum ||
-          b == Builtin::IsFloat || b == Builtin::IsInteger ||
-          b == Builtin::IsNewtype || b == Builtin::IsNumeric ||
-          b == Builtin::IsOpaque || b == Builtin::IsPointer ||
-          b == Builtin::IsPrimitive || b == Builtin::IsSame ||
-          b == Builtin::IsSigned || b == Builtin::IsString ||
-          b == Builtin::IsStruct || b == Builtin::IsSubtype ||
-          b == Builtin::IsUnsigned || b == Builtin::Kind ||
-          b == Builtin::MethodCount || b == Builtin::Offsetof ||
-          b == Builtin::Parent || b == Builtin::Sizeof ||
-          b == Builtin::StaticAssert || b == Builtin::TypeId ||
-          b == Builtin::TypeInfoAlign || b == Builtin::TypeInfoFieldCount ||
-          b == Builtin::TypeInfoFieldName ||
+    /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo.
+     */
+    if (!(b == Builtin::Alignof || b == Builtin::Bitcast ||
+          b == Builtin::ComptimeTypeAlignof || b == Builtin::ComptimeTypeKind ||
+          b == Builtin::ComptimeTypeSizeof || b == Builtin::Extent ||
+          b == Builtin::FieldCount || b == Builtin::FieldGet ||
+          b == Builtin::FieldName || b == Builtin::FieldSet ||
+          b == Builtin::FieldType || b == Builtin::FindType ||
+          b == Builtin::ForEachField || b == Builtin::ForEachMethod ||
+          b == Builtin::HasField || b == Builtin::HasMethod ||
+          b == Builtin::InBounds || b == Builtin::IsBool ||
+          b == Builtin::IsChar || b == Builtin::IsClass ||
+          b == Builtin::IsEnum || b == Builtin::IsFloat ||
+          b == Builtin::IsInteger || b == Builtin::IsNewtype ||
+          b == Builtin::IsNumeric || b == Builtin::IsOpaque ||
+          b == Builtin::IsPointer || b == Builtin::IsPrimitive ||
+          b == Builtin::IsSame || b == Builtin::IsSigned ||
+          b == Builtin::IsString || b == Builtin::IsStruct ||
+          b == Builtin::IsSubtype || b == Builtin::IsUnsigned ||
+          b == Builtin::Kind || b == Builtin::MethodCount ||
+          b == Builtin::Offsetof || b == Builtin::Parent ||
+          b == Builtin::Sizeof || b == Builtin::StaticAssert ||
+          b == Builtin::TypeId || b == Builtin::TypeInfoAlign ||
+          b == Builtin::TypeInfoFieldCount || b == Builtin::TypeInfoFieldName ||
           b == Builtin::TypeInfoFieldOffset ||
           b == Builtin::TypeInfoFieldSize || b == Builtin::TypeInfoKind ||
           b == Builtin::TypeInfoName || b == Builtin::TypeInfoSize ||
@@ -103,13 +102,16 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         ast::Expr *arg = e->args[0].get();
         const Type vt = arg->result_type;
         if (vt.kind != PrimitiveKind::STRUCT) {
-            return builtin_error(e->loc, "extent(v): v debe ser una vista @overlay", out_value);
+            return builtin_error(
+                e->loc, "extent(v): v debe ser una vista @overlay", out_value);
         }
         const auto &lays = tc_.struct_layouts();
         auto it = lays.find(vt.struct_name);
         if (it == lays.end() || !it->second.is_overlay) {
-            return builtin_error(e->loc, "extent(v): '" + vt.struct_name +
-                                             "' no es una vista @overlay", out_value);
+            return builtin_error(e->loc,
+                                 "extent(v): '" + vt.struct_name +
+                                     "' no es una vista @overlay",
+                                 out_value);
         }
         const ir::IrValueId base = lower_expr(arg);
         if (base == ir::IR_NO_VALUE) {
@@ -137,9 +139,11 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     if (b == Builtin::Parent && !e->type_args.empty() && e->args.empty()) {
         const ir::IrValueId rv = lookup("__ovl_root");
         if (rv == ir::IR_NO_VALUE) {
-            return builtin_error(e->loc,
-                                 "parent<T>() solo es valido dentro de un resolver "
-                                 "@offset { } (de un overlay accedido como sub-vista)", out_value);
+            return builtin_error(
+                e->loc,
+                "parent<T>() solo es valido dentro de un resolver "
+                "@offset { } (de un overlay accedido como sub-vista)",
+                out_value);
         }
         out_value = rv;
         return true;
@@ -168,8 +172,11 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             field_addr = lower_index_addr(static_cast<ast::IndexExpr *>(arg));
         }
         if (field_addr == ir::IR_NO_VALUE) {
-            return builtin_error(e->loc, std::string(name) + ": el argumento debe ser un acceso a "
-                                                "campo/elemento de un overlay", out_value);
+            return builtin_error(e->loc,
+                                 std::string(name) +
+                                     ": el argumento debe ser un acceso a "
+                                     "campo/elemento de un overlay",
+                                 out_value);
         }
         // Puntero base de la vista: raiz de la cadena de accesos.
         ast::Expr *root = arg;
@@ -190,9 +197,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             return true;
         }
         // off = field_addr - base_ptr   (u64)
-        ir::IrValueId off =
-            emit_ir_binop(ir::IrOp::SUB, field_addr, base_ptr,
-                          ir::IrType::U64, ln);
+        ir::IrValueId off = emit_ir_binop(ir::IrOp::SUB, field_addr, base_ptr,
+                                          ir::IrType::U64, ln);
         if (b == Builtin::Offsetof) {
             out_value = off;
             return true;
@@ -233,8 +239,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
      * los typenames canonicos importados). */
     if (e->args.size() == 1 && e->args[0] &&
         e->args[0]->kind == ast::NodeKind::StringLitExpr &&
-        (b == Builtin::ComptimeTypeSizeof || b == Builtin::ComptimeTypeAlignof ||
-         b == Builtin::ComptimeTypeKind)) {
+        (b == Builtin::ComptimeTypeSizeof ||
+         b == Builtin::ComptimeTypeAlignof || b == Builtin::ComptimeTypeKind)) {
         const std::string tn =
             static_cast<ast::StringLitExpr *>(e->args[0].get())->value;
         const Type t = tc_.resolve_type_string(tn);
@@ -282,10 +288,12 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     // que los use lo pliega el optimizer y la rama muerta desaparece: en el
     // binario solo queda el camino que corresponde a T.
     if (e->type_args.size() == 1 && e->args.empty() &&
-        (b == Builtin::IsFloat || b == Builtin::IsInteger || b == Builtin::IsSigned ||
-         b == Builtin::IsUnsigned || b == Builtin::IsNumeric || b == Builtin::IsBool ||
-         b == Builtin::IsChar || b == Builtin::IsPointer || b == Builtin::IsString ||
-         b == Builtin::IsClass || b == Builtin::IsStruct || b == Builtin::IsPrimitive ||
+        (b == Builtin::IsFloat || b == Builtin::IsInteger ||
+         b == Builtin::IsSigned || b == Builtin::IsUnsigned ||
+         b == Builtin::IsNumeric || b == Builtin::IsBool ||
+         b == Builtin::IsChar || b == Builtin::IsPointer ||
+         b == Builtin::IsString || b == Builtin::IsClass ||
+         b == Builtin::IsStruct || b == Builtin::IsPrimitive ||
          b == Builtin::IsEnum)) {
         int64_t v = 0;
         if (!const_cast<TypeChecker &>(tc_).lsp_eval_builtin_scalar(e, &v)) {
@@ -298,8 +306,9 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         return true;
     }
     if (!e->type_args.empty() &&
-        (b == Builtin::Sizeof || b == Builtin::Alignof || b == Builtin::Typename ||
-         b == Builtin::TypeId || b == Builtin::Kind)) {
+        (b == Builtin::Sizeof || b == Builtin::Alignof ||
+         b == Builtin::Typename || b == Builtin::TypeId ||
+         b == Builtin::Kind)) {
         const Type t = tc_.resolve_type_node(e->type_args[0].get());
         const uint32_t src_line = e->loc.line;
         if (b == Builtin::Sizeof) {
@@ -345,7 +354,6 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         }
     }
 
-
     // -----------------------------------------------------------------
     // static_assert(cond, "msg").
     //
@@ -390,8 +398,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         const bool is_kind_i32 = (b == Builtin::TypeInfoKind);
         const bool is_name_q = (b == Builtin::TypeInfoName);
         const bool is_field_name = (b == Builtin::TypeInfoFieldName);
-        const bool is_field_u32 =
-            b == Builtin::TypeInfoFieldOffset || b == Builtin::TypeInfoFieldSize;
+        const bool is_field_u32 = b == Builtin::TypeInfoFieldOffset ||
+                                  b == Builtin::TypeInfoFieldSize;
         if (is_find || is_simple_u32 || is_kind_i32 || is_name_q ||
             is_field_name || is_field_u32) {
             const uint32_t src_line = e->loc.line;
@@ -497,13 +505,11 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             ir::IrValueId idx_val = lower_expr(e->args[1].get());
             /* field_addr = info_ptr + 24 + idx * 16 */
             ir::IrValueId v16 = emit_const(ir::IrType::I64, 16, src_line);
-            ir::IrValueId idx_x16 =
-                emit_ir_binop(ir::IrOp::MUL, idx_val, v16,
-                              ir::IrType::I64, src_line);
+            ir::IrValueId idx_x16 = emit_ir_binop(ir::IrOp::MUL, idx_val, v16,
+                                                  ir::IrType::I64, src_line);
             ir::IrValueId v24 = emit_const(ir::IrType::I64, 24, src_line);
-            ir::IrValueId field_off =
-                emit_ir_binop(ir::IrOp::ADD, idx_x16, v24,
-                              ir::IrType::I64, src_line);
+            ir::IrValueId field_off = emit_ir_binop(ir::IrOp::ADD, idx_x16, v24,
+                                                    ir::IrType::I64, src_line);
             ir::IrValueId field_addr =
                 emit_ptr_add(info_ptr, field_off, src_line);
             /* Helper interno LOAD u32 at field_addr + offset. */
@@ -570,10 +576,11 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             b == Builtin::IsNewtype || b == Builtin::IsOpaque ||
             b == Builtin::UnderlyingOf;
         const bool one_targ_str_arg =
-            b == Builtin::Offsetof || b == Builtin::HasField || b == Builtin::HasMethod ||
-            b == Builtin::FieldType;
+            b == Builtin::Offsetof || b == Builtin::HasField ||
+            b == Builtin::HasMethod || b == Builtin::FieldType;
         const bool one_targ_int_arg = (b == Builtin::FieldName);
-        const bool two_targ_no_args = b == Builtin::IsSubtype || b == Builtin::IsSame;
+        const bool two_targ_no_args =
+            b == Builtin::IsSubtype || b == Builtin::IsSame;
 
         if ((one_targ_no_args || one_targ_str_arg || one_targ_int_arg ||
              two_targ_no_args) &&
@@ -760,8 +767,11 @@ bool Lowering::try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,
         }
         const int64_t off = comptime_field_offset(tc_, t, fname);
         if (off < 0) {
-            return builtin_error(e->loc, std::string(builtin_name(b)) + ": el tipo '" + comptime_type_name(tc_, t) +
-                                             "' no tiene campo '" + fname + "'", out_value);
+            return builtin_error(e->loc,
+                                 std::string(builtin_name(b)) + ": el tipo '" +
+                                     comptime_type_name(tc_, t) +
+                                     "' no tiene campo '" + fname + "'",
+                                 out_value);
         }
         const Type ftype = comptime_field_type(tc_, t, fname);
         const ir::IrType ir_t = ir_type_from_primitive(ftype.kind);

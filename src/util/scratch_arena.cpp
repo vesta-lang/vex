@@ -57,7 +57,8 @@ ScratchArena::Block *ScratchArena::add_block(size_t least) noexcept {
     // Y si lo que se pide no cabe ni asi, el bloque se hace a medida: una
     // reserva grande suelta no puede quedarse sin sitio solo porque el tamano
     // de bloque tenga tope.
-    while (size < least + sizeof(Block)) size *= 2;
+    while (size < least + sizeof(Block))
+        size *= 2;
 
     void *mem = system_block(size);
     if (mem == nullptr) return nullptr;
@@ -105,10 +106,12 @@ void ScratchArena::release(Mark m) noexcept {
      * partir de la segunda vuelta. */
     if (m.block == nullptr) {
         current_ = head_;
-        for (Block *b = head_; b != nullptr; b = b->next) b->used = 0;
+        for (Block *b = head_; b != nullptr; b = b->next)
+            b->used = 0;
         return;
     }
-    for (Block *b = m.block->next; b != nullptr; b = b->next) b->used = 0;
+    for (Block *b = m.block->next; b != nullptr; b = b->next)
+        b->used = 0;
     m.block->used = m.used;
     current_ = m.block;
 }
@@ -124,7 +127,8 @@ ScratchArena &scratch_arena() noexcept {
     } else {
         /* Mas hilos de los previstos.  Se le da una arena propia igualmente --
          * compartir una entre dos hilos seria una carrera -- y se acepta que
-         * esa memoria no se devuelva: pasa como mucho una vez por hilo extra. */
+         * esa memoria no se devuelva: pasa como mucho una vez por hilo extra.
+         */
         void *mem = system_block(sizeof(ScratchArena));
         if (mem == nullptr) return g_arenas[0]; // sin memoria ni para esto
         a = new (mem) ScratchArena();

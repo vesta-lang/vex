@@ -45,8 +45,9 @@ namespace util {
  * Cambiar el valor mueve cualquier cosa guardada con el hash viejo, asi que al
  * corregirlo hubo que tirar las caches.  Si vuelve a cambiar, lo mismo.
  */
-static constexpr uint64_t kFnvOffset = 14695981039346656037ull; // 0xcbf29ce484222325
-static constexpr uint64_t kFnvPrime = 1099511628211ull;         // 0x100000001b3
+static constexpr uint64_t kFnvOffset =
+    14695981039346656037ull;                            // 0xcbf29ce484222325
+static constexpr uint64_t kFnvPrime = 1099511628211ull; // 0x100000001b3
 
 /**
  * @brief Mezcla un entero de 64 bits (byte a byte) en un acumulador.

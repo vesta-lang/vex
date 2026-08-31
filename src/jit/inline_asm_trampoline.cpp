@@ -554,8 +554,8 @@ extern "C" uint64_t vrt_asm_micro_ops(uint64_t proc, uint64_t hash,
  * Antes lo que se emitia era un `hlt` pelado, y eso en ejecucion es
  * INDISTINGUIBLE de que el programa termine bien: el proceso paraba a mitad de
  * la funcion y quien la llamo leia lo que hubiera quedado en R0.  Asi es como
- * `367_std_memory_variantes` devolvia un puntero -- y en otra de sus rutinas, el
- * propio byte de relleno -- en lugar de su resultado, sin una sola queja.
+ * `367_std_memory_variantes` devolvia un puntero -- y en otra de sus rutinas,
+ * el propio byte de relleno -- en lugar de su resultado, sin una sola queja.
  *
  * @param proc @c ProcessVM* del proceso que ejecuta el bloque.
  * @return Nunca devuelve por la via normal: @c throw_fatal desvia.

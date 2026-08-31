@@ -243,18 +243,18 @@ void tier2_tick(runtime::ProcessVM *vm, loader::MethodInfo *method) noexcept;
 /* Forward decl de CompileResult (definido en jit_compile_options.h). */
 struct CompileResult;
 
-/* La base de hechos del ASA (@c analysis/asa/base_hechos.h).  Aqui solo se pasa
+/* La base de hechos del ASA (@c analysis/asa/fact_base.h).  Aqui solo se pasa
  * por puntero, asi que basta declararla: no hace falta arrastrar los dominios
  * de analisis a todo el que incluya esta cabecera.  El nombre corto es el que
  * usan los consumidores del JIT (@c jit/jit_facts.h); no es otro tipo. */
 } // namespace jit
 namespace analysis {
 namespace asa {
-class BaseDeHechos;
+class FactBase;
 }
 } // namespace analysis
 namespace jit {
-using JitFactBase = analysis::asa::BaseDeHechos;
+using JitFactBase = analysis::asa::FactBase;
 
 /**
  * @brief Compila una @c IrFunction usando el JIT subsystem (lazy

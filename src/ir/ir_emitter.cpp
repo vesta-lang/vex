@@ -3460,7 +3460,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
          * fallaba al colocarlo: fallaba despues, en cuanto el cuerpo del metodo
          * llamaba a algo y ese scratch se reusaba, y entonces el argumento
          * llegaba con basura.  El comprobador de tipos rechaza pasar de once
-         * antes de llegar aqui; este recorte es la red por si algo lo esquiva. */
+         * antes de llegar aqui; este recorte es la red por si algo lo esquiva.
+         */
         const size_t nargs = ins.operands.size() > 1
                                  ? std::min(ins.operands.size() - 1, (size_t)11)
                                  : 0;
@@ -3632,9 +3633,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // (resuelto en compile-time por el linker), emitimos
         // `callni reg_fn` (puntero leido en runtime).  Misma calling
         // convention: argc en R15, args en R01..R12, retorno en R00.
-        const bool is_indirect =
-            ins.func_name.size() >= 11 &&
-            ins.func_name.rfind("__callni__:", 0) == 0;
+        const bool is_indirect = ins.func_name.size() >= 11 &&
+                                 ins.func_name.rfind("__callni__:", 0) == 0;
         const size_t arg_offset = is_indirect ? 1 : 0;
         const size_t nargs =
             std::min(ins.operands.size() - arg_offset, (size_t)12);
@@ -4128,7 +4128,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             (subop == 1)   ? emmit::Mnemonic::FNEG
             : (subop == 2) ? emmit::Mnemonic::FABS
             : (subop == 3) ? emmit::Mnemonic::FSQRT
-                           : emmit::Mnemonic::kCount; // 0=copy (sin op)
+                           : emmit::Mnemonic::kCount;  // 0=copy (sin op)
         if (!es_fp && subop != 0 && subop != 1) break; // entero: solo negar
         ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
         ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
@@ -6159,7 +6159,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                      * Antes se renunciaba aqui.  Al principio en SILENCIO -- la
                      * ligadura desaparecia de la lista y el bloque se ejecutaba
                      * con lo que hubiera en ese registro --, y despues parando
-                     * con un mensaje.  Ninguna de las dos hacia lo que se pedia.
+                     * con un mensaje.  Ninguna de las dos hacia lo que se
+                     * pedia.
                      *
                      * Se sigue renunciando en lo que de verdad no cabe: un
                      * registro mas ancho que la ranura del contexto, o un

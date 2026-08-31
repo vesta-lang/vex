@@ -84,10 +84,12 @@ namespace asa {
 /// solo si cambia el sobre; el contenido de cada dominio versiona aparte.
 constexpr uint16_t kContainerVersion = 1;
 
-/// Version del layout de un HECHO.  La 2 anade el ambito (donde vale).  Va en
-/// cada registro: cambiarla descarta los registros viejos de todos los
-/// dominios, pero no rompe el fichero.
-constexpr uint16_t kFactVersion = 2;
+/// Version del layout de un HECHO.  La 2 anade el ambito (donde vale); la 3, el
+/// POR QUE de ese ambito y la CLASE de lo que no se supo -- sin ellos, la cache
+/// devolvia hechos sin justificar y convertia cualquier motivo en "no
+/// preguntado".  Va en cada registro: cambiarla descarta los registros viejos
+/// de todos los dominios, pero no rompe el fichero.
+constexpr uint16_t kFactVersion = 3;
 
 /**
  * @brief Cuanto se guarda.  Ajustable con @c VESTA_ASA_CACHE.
@@ -255,8 +257,12 @@ struct ReadResult {
  * solo se descarta lo que de verdad es de otro sitio.  Sin esto habria que
  * separar el fichero entero por objetivo y duplicar tambien lo comun.
  *
- * Un @c aqui vacio no filtra nada: sirve para leerlo todo (volcados,
- * herramientas) sin decir donde se esta.
+ * Un @c here vacio no filtra nada: sirve para leerlo todo (volcados,
+ * herramientas) sin decir donde se esta.  Es el DEFECTO a proposito: cargar no
+ * es preguntar -- el almacen es un deposito y quien filtra es @c
+ * FactStore::find con el ambito de quien pregunta --, y con el filtro puesto
+ * por omision todo hecho sellado desaparecia al volver del disco sin que nadie
+ * lo notara.
  *
  * EXIGE que los nombres canonicos esten dados de alta antes (ver
  * @c register_canonical_name).  Este fichero es el FORMATO y no conoce a los
@@ -275,23 +281,25 @@ struct ReadResult {
  * SALTA -- para eso lleva la longitud delante --, y lo que se apoyaba en el
  * pierde ese apoyo en vez de arrastrar una referencia a un hecho que no existe.
  *
- * @param datos   Bytes del fichero.
- * @param n       Cuantos.
- * @param huella  La que debe llevar dentro; si no cuadra no se lee nada.
- * @param destino Donde se depositan.
+ * @param data        Bytes del fichero.
+ * @param n           Cuantos.
+ * @param fingerprint La que debe llevar dentro; si no cuadra no se lee nada.
+ * @param dest        Donde se depositan.
+ * @param current     De que depende hoy cada dominio, para anular solo lo suyo.
+ * @param compiler    Version del compilador que los produjo.
+ * @param here        Desde donde se lee.  Vacio = no se estrecha nada.
  * @return Que se leyo, o por que no.
  */
-ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
-                      FactStore &destino,
-                      const std::vector<DomainCost> &vigentes = {},
-                      uint64_t compilador = 0, const Ambito &aqui = Ambito{});
+ReadResult read_facts(const uint8_t *data, size_t n, uint64_t fingerprint,
+                      FactStore &dest,
+                      const std::vector<DomainCost> &current = {},
+                      uint64_t compiler = 0, const Scope &here = Scope{});
 
-/// Lee @p ruta y deposita en @p destino.  Si no existe, @c motivo lo dice.
-ReadResult read_facts_file(const std::string &ruta, uint64_t huella,
-                           FactStore &destino,
-                           const std::vector<DomainCost> &vigentes = {},
-                           uint64_t compilador = 0,
-                           const Ambito &aqui = Ambito{});
+/// Lee @p path y deposita en @p dest.  Si no existe, @c motivo lo dice.
+ReadResult read_facts_file(const std::string &path, uint64_t fingerprint,
+                           FactStore &dest,
+                           const std::vector<DomainCost> &current = {},
+                           uint64_t compiler = 0, const Scope &here = Scope{});
 
 } // namespace asa
 } // namespace analysis

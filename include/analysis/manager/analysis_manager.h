@@ -358,7 +358,8 @@ class AnalysisManager {
         /* Soltar el cerrojo ANTES de la fabrica es obligatorio, no una mejora:
          * la fabrica pide otros `get_or_compute` -- eso es lo que crea las
          * dependencias -- y volver a entrar con el cerrojo puesto se
-         * autobloquea sobre un mutex no reentrante.  Aqui faltaba, y colgaba. */
+         * autobloquea sobre un mutex no reentrante.  Aqui faltaba, y colgaba.
+         */
         lk.unlock();
         T value = factory(); // puede pedir otros get_or_compute -> mas deps
         lk.lock();
@@ -525,7 +526,8 @@ class AnalysisManager {
         // Estatico LOCAL de funcion, no miembro `static inline thread_local`:
         // con MinGW, este ultimo duplica la funcion de inicializacion del TLS
         // en cada unidad de traduccion y el enlace falla.
-        static thread_local std::vector<std::shared_ptr<AnalysisResultConcept>> v;
+        static thread_local std::vector<std::shared_ptr<AnalysisResultConcept>>
+            v;
         return v;
     }
     std::unordered_map<Key, std::unordered_set<Key, KeyHash>, KeyHash>

@@ -87,12 +87,8 @@ std::string Lowering::ensure_strcmp_helper() {
     const uint32_t ln = 0;
 
     // Helpers locales (mismo patron que emit_native_itoa_to_buf).
-    auto new_slot = [&]() {
-        return stack_alloc_buf(8, ln, true);
-    };
-    auto load_i64 = [&](ir::IrValueId addr) {
-        return emit_load_i64(addr, ln);
-    };
+    auto new_slot = [&]() { return stack_alloc_buf(8, ln, true); };
+    auto load_i64 = [&](ir::IrValueId addr) { return emit_load_i64(addr, ln); };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
         emit_store_i64(addr, val, ln);
     };
@@ -274,13 +270,12 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             ir::IrValueId v_dst =
                 (off == 0)
                     ? v_scratch
-                    : emit_ptr_add(v_scratch, emit_const(ir::IrType::I64, off, ln), ln);
+                    : emit_ptr_add(v_scratch,
+                                   emit_const(ir::IrType::I64, off, ln), ln);
             ir::IrValueId v_val = emit_const(ty, val, ln);
             emit_store_typed(v_dst, v_val, ty, ln);
         };
-        auto pack = [&](uint64_t pos, int n) {
-            return pack_le(data, pos, n);
-        };
+        auto pack = [&](uint64_t pos, int n) { return pack_le(data, pos, n); };
         uint64_t pos = 0;
         for (; pos + 8 <= plen; pos += 8)
             store_chunk(pos, pack(pos, 8), ir::IrType::I64);
@@ -368,8 +363,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             ir::IrValueId v_scr = stack_alloc_buf(4, ln, native_poo_);
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             const std::string ctoa_fn = ensure_ctoa_helper();
-            ir::IrValueId v_len = emit_call(ctoa_fn,
-                      {v_scr, v_cp}, ir::IrType::I64, ln);
+            ir::IrValueId v_len =
+                emit_call(ctoa_fn, {v_scr, v_cp}, ir::IrType::I64, ln);
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
         }
@@ -420,8 +415,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             // constante (el itoa vive en una funcion aparte con loops).
             const std::string itoa_fn =
                 ensure_itoa_helper(is_signed_integral(ek));
-            ir::IrValueId v_len = emit_call(itoa_fn,
-                      {v_scr, v_int}, ir::IrType::I64, ln);
+            ir::IrValueId v_len =
+                emit_call(itoa_fn, {v_scr, v_int}, ir::IrType::I64, ln);
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
         }
@@ -437,8 +432,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             ir::IrValueId v_scr = stack_alloc_buf(8, ln, native_poo_);
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             const std::string btoa_fn = ensure_btoa_helper();
-            ir::IrValueId v_len = emit_call(btoa_fn,
-                      {v_scr, v_b64}, ir::IrType::I64, ln);
+            ir::IrValueId v_len =
+                emit_call(btoa_fn, {v_scr, v_b64}, ir::IrType::I64, ln);
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
         }
@@ -510,9 +505,8 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
     ir::IrValueId v_b23 = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     // is_heap = b23 >> 7  (logico; b23 es 0..255 zero-extended).
     ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
-    ir::IrValueId v_is_heap =
-        emit_ir_binop(ir::IrOp::SHR, v_b23, v_seven,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_is_heap = emit_ir_binop(ir::IrOp::SHR, v_b23, v_seven,
+                                            ir::IrType::I64, source_line);
     return v_is_heap;
 }
 
@@ -530,12 +524,11 @@ ir::IrValueId Lowering::emit_native_str_is_owned(ir::IrValueId v_slot,
     ir::IrValueId v_addr = emit_ptr_add(v_slot, v_off, source_line);
     ir::IrValueId v_b23 = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     ir::IrValueId v_six = emit_const(ir::IrType::I64, 6, source_line);
-    ir::IrValueId v_top2 =
-        emit_ir_binop(ir::IrOp::SHR, v_b23, v_six,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_top2 = emit_ir_binop(ir::IrOp::SHR, v_b23, v_six,
+                                         ir::IrType::I64, source_line);
     ir::IrValueId v_dos = emit_const(ir::IrType::I64, 2, source_line);
-    ir::IrValueId v_owned =
-        emit_ir_binop(ir::IrOp::CMP_EQ, v_top2, v_dos, ir::IrType::I64, source_line);
+    ir::IrValueId v_owned = emit_ir_binop(ir::IrOp::CMP_EQ, v_top2, v_dos,
+                                          ir::IrType::I64, source_line);
     return v_owned;
 }
 
@@ -555,16 +548,14 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
     ir::IrValueId v_slot_i =
         emit_ir_unop(ir::IrOp::BITCAST, v_slot, ir::IrType::I64, source_line);
     // diff = ptr0 - slot.
-    ir::IrValueId v_diff =
-        emit_ir_binop(ir::IrOp::SUB, v_ptr0, v_slot_i,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_diff = emit_ir_binop(ir::IrOp::SUB, v_ptr0, v_slot_i,
+                                         ir::IrType::I64, source_line);
     // masked = diff & (-is_heap)  (AND, no MUL: valgrind sabe x&0=0 es
     // definido aunque diff use ptr0 con bits de data inline SSO).
     ir::IrValueId v_mask =
         emit_ir_unop(ir::IrOp::NEG, v_is_heap, ir::IrType::I64, source_line);
-    ir::IrValueId v_masked =
-        emit_ir_binop(ir::IrOp::AND, v_diff, v_mask,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_masked = emit_ir_binop(ir::IrOp::AND, v_diff, v_mask,
+                                           ir::IrType::I64, source_line);
     // data = slot + masked.  La base es el slot pasado a ENTERO -- asi se
     // elige entre las dos direcciones sin bifurcar --, y un entero no lleva la
     // marca de ser del anfitrion: hay que devolversela.
@@ -584,27 +575,23 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
     ir::IrValueId v_b23 =
         emit_load_typed(v_addr23, ir::IrType::U8, source_line);
     ir::IrValueId v_mask7f = emit_const(ir::IrType::I64, 0x7F, source_line);
-    ir::IrValueId v_sso_len =
-        emit_ir_binop(ir::IrOp::AND, v_b23, v_mask7f,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_sso_len = emit_ir_binop(ir::IrOp::AND, v_b23, v_mask7f,
+                                            ir::IrType::I64, source_line);
     // heap_len = LOAD len@8.
     ir::IrValueId v_heap_len =
         load_native_string_field(v_slot, 8, /*as_host=*/false, source_line);
     // diff = heap_len - sso_len.
-    ir::IrValueId v_diff =
-        emit_ir_binop(ir::IrOp::SUB, v_heap_len, v_sso_len,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_diff = emit_ir_binop(ir::IrOp::SUB, v_heap_len, v_sso_len,
+                                         ir::IrType::I64, source_line);
     // masked = diff & (-is_heap)  (AND, no MUL: heap_len puede ser un
     // LOAD de bytes no inicializados en modo SSO; x&0=0 es definido).
     ir::IrValueId v_mask =
         emit_ir_unop(ir::IrOp::NEG, v_is_heap, ir::IrType::I64, source_line);
-    ir::IrValueId v_masked =
-        emit_ir_binop(ir::IrOp::AND, v_diff, v_mask,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_masked = emit_ir_binop(ir::IrOp::AND, v_diff, v_mask,
+                                           ir::IrType::I64, source_line);
     // len = sso_len + masked.
-    ir::IrValueId v_len =
-        emit_ir_binop(ir::IrOp::ADD, v_sso_len, v_masked,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_len = emit_ir_binop(ir::IrOp::ADD, v_sso_len, v_masked,
+                                        ir::IrType::I64, source_line);
     return v_len;
 }
 
@@ -633,8 +620,8 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
     // prepone en main no-native, asi que el fp quedaria a null).
     if (!native_poo_) {
         const std::string name = ensure_strlen_helper();
-        ir::IrValueId v = emit_call(name,
-                  {v_slot}, ir::IrType::I64, source_line);
+        ir::IrValueId v =
+            emit_call(name, {v_slot}, ir::IrType::I64, source_line);
         return v;
     }
     // CPU dispatch Inc 5a: strlen(s) -> i64 DESPACHADO por tabla de punteros:
@@ -697,12 +684,8 @@ std::string Lowering::ensure_str_cplen_helper() {
     const uint32_t ln = 0;
 
     // Toolkit local (mismo patron que ensure_strcmp_helper).
-    auto new_slot = [&]() {
-        return stack_alloc_buf(8, ln, true);
-    };
-    auto load_i64 = [&](ir::IrValueId addr) {
-        return emit_load_i64(addr, ln);
-    };
+    auto new_slot = [&]() { return stack_alloc_buf(8, ln, true); };
+    auto load_i64 = [&](ir::IrValueId addr) { return emit_load_i64(addr, ln); };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
         emit_store_i64(addr, val, ln);
     };
@@ -779,8 +762,8 @@ ir::IrValueId Lowering::emit_native_str_cplen(ir::IrValueId v_ptr,
                                               ir::IrValueId v_blen,
                                               uint32_t source_line) {
     const std::string name = ensure_str_cplen_helper();
-    ir::IrValueId v = emit_call(name,
-              {v_ptr, v_blen}, ir::IrType::I64, source_line);
+    ir::IrValueId v =
+        emit_call(name, {v_ptr, v_blen}, ir::IrType::I64, source_line);
     return v;
 }
 
@@ -828,12 +811,8 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     const uint32_t ln = 0;
 
     // Toolkit local.
-    auto new_slot = [&]() {
-        return stack_alloc_buf(8, ln, true);
-    };
-    auto load_i64 = [&](ir::IrValueId addr) {
-        return emit_load_i64(addr, ln);
-    };
+    auto new_slot = [&]() { return stack_alloc_buf(8, ln, true); };
+    auto load_i64 = [&](ir::IrValueId addr) { return emit_load_i64(addr, ln); };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
         emit_store_i64(addr, val, ln);
     };
@@ -1140,9 +1119,8 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
     // mask = -is_heap  (0 - is_heap): 0 -> 0 ; 1 -> ~0.
     ir::IrValueId v_mask =
         emit_ir_unop(ir::IrOp::NEG, v_is_heap, ir::IrType::I64, source_line);
-    ir::IrValueId v_to_free_i =
-        emit_ir_binop(ir::IrOp::AND, v_ptr0, v_mask,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_to_free_i = emit_ir_binop(ir::IrOp::AND, v_ptr0, v_mask,
+                                              ir::IrType::I64, source_line);
     ir::IrValueId v_to_free = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_to_free].is_host_ptr = true;
     {
@@ -1205,7 +1183,7 @@ void Lowering::emit_zero_native_str_slot(ir::IrValueId v_slot,
         st.op = ir::IrOp::STORE;
         st.type = ty;
         st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_z, emit_ptr_add(v_slot, (uint64_t) (off), source_line)};
+        st.operands = {v_z, emit_ptr_add(v_slot, (uint64_t)(off), source_line)};
         st.source_line = source_line;
         emit(current_block_, std::move(st));
     };
@@ -1249,9 +1227,10 @@ void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
     auto store = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         emit_store_typed(addr, val, ty, source_line);
     };
-    store(emit_ptr_add(v_slot, (uint64_t) (16), source_line), v_cap, ir::IrType::I64);
-    store(emit_ptr_add(v_slot, (uint64_t) (23), source_line), emit_const(ir::IrType::U8, 0x80, source_line),
-          ir::IrType::U8);
+    store(emit_ptr_add(v_slot, (uint64_t)(16), source_line), v_cap,
+          ir::IrType::I64);
+    store(emit_ptr_add(v_slot, (uint64_t)(23), source_line),
+          emit_const(ir::IrType::U8, 0x80, source_line), ir::IrType::U8);
 }
 
 void Lowering::emit_native_str_move_copy(ir::IrValueId v_dst_slot,
@@ -1282,13 +1261,11 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
         emit_load_typed(v_slot, ir::IrType::I64, source_line);
     // mask = is_heap - 1.
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-    ir::IrValueId v_mask =
-        emit_ir_binop(ir::IrOp::SUB, v_is_heap, v_one,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_mask = emit_ir_binop(ir::IrOp::SUB, v_is_heap, v_one,
+                                         ir::IrType::I64, source_line);
     // new_ptr0 = old_ptr0 & mask.
-    ir::IrValueId v_new =
-        emit_ir_binop(ir::IrOp::AND, v_old_ptr0, v_mask,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_new = emit_ir_binop(ir::IrOp::AND, v_old_ptr0, v_mask,
+                                        ir::IrType::I64, source_line);
     emit_store_typed(v_slot, v_new, ir::IrType::I64, source_line);
 }
 
@@ -1450,9 +1427,8 @@ ir::IrValueId Lowering::emit_strconv(ir::IrValueId v_str, uint64_t enc_imm,
 
 ir::IrValueId Lowering::emit_strgetbytes(ir::IrValueId v_str,
                                          uint32_t source_line) {
-    const ir::IrValueId v_n =
-        emit_ir_unop(ir::IrOp::STRGETBYTES, v_str,
-                     ir::IrType::U64, source_line);
+    const ir::IrValueId v_n = emit_ir_unop(ir::IrOp::STRGETBYTES, v_str,
+                                           ir::IrType::U64, source_line);
     return v_n;
 }
 
@@ -1608,8 +1584,8 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
      * cuanto la rodeara (52 sitios solo en std.memory), que es lo unico honesto
      * ante una funcion nativa de la que no se sabe nada. */
     ir::IrNativeEffects fx;
-    fx.declarados = true;
-    fx.escribe_apuntado = 1u << 1; // el buffer destino
+    fx.declared = true;
+    fx.writes_pointee = 1u << 1; // el buffer destino
     ir::IrValueId v_len =
         emit_native_call(kVestaIoLib, native_fn, {v_proc, v_buf, v_val},
                          ir::IrType::I64, ln, &fx);
@@ -1617,7 +1593,6 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
     ir::IrValueId v_h = emit_strmake(v_buf, v_len, ln);
     return v_h;
 }
-
 
 bool Lowering::transcode_literal(const std::string &utf8, int enc,
                                  std::vector<uint8_t> &out) {
@@ -1746,9 +1721,7 @@ std::string Lowering::ensure_btoa_helper() {
             st.source_line = 0;
             emit(current_block_, std::move(st));
         };
-        auto pack = [&](uint64_t pos, int n) {
-            return pack_le(data, pos, n);
-        };
+        auto pack = [&](uint64_t pos, int n) { return pack_le(data, pos, n); };
         const uint64_t plen = data.size();
         uint64_t pos = 0;
         for (; pos + 4 <= plen; pos += 4)
@@ -1791,6 +1764,5 @@ std::string Lowering::ensure_btoa_helper() {
     out_mod_->add_function(std::move(hf));
     return name;
 }
-
 
 } // namespace vx

@@ -21,9 +21,9 @@
  * POR QUE ESTA SEPARACION EXISTE.  Antes ese saber estaba dentro del modulo
  * comun, en forma de `if (isa == X86) ... else ...`.  Y @c EffIsa no tiene dos
  * valores: tiene CUATRO (x86, arm64, arm32, riscv).  O sea que cada una de esas
- * preguntas le daba a arm32 y a riscv la respuesta de arm64 -- registros de otra
- * arquitectura -- sin que nada avisara.  Aqui eso no se puede escribir: o la ISA
- * declara lo suyo, o no hay respuesta y se dice.
+ * preguntas le daba a arm32 y a riscv la respuesta de arm64 -- registros de
+ * otra arquitectura -- sin que nada avisara.  Aqui eso no se puede escribir: o
+ * la ISA declara lo suyo, o no hay respuesta y se dice.
  *
  * NO HAY RESPUESTA POR DEFECTO.  Si una ISA no ha declarado su tabla, quien
  * pregunte recibe @c nullptr y debe FALLAR, no seguir con una suposicion.  Un
@@ -90,8 +90,8 @@ struct IsaEffects {
     ///
     /// En x86 escribir `al` conserva los demas bytes, y un `setcc` escribe uno
     /// solo aunque su operando se nombre entero; en arm64 escribir una `w` pone
-    /// a cero la mitad alta, que equivale a escribirlo entero.  Quien lo sabe es
-    /// cada arquitectura.
+    /// a cero la mitad alta, que equivale a escribirlo entero.  Quien lo sabe
+    /// es cada arquitectura.
     bool (*is_narrow_write)(const MInstr &mi, const MOperand &o);
 };
 

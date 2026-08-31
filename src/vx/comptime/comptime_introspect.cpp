@@ -2706,21 +2706,22 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                             fn_it->second->return_type.get());
                         ret_is_str = (rt.kind == PrimitiveKind::STRING);
                         /* Un ENUM tambien se devuelve por BUFER, igual que un
-                         * struct -- comparten el kind y comparten convencion --,
-                         * y aqui se le trataba como si cupiera en un registro.
+                         * struct -- comparten el kind y comparten convencion
+                         * --, y aqui se le trataba como si cupiera en un
+                         * registro.
                          *
                          * Eso no era una simplificacion inofensiva: el llamado
                          * esta compilado esperando el puntero al bufer, asi que
                          * al no pasarselo tomaba como puntero lo que hubiera en
                          * la ranura del primer argumento y escribia la etiqueta
-                         * AHi.  Se veia clavado en la direccion del fallo: `0x0`
-                         * sin parametros, `0x1` llamando con `1`, `0x2b`
+                         * AHi.  Se veia clavado en la direccion del fallo:
+                         * `0x0` sin parametros, `0x1` llamando con `1`, `0x2b`
                          * llamando con `'+'` -- que no es una direccion, es una
                          * letra.
                          *
-                         * A diferencia de un struct no hay que reconstruir campo
-                         * a campo: el valor de un enum es su ETIQUETA, ocho
-                         * bytes al principio del bufer. */
+                         * A diferencia de un struct no hay que reconstruir
+                         * campo a campo: el valor de un enum es su ETIQUETA,
+                         * ocho bytes al principio del bufer. */
                         if (rt.kind == PrimitiveKind::STRUCT) {
                             const auto &elays = tc.enum_layouts();
                             auto ite = elays.find(rt.struct_name);
@@ -2732,7 +2733,8 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         /* Retorno struct por valor: se recupera por su buffer
                          * de retorno (SRET) y se reconstruye campo a campo.  Se
                          * excluyen los enums (que van por la rama de arriba) y
-                         * los overlay, cuyo valor es un puntero y no un buffer. */
+                         * los overlay, cuyo valor es un puntero y no un buffer.
+                         */
                         if (rt.kind == PrimitiveKind::STRUCT && !ret_is_enum) {
                             const auto &slays = tc.struct_layouts();
                             const auto &elays = tc.enum_layouts();
@@ -2776,8 +2778,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                          * una direccion, es la letra que se paso). */
                         Type pt;
                         bool pt_ok = false;
-                        if (ai < pars.size() && pars[ai] &&
-                            pars[ai]->type) {
+                        if (ai < pars.size() && pars[ai] && pars[ai]->type) {
                             pt = tc.resolve_type_node(pars[ai]->type.get());
                             pt_ok = true;
                         }
@@ -2869,16 +2870,16 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         else
                             vr.deferred = true;
                     } else if (ret_is_enum) {
-                        /* Mismo camino que un struct -- la funcion escribe en un
-                         * bufer de retorno --, pero el valor de un enum es su
-                         * ETIQUETA, y esa esta al principio del bufer.  No hay
-                         * campos que reconstruir. */
+                        /* Mismo camino que un struct -- la funcion escribe en
+                         * un bufer de retorno --, pero el valor de un enum es
+                         * su ETIQUETA, y esa esta al principio del bufer.  No
+                         * hay campos que reconstruir. */
                         std::vector<uint8_t> ebytes;
-                        bool inv = const_cast<TypeChecker &>(tc)
-                                       .comptime_runtime()
-                                       .invoke_struct_macro(macro_nm, vm_args,
-                                                            ret_enum_bytes,
-                                                            ebytes);
+                        bool inv =
+                            const_cast<TypeChecker &>(tc)
+                                .comptime_runtime()
+                                .invoke_struct_macro(macro_nm, vm_args,
+                                                     ret_enum_bytes, ebytes);
                         if (!inv && macro_alt != macro_nm)
                             inv = const_cast<TypeChecker &>(tc)
                                       .comptime_runtime()

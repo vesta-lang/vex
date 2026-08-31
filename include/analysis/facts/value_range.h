@@ -509,9 +509,9 @@ struct RangeStats {
  * que el relleno que se ahorra.
  */
 struct RangeEntry {
-    ir::IrValueId id = 0;              ///< el valor refinado
-    RangeKind kind = RangeKind::Top;   ///< los tres campos de ValueRange,
-    RangeType t{};                     ///< aplanados para que no haya relleno
+    ir::IrValueId id = 0;            ///< el valor refinado
+    RangeKind kind = RangeKind::Top; ///< los tres campos de ValueRange,
+    RangeType t{};                   ///< aplanados para que no haya relleno
     uint8_t _pad = 0;
     uint64_t lo_c = 0;
     uint64_t hi_c = 0;
@@ -594,6 +594,24 @@ struct DependenciasRango {
     /// Cada resumen CONSULTADO: a quien se pregunto y que contesto entonces.
     /// Se guarda el nombre para poder RELEERLO, no solo comparar un total.
     std::vector<std::pair<std::string, uint64_t>> resumenes;
+    /**
+     * @brief Si HABIA resumenes cuando se calculo esto.
+     *
+     * No es lo mismo que la lista de arriba, y confundirlo servia un resultado
+     * PEOR que el pedido, en silencio.  El motor solo pregunta por un resumen
+     * cuando tiene alguno: sin ellos no consulta NADA, la lista queda vacia, y
+     * una lista vacia vale contra cualquier conjunto de resumenes -- asi que un
+     * resultado calculado a ciegas se reutilizaba para una peticion que SI
+     * traia resumenes, y los parametros seguian valiendo todo su tipo.
+     *
+     * La asimetria es lo que lo hacia dificil de ver: al reves funciona.  Un
+     * calculo CON resumenes si deja lecturas anotadas, y al releerlas sin ellos
+     * las huellas cambian y se recalcula.
+     *
+     * Es la misma regla que rige el resto del analisis, aplicada al GUARDIA y
+     * no solo a lo que hay detras: no haber mirado no es haber comprobado.
+     */
+    bool had_summaries = false;
     /// @c false si no se llego a registrar nada (analisis sin dependencias
     /// conocidas): entonces no se afirma que valga, se recalcula.
     bool registrada = false;

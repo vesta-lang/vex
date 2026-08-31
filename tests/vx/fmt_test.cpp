@@ -749,7 +749,8 @@ void check_spacing_lote() {
     // `R54`: el `;` de la cabecera de un `for` lleva espacio detras.
     const std::string bucle =
         fmt("i32 f() {\nfor (i32 i = 0;i < n;i = i + 1) {\ng();\n}\n}\n");
-    check(bucle.find("for (i32 i = 0_i32; i < n; i = i + 1)") != std::string::npos,
+    check(bucle.find("for (i32 i = 0_i32; i < n; i = i + 1)") !=
+              std::string::npos,
           "el `;` del `for` lleva espacio detras");
     check(fmt("i32 f() {\nfor (;;) {\ng();\n}\n}\n").find("for (;;)") !=
               std::string::npos,
@@ -801,10 +802,9 @@ void check_una_por_linea() {
     };
 
     // `R26`: una declaracion por linea.
-    check(
-        fmt("i32 f() {\ni32 a = 1; i32 b = 2;\n}\n").find("a = 1_i32;\n\ti32 b") !=
-            std::string::npos,
-        "dos sentencias en una linea se separan");
+    check(fmt("i32 f() {\ni32 a = 1; i32 b = 2;\n}\n")
+                  .find("a = 1_i32;\n\ti32 b") != std::string::npos,
+          "dos sentencias en una linea se separan");
 
     // `R43`: y un miembro de clase por linea.
     check(fmt("class C {\ni32 a; i32 b;\n}\n").find("i32 a;\n\ti32 b;") !=

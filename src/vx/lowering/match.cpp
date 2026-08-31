@@ -51,17 +51,17 @@ static int64_t eval_scalar_pattern(const ast::Expr *p) {
 void Lowering::emit_case_bst(
     ir::IrValueId value,
     const std::vector<std::pair<int64_t, ir::IrBlockId>> &cases, size_t lo,
-    size_t hi, ir::IrBlockId cur, ir::IrBlockId default_bb,
-    const char *prefix, uint32_t source_line) {
+    size_t hi, ir::IrBlockId cur, ir::IrBlockId default_bb, const char *prefix,
+    uint32_t source_line) {
     current_block_ = cur;
     // Con dos o menos, comparar uno a uno sale mas barato que seguir
     // partiendo: el arbol ahorra comparaciones, pero cada nodo cuesta un
     // bloque y un salto.
     if (hi - lo <= 2) {
         for (size_t k = lo; k < hi; ++k) {
-            const ir::IrValueId tc = emit_const(
-                ir::IrType::I64, static_cast<uint64_t>(cases[k].first),
-                source_line);
+            const ir::IrValueId tc =
+                emit_const(ir::IrType::I64,
+                           static_cast<uint64_t>(cases[k].first), source_line);
             const ir::IrValueId eq = emit_ir_binop(
                 ir::IrOp::CMP_EQ, value, tc, ir::IrType::BOOL, source_line);
             const ir::IrBlockId nb =
@@ -84,7 +84,6 @@ void Lowering::emit_case_bst(
     emit_case_bst(value, cases, lo, mid, lb, default_bb, prefix, source_line);
     emit_case_bst(value, cases, mid, hi, rb, default_bb, prefix, source_line);
 }
-
 
 ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     // 1. Valor del scrutinee (entero/char).  Se compara como i64.
@@ -401,10 +400,10 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             ir::IrValueId zero =
                 emit_const(ir::IrType::I64, 0, e->arms[idx].loc.line);
             ir::IrValueId eqb =
-                emit_ir_binop(ir::IrOp::CMP_EQ, scmp, zero, ir::IrType::BOOL, e->arms[idx].loc.line);
+                emit_ir_binop(ir::IrOp::CMP_EQ, scmp, zero, ir::IrType::BOOL,
+                              e->arms[idx].loc.line);
             ir::IrBlockId vnext = fn_->new_block("strmatch_vnext");
-            emit_br_cond(eqb, arm_blocks[idx], vnext,
-                         e->arms[idx].loc.line);
+            emit_br_cond(eqb, arm_blocks[idx], vnext, e->arms[idx].loc.line);
             current_block_ = vnext;
             block_terminated_ = false;
         }
@@ -527,12 +526,11 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
      * La alternativa era ensenarle a cada una de las tres a comparar "distinto
      * de cero", que es la misma cosa escrita tres veces. */
     if (elay.tag_is_value) {
-        const ir::IrValueId v_es_cero = emit_ir_unop(
-            ir::IrOp::ISNULL, tag_v, ir::IrType::I64, e->loc.line);
-        const ir::IrValueId v_uno =
-            emit_const(ir::IrType::I64, 1, e->loc.line);
-        tag_v = emit_ir_binop(ir::IrOp::XOR, v_es_cero, v_uno,
-                              ir::IrType::I64, e->loc.line);
+        const ir::IrValueId v_es_cero =
+            emit_ir_unop(ir::IrOp::ISNULL, tag_v, ir::IrType::I64, e->loc.line);
+        const ir::IrValueId v_uno = emit_const(ir::IrType::I64, 1, e->loc.line);
+        tag_v = emit_ir_binop(ir::IrOp::XOR, v_es_cero, v_uno, ir::IrType::I64,
+                              e->loc.line);
     }
 
     // 3. Construir bloques: uno por arm + uno default + uno merge.
@@ -843,14 +841,16 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                     const Type &ft = arm_var->field_types[bi];
                     if (ft.kind == PrimitiveKind::F64) {
                         ir::IrValueId v2 =
-                            emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::F64, arm.loc.line);
+                            emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::F64,
+                                         arm.loc.line);
                         v = v2;
                     } else if (ft.kind == PrimitiveKind::F32) {
                         // Recuperar f32: el slot guardo BITCAST(F32TOF64(x))
                         // como i64.  Invertimos: BITCAST i64->f64 +
                         // F64TOF32 narrow para volver al f32 original.
                         ir::IrValueId vd =
-                            emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::F64, arm.loc.line);
+                            emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::F64,
+                                         arm.loc.line);
                         ir::IrValueId v2 =
                             emit_ir_unop(ir::IrOp::F64TOF32, vd,
                                          ir::IrType::F32, arm.loc.line);

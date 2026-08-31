@@ -17,11 +17,12 @@
  *
  * De ahi lo que hay aqui: emitir VARIAS versiones, preguntar UNA vez al
  * arrancar que sabe hacer la maquina, y dejar que cada llamada vaya a la que
- * toca.  El coste de preguntar se paga una vez; el de elegir mal, en cada copia.
+ * toca.  El coste de preguntar se paga una vez; el de elegir mal, en cada
+ * copia.
  */
 #include "vx/lowering.h"
 #include "util/thread_slot.h" // el estado por hilo NO va en thread_local
-#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -772,9 +773,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         const ir::IrBlockId bb_join = fn_->new_block("join");
 
         auto branch = [&](ir::IrValueId cond, ir::IrBlockId t,
-                          ir::IrBlockId f) {
-            emit_br_cond(cond, t, f, ln);
-        };
+                          ir::IrBlockId f) { emit_br_cond(cond, t, f, ln); };
         // En el bloque actual: setea el fp de TODAS las entries a la variante
         // del sufijo dado + BR a join.
         auto store_all_and_join = [&](const char *suffix) {
@@ -803,7 +802,6 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         block_terminated_ = true;
         out_module.add_function(std::move(hf));
     }
-
 }
 
 void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
@@ -903,9 +901,7 @@ void Lowering::ensure_strdisp() {
     }
     block_terminated_ = true;
     out_mod_->add_function(std::move(hf));
-
 }
-
 
 void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
                                    ir::IrValueId src_base, ir::IrValueId v_len,
@@ -935,9 +931,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
     // Para len < 8 -> limit8 <= 0 -> el loop de palabra no entra (i=0 >= 0
     // no se cumple con CMP_LT signed) y todo se copia por la cola.
     ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
-    ir::IrValueId v_limit8 =
-        emit_ir_binop(ir::IrOp::SUB, v_len, v_seven,
-                      ir::IrType::I64, source_line);
+    ir::IrValueId v_limit8 = emit_ir_binop(ir::IrOp::SUB, v_len, v_seven,
+                                           ir::IrType::I64, source_line);
 
     // ---- Loop 1: copia de palabra (8 bytes/iter). ----
     {
@@ -950,9 +945,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         current_block_ = hdr;
         ir::IrValueId v_i =
             emit_load_typed(v_i_slot, ir::IrType::I64, source_line);
-        ir::IrValueId v_cond =
-            emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_limit8,
-                          ir::IrType::BOOL, source_line);
+        ir::IrValueId v_cond = emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_limit8,
+                                             ir::IrType::BOOL, source_line);
         emit_br_cond(v_cond, body, done, source_line);
 
         // body: w = load.i64 src+i ; store.i64 w -> dst+i ; i += 8 ; -> hdr
@@ -976,7 +970,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         emit_store_typed(v_i_slot, v_i8, ir::IrType::I64, source_line);
         /* La arista se anotaba desde `body` y el salto sale del bloque ACTUAL.
          * Hoy son el mismo, pero eso depende de que nada de lo de arriba abra
-         * un bloque nuevo; asi la arista sale siempre de donde sale el salto. */
+         * un bloque nuevo; asi la arista sale siempre de donde sale el salto.
+         */
         emit_br(hdr, source_line);
 
         current_block_ = done;
@@ -994,8 +989,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         current_block_ = hdr;
         ir::IrValueId v_i =
             emit_load_typed(v_i_slot, ir::IrType::I64, source_line);
-        ir::IrValueId v_cond =
-            emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_len, ir::IrType::BOOL, source_line);
+        ir::IrValueId v_cond = emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_len,
+                                             ir::IrType::BOOL, source_line);
         emit_br_cond(v_cond, body, done, source_line);
 
         // body: byte = load.u8 src+i ; store.u8 byte -> dst+i ; i += 1 ; -> hdr
@@ -1019,7 +1014,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         emit_store_typed(v_i_slot, v_i1, ir::IrType::I64, source_line);
         /* La arista se anotaba desde `body` y el salto sale del bloque ACTUAL.
          * Hoy son el mismo, pero eso depende de que nada de lo de arriba abra
-         * un bloque nuevo; asi la arista sale siempre de donde sale el salto. */
+         * un bloque nuevo; asi la arista sale siempre de donde sale el salto.
+         */
         emit_br(hdr, source_line);
 
         current_block_ = done;
@@ -1161,8 +1157,7 @@ ir::IrValueId Lowering::emit_ptr_add(ir::IrValueId base, uint64_t off,
 /**
  * @copydoc vx::Lowering::emit_host_ptr_add
  */
-ir::IrValueId Lowering::emit_host_ptr_add(ir::IrValueId base,
-                                          ir::IrValueId off,
+ir::IrValueId Lowering::emit_host_ptr_add(ir::IrValueId base, ir::IrValueId off,
                                           uint32_t source_line) {
     const ir::IrValueId v = emit_ptr_add(base, off, source_line);
     fn_->values[v].is_host_ptr = true;
@@ -1188,7 +1183,7 @@ ir::IrValueId Lowering::emit_host_ptr_add(ir::IrValueId base,
  * @return El valor SSA leido.
  */
 ir::IrValueId Lowering::emit_load_typed(ir::IrValueId addr, ir::IrType ty,
-                                       uint32_t source_line, bool host_ptr) {
+                                        uint32_t source_line, bool host_ptr) {
     const ir::IrValueId v = fn_->new_value(ty);
     if (host_ptr) fn_->values[v].is_host_ptr = true;
     ir::IrInstr ld{};
@@ -1294,7 +1289,7 @@ ir::IrValueId Lowering::emit_load_host_ptr(ir::IrValueId addr,
  * @param source_line Linea fuente, para la depuracion.
  */
 void Lowering::emit_store_typed(ir::IrValueId addr, ir::IrValueId val,
-                               ir::IrType ty, uint32_t source_line) {
+                                ir::IrType ty, uint32_t source_line) {
     ir::IrInstr st{};
     st.op = ir::IrOp::STORE;
     st.type = ty;
@@ -1335,10 +1330,10 @@ ir::IrValueId Lowering::emit_ir_unop(ir::IrOp op, ir::IrValueId a, ir::IrType t,
  * @brief Emite una operacion de dos operandos y devuelve su resultado.
  *
  * Estaba escrito seis veces en dos formas, y la diferencia entre ellas no era
- * de estilo: tres pasaban el tipo del resultado y NO ponian linea fuente -- esas
- * instrucciones salian sin linea, y la depuracion las perdia --, y las otras
- * tres fijaban el tipo a entero sin signo y si la ponian.  Aqui van las dos
- * cosas, porque las dos hacen falta.
+ * de estilo: tres pasaban el tipo del resultado y NO ponian linea fuente --
+ * esas instrucciones salian sin linea, y la depuracion las perdia --, y las
+ * otras tres fijaban el tipo a entero sin signo y si la ponian.  Aqui van las
+ * dos cosas, porque las dos hacen falta.
  *
  * @param op          Que operacion.
  * @param a           Primer operando.

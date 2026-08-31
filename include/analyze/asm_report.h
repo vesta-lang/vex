@@ -117,7 +117,18 @@ void print_asm_report(std::ostream &os,
  * instrucciones.  Lo llama quien lo tenga disponible antes de producir: para
  * eso existe el registro de productores.
  */
-void registrar_productor_asm();
+void register_asm_producer();
+
+/**
+ * @brief Da de alta el dominio de la HUELLA como productor de hechos del ASA.
+ *
+ * Vive aqui por lo mismo que el del asm: necesita la maquinaria de efectos
+ * (@c analyze/fingerprint.h), que no esta en el nucleo del ASA.  Lo que produce
+ * es la verdad INFERIDA -- si lanza, si es pura, cuanto reserva --, sin mirar
+ * ni un contrato: comparar lo demostrado con lo declarado es cosa de un
+ * consumidor, no del productor.
+ */
+void register_fingerprint_producer();
 
 } // namespace analyze
 

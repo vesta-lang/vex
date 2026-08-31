@@ -604,8 +604,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
         ir::IrValueId rhs = ir::IR_NO_VALUE;
         bool promoted = false;
         if (e->value && e->value->kind == ast::NodeKind::StringLitExpr &&
-            fa->base &&
-            fa->base->result_type.kind == PrimitiveKind::CLASS) {
+            fa->base && fa->base->result_type.kind == PrimitiveKind::CLASS) {
             auto *slit = static_cast<ast::StringLitExpr *>(e->value.get());
             // Promovemos tanto literales puros como interpolados:
             // el helper detecta el caso y emite STRMAKE simple
@@ -633,8 +632,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             ir::IrValueId cur = lower_class_field_load(fa);
             if (cur == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
-            rhs =
-                emit_binop_ir(bop, cur, rhs, fa->result_type.kind, e->loc);
+            rhs = emit_binop_ir(bop, cur, rhs, fa->result_type.kind, e->loc);
         }
         out = lower_class_field_store(fa, rhs, e->loc);
         return true;
@@ -709,9 +707,8 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
                     find_field(it_w->second, fa->field_name);
                 if (f && f->endian_expr && f->bit_width == 0 &&
                     (f->size == 2 || f->size == 4 || f->size == 8)) {
-                    rhs = emit_overlay_endian_swap(fa->base.get(),
-                                                   it_w->second, *f, rhs,
-                                                   e->loc.line);
+                    rhs = emit_overlay_endian_swap(fa->base.get(), it_w->second,
+                                                   *f, rhs, e->loc.line);
                 }
             }
         }
@@ -731,18 +728,15 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             const StructFieldInfo *f = find_field(it_l->second, fa->field_name);
             if (f && f->bit_width > 0) {
                 // 1. LOAD storage word completo.
-                ir::IrValueId v_old =
-                    emit_load_typed(addr, ft, e->loc.line);
+                ir::IrValueId v_old = emit_load_typed(addr, ft, e->loc.line);
                 // 2. mask = (1 << bit_width) - 1 (en el tipo
                 //    del storage; truncar a tamano del LOAD).
-                const uint64_t mask =
-                    (f->bit_width == 64)
-                        ? UINT64_MAX
-                        : ((uint64_t(1) << f->bit_width) - 1);
+                const uint64_t mask = (f->bit_width == 64)
+                                          ? UINT64_MAX
+                                          : ((uint64_t(1) << f->bit_width) - 1);
                 const uint64_t inv_mask = ~(mask << f->bit_offset);
                 // 3. cleared = old & inv_mask
-                ir::IrValueId v_inv =
-                    emit_const(ft, inv_mask, e->loc.line);
+                ir::IrValueId v_inv = emit_const(ft, inv_mask, e->loc.line);
                 ir::IrValueId v_clr = fn_->new_value(ft);
                 {
                     ir::IrInstr an{};
@@ -768,8 +762,8 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
                 // 5. shifted = trimmed << bit_offset
                 ir::IrValueId v_sh = v_tr;
                 if (f->bit_offset > 0) {
-                    ir::IrValueId v_amt = emit_const(
-                        ft, (uint64_t)f->bit_offset, e->loc.line);
+                    ir::IrValueId v_amt =
+                        emit_const(ft, (uint64_t)f->bit_offset, e->loc.line);
                     v_sh = fn_->new_value(ft);
                     ir::IrInstr sh{};
                     sh.op = ir::IrOp::SHL;
@@ -851,8 +845,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             it_sl->second.has_copy_hook) {
             emit_struct_method_on_host_field(
                 addr, fa->result_type.struct_name,
-                fa->result_type.struct_name + "__" + "__clone__",
-                e->loc.line);
+                fa->result_type.struct_name + "__" + "__clone__", e->loc.line);
         }
         out = rhs;
         return true;
@@ -896,8 +889,8 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
     // sintetico @c `base.__index_set__(index, value)` y delegamos en
     // la maquinaria de metodos (CALLVIRT para CLASS, CALL para
     // STRUCT).  Robamos los hijos del AST y los restauramos despues.
-    if (!ix->index_set_method.empty() && ix->base && ix->index &&
-        e->value && e->op == ast::AssignOp::Assign) {
+    if (!ix->index_set_method.empty() && ix->base && ix->index && e->value &&
+        e->op == ast::AssignOp::Assign) {
         const bool recv_is_struct =
             (ix->base->result_type.kind == PrimitiveKind::STRUCT);
         ast::CallExpr synth;
@@ -909,12 +902,10 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
         synth.callee = std::move(fa);
         synth.args.push_back(std::move(ix->index)); // arg 0: indice
         synth.args.push_back(std::move(e->value));  // arg 1: valor
-        ir::IrValueId v_call = recv_is_struct
-                                   ? lower_struct_method_call(&synth)
-                                   : lower_class_method_call(&synth);
+        ir::IrValueId v_call = recv_is_struct ? lower_struct_method_call(&synth)
+                                              : lower_class_method_call(&synth);
         // Restaurar los hijos a sus nodos originales.
-        auto *fa_back =
-            static_cast<ast::FieldAccessExpr *>(synth.callee.get());
+        auto *fa_back = static_cast<ast::FieldAccessExpr *>(synth.callee.get());
         ix->base = std::move(fa_back->base);
         ix->index = std::move(synth.args[0]);
         e->value = std::move(synth.args[1]);
@@ -929,10 +920,9 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
     if (ix->base && ix->base->result_type.kind == PrimitiveKind::STRING &&
         !ix->is_range) {
         if (!native_poo_) {
-            error_at(e->loc,
-                     "escritura indexada de string (s[i]=c) solo "
-                     "soportada en compilacion nativa (AOT Embed/Bare) "
-                     "por ahora");
+            error_at(e->loc, "escritura indexada de string (s[i]=c) solo "
+                             "soportada en compilacion nativa (AOT Embed/Bare) "
+                             "por ahora");
             out = ir::IR_NO_VALUE;
             return true;
         }
@@ -945,8 +935,8 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
         if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         ir::IrValueId v_idx = lower_expr(ix->index.get());
         if (v_idx == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-        v_idx = cast_if_needed(v_idx, fn_->values[v_idx].type,
-                               ir::IrType::I64, e->loc.line);
+        v_idx = cast_if_needed(v_idx, fn_->values[v_idx].type, ir::IrType::I64,
+                               e->loc.line);
         ir::IrValueId v_val = lower_expr(e->value.get());
         if (v_val == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         // Compound `s[i] += c`: leer el byte actual, aplicar el op.
@@ -955,15 +945,14 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
                 build_native_string_index_char(v_src, v_idx, e->loc.line);
             if (v_old == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
-            v_val =
-                emit_binop_ir(bop, v_old, v_val, PrimitiveKind::U8, e->loc);
+            v_val = emit_binop_ir(bop, v_old, v_val, PrimitiveKind::U8, e->loc);
         }
         // data_ptr (flag-aware) + i -> direccion del byte.
         ir::IrValueId v_ptr = emit_native_str_data_ptr(v_src, e->loc.line);
         ir::IrValueId v_addr = emit_ptr_add(v_ptr, v_idx, e->loc.line);
         // STORE u8: el char rhs se guarda truncado a 1 byte.
-        v_val = cast_if_needed(v_val, fn_->values[v_val].type,
-                               ir::IrType::U8, e->loc.line);
+        v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir::IrType::U8,
+                               e->loc.line);
         emit_store_typed(v_addr, v_val, ir::IrType::U8, e->loc.line);
         out = v_val;
         return true;
@@ -1000,8 +989,7 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
                 const auto &elays = tc_.enum_layouts();
                 auto ite = elays.find(ix->result_type.struct_name);
                 if (ite != elays.end()) {
-                    struct_size =
-                        static_cast<uint64_t>(ite->second.size_bytes);
+                    struct_size = static_cast<uint64_t>(ite->second.size_bytes);
                 }
             }
         }
@@ -1019,8 +1007,7 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
                     ir::IrValueId v_off =
                         emit_const(ir::IrType::I64, byte_off, e->loc.line);
                     {
-                        ir::IrValueId v_new =
-                            fn_->new_value(ir::IrType::PTR);
+                        ir::IrValueId v_new = fn_->new_value(ir::IrType::PTR);
                         if (src_host) fn_->values[v_new].is_host_ptr = true;
                         ir::IrInstr ad{};
                         ad.op = ir::IrOp::ADD;
@@ -1032,8 +1019,7 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
                         off_src = v_new;
                     }
                     {
-                        ir::IrValueId v_new =
-                            fn_->new_value(ir::IrType::PTR);
+                        ir::IrValueId v_new = fn_->new_value(ir::IrType::PTR);
                         if (dst_host) fn_->values[v_new].is_host_ptr = true;
                         ir::IrInstr ad{};
                         ad.op = ir::IrOp::ADD;
@@ -1047,8 +1033,7 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
                 }
                 ir::IrValueId v_qw =
                     emit_load_typed(off_src, ir::IrType::I64, e->loc.line);
-                emit_store_typed(off_dst, v_qw,
-                                 ir::IrType::I64, e->loc.line);
+                emit_store_typed(off_dst, v_qw, ir::IrType::I64, e->loc.line);
             }
             out = addr;
             return true;
@@ -1134,8 +1119,7 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
                 const auto &layouts = tc_.struct_layouts();
                 auto it = layouts.find(agg_t.struct_name);
                 if (it != layouts.end()) {
-                    struct_size =
-                        static_cast<uint64_t>(it->second.size_bytes);
+                    struct_size = static_cast<uint64_t>(it->second.size_bytes);
                 }
                 // Tambien enum (encoded como STRUCT con struct_name).
                 if (struct_size == 0) {
@@ -1167,14 +1151,13 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
                     ir::IrValueId off_dst = addr;
                     if (q > 0) {
                         const uint64_t byte_off = q * 8;
-                        ir::IrValueId v_off = emit_const(
-                            ir::IrType::I64, byte_off, e->loc.line);
+                        ir::IrValueId v_off =
+                            emit_const(ir::IrType::I64, byte_off, e->loc.line);
                         // src + off
                         {
                             ir::IrValueId v_new =
                                 fn_->new_value(ir::IrType::PTR);
-                            if (src_host)
-                                fn_->values[v_new].is_host_ptr = true;
+                            if (src_host) fn_->values[v_new].is_host_ptr = true;
                             ir::IrInstr ad{};
                             ad.op = ir::IrOp::ADD;
                             ad.type = ir::IrType::I64;
@@ -1187,8 +1170,7 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
                         {
                             ir::IrValueId v_new =
                                 fn_->new_value(ir::IrType::PTR);
-                            if (dst_host)
-                                fn_->values[v_new].is_host_ptr = true;
+                            if (dst_host) fn_->values[v_new].is_host_ptr = true;
                             ir::IrInstr ad{};
                             ad.op = ir::IrOp::ADD;
                             ad.type = ir::IrType::I64;
@@ -1203,8 +1185,8 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
                     ir::IrValueId v_qw =
                         emit_load_typed(off_src, ir::IrType::I64, e->loc.line);
                     // STORE al dst + q*8
-                    emit_store_typed(off_dst, v_qw,
-                                     ir::IrType::I64, e->loc.line);
+                    emit_store_typed(off_dst, v_qw, ir::IrType::I64,
+                                     e->loc.line);
                 }
                 out = addr;
                 return true;
@@ -1229,8 +1211,7 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
         if (e->op != ast::AssignOp::Assign) {
             ir::IrValueId v_old = emit_load_typed(addr, pt, e->loc.line);
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
-            rhs = emit_binop_ir(bop, v_old, rhs, un->result_type.kind,
-                                e->loc);
+            rhs = emit_binop_ir(bop, v_old, rhs, un->result_type.kind, e->loc);
         }
         rhs = cast_if_needed(rhs, fn_->values[rhs].type, pt, e->loc.line);
         emit_store_typed(addr, rhs, pt, e->loc.line);

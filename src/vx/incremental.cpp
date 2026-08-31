@@ -144,9 +144,9 @@ uint64_t BuildConfig::ir_fingerprint() const {
      * de env_flags.h lleva declarando desde que existe -- "un mando que cambia
      * el codigo emitido y no entra en la clave de la cache hace que se sirva un
      * artefacto construido con OTRA configuracion; no da error: da un binario
-     * que no corresponde al fuente" --, con su huella escrita y probada... y sin
-     * que nadie la llamara.  Compilar con `VESTA_NO_SPEC_DEVIRT=1` y despues sin
-     * el devolvia el artefacto de la primera vez, byte a byte.
+     * que no corresponde al fuente" --, con su huella escrita y probada... y
+     * sin que nadie la llamara.  Compilar con `VESTA_NO_SPEC_DEVIRT=1` y
+     * despues sin el devolvia el artefacto de la primera vez, byte a byte.
      *
      * Va dentro de la huella y no en un campo de la configuracion a proposito:
      * un campo hay que acordarse de rellenarlo, y olvidarlo no da error.

@@ -449,10 +449,10 @@ void Scheduler::run_loop() {
              * se hizo longjmp (aborto) -> saltar la ejecucion y dejar el
              * proceso HALT. */
             /* Y quien esta ejecutando, que el manejador del sistema lo necesita
-             * para saber a quien avisar.  La vuelta del bucle empieza poniendolo
-             * a nulo (mas arriba) y solo el lote del interprete lo volvia a
-             * poner; por aqui se armaba la recuperacion sin registrar el
-             * proceso, asi que el manejador se retiraba -- no tenia a quien
+             * para saber a quien avisar.  La vuelta del bucle empieza
+             * poniendolo a nulo (mas arriba) y solo el lote del interprete lo
+             * volvia a poner; por aqui se armaba la recuperacion sin registrar
+             * el proceso, asi que el manejador se retiraba -- no tenia a quien
              * avisar -- y un fallo dentro de `main` compilado mataba al proceso
              * con 0xC0000005 y la salida de error VACiA.  El mismo fallo dentro
              * del lote interpretado si salia contado, con su codigo, su
@@ -702,8 +702,8 @@ void Scheduler::run_loop() {
                 unsigned dispatch_idx;
                 {
                     const uint64_t _pc = instance->registers.rip.raw();
-                    DecodedInstr *_c = &instance->icache[icache_index(_pc)];
-                    if (__builtin_expect(_c->pc == _pc &&
+                    DecodedInstr *_c = icache_lookup(instance, _pc);
+                    if (__builtin_expect(_c != nullptr &&
                                              instance->decoded_ptr != nullptr,
                                          1)) {
                         instance->decoded_ptr = _c;
@@ -735,9 +735,9 @@ void Scheduler::run_loop() {
         if (__builtin_expect(--instance->reductions_remaining == 0, 0))        \
             goto BATCH_END;                                                    \
         const uint64_t _pc = instance->registers.rip.raw();                    \
-        DecodedInstr *_c = &instance->icache[icache_index(_pc)];               \
+        DecodedInstr *_c = icache_lookup(instance, _pc);                       \
         if (__builtin_expect(                                                  \
-                _c->pc == _pc && instance->decoded_ptr != nullptr, 1)) {       \
+                _c != nullptr && instance->decoded_ptr != nullptr, 1)) {       \
             instance->decoded_ptr = _c;                                        \
         } else {                                                               \
             decode_instruction(instance);                                      \
@@ -1423,8 +1423,8 @@ void Scheduler::run_loop() {
                     if (instance->reductions_remaining == 0) goto BATCH_END;
                     {
                         const uint64_t _pc = instance->registers.rip.raw();
-                        DecodedInstr *_c = &instance->icache[icache_index(_pc)];
-                        if (__builtin_expect(_c->pc == _pc &&
+                        DecodedInstr *_c = icache_lookup(instance, _pc);
+                        if (__builtin_expect(_c != nullptr &&
                                                  instance->decoded_ptr !=
                                                      nullptr,
                                              1)) {

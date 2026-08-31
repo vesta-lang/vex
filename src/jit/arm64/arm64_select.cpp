@@ -210,7 +210,8 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                     out_unsupported = true;
                     return "";
                 }
-                const int sb = ir::type_access_bytes(st), db = ir::type_access_bytes(dt);
+                const int sb = ir::type_access_bytes(st),
+                          db = ir::type_access_bytes(dt);
                 emit_ld(os, "x9", in.operands[0]);
                 if (db == sb) {
                     // Mismo ancho: copia de bits (x9 ya cargado).

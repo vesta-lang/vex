@@ -71,9 +71,9 @@ int main() {
     for (uint16_t v = static_cast<uint16_t>(primero); v < ultimo; ++v) {
         const auto b = static_cast<Builtin>(v);
         const std::string txt(builtin_name(b));
-        check(!txt.empty(), "el builtin " + std::to_string(v) + " no tiene texto");
-        if (txt.empty())
-            continue;
+        check(!txt.empty(),
+              "el builtin " + std::to_string(v) + " no tiene texto");
+        if (txt.empty()) continue;
         check(builtin_from_name(txt) == b, "ida y vuelta de '" + txt + "'");
         ++vistos;
     }
@@ -87,11 +87,16 @@ int main() {
     /* Y los que se PARECEN, que es donde falla un comparador mal escrito:
      * prefijos, sufijos, y nombres de la misma longitud que uno real. */
     check(builtin_from_name("prin") == Builtin::Unknown, "prefijo de print");
-    check(builtin_from_name("printl") == Builtin::Unknown, "prefijo de println");
-    check(builtin_from_name("printlnn") == Builtin::Unknown, "println con letra de mas");
-    check(builtin_from_name("qrint") == Builtin::Unknown, "misma longitud que print");
-    check(builtin_from_name("printz") == Builtin::Unknown, "misma longitud que printf");
-    check(builtin_from_name("PRINT") == Builtin::Unknown, "print en mayusculas");
+    check(builtin_from_name("printl") == Builtin::Unknown,
+          "prefijo de println");
+    check(builtin_from_name("printlnn") == Builtin::Unknown,
+          "println con letra de mas");
+    check(builtin_from_name("qrint") == Builtin::Unknown,
+          "misma longitud que print");
+    check(builtin_from_name("printz") == Builtin::Unknown,
+          "misma longitud que printf");
+    check(builtin_from_name("PRINT") == Builtin::Unknown,
+          "print en mayusculas");
 
     /* Los extremos de la tabla: el mas corto y el mas largo se reconocen, y
      * uno mas corto o mas largo que cualquiera se descarta sin buscar. */
@@ -106,7 +111,8 @@ int main() {
     check(builtin_from_name("println") == Builtin::Println, "println");
     check(builtin_from_name("malloc") == Builtin::Malloc, "malloc");
     check(builtin_from_name("term_move") == Builtin::TermMove, "term_move");
-    check(builtin_from_name("shared_malloc") == Builtin::SharedMalloc, "shared_malloc");
+    check(builtin_from_name("shared_malloc") == Builtin::SharedMalloc,
+          "shared_malloc");
     check(builtin_from_name("None") == Builtin::None, "None (el de Optional)");
 
     /* Un builtin invalido no revienta al pedir su texto. */
@@ -124,34 +130,46 @@ int main() {
     for (uint16_t v = static_cast<uint16_t>(primero); v < ultimo; ++v) {
         const auto fam = vx::builtin_family(static_cast<Builtin>(v));
         const auto i = static_cast<size_t>(fam);
-        check(i < 11, "familia fuera de rango para el builtin " + std::to_string(v));
+        check(i < 11,
+              "familia fuera de rango para el builtin " + std::to_string(v));
         if (i < 11) ++por_familia[i];
     }
-    const char *nombres[11] = {"Other",      "Print",    "Runtime",
-                               "Concurrent", "Optional", "Reflect",
-                               "Ownership",  "String",   "Math",
-                               "Introspect", "<sobra>"};
+    const char *nombres[11] = {
+        "Other",     "Print",  "Runtime", "Concurrent", "Optional", "Reflect",
+        "Ownership", "String", "Math",    "Introspect", "<sobra>"};
     for (int i = 1; i <= 9; ++i)
         check(por_familia[i] > 0,
               std::string("la familia ") + nombres[i] + " se quedo vacia");
     check(por_familia[10] == 0, "hay una familia que el test no conoce");
 
     /* Uno de cada, para que un reparto corrido no pase desapercibido. */
-    using vx::BuiltinFamily;
     using vx::builtin_family;
-    check(builtin_family(Builtin::Println) == BuiltinFamily::Print, "println -> Print");
-    check(builtin_family(Builtin::TermMove) == BuiltinFamily::Print, "term_move -> Print");
-    check(builtin_family(Builtin::Malloc) == BuiltinFamily::Runtime, "malloc -> Runtime");
-    check(builtin_family(Builtin::Msgsend) == BuiltinFamily::Concurrent, "msgsend -> Concurrent");
-    check(builtin_family(Builtin::Some) == BuiltinFamily::Optional, "Some -> Optional");
-    check(builtin_family(Builtin::ForName) == BuiltinFamily::Reflect, "forName -> Reflect");
-    check(builtin_family(Builtin::UniqueBox) == BuiltinFamily::Ownership, "unique_box -> Ownership");
-    check(builtin_family(Builtin::StrConcat) == BuiltinFamily::String, "str_concat -> String");
+    using vx::BuiltinFamily;
+    check(builtin_family(Builtin::Println) == BuiltinFamily::Print,
+          "println -> Print");
+    check(builtin_family(Builtin::TermMove) == BuiltinFamily::Print,
+          "term_move -> Print");
+    check(builtin_family(Builtin::Malloc) == BuiltinFamily::Runtime,
+          "malloc -> Runtime");
+    check(builtin_family(Builtin::Msgsend) == BuiltinFamily::Concurrent,
+          "msgsend -> Concurrent");
+    check(builtin_family(Builtin::Some) == BuiltinFamily::Optional,
+          "Some -> Optional");
+    check(builtin_family(Builtin::ForName) == BuiltinFamily::Reflect,
+          "forName -> Reflect");
+    check(builtin_family(Builtin::UniqueBox) == BuiltinFamily::Ownership,
+          "unique_box -> Ownership");
+    check(builtin_family(Builtin::StrConcat) == BuiltinFamily::String,
+          "str_concat -> String");
     check(builtin_family(Builtin::Sqrt) == BuiltinFamily::Math, "sqrt -> Math");
-    check(builtin_family(Builtin::Popcount) == BuiltinFamily::Math, "popcount -> Math");
-    check(builtin_family(Builtin::FfiOpen) == BuiltinFamily::Runtime, "ffi_open -> Runtime");
-    check(builtin_family(Builtin::Sizeof) == BuiltinFamily::Introspect, "sizeof -> Introspect");
-    check(builtin_family(Builtin::FieldName) == BuiltinFamily::Introspect, "field_name -> Introspect");
+    check(builtin_family(Builtin::Popcount) == BuiltinFamily::Math,
+          "popcount -> Math");
+    check(builtin_family(Builtin::FfiOpen) == BuiltinFamily::Runtime,
+          "ffi_open -> Runtime");
+    check(builtin_family(Builtin::Sizeof) == BuiltinFamily::Introspect,
+          "sizeof -> Introspect");
+    check(builtin_family(Builtin::FieldName) == BuiltinFamily::Introspect,
+          "field_name -> Introspect");
     /* Preguntar por un tipo AL COMPILAR y preguntar EN MARCHA son familias
      * distintas, y es lo que mas se presta a confusion. */
     check(builtin_family(Builtin::GetField) == BuiltinFamily::Reflect,
@@ -160,8 +178,10 @@ int main() {
     /* Lo que no es de nadie, y lo que no es un builtin. */
     check(builtin_family(Builtin::Vacount) == BuiltinFamily::Other,
           "vacount no tiene familia propia");
-    check(builtin_family(Builtin::Unknown) == BuiltinFamily::Other, "Unknown -> Other");
-    check(builtin_family(Builtin::Count) == BuiltinFamily::Other, "Count -> Other");
+    check(builtin_family(Builtin::Unknown) == BuiltinFamily::Other,
+          "Unknown -> Other");
+    check(builtin_family(Builtin::Count) == BuiltinFamily::Other,
+          "Count -> Other");
     check(builtin_family(static_cast<Builtin>(60000)) == BuiltinFamily::Other,
           "un valor fuera de rango no se sale de la tabla");
 

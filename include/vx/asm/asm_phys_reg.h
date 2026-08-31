@@ -522,8 +522,7 @@ inline std::string asm_mem_operando(uint8_t isa, const std::string &base,
              * genera: no depender de como este configurado el que lo parsea. */
             const uint64_t mag = static_cast<uint64_t>(disp > 0 ? disp : -disp);
             char buf[24];
-            std::snprintf(buf, sizeof(buf), "0x%llX",
-                          (unsigned long long)mag);
+            std::snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)mag);
             s += buf;
         }
         return s + "]";

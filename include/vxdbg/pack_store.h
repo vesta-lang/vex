@@ -205,10 +205,10 @@ class PackNodeStore : public NodeStore {
     struct CompactResult {
         bool ok = true;
         size_t packs_before = 0;
-        size_t packs_after = 0;      ///< los que escribio
-        size_t packs_removed = 0;    ///< los viejos que borro
-        size_t entries_kept = 0;     ///< entradas vivas reescritas
-        size_t entries_dropped = 0;  ///< las muertas que se quedaron fuera
+        size_t packs_after = 0;     ///< los que escribio
+        size_t packs_removed = 0;   ///< los viejos que borro
+        size_t entries_kept = 0;    ///< entradas vivas reescritas
+        size_t entries_dropped = 0; ///< las muertas que se quedaron fuera
         uint64_t bytes_before = 0;
         uint64_t bytes_after = 0;
     };

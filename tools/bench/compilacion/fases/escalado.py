@@ -8,7 +8,7 @@ from ..generadores import GENERADORES, funciones_para_lineas
 from ..multi import escribir_multi
 from ..informe import cabecera_fase
 from ..medida import compila_de_verdad, medir_caliente, medir_frio
-from ..ordenes import entorno_cache, orden_compilar
+from ..ordenes import SECUENCIAL, entorno_cache, orden_compilar
 from ..topologia import orden_multi
 
 
@@ -41,7 +41,11 @@ def fase(ctx: Ctx) -> None:
     print(f"{C.DIM}  {'':<10}{'(codigo)':>9}{'(ms)':>10}{'(ms)':>10}"
           f"{'(veces)':>16}{C.RESET}")
     print("-" * len(cab))
-    escala = [1500, 6000, 24000]  # LINEAS, no funciones
+    # LINEAS, no funciones.  Sale de `--lineas` en vez de estar fijo aqui: si
+    # no, `--grande` anadia el cuarto tamano a las demas fases y esta se
+    # quedaba con tres, y las curvas dejaban de apoyarse en la misma base.
+    escala = [int(x) for x in args.lineas.split(",") if x.strip()] or \
+        [1500, 6000, 24000]
     for ln in langs:
         nombre, gen = GENERADORES[ln]
         previo = None
@@ -55,6 +59,8 @@ def fase(ctx: Ctx) -> None:
             (d / nombre).write_text(texto, encoding="utf-8")
             lineas = texto.count("\n")
             cmd = orden_compilar(ln, d / nombre, d / "out", vm)
+            if not cmd:
+                break  # sin camino de compilacion: este lenguaje no participa
             env = entorno_cache(ln, dir_cache, entorno_base)
             ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
                                            args.timeout)
@@ -90,8 +96,16 @@ def fase(ctx: Ctx) -> None:
             ficheros = escribir_multi(ln, 1024, k, d)
             if not ficheros:
                 continue
-            cmd = orden_multi(ln, ficheros, d / "out", vm)
-            env = entorno_cache(ln, dir_cache, entorno_base)
+            # Eje SECUENCIAL, siempre.  Esta fase mide el coste FIJO por
+            # modulo, y con cada herramienta usando un numero distinto de
+            # hilos ese coste queda dividido por un factor distinto en cada
+            # fila: dejaria de ser comparable, que es lo unico que la tabla
+            # hace.  Los dos ejes se publican en la fase `proyecto`.
+            cmd = orden_multi(ln, ficheros, d / "out", vm, SECUENCIAL,
+                              ctx.nucleos)
+            if not cmd:
+                continue  # sin camino de compilacion: no participa
+            env = entorno_cache(ln, dir_cache, entorno_base, SECUENCIAL)
             ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
                                            args.timeout)
             if not ok:
@@ -104,7 +118,7 @@ def fase(ctx: Ctx) -> None:
             print(f"  {ln:<10}{len(ficheros):>9}{s['p50']:>10.0f}"
                   f"{s['p50'] / len(ficheros):>12.1f}")
             resultados["casos"].append({
-                "lang": ln, "escalado": "modulos",
+                "lang": ln, "escalado": "modulos", "paralelismo": SECUENCIAL,
                 "ficheros": len(ficheros), "stats": s})
     print("-" * len(cab2))
 

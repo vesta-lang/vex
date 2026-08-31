@@ -90,11 +90,11 @@ static void probar_pregunta() {
     jit::JitFactBase base;
 
     const ir::IrFunction con = hacer_con_cota("con_cota");
-    CHECK(jit::hay_argumento_acotado(con, base.rangos(con)),
+    CHECK(jit::hay_argumento_acotado(con, base.ranges(con)),
           "un argumento constante esta acotado -- de el se sabe algo");
 
     const ir::IrFunction sin = hacer_sin_cota("sin_cota");
-    CHECK(!jit::hay_argumento_acotado(sin, base.rangos(sin)),
+    CHECK(!jit::hay_argumento_acotado(sin, base.ranges(sin)),
           "un argumento que vale todo su tipo no acota nada");
 
     // Sin llamadas ni reservas no hay sitio donde aprovechar nada.
@@ -103,7 +103,7 @@ static void probar_pregunta() {
     const uint32_t b0 = pelada.new_block("entry");
     const ir::IrValueId k = cte(pelada, b0, 7);
     emitir(pelada, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {k});
-    CHECK(!jit::hay_argumento_acotado(pelada, base.rangos(pelada)),
+    CHECK(!jit::hay_argumento_acotado(pelada, base.ranges(pelada)),
           "sin llamada ni reserva no hay sitio donde aprovechar la cota");
 }
 
@@ -114,28 +114,28 @@ static void probar_reparto() {
     jit::JitFactBase base;
     const ir::IrFunction fn = hacer_con_cota("reparto");
 
-    const analysis::RangeFacts &r1 = base.rangos(fn);
-    const size_t tras_la_primera = base.computos();
+    const analysis::RangeFacts &r1 = base.ranges(fn);
+    const size_t tras_la_primera = base.computations();
     CHECK(tras_la_primera == 2, "la primera consulta ejecuta los rangos y la "
                                 "estructura de la que dependen");
 
-    const analysis::RangeFacts &r2 = base.rangos(fn);
+    const analysis::RangeFacts &r2 = base.ranges(fn);
     CHECK(&r1 == &r2,
           "la segunda consulta devuelve EL MISMO hecho, no una copia");
-    CHECK(base.computos() == tras_la_primera,
+    CHECK(base.computations() == tras_la_primera,
           "la segunda consulta no ejecuta ningun analisis -- sale de la cache");
 
     // La estructura ya la pidieron los rangos: preguntarla no cuesta nada.
-    base.estructura(fn);
-    CHECK(base.computos() == tras_la_primera,
+    base.structure(fn);
+    CHECK(base.computations() == tras_la_primera,
           "la estructura que pidieron los rangos ya esta: no se recalcula");
-    CHECK(base.consultas() > base.computos(),
+    CHECK(base.queries() > base.computations(),
           "hay mas preguntas que analisis: eso ES el reparto");
 
     // Otra funcion es otro conocimiento: la cache no las confunde.
     const ir::IrFunction otra = hacer_sin_cota("otra");
-    base.rangos(otra);
-    CHECK(base.computos() == tras_la_primera + 2,
+    base.ranges(otra);
+    CHECK(base.computations() == tras_la_primera + 2,
           "otra funcion se analiza aparte -- la cache va por funcion");
 }
 
@@ -146,12 +146,12 @@ static void probar_caducidad() {
     jit::JitFactBase base;
     ir::IrFunction fn = hacer_con_cota("caducidad");
 
-    base.rangos(fn);
-    const size_t antes = base.computos();
+    base.ranges(fn);
+    const size_t antes = base.computations();
 
-    base.invalidar(fn);
-    base.rangos(fn);
-    CHECK(base.computos() == antes + 2,
+    base.invalidate(fn);
+    base.ranges(fn);
+    CHECK(base.computations() == antes + 2,
           "tras invalidar se recalculan los rangos Y la estructura (cascada)");
 
     /* Y el hecho nuevo refleja el IR nuevo: la llamada pasa a recibir un valor
@@ -159,8 +159,8 @@ static void probar_caducidad() {
     const ir::IrValueId p = fn.new_value(ir::IrType::I64);
     fn.params.push_back(p);
     fn.blocks[0].instrs[1].operands[0] = p; // la CALL ahora recibe el parametro
-    base.invalidar(fn);
-    CHECK(!jit::hay_argumento_acotado(fn, base.rangos(fn)),
+    base.invalidate(fn);
+    CHECK(!jit::hay_argumento_acotado(fn, base.ranges(fn)),
           "tras cambiar el IR la respuesta es la del IR NUEVO, no la cacheada");
 }
 
@@ -170,37 +170,37 @@ static void probar_caducidad() {
 static void probar_sello_y_volcado() {
     jit::JitFactBase base;
     const ir::IrFunction fn = hacer_con_cota("sellada");
-    base.rangos(fn);
+    base.ranges(fn);
 
-    const analysis::asa::Sello s = base.sello(jit::kProductorRangos, fn);
-    CHECK(s.certeza == analysis::asa::Certeza::Demostrada,
+    const analysis::asa::Seal s = base.seal(jit::kProducerRanges, fn);
+    CHECK(s.certainty == analysis::asa::Certainty::Proven,
           "un analisis que llega a punto fijo da un hecho demostrado");
-    CHECK(s.origen.productor == jit::kProductorRangos,
+    CHECK(s.origin.producer == jit::kProducerRanges,
           "el hecho dice QUIEN lo descubrio");
-    CHECK(std::string(s.origen.funcion) == "sellada", "y mirando que funcion");
+    CHECK(std::string(s.origin.function) == "sellada", "y mirando que funcion");
     CHECK(
-        s.apoyos.depende_de(jit::kProductorEstructura),
+        s.support.depends_on(jit::kProducerStructure),
         "y sobre que otro hecho se dedujo -- sin eso no hay a quien invalidar");
 
     // De una funcion que nadie miro no se sabe nada, que NO es saber que no
     // hay.
     const ir::IrFunction ajena = hacer_sin_cota("ajena");
-    CHECK(base.sello(jit::kProductorRangos, ajena).certeza ==
-              analysis::asa::Certeza::Desconocida,
+    CHECK(base.seal(jit::kProducerRanges, ajena).certainty ==
+              analysis::asa::Certainty::Unknown,
           "sin preguntar no hay hecho, y eso se dice: desconocida");
 
-    const std::vector<jit::HechoRegistrado> v = base.volcado();
+    const std::vector<jit::RecordedFact> v = base.dump();
     CHECK(v.size() == 2,
           "el volcado saca los dos hechos vivos: los rangos y su estructura");
-    CHECK(v[0].funcion == "sellada" && v[1].funcion == "sellada",
+    CHECK(v[0].function == "sellada" && v[1].function == "sellada",
           "y solo los de la funcion consultada");
-    CHECK(std::string(v[0].dominio) == jit::kProductorEstructura &&
-              std::string(v[1].dominio) == jit::kProductorRangos,
+    CHECK(std::string(v[0].domain) == jit::kProducerStructure &&
+              std::string(v[1].domain) == jit::kProducerRanges,
           "en orden estable, para que dos volcados se puedan comparar");
 
-    base.invalidar(fn);
+    base.invalidate(fn);
     CHECK(
-        base.volcado().empty(),
+        base.dump().empty(),
         "lo invalidado desaparece del volcado -- no queda afirmando lo que ya "
         "no se sabe");
 }

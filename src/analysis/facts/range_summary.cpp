@@ -58,7 +58,7 @@ struct UsosDeNombre {
             for (const ir::IrBlock &b : fn.blocks)
                 for (const ir::IrInstr &in : b.instrs) {
                     if (in.op == IrOp::RAW_ASM || in.op == IrOp::INLINE_ASM)
-                        continue; // lo mira `seguir_direccion`, que ve el texto
+                        continue; // lo mira `follow_address`, que ve el texto
                     if (in.func_name.empty()) continue;
                     if (in.op == IrOp::CALL || in.op == IrOp::TAILCALL)
                         llamadas[in.func_name]++;
@@ -76,14 +76,14 @@ struct UsosDeNombre {
         for (const ir::IrFunction &fn : mod.functions)
             if (con_nombre_fuera_de_call.count(fn.name) != 0)
                 a_seguir.insert(fn.name);
-        const auto seguidas = seguir_direcciones(mod, a_seguir);
+        const auto seguidas = follow_addresses(mod, a_seguir);
         for (const auto &kv : seguidas) {
-            if (!kv.second.todas_se_ven) {
+            if (!kv.second.all_visible) {
                 abiertas.insert(kv.first);
                 continue;
             }
             llamadas[kv.first] +=
-                static_cast<uint32_t>(kv.second.indirectas.size());
+                static_cast<uint32_t>(kv.second.indirect.size());
         }
     }
 
@@ -239,7 +239,7 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
                     if (in.op == IrOp::CALL || in.op == IrOp::TAILCALL)
                         destino = in.func_name;
                     else if (in.op == IrOp::CALLIND)
-                        destino = funcion_apuntada(fn, hechos[i], in.func_ptr);
+                        destino = pointed_function(fn, hechos[i], in.func_ptr);
                     if (destino.empty()) continue;
                     auto it = out.por_funcion.find(destino);
                     if (it == out.por_funcion.end()) continue;

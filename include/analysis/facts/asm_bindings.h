@@ -37,6 +37,7 @@
 #include <string>
 #include <vector>
 
+#include "analysis/asa/fact.h"          // UnknownReason: por que no se supo
 #include "analysis/facts/value_range.h" // acotar lo que no es constante
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h" // la extension que describe el bloque
@@ -139,6 +140,28 @@ struct ExtensionResuelta {
     bool acotada = false; ///< se pudo poner un limite a los dos extremos.
 
     int64_t bytes() const { return hasta - desde; }
+
+    /**
+     * @brief POR QUE no se pudo acotar.  Solo vale con @c !acotada.
+     *
+     * Aqui la diferencia no es academica: esto es lo que convierte un
+     * `rep movsb` de "toca memoria en algun sitio" en "toca como mucho tantos
+     * bytes desde aqui", y eso es lo que despues se compara contra el tamano de
+     * la region para decir si se SALE.  Cuando no se puede acotar, el usuario
+     * necesita saber cual de estas cosas le pasa:
+     *
+     *   - falta la LIGADURA del operando -> `ShapeNotRecognized`, y ahi si se
+     *     le puede decir que escribir: liga ese registro a una variable;
+     *   - la ligadura esta y el VALOR no tiene cota -> `RuntimeDependent`, que
+     *     es cosa del programa y se arregla con una precondicion;
+     *   - el bloque no dijo ni cuanto mide el acceso -> no hay nada que acotar.
+     *
+     * Con un solo `false`, las tres se leian como "no se puede comprobar este
+     * asm", que es justo el veredicto que hace que nadie lo arregle.
+     */
+    asa::UnknownReason reason = asa::UnknownReason::NotAsked;
+    /// Codigo estable del caso EXACTO, del vocabulario de este dominio.
+    const char *reason_code = "";
 };
 
 /**

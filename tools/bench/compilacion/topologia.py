@@ -10,6 +10,7 @@ es lo que distingue "no reconstruye" de "reconstruye deprisa".
 from __future__ import annotations
 
 import hashlib
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -263,21 +264,84 @@ def contar_rehechos(antes: dict[str, str],
     return (rehechos, reutilizados, nuevos)
 
 
+def _makefile_c(lang: str, ficheros: list[str], salida: Path,
+                nucleos: int) -> Optional[list[str]]:
+    """Un Makefile que compila cada unidad por separado, y la orden `make -j`.
+
+    gcc y clang no paralelizan: una invocacion con N ficheros los compila uno
+    detras de otro.  Lo que hace un proyecto de C de verdad es `make -jN`, y
+    esa es la unica forma honesta de ponerlos en el eje `maquina` -- si no, se
+    compararia el paralelismo de Vesta contra la ausencia del suyo, que no es
+    una propiedad del compilador sino de como se le llamo.
+
+    Escribe el Makefile en el directorio del caso.  Devuelve None si no hay
+    `make`, y entonces el llamante se queda en secuencial y lo APUNTA, en vez
+    de publicar como paralelo algo que no lo fue.
+    """
+    if not shutil.which("make"):
+        return None
+    cc = ELEGIDO["c"] if lang == "c" else ELEGIDO["cpp"]
+    std = "-std=c11" if lang == "c" else "-std=c++17"
+    d = salida.parent
+    objs = [f + ".o" for f in ficheros]
+    lineas = [
+        "CC = %s" % cc,
+        "CFLAGS = -O2 %s" % std,
+        "OBJS = %s" % " ".join(objs),
+        "",
+        "%s: $(OBJS)" % salida.name,
+        "\t$(CC) $(OBJS) -o %s" % salida.name,
+        "",
+        "%.o: %",
+        "\t$(CC) $(CFLAGS) -c $< -o $@",
+        "",
+    ]
+    (d / "Makefile.bench").write_text("\n".join(lineas), encoding="utf-8")
+    return ["make", "-f", "Makefile.bench", "-j", str(max(1, nucleos)),
+            salida.name]
+
+
 def orden_multi(lang: str, ficheros: list[str], salida: Path,
-                vm: Path) -> list[str]:
+                vm: Path, paralelo: str = "", nucleos: int = 1) -> list[str]:
     """Orden que compila el proyecto repartido.  Cada herramienta lo recibe
     como ella lo entiende: unos quieren todas las unidades, otros solo el
-    fichero raiz y ya siguen las dependencias."""
-    if lang == "c":
-        return [ELEGIDO["c"], "-O2", "-std=c11"] + ficheros + ["-o", str(salida)]
-    if lang == "cpp":
-        return [ELEGIDO["cpp"], "-O2", "-std=c++17"] + ficheros + ["-o", str(salida)]
+    fichero raiz y ya siguen las dependencias.
+
+    @p paralelo elige el eje (ver `ordenes.PARALELISMO`).  Lo que cambia por
+    herramienta:
+      c / cpp  `maquina` usa `make -jN`, porque una sola invocacion de gcc con
+               N ficheros es secuencial por construccion.
+      go       `-p N`, que es su numero de paquetes en paralelo.
+      vesta    va por entorno (`VX_PARALLEL_COMPILE`), no por la orden.
+      rust     una sola crate: no hay paralelismo de unidades que pedirle.
+    """
+    if lang in ("c", "cpp"):
+        if paralelo == "maquina":
+            cmd = _makefile_c(lang, ficheros, salida, nucleos)
+            if cmd:
+                return cmd
+            # Sin `make` no se puede paralelizar C aqui; se cae a secuencial.
+            # El llamante lo marca en el JSON para que nadie lea esta fila
+            # como si fuera del eje `maquina`.
+        exe = ELEGIDO["c"] if lang == "c" else ELEGIDO["cpp"]
+        std = "-std=c11" if lang == "c" else "-std=c++17"
+        return [exe, "-O2", std] + ficheros + ["-o", str(salida)]
     if lang == "go":
-        return ["go", "build", "-o", str(salida)] + ficheros
+        # `-p` es cuantos paquetes compila a la vez.  Sin fijarlo usa los
+        # nucleos de la maquina, asi que en el eje secuencial hay que pedirle
+        # explicitamente 1 o Go entraria paralelo en la tabla secuencial.
+        p = ["-p", "1"] if paralelo == "secuencial" else (
+            ["-p", str(max(1, nucleos))] if paralelo == "maquina" else [])
+        return ["go", "build"] + p + ["-o", str(salida)] + ficheros
     if lang == "java":
         return ["javac", "-d", str(salida.parent / "clases")] + ficheros
     if lang == "rust":
-        return ["rustc", "-O", "main.rs", "-o", str(salida)]
+        # Misma cache incremental que en `orden_compilar`, y por el mismo
+        # motivo: sin ella se mediria a Rust siempre en frio y su aporte de
+        # cache saldria como 1.00x.  `enfriar` la borra.
+        return ["rustc", "-O", "-C",
+                "incremental=" + str(salida.parent / "rustc-inc"),
+                "main.rs", "-o", str(salida)]
     if lang == "vesta":
         return [str(vm), "--vesta", "main.vx", "-o", str(salida)]
     if lang == "vesta_aot":

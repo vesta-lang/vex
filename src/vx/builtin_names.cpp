@@ -72,270 +72,270 @@ struct BuiltinEntry {
 constexpr BuiltinEntry kTable[] = {
 
     /* --- 2 caracteres --- */
-    {"Ok",                     Builtin::Ok},
+    {"Ok", Builtin::Ok},
 
     /* --- 3 caracteres --- */
-    {"Err",                    Builtin::Err},
-    {"abs",                    Builtin::Abs},
-    {"chr",                    Builtin::Chr},
-    {"clz",                    Builtin::Clz},
-    {"cos",                    Builtin::Cos},
-    {"ctz",                    Builtin::Ctz},
-    {"log",                    Builtin::Log},
-    {"ord",                    Builtin::Ord},
-    {"pid",                    Builtin::Pid},
-    {"pow",                    Builtin::Pow},
-    {"sin",                    Builtin::Sin},
-    {"tan",                    Builtin::Tan},
+    {"Err", Builtin::Err},
+    {"abs", Builtin::Abs},
+    {"chr", Builtin::Chr},
+    {"clz", Builtin::Clz},
+    {"cos", Builtin::Cos},
+    {"ctz", Builtin::Ctz},
+    {"log", Builtin::Log},
+    {"ord", Builtin::Ord},
+    {"pid", Builtin::Pid},
+    {"pow", Builtin::Pow},
+    {"sin", Builtin::Sin},
+    {"tan", Builtin::Tan},
 
     /* --- 4 caracteres --- */
-    {"None",                   Builtin::None},
-    {"Some",                   Builtin::Some},
-    {"ceil",                   Builtin::Ceil},
-    {"echo",                   Builtin::Echo},
-    {"fabs",                   Builtin::Fabs},
-    {"fmax",                   Builtin::Fmax},
-    {"fmin",                   Builtin::Fmin},
-    {"free",                   Builtin::Free},
-    {"imax",                   Builtin::Imax},
-    {"imin",                   Builtin::Imin},
-    {"isOk",                   Builtin::IsOk},
-    {"kind",                   Builtin::Kind},
-    {"lend",                   Builtin::Lend},
-    {"log2",                   Builtin::Log2},
-    {"move",                   Builtin::Move},
-    {"rotl",                   Builtin::Rotl},
-    {"rotr",                   Builtin::Rotr},
-    {"sqrt",                   Builtin::Sqrt},
-    {"wait",                   Builtin::Wait},
+    {"None", Builtin::None},
+    {"Some", Builtin::Some},
+    {"ceil", Builtin::Ceil},
+    {"echo", Builtin::Echo},
+    {"fabs", Builtin::Fabs},
+    {"fmax", Builtin::Fmax},
+    {"fmin", Builtin::Fmin},
+    {"free", Builtin::Free},
+    {"imax", Builtin::Imax},
+    {"imin", Builtin::Imin},
+    {"isOk", Builtin::IsOk},
+    {"kind", Builtin::Kind},
+    {"lend", Builtin::Lend},
+    {"log2", Builtin::Log2},
+    {"move", Builtin::Move},
+    {"rotl", Builtin::Rotl},
+    {"rotr", Builtin::Rotr},
+    {"sqrt", Builtin::Sqrt},
+    {"wait", Builtin::Wait},
 
     /* --- 5 caracteres --- */
-    {"bswap",                  Builtin::Bswap},
-    {"clamp",                  Builtin::Clamp},
-    {"deque",                   Builtin::Deque},
-    {"error",                  Builtin::Error},
-    {"floor",                  Builtin::Floor},
-    {"flush",                  Builtin::Flush},
-    {"fopen",                  Builtin::Fopen},
-    {"ilog2",                  Builtin::Ilog2},
-    {"imaxu",                  Builtin::Imaxu},
-    {"iminu",                  Builtin::Iminu},
-    {"log10",                  Builtin::Log10},
-    {"panic",                  Builtin::Panic},
-    {"print",                  Builtin::Print},
-    {"queue",                   Builtin::Queue},
-    {"round",                  Builtin::Round},
-    {"share",                  Builtin::Share},
-    {"stack",                   Builtin::Stack},
-    {"trunc",                  Builtin::Trunc},
-    {"value",                  Builtin::Value},
+    {"bswap", Builtin::Bswap},
+    {"clamp", Builtin::Clamp},
+    {"deque", Builtin::Deque},
+    {"error", Builtin::Error},
+    {"floor", Builtin::Floor},
+    {"flush", Builtin::Flush},
+    {"fopen", Builtin::Fopen},
+    {"ilog2", Builtin::Ilog2},
+    {"imaxu", Builtin::Imaxu},
+    {"iminu", Builtin::Iminu},
+    {"log10", Builtin::Log10},
+    {"panic", Builtin::Panic},
+    {"print", Builtin::Print},
+    {"queue", Builtin::Queue},
+    {"round", Builtin::Round},
+    {"share", Builtin::Share},
+    {"stack", Builtin::Stack},
+    {"trunc", Builtin::Trunc},
+    {"value", Builtin::Value},
 
     /* --- 6 caracteres --- */
-    {"bg_rgb",                 Builtin::BgRgb},
-    {"expect",                 Builtin::Expect},
-    {"extent",                 Builtin::Extent},
-    {"fclose",                 Builtin::Fclose},
-    {"fg_rgb",                 Builtin::FgRgb},
-    {"fwrite",                 Builtin::Fwrite},
-    {"gc_box",                 Builtin::GcBox},
-    {"gensym",                 Builtin::Gensym},
-    {"invoke",                 Builtin::Invoke},
-    {"malloc",                 Builtin::Malloc},
-    {"notify",                 Builtin::Notify},
-    {"parent",                 Builtin::Parent},
-    {"ptr_of",                 Builtin::PtrOf},
-    {"repeat",                 Builtin::Repeat},
-    {"sizeof",                 Builtin::Sizeof},
-    {"substr",                 Builtin::Substr},
-    {"to_str",                 Builtin::ToStr},
-    {"unwrap",                 Builtin::Unwrap},
+    {"bg_rgb", Builtin::BgRgb},
+    {"expect", Builtin::Expect},
+    {"extent", Builtin::Extent},
+    {"fclose", Builtin::Fclose},
+    {"fg_rgb", Builtin::FgRgb},
+    {"fwrite", Builtin::Fwrite},
+    {"gc_box", Builtin::GcBox},
+    {"gensym", Builtin::Gensym},
+    {"invoke", Builtin::Invoke},
+    {"malloc", Builtin::Malloc},
+    {"notify", Builtin::Notify},
+    {"parent", Builtin::Parent},
+    {"ptr_of", Builtin::PtrOf},
+    {"repeat", Builtin::Repeat},
+    {"sizeof", Builtin::Sizeof},
+    {"substr", Builtin::Substr},
+    {"to_str", Builtin::ToStr},
+    {"unwrap", Builtin::Unwrap},
 
     /* --- 7 caracteres --- */
-    {"alignof",                Builtin::Alignof},
-    {"bitcast",                Builtin::Bitcast},
-    {"dispose",                Builtin::Dispose},
-    {"ffi_sym",                Builtin::FfiSym},
-    {"forName",                Builtin::ForName},
-    {"fulfill",                Builtin::Fulfill},
-    {"hashmap",                 Builtin::Hashmap},
-    {"hashset",                 Builtin::Hashset},
-    {"is_bool",                Builtin::IsBool},
-    {"is_char",                Builtin::IsChar},
-    {"is_enum",                Builtin::IsEnum},
-    {"is_same",                Builtin::IsSame},
-    {"msgrecv",                Builtin::Msgrecv},
-    {"msgsend",                Builtin::Msgsend},
-    {"println",                Builtin::Println},
-    {"proceed",                Builtin::Proceed},
-    {"replace",                Builtin::Replace},
-    {"treemap",                 Builtin::Treemap},
-    {"treeset",                 Builtin::Treeset},
-    {"type_id",                Builtin::TypeId},
-    {"unshare",                Builtin::Unshare},
-    {"vacount",                Builtin::Vacount},
+    {"alignof", Builtin::Alignof},
+    {"bitcast", Builtin::Bitcast},
+    {"dispose", Builtin::Dispose},
+    {"ffi_sym", Builtin::FfiSym},
+    {"forName", Builtin::ForName},
+    {"fulfill", Builtin::Fulfill},
+    {"hashmap", Builtin::Hashmap},
+    {"hashset", Builtin::Hashset},
+    {"is_bool", Builtin::IsBool},
+    {"is_char", Builtin::IsChar},
+    {"is_enum", Builtin::IsEnum},
+    {"is_same", Builtin::IsSame},
+    {"msgrecv", Builtin::Msgrecv},
+    {"msgsend", Builtin::Msgsend},
+    {"println", Builtin::Println},
+    {"proceed", Builtin::Proceed},
+    {"replace", Builtin::Replace},
+    {"treemap", Builtin::Treemap},
+    {"treeset", Builtin::Treeset},
+    {"type_id", Builtin::TypeId},
+    {"unshare", Builtin::Unshare},
+    {"vacount", Builtin::Vacount},
 
     /* --- 8 caracteres --- */
-    {"args_get",               Builtin::ArgsGet},
-    {"contains",               Builtin::Contains},
-    {"ct_print",               Builtin::CtPrint},
-    {"ffi_call",               Builtin::FfiCall},
-    {"ffi_open",               Builtin::FfiOpen},
-    {"getClass",               Builtin::GetClass},
-    {"getField",               Builtin::GetField},
-    {"is_class",               Builtin::IsClass},
-    {"is_float",               Builtin::IsFloat},
-    {"lend_mut",               Builtin::LendMut},
-    {"offsetof",               Builtin::Offsetof},
-    {"popcount",               Builtin::Popcount},
-    {"str_cstr",               Builtin::StrCstr},
-    {"str_hash",               Builtin::StrHash},
-    {"str_make",               Builtin::StrMake},
-    {"str_wstr",               Builtin::StrWstr},
-    {"typename",               Builtin::Typename},
+    {"args_get", Builtin::ArgsGet},
+    {"contains", Builtin::Contains},
+    {"ct_print", Builtin::CtPrint},
+    {"ffi_call", Builtin::FfiCall},
+    {"ffi_open", Builtin::FfiOpen},
+    {"getClass", Builtin::GetClass},
+    {"getField", Builtin::GetField},
+    {"is_class", Builtin::IsClass},
+    {"is_float", Builtin::IsFloat},
+    {"lend_mut", Builtin::LendMut},
+    {"offsetof", Builtin::Offsetof},
+    {"popcount", Builtin::Popcount},
+    {"str_cstr", Builtin::StrCstr},
+    {"str_hash", Builtin::StrHash},
+    {"str_make", Builtin::StrMake},
+    {"str_wstr", Builtin::StrWstr},
+    {"typename", Builtin::Typename},
 
     /* --- 9 caracteres --- */
-    {"arraylist",               Builtin::Arraylist},
-    {"field_get",              Builtin::FieldGet},
-    {"field_set",              Builtin::FieldSet},
-    {"find_type",              Builtin::FindType},
-    {"getFields",              Builtin::GetFields},
-    {"getMethod",              Builtin::GetMethod},
-    {"has_field",              Builtin::HasField},
-    {"in_bounds",              Builtin::InBounds},
-    {"isPresent",              Builtin::IsPresent},
-    {"is_opaque",              Builtin::IsOpaque},
-    {"is_shared",              Builtin::IsShared},
-    {"is_signed",              Builtin::IsSigned},
-    {"is_string",              Builtin::IsString},
-    {"is_struct",              Builtin::IsStruct},
-    {"notifyAll",              Builtin::NotifyAll},
-    {"print_bin",              Builtin::PrintBin},
-    {"print_hex",              Builtin::PrintHex},
-    {"print_int",              Builtin::PrintInt},
-    {"print_oct",              Builtin::PrintOct},
-    {"print_pad",              Builtin::PrintPad},
-    {"print_ptr",              Builtin::PrintPtr},
-    {"str_bytes",              Builtin::StrBytes},
-    {"term_move",              Builtin::TermMove},
-    {"to_string",              Builtin::ToString},
-    {"unwrap_or",              Builtin::UnwrapOr},
-    {"use_count",              Builtin::UseCount},
+    {"arraylist", Builtin::Arraylist},
+    {"field_get", Builtin::FieldGet},
+    {"field_set", Builtin::FieldSet},
+    {"find_type", Builtin::FindType},
+    {"getFields", Builtin::GetFields},
+    {"getMethod", Builtin::GetMethod},
+    {"has_field", Builtin::HasField},
+    {"in_bounds", Builtin::InBounds},
+    {"isPresent", Builtin::IsPresent},
+    {"is_opaque", Builtin::IsOpaque},
+    {"is_shared", Builtin::IsShared},
+    {"is_signed", Builtin::IsSigned},
+    {"is_string", Builtin::IsString},
+    {"is_struct", Builtin::IsStruct},
+    {"notifyAll", Builtin::NotifyAll},
+    {"print_bin", Builtin::PrintBin},
+    {"print_hex", Builtin::PrintHex},
+    {"print_int", Builtin::PrintInt},
+    {"print_oct", Builtin::PrintOct},
+    {"print_pad", Builtin::PrintPad},
+    {"print_ptr", Builtin::PrintPtr},
+    {"str_bytes", Builtin::StrBytes},
+    {"term_move", Builtin::TermMove},
+    {"to_string", Builtin::ToString},
+    {"unwrap_or", Builtin::UnwrapOr},
+    {"use_count", Builtin::UseCount},
 
     /* --- 10 caracteres --- */
-    {"args_count",             Builtin::ArgsCount},
-    {"atomic_add",             Builtin::AtomicAdd},
-    {"atomic_cas",             Builtin::AtomicCas},
-    {"field_name",             Builtin::FieldName},
-    {"field_type",             Builtin::FieldType},
-    {"gc_collect",             Builtin::GcCollect},
-    {"getFieldAt",             Builtin::GetFieldAt},
-    {"getMethods",             Builtin::GetMethods},
-    {"has_method",             Builtin::HasMethod},
-    {"is_integer",             Builtin::IsInteger},
-    {"is_newtype",             Builtin::IsNewtype},
-    {"is_numeric",             Builtin::IsNumeric},
-    {"is_pointer",             Builtin::IsPointer},
-    {"is_subtype",             Builtin::IsSubtype},
-    {"loadmodule",             Builtin::Loadmodule},
-    {"print_bool",             Builtin::PrintBool},
-    {"print_char",             Builtin::PrintChar},
-    {"print_cstr",             Builtin::PrintCstr},
-    {"print_uint",             Builtin::PrintUint},
-    {"shared_box",             Builtin::SharedBox},
-    {"str_concat",             Builtin::StrConcat},
-    {"str_equals",             Builtin::StrEquals},
-    {"str_intern",             Builtin::StrIntern},
-    {"str_length",             Builtin::StrLength},
-    {"term_clear",             Builtin::TermClear},
-    {"term_reset",             Builtin::TermReset},
-    {"unique_box",             Builtin::UniqueBox},
+    {"args_count", Builtin::ArgsCount},
+    {"atomic_add", Builtin::AtomicAdd},
+    {"atomic_cas", Builtin::AtomicCas},
+    {"field_name", Builtin::FieldName},
+    {"field_type", Builtin::FieldType},
+    {"gc_collect", Builtin::GcCollect},
+    {"getFieldAt", Builtin::GetFieldAt},
+    {"getMethods", Builtin::GetMethods},
+    {"has_method", Builtin::HasMethod},
+    {"is_integer", Builtin::IsInteger},
+    {"is_newtype", Builtin::IsNewtype},
+    {"is_numeric", Builtin::IsNumeric},
+    {"is_pointer", Builtin::IsPointer},
+    {"is_subtype", Builtin::IsSubtype},
+    {"loadmodule", Builtin::Loadmodule},
+    {"print_bool", Builtin::PrintBool},
+    {"print_char", Builtin::PrintChar},
+    {"print_cstr", Builtin::PrintCstr},
+    {"print_uint", Builtin::PrintUint},
+    {"shared_box", Builtin::SharedBox},
+    {"str_concat", Builtin::StrConcat},
+    {"str_equals", Builtin::StrEquals},
+    {"str_intern", Builtin::StrIntern},
+    {"str_length", Builtin::StrLength},
+    {"term_clear", Builtin::TermClear},
+    {"term_reset", Builtin::TermReset},
+    {"unique_box", Builtin::UniqueBox},
 
     /* --- 11 caracteres --- */
-    {"atomic_load",            Builtin::AtomicLoad},
-    {"fiber_entry",            Builtin::FiberEntry},
-    {"field_count",            Builtin::FieldCount},
-    {"getMethodAt",            Builtin::GetMethodAt},
-    {"is_unsigned",            Builtin::IsUnsigned},
-    {"newInstance",            Builtin::NewInstance},
-    {"print_color",            Builtin::PrintColor},
-    {"print_float",            Builtin::PrintFloat},
-    {"read_borrow",            Builtin::ReadBorrow},
-    {"section_end",            Builtin::SectionEnd},
-    {"shared_free",            Builtin::SharedFree},
-    {"shared_with",            Builtin::SharedWith},
-    {"str_convert",            Builtin::StrConvert},
-    {"unique_with",            Builtin::UniqueWith},
+    {"atomic_load", Builtin::AtomicLoad},
+    {"fiber_entry", Builtin::FiberEntry},
+    {"field_count", Builtin::FieldCount},
+    {"getMethodAt", Builtin::GetMethodAt},
+    {"is_unsigned", Builtin::IsUnsigned},
+    {"newInstance", Builtin::NewInstance},
+    {"print_color", Builtin::PrintColor},
+    {"print_float", Builtin::PrintFloat},
+    {"read_borrow", Builtin::ReadBorrow},
+    {"section_end", Builtin::SectionEnd},
+    {"shared_free", Builtin::SharedFree},
+    {"shared_with", Builtin::SharedWith},
+    {"str_convert", Builtin::StrConvert},
+    {"unique_with", Builtin::UniqueWith},
 
     /* --- 12 caracteres --- */
-    {"atomic_store",           Builtin::AtomicStore},
-    {"comptime_chr",           Builtin::ComptimeChr},
-    {"comptime_ord",           Builtin::ComptimeOrd},
-    {"cpu_features",           Builtin::CpuFeatures},
-    {"future_alloc",           Builtin::FutureAlloc},
-    {"is_primitive",           Builtin::IsPrimitive},
-    {"method_count",           Builtin::MethodCount},
-    {"section_size",           Builtin::SectionSize},
-    {"unloadmodule",           Builtin::Unloadmodule},
-    {"write_borrow",           Builtin::WriteBorrow},
+    {"atomic_store", Builtin::AtomicStore},
+    {"comptime_chr", Builtin::ComptimeChr},
+    {"comptime_ord", Builtin::ComptimeOrd},
+    {"cpu_features", Builtin::CpuFeatures},
+    {"future_alloc", Builtin::FutureAlloc},
+    {"is_primitive", Builtin::IsPrimitive},
+    {"method_count", Builtin::MethodCount},
+    {"section_size", Builtin::SectionSize},
+    {"unloadmodule", Builtin::Unloadmodule},
+    {"write_borrow", Builtin::WriteBorrow},
 
     /* --- 13 caracteres --- */
-    {"fiber_swapctx",          Builtin::FiberSwapctx},
-    {"section_start",          Builtin::SectionStart},
-    {"shared_malloc",          Builtin::SharedMalloc},
-    {"static_assert",          Builtin::StaticAssert},
-    {"underlying_of",          Builtin::UnderlyingOf},
+    {"fiber_swapctx", Builtin::FiberSwapctx},
+    {"section_start", Builtin::SectionStart},
+    {"shared_malloc", Builtin::SharedMalloc},
+    {"static_assert", Builtin::StaticAssert},
+    {"underlying_of", Builtin::UnderlyingOf},
 
     /* --- 14 caracteres --- */
-    {"atomic_add_i64",         Builtin::AtomicAddI64},
-    {"atomic_cas_i64",         Builtin::AtomicCasI64},
-    {"comptime_print",         Builtin::ComptimePrint},
-    {"comptime_streq",         Builtin::ComptimeStreq},
-    {"for_each_field",         Builtin::ForEachField},
-    {"print_gchandle",         Builtin::PrintGchandle},
-    {"type_info_kind",         Builtin::TypeInfoKind},
-    {"type_info_name",         Builtin::TypeInfoName},
-    {"type_info_size",         Builtin::TypeInfoSize},
+    {"atomic_add_i64", Builtin::AtomicAddI64},
+    {"atomic_cas_i64", Builtin::AtomicCasI64},
+    {"comptime_print", Builtin::ComptimePrint},
+    {"comptime_streq", Builtin::ComptimeStreq},
+    {"for_each_field", Builtin::ForEachField},
+    {"print_gchandle", Builtin::PrintGchandle},
+    {"type_info_kind", Builtin::TypeInfoKind},
+    {"type_info_name", Builtin::TypeInfoName},
+    {"type_info_size", Builtin::TypeInfoSize},
 
     /* --- 15 caracteres --- */
-    {"atomic_load_i64",        Builtin::AtomicLoadI64},
-    {"comptime_concat",        Builtin::ComptimeConcat},
-    {"comptime_repeat",        Builtin::ComptimeRepeat},
-    {"comptime_strlen",        Builtin::ComptimeStrlen},
-    {"comptime_substr",        Builtin::ComptimeSubstr},
-    {"comptime_to_str",        Builtin::ComptimeToStr},
-    {"for_each_method",        Builtin::ForEachMethod},
-    {"gc_finalize_all",        Builtin::GcFinalizeAll},
-    {"term_clear_line",        Builtin::TermClearLine},
-    {"type_info_align",        Builtin::TypeInfoAlign},
+    {"atomic_load_i64", Builtin::AtomicLoadI64},
+    {"comptime_concat", Builtin::ComptimeConcat},
+    {"comptime_repeat", Builtin::ComptimeRepeat},
+    {"comptime_strlen", Builtin::ComptimeStrlen},
+    {"comptime_substr", Builtin::ComptimeSubstr},
+    {"comptime_to_str", Builtin::ComptimeToStr},
+    {"for_each_method", Builtin::ForEachMethod},
+    {"gc_finalize_all", Builtin::GcFinalizeAll},
+    {"term_clear_line", Builtin::TermClearLine},
+    {"type_info_align", Builtin::TypeInfoAlign},
 
     /* --- 16 caracteres --- */
-    {"atomic_store_i64",       Builtin::AtomicStoreI64},
-    {"comptime_replace",       Builtin::ComptimeReplace},
-    {"term_hide_cursor",       Builtin::TermHideCursor},
-    {"term_save_cursor",       Builtin::TermSaveCursor},
-    {"term_show_cursor",       Builtin::TermShowCursor},
-    {"unwrap_unchecked",       Builtin::UnwrapUnchecked},
+    {"atomic_store_i64", Builtin::AtomicStoreI64},
+    {"comptime_replace", Builtin::ComptimeReplace},
+    {"term_hide_cursor", Builtin::TermHideCursor},
+    {"term_save_cursor", Builtin::TermSaveCursor},
+    {"term_show_cursor", Builtin::TermShowCursor},
+    {"unwrap_unchecked", Builtin::UnwrapUnchecked},
 
     /* --- 17 caracteres --- */
-    {"comptime_contains",      Builtin::ComptimeContains},
-    {"shared_gc_collect",      Builtin::SharedGcCollect},
-    {"shared_heap_bytes",      Builtin::SharedHeapBytes},
+    {"comptime_contains", Builtin::ComptimeContains},
+    {"shared_gc_collect", Builtin::SharedGcCollect},
+    {"shared_heap_bytes", Builtin::SharedHeapBytes},
 
     /* --- 18 caracteres --- */
-    {"as_native_callback",     Builtin::AsNativeCallback},
-    {"comptime_type_kind",     Builtin::ComptimeTypeKind},
+    {"as_native_callback", Builtin::AsNativeCallback},
+    {"comptime_type_kind", Builtin::ComptimeTypeKind},
 
     /* --- 19 caracteres --- */
-    {"term_restore_cursor",    Builtin::TermRestoreCursor},
+    {"term_restore_cursor", Builtin::TermRestoreCursor},
 
     /* --- 20 caracteres --- */
-    {"comptime_type_sizeof",   Builtin::ComptimeTypeSizeof},
-    {"type_info_field_name",   Builtin::TypeInfoFieldName},
-    {"type_info_field_size",   Builtin::TypeInfoFieldSize},
+    {"comptime_type_sizeof", Builtin::ComptimeTypeSizeof},
+    {"type_info_field_name", Builtin::TypeInfoFieldName},
+    {"type_info_field_size", Builtin::TypeInfoFieldSize},
 
     /* --- 21 caracteres --- */
-    {"comptime_type_alignof",  Builtin::ComptimeTypeAlignof},
-    {"type_info_field_count",  Builtin::TypeInfoFieldCount},
+    {"comptime_type_alignof", Builtin::ComptimeTypeAlignof},
+    {"type_info_field_count", Builtin::TypeInfoFieldCount},
 
     /* --- 22 caracteres --- */
     {"shared_heap_live_count", Builtin::SharedHeapLiveCount},
@@ -362,11 +362,9 @@ constexpr size_t kTableSize = sizeof(kTable) / sizeof(kTable[0]);
  */
 constexpr int ct_cmp(const char *a_text, uint16_t a_len, const char *b_text,
                      uint16_t b_len) {
-    if (a_len != b_len)
-        return (a_len < b_len) ? -1 : 1;
+    if (a_len != b_len) return (a_len < b_len) ? -1 : 1;
     for (uint16_t i = 0; i < a_len; ++i) {
-        if (a_text[i] != b_text[i])
-            return (a_text[i] < b_text[i]) ? -1 : 1;
+        if (a_text[i] != b_text[i]) return (a_text[i] < b_text[i]) ? -1 : 1;
     }
     return 0;
 }
@@ -463,114 +461,225 @@ namespace {
  */
 constexpr BuiltinFamily family_of(Builtin b) {
     switch (b) {
-    case Builtin::ComptimePrint: case Builtin::CtPrint: case Builtin::Echo:
-    case Builtin::Flush: case Builtin::GcCollect: case Builtin::GcFinalizeAll:
-    case Builtin::Print: case Builtin::PrintBin: case Builtin::PrintBool:
-    case Builtin::PrintChar: case Builtin::PrintColor:
-    case Builtin::PrintCstr: case Builtin::PrintFloat:
-    case Builtin::PrintGchandle: case Builtin::PrintHex:
-    case Builtin::PrintInt: case Builtin::PrintOct: case Builtin::PrintPad:
-    case Builtin::PrintPtr: case Builtin::PrintUint: case Builtin::Println:
-    case Builtin::TermClear: case Builtin::TermClearLine:
-    case Builtin::TermHideCursor: case Builtin::TermMove:
-    case Builtin::TermReset: case Builtin::TermRestoreCursor:
-    case Builtin::TermSaveCursor: case Builtin::TermShowCursor:
-        return BuiltinFamily::Print;
+    case Builtin::ComptimePrint:
+    case Builtin::CtPrint:
+    case Builtin::Echo:
+    case Builtin::Flush:
+    case Builtin::GcCollect:
+    case Builtin::GcFinalizeAll:
+    case Builtin::Print:
+    case Builtin::PrintBin:
+    case Builtin::PrintBool:
+    case Builtin::PrintChar:
+    case Builtin::PrintColor:
+    case Builtin::PrintCstr:
+    case Builtin::PrintFloat:
+    case Builtin::PrintGchandle:
+    case Builtin::PrintHex:
+    case Builtin::PrintInt:
+    case Builtin::PrintOct:
+    case Builtin::PrintPad:
+    case Builtin::PrintPtr:
+    case Builtin::PrintUint:
+    case Builtin::Println:
+    case Builtin::TermClear:
+    case Builtin::TermClearLine:
+    case Builtin::TermHideCursor:
+    case Builtin::TermMove:
+    case Builtin::TermReset:
+    case Builtin::TermRestoreCursor:
+    case Builtin::TermSaveCursor:
+    case Builtin::TermShowCursor: return BuiltinFamily::Print;
 
-    case Builtin::Dispose: case Builtin::Fclose: case Builtin::FiberSwapctx:
-    case Builtin::Fopen: case Builtin::Free: case Builtin::Fwrite:
-    case Builtin::Loadmodule: case Builtin::Malloc:
+    case Builtin::Dispose:
+    case Builtin::Fclose:
+    case Builtin::FiberSwapctx:
+    case Builtin::Fopen:
+    case Builtin::Free:
+    case Builtin::Fwrite:
+    case Builtin::Loadmodule:
+    case Builtin::Malloc:
     case Builtin::Unloadmodule:
-    case Builtin::FfiOpen: case Builtin::FfiSym: case Builtin::FfiCall:
-    case Builtin::Pid: case Builtin::CpuFeatures:
-    case Builtin::ArgsCount: case Builtin::ArgsGet:
-        return BuiltinFamily::Runtime;
+    case Builtin::FfiOpen:
+    case Builtin::FfiSym:
+    case Builtin::FfiCall:
+    case Builtin::Pid:
+    case Builtin::CpuFeatures:
+    case Builtin::ArgsCount:
+    case Builtin::ArgsGet: return BuiltinFamily::Runtime;
 
-    case Builtin::AtomicAddI64: case Builtin::AtomicCasI64:
-    case Builtin::AtomicLoadI64: case Builtin::AtomicStoreI64:
-    case Builtin::Fulfill: case Builtin::FutureAlloc: case Builtin::IsShared:
-    case Builtin::Msgrecv: case Builtin::Msgsend: case Builtin::Share:
-    case Builtin::SharedFree: case Builtin::SharedGcCollect:
-    case Builtin::SharedHeapBytes: case Builtin::SharedHeapLiveCount:
-    case Builtin::SharedMalloc: case Builtin::Unshare:
-    case Builtin::AtomicLoad: case Builtin::AtomicStore:
-    case Builtin::AtomicCas: case Builtin::AtomicAdd:
-    case Builtin::Wait: case Builtin::Notify: case Builtin::NotifyAll:
-        return BuiltinFamily::Concurrent;
+    case Builtin::AtomicAddI64:
+    case Builtin::AtomicCasI64:
+    case Builtin::AtomicLoadI64:
+    case Builtin::AtomicStoreI64:
+    case Builtin::Fulfill:
+    case Builtin::FutureAlloc:
+    case Builtin::IsShared:
+    case Builtin::Msgrecv:
+    case Builtin::Msgsend:
+    case Builtin::Share:
+    case Builtin::SharedFree:
+    case Builtin::SharedGcCollect:
+    case Builtin::SharedHeapBytes:
+    case Builtin::SharedHeapLiveCount:
+    case Builtin::SharedMalloc:
+    case Builtin::Unshare:
+    case Builtin::AtomicLoad:
+    case Builtin::AtomicStore:
+    case Builtin::AtomicCas:
+    case Builtin::AtomicAdd:
+    case Builtin::Wait:
+    case Builtin::Notify:
+    case Builtin::NotifyAll: return BuiltinFamily::Concurrent;
 
-    case Builtin::Err: case Builtin::Error: case Builtin::Expect:
+    case Builtin::Err:
+    case Builtin::Error:
+    case Builtin::Expect:
     case Builtin::IsOk:
-    case Builtin::IsPresent: case Builtin::None: case Builtin::Ok:
-    case Builtin::Some: case Builtin::Unwrap: case Builtin::UnwrapOr:
+    case Builtin::IsPresent:
+    case Builtin::None:
+    case Builtin::Ok:
+    case Builtin::Some:
+    case Builtin::Unwrap:
+    case Builtin::UnwrapOr:
     case Builtin::UnwrapUnchecked:
-    case Builtin::Value:
-        return BuiltinFamily::Optional;
+    case Builtin::Value: return BuiltinFamily::Optional;
 
-    case Builtin::ForName: case Builtin::GetClass: case Builtin::GetField:
-    case Builtin::GetFieldAt: case Builtin::GetFields:
-    case Builtin::GetMethod: case Builtin::GetMethodAt:
-    case Builtin::GetMethods: case Builtin::Invoke: case Builtin::NewInstance:
-    case Builtin::Proceed:
-        return BuiltinFamily::Reflect;
+    case Builtin::ForName:
+    case Builtin::GetClass:
+    case Builtin::GetField:
+    case Builtin::GetFieldAt:
+    case Builtin::GetFields:
+    case Builtin::GetMethod:
+    case Builtin::GetMethodAt:
+    case Builtin::GetMethods:
+    case Builtin::Invoke:
+    case Builtin::NewInstance:
+    case Builtin::Proceed: return BuiltinFamily::Reflect;
 
-    case Builtin::GcBox: case Builtin::Lend: case Builtin::LendMut:
-    case Builtin::Move: case Builtin::PtrOf: case Builtin::ReadBorrow:
-    case Builtin::SharedBox: case Builtin::SharedWith:
-    case Builtin::UniqueBox: case Builtin::UniqueWith: case Builtin::UseCount:
-    case Builtin::WriteBorrow:
-        return BuiltinFamily::Ownership;
+    case Builtin::GcBox:
+    case Builtin::Lend:
+    case Builtin::LendMut:
+    case Builtin::Move:
+    case Builtin::PtrOf:
+    case Builtin::ReadBorrow:
+    case Builtin::SharedBox:
+    case Builtin::SharedWith:
+    case Builtin::UniqueBox:
+    case Builtin::UniqueWith:
+    case Builtin::UseCount:
+    case Builtin::WriteBorrow: return BuiltinFamily::Ownership;
 
-    case Builtin::Chr: case Builtin::ComptimeChr:
-    case Builtin::ComptimeConcat: case Builtin::ComptimeContains:
-    case Builtin::ComptimeOrd: case Builtin::ComptimeRepeat:
-    case Builtin::ComptimeReplace: case Builtin::ComptimeStreq:
-    case Builtin::ComptimeStrlen: case Builtin::ComptimeSubstr:
-    case Builtin::ComptimeToStr: case Builtin::Contains: case Builtin::Ord:
-    case Builtin::Repeat: case Builtin::Replace: case Builtin::StrBytes:
-    case Builtin::StrConcat: case Builtin::StrConvert: case Builtin::StrCstr:
-    case Builtin::StrEquals: case Builtin::StrHash: case Builtin::StrIntern:
-    case Builtin::StrLength: case Builtin::StrMake: case Builtin::StrWstr:
-    case Builtin::Substr: case Builtin::ToStr:
-        return BuiltinFamily::String;
+    case Builtin::Chr:
+    case Builtin::ComptimeChr:
+    case Builtin::ComptimeConcat:
+    case Builtin::ComptimeContains:
+    case Builtin::ComptimeOrd:
+    case Builtin::ComptimeRepeat:
+    case Builtin::ComptimeReplace:
+    case Builtin::ComptimeStreq:
+    case Builtin::ComptimeStrlen:
+    case Builtin::ComptimeSubstr:
+    case Builtin::ComptimeToStr:
+    case Builtin::Contains:
+    case Builtin::Ord:
+    case Builtin::Repeat:
+    case Builtin::Replace:
+    case Builtin::StrBytes:
+    case Builtin::StrConcat:
+    case Builtin::StrConvert:
+    case Builtin::StrCstr:
+    case Builtin::StrEquals:
+    case Builtin::StrHash:
+    case Builtin::StrIntern:
+    case Builtin::StrLength:
+    case Builtin::StrMake:
+    case Builtin::StrWstr:
+    case Builtin::Substr:
+    case Builtin::ToStr: return BuiltinFamily::String;
 
+    case Builtin::Abs:
+    case Builtin::Bswap:
+    case Builtin::Ceil:
+    case Builtin::Clamp:
+    case Builtin::Clz:
+    case Builtin::Cos:
+    case Builtin::Ctz:
+    case Builtin::Fabs:
+    case Builtin::Floor:
+    case Builtin::Fmax:
+    case Builtin::Fmin:
+    case Builtin::Ilog2:
+    case Builtin::Imax:
+    case Builtin::Imaxu:
+    case Builtin::Imin:
+    case Builtin::Iminu:
+    case Builtin::Log:
+    case Builtin::Log10:
+    case Builtin::Log2:
+    case Builtin::Popcount:
+    case Builtin::Pow:
+    case Builtin::Rotl:
+    case Builtin::Rotr:
+    case Builtin::Round:
+    case Builtin::Sin:
+    case Builtin::Sqrt:
+    case Builtin::Tan:
+    case Builtin::Trunc: return BuiltinFamily::Math;
 
-    case Builtin::Abs: case Builtin::Bswap: case Builtin::Ceil:
-    case Builtin::Clamp: case Builtin::Clz: case Builtin::Cos:
-    case Builtin::Ctz: case Builtin::Fabs: case Builtin::Floor:
-    case Builtin::Fmax: case Builtin::Fmin: case Builtin::Ilog2:
-    case Builtin::Imax: case Builtin::Imaxu: case Builtin::Imin:
-    case Builtin::Iminu: case Builtin::Log: case Builtin::Log10:
-    case Builtin::Log2: case Builtin::Popcount: case Builtin::Pow:
-    case Builtin::Rotl: case Builtin::Rotr: case Builtin::Round:
-    case Builtin::Sin: case Builtin::Sqrt: case Builtin::Tan:
-    case Builtin::Trunc:
-        return BuiltinFamily::Math;
+    case Builtin::Alignof:
+    case Builtin::Bitcast:
+    case Builtin::ComptimeTypeAlignof:
+    case Builtin::ComptimeTypeKind:
+    case Builtin::ComptimeTypeSizeof:
+    case Builtin::Extent:
+    case Builtin::FieldCount:
+    case Builtin::FieldGet:
+    case Builtin::FieldName:
+    case Builtin::FieldSet:
+    case Builtin::FieldType:
+    case Builtin::FindType:
+    case Builtin::ForEachField:
+    case Builtin::ForEachMethod:
+    case Builtin::HasField:
+    case Builtin::HasMethod:
+    case Builtin::InBounds:
+    case Builtin::IsBool:
+    case Builtin::IsChar:
+    case Builtin::IsClass:
+    case Builtin::IsEnum:
+    case Builtin::IsFloat:
+    case Builtin::IsInteger:
+    case Builtin::IsNewtype:
+    case Builtin::IsNumeric:
+    case Builtin::IsOpaque:
+    case Builtin::IsPointer:
+    case Builtin::IsPrimitive:
+    case Builtin::IsSame:
+    case Builtin::IsSigned:
+    case Builtin::IsString:
+    case Builtin::IsStruct:
+    case Builtin::IsSubtype:
+    case Builtin::IsUnsigned:
+    case Builtin::Kind:
+    case Builtin::MethodCount:
+    case Builtin::Offsetof:
+    case Builtin::Parent:
+    case Builtin::Sizeof:
+    case Builtin::StaticAssert:
+    case Builtin::TypeId:
+    case Builtin::TypeInfoAlign:
+    case Builtin::TypeInfoFieldCount:
+    case Builtin::TypeInfoFieldName:
+    case Builtin::TypeInfoFieldOffset:
+    case Builtin::TypeInfoFieldSize:
+    case Builtin::TypeInfoKind:
+    case Builtin::TypeInfoName:
+    case Builtin::TypeInfoSize:
+    case Builtin::Typename:
+    case Builtin::UnderlyingOf: return BuiltinFamily::Introspect;
 
-
-    case Builtin::Alignof: case Builtin::Bitcast:
-    case Builtin::ComptimeTypeAlignof: case Builtin::ComptimeTypeKind:
-    case Builtin::ComptimeTypeSizeof: case Builtin::Extent:
-    case Builtin::FieldCount: case Builtin::FieldGet: case Builtin::FieldName:
-    case Builtin::FieldSet: case Builtin::FieldType: case Builtin::FindType:
-    case Builtin::ForEachField: case Builtin::ForEachMethod:
-    case Builtin::HasField: case Builtin::HasMethod: case Builtin::InBounds:
-    case Builtin::IsBool: case Builtin::IsChar: case Builtin::IsClass:
-    case Builtin::IsEnum: case Builtin::IsFloat: case Builtin::IsInteger:
-    case Builtin::IsNewtype: case Builtin::IsNumeric: case Builtin::IsOpaque:
-    case Builtin::IsPointer: case Builtin::IsPrimitive: case Builtin::IsSame:
-    case Builtin::IsSigned: case Builtin::IsString: case Builtin::IsStruct:
-    case Builtin::IsSubtype: case Builtin::IsUnsigned: case Builtin::Kind:
-    case Builtin::MethodCount: case Builtin::Offsetof: case Builtin::Parent:
-    case Builtin::Sizeof: case Builtin::StaticAssert: case Builtin::TypeId:
-    case Builtin::TypeInfoAlign: case Builtin::TypeInfoFieldCount:
-    case Builtin::TypeInfoFieldName: case Builtin::TypeInfoFieldOffset:
-    case Builtin::TypeInfoFieldSize: case Builtin::TypeInfoKind:
-    case Builtin::TypeInfoName: case Builtin::TypeInfoSize:
-    case Builtin::Typename: case Builtin::UnderlyingOf:
-        return BuiltinFamily::Introspect;
-
-    default:
-        return BuiltinFamily::Other;
+    default: return BuiltinFamily::Other;
     }
 }
 

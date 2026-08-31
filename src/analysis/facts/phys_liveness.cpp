@@ -23,7 +23,7 @@
 #include "analysis/facts/phys_liveness.h"
 
 #include "jit/sched/machine_effects.h" // el saber: la DB es la fuente de verdad
-#include "vx/asm/asm_effects.h" // isa_host(): para que ISA se pregunta
+#include "vx/asm/asm_effects.h"        // isa_host(): para que ISA se pregunta
 
 namespace analysis {
 namespace facts {
@@ -34,8 +34,8 @@ namespace {
 ///
 /// El espacio de ids es uniforme: por debajo de @c VREG_BASE son fisicos, por
 /// encima son virtuales.  Aqui solo interesan los primeros; si aparece uno
-/// virtual es que se pregunto sobre codigo sin repartir, y quien llama lo cuenta
-/// como no saber en vez de mezclar dos dominios.
+/// virtual es que se pregunto sobre codigo sin repartir, y quien llama lo
+/// cuenta como no saber en vez de mezclar dos dominios.
 inline PhysRegSet reg_mask(const std::vector<uint32_t> &v, bool &saw_virtual) {
     PhysRegSet m = 0;
     for (const uint32_t id : v) {
@@ -61,8 +61,7 @@ PhysLivenessFacts compute_phys_liveness(const jit::MFunction &pf) {
     F.after.assign(F.off[NB], kPhysRegAll);
     if (NB == 0) return F;
 
-    const jit::sched::EffIsa isa =
-        (vx::isa_host() == vx::instr_db::Isa::ARM64)
+    const jit::sched::EffIsa isa = (vx::isa_host() == vx::instr_db::Isa::ARM64)
                                        ? jit::sched::EffIsa::ARM64
                                        : jit::sched::EffIsa::X86;
 
@@ -87,8 +86,8 @@ PhysLivenessFacts compute_phys_liveness(const jit::MFunction &pf) {
      * que lo de abajo viene de arriba cuando puede venir de otro sitio.  Se vio
      * en `346_optional_struct`: un valor se ponia en un registro, mas abajo un
      * `pop` lo restauraba, y por en medio habia un salto que se saltaba el
-     * `pop` y llegaba a un uso -- asi que el valor SI hacia falta y el recorrido
-     * lo daba por muerto.
+     * `pop` y llegaba a un uso -- asi que el valor SI hacia falta y el
+     * recorrido lo daba por muerto.
      *
      * Aqui NO se modela ese control interno: se DICE que no se sabe, que es lo
      * unico honesto, y quien pregunte se lo encontrara como un punto sin saber.
@@ -138,10 +137,14 @@ PhysLivenessFacts compute_phys_liveness(const jit::MFunction &pf) {
                     continue;
                 }
                 const jit::AsmBlob &blob = pf.asm_blobs[bi];
-                for (const uint8_t r : blob.in_phys) t.reads |= phys_bit(r);
-                for (const uint8_t r : blob.body_reads) t.reads |= phys_bit(r);
-                for (const uint8_t r : blob.out_phys) t.writes |= phys_bit(r);
-                for (const uint8_t r : blob.clobbers) t.writes |= phys_bit(r);
+                for (const uint8_t r : blob.in_phys)
+                    t.reads |= phys_bit(r);
+                for (const uint8_t r : blob.body_reads)
+                    t.reads |= phys_bit(r);
+                for (const uint8_t r : blob.out_phys)
+                    t.writes |= phys_bit(r);
+                for (const uint8_t r : blob.clobbers)
+                    t.writes |= phys_bit(r);
                 continue;
             }
             const jit::sched::MEffects e =
@@ -194,7 +197,8 @@ PhysLivenessFacts compute_phys_liveness(const jit::MFunction &pf) {
             };
             join(blk.succ_a);
             join(blk.succ_b);
-            for (const jit::MBlockId s : blk.extra_succs) join(s);
+            for (const jit::MBlockId s : blk.extra_succs)
+                join(s);
             const PhysRegSet in = gen[i] | (out & ~kill[i]);
             if (out != F.live_out[i] || in != live_in[i]) {
                 F.live_out[i] = out;

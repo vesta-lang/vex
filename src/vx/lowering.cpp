@@ -69,8 +69,7 @@ namespace vx {
  * @param n   Nodo a inspeccionar (puede ser nullptr).
  * @param out Set destino al que se añaden los nombres.
  */
-void collect_assigned_vars(const ast::Node *n,
-                                  std::set<std::string> &out) {
+void collect_assigned_vars(const ast::Node *n, std::set<std::string> &out) {
     if (!n) return;
     switch (n->kind) {
     case ast::NodeKind::AssignExpr: {
@@ -220,8 +219,6 @@ Lowering::Lowering(ast::ModuleNode &mod, const TypeChecker &tc,
 // Helpers de tipo.
 // ---------------------------------------------------------------------
 
-
-
 // Computa el intervalo DFS [lo,hi] de cada clase sobre el bosque de herencia
 // (super_name).  El preorden numera lo; hi = max lo del subarbol.  Asi
 // is-a(A,B) <=> B.lo <= A.lo <= B.hi (A es B o un descendiente de B).  Orden de
@@ -232,7 +229,7 @@ Lowering::Lowering(ast::ModuleNode &mod, const TypeChecker &tc,
 // Forward-decl del chequeo de lowereabilidad de macros (definido mas abajo) +
 // definicion del contexto force-lower, para que el pre-pase de run() los use.
 std::string macro_body_unsupported_reason(const TypeChecker &tc,
-                                                 const ast::Stmt *s);
+                                          const ast::Stmt *s);
 
 /* El estado por hilo del bajado de macros va en las ranuras propias del
  * proyecto (util/thread_slot.h) y no en `thread_local`.
@@ -337,7 +334,8 @@ Lowering::SretInfo Lowering::sret_info(const Type &ret) const {
     // pila del llamado y muere al RET.  El tamano lo decide un solo sitio, y
     // no son 16 siempre -- un `shared<T>` son 8 --; quien llamaba reservaba
     // 16 a ciegas porque desde alli no se sabia cual de los dos era.
-    if (kind == PrimitiveKind::UNIQUE_PTR || kind == PrimitiveKind::SHARED_PTR) {
+    if (kind == PrimitiveKind::UNIQUE_PTR ||
+        kind == PrimitiveKind::SHARED_PTR) {
         info.uses_buffer = true;
         info.host_buffer = true;
         info.bytes = static_cast<uint64_t>(smart_ptr_slot_bytes(kind));
@@ -409,7 +407,6 @@ void Lowering::register_fn_ret_info(const std::string &name, const Type &ret,
     if (is_user_enum) fn_ret_enum_name_[name] = ret.struct_name;
 }
 
-
 // ---------------------------------------------------------------------
 // Lowering de una funcion.
 // ---------------------------------------------------------------------
@@ -448,7 +445,6 @@ void Lowering::propagate_is_gc_object_through_phis(ir::IrFunction &fn) {
 // ---------------------------------------------------------------------
 // Statements.
 // ---------------------------------------------------------------------
-
 
 void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
                               uint32_t line) {
@@ -523,14 +519,6 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
 //  Transcodificacion de literales en tiempo de compilacion
 // =========================================================================
 
-
-
-
-
-
-
-
-
 // =========================================================================
 //  Instrumentacion (vx_trace:enter / vx_trace:exit)
 // =========================================================================
@@ -543,8 +531,6 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
 //   - JIT: idem (mismo CALLN dispatch)
 //   - port C: emit_native_call lo bridgea a fprintf stderr (default)
 //             o el usuario provee su propia implementacion.
-
-
 
 // Forward decls de helpers definidos mas abajo en el TU.  Necesarias
 // porque lower_try y try_lower_builtin_call los usan.
@@ -575,7 +561,6 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
 // Asi el linker resuelve la referencia sin necesitar metadata extra.
 // ---------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------
 // foreach: for (T x : col) body  -- desazucarado a counted loop.
 //
@@ -602,9 +587,6 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
 void Lowering::emit_cleanups_all() {
     emit_cleanups_range(0, cleanup_stack_.size());
 }
-
-
-
 
 // ---------------------------------------------------------------------
 // synchronized (obj) { body }   (cierre completo con cleanup)
@@ -667,7 +649,6 @@ void Lowering::emit_cleanups_all() {
 //     operands=[env_addr, args...].  El emisor IR coloca env en R14,
 //     args en R1..R12 via parallel-move y emite @c callvmr.
 // ---------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------
 // ADTs: lower_enum_constructor + lower_match_expr.
@@ -758,8 +739,6 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
     }
 }
 
-
-
 void Lowering::emit_match_arm_phis(
     const std::vector<std::unordered_map<std::string, ir::IrValueId>>
         &entry_scopes,
@@ -813,8 +792,6 @@ void Lowering::emit_match_arm_phis(
     }
 }
 
-
-
 // ---------------------------------------------------------------------
 // @Async sugar.  Transforma una FunctionDecl con flag
 // is_async en DOS funciones IR:
@@ -836,7 +813,6 @@ void Lowering::emit_match_arm_phis(
 //   @Async i64 compute() { return 42; }
 //   i32 main() { i64 r = await compute(); return r; }
 // ---------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------
 //  AS: inline asm nativo -> IrOp::INLINE_ASM (marker host).
@@ -974,12 +950,9 @@ ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
     }
 }
 
-
 // ---------------------------------------------------------------------
 // Helpers: tamano de tipo y aritmetica de punteros.
 // ---------------------------------------------------------------------
-
-
 
 ir::IrValueId
 Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
@@ -1249,10 +1222,6 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
 // ruido en el .vel para el caso comun de "campo cero".
 // ---------------------------------------------------------------------
 
-
-
-
-
 // ---------------------------------------------------------------------
 // Lowering de asignaciones.
 //
@@ -1351,7 +1320,6 @@ ir::IrValueId Lowering::emit_binop_ir(ast::BinOp op, ir::IrValueId lhs_val,
     return dst;
 }
 
-
 /**
  * @brief A.39 - emite el cuerpo de un `comptime for` desenrollado.
  *
@@ -1446,17 +1414,17 @@ ir::IrValueId Lowering::lower_overloaded_step(ast::UnaryExpr *e, bool is_inc,
     return is_pre ? new_val : prev;
 }
 
-
 // ---------------------------------------------------------------------
 // Lowering de literales de string y builtins FFI.
 // ---------------------------------------------------------------------
-
 
 // Forward decls de los helpers definidos mas abajo en el TU.  Necesarias
 // porque try_lower_builtin_call los invoca en la implementacion de
 // forName/getClass
 
-/* try_lower_builtin_call vive ahora en lowering/builtins.cpp: eran 7425 lineas * en este fichero, un diecisiete por ciento del total, y tienen tema propio. */
+/* try_lower_builtin_call vive ahora en lowering/builtins.cpp: eran 7425 lineas
+ * * en este fichero, un diecisiete por ciento del total, y tienen tema propio.
+ */
 
 // ---------------------------------------------------------------------
 // POO: clases en Vesta. la integracion completa
@@ -1464,8 +1432,6 @@ ir::IrValueId Lowering::lower_overloaded_step(ast::UnaryExpr *e, bool is_inc,
 // se implementa por fases.  Cada metodo nuevo emite un error claro
 // hasta que su implementacion concreta este lista.
 // ---------------------------------------------------------------------
-
-
 
 // -----------------------------------------------------------------
 // NS.6-ext: baja los metodos de extension / impl como funciones libres
@@ -1526,8 +1492,7 @@ static uint64_t intern_string_literal_nul(ir::IrModule &mod,
  * (que es el patron de `intern_class_name`).  El runtime accede
  * SOLO a los primeros 8 bytes del slot.
  */
-uint64_t intern_class_cache_slot(ir::IrModule &mod,
-                                        const std::string &name) {
+uint64_t intern_class_cache_slot(ir::IrModule &mod, const std::string &name) {
     std::vector<uint8_t> bytes(8, 0); // 8 zeros (cache)
     bytes.push_back(0xFF); // sentinel: distingue de intern_class_name
     bytes.insert(bytes.end(), name.begin(), name.end()); // nombre para unicidad
@@ -1622,9 +1587,6 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
     }
 }
 
-
-
-
 std::string Lowering::func_ref_label(const std::string &name,
                                      const std::string &mangled) {
     // Si el nombre es un extern, su direccion cruda no es invocable por
@@ -1636,9 +1598,6 @@ std::string Lowering::func_ref_label(const std::string &name,
     }
     return mangled.empty() ? name : mangled;
 }
-
-
-
 
 namespace {
 
@@ -1699,7 +1658,8 @@ bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out) {
     if (nblocks < 2) return false;
 
     size_t total = 0;
-    for (const auto &b : init.blocks) total += b.instrs.size();
+    for (const auto &b : init.blocks)
+        total += b.instrs.size();
     if (total < kModuleInitSplitMin) return false;
 
     // --- 1. La cadena tiene que ser lineal y sin PHIs ---------------------
@@ -1753,7 +1713,8 @@ bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out) {
     };
     for (size_t i = 0; i < nblocks && splittable; ++i)
         for (const ir::IrInstr &in : init.blocks[i].instrs) {
-            for (ir::IrValueId v : in.operands) note_use(v, i);
+            for (ir::IrValueId v : in.operands)
+                note_use(v, i);
             note_use(in.func_ptr, i);
         }
     if (!splittable) return false;
@@ -1862,14 +1823,11 @@ bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out) {
     return true;
 }
 
-
-
 std::string Lowering::build_module_init_asm(ir::IrModule & /*out_module*/) {
     // No se usa: la generacion de __module_init se hace via
     // generate_module_init_function (IrFunction completa, no cadena).
     return std::string();
 }
-
 
 ir::IrValueId Lowering::lower_this_expr(ast::ThisExpr *e) {
     const ir::IrValueId v = lookup("this");
@@ -1885,8 +1843,8 @@ ir::IrValueId Lowering::lower_this_expr(ast::ThisExpr *e) {
  *        Si offset es 0, devuelve el base directamente.
  */
 ir::IrValueId emit_field_addr(ir::IrFunction *fn, ir::IrBlockId block,
-                                     ir::IrValueId base, uint32_t offset,
-                                     uint32_t line) {
+                              ir::IrValueId base, uint32_t offset,
+                              uint32_t line) {
     if (offset == 0) {
         // El frontend marca el resultado como host_ptr para que LOAD/
         // STORE usen movh.  Si la base ya tiene is_host_ptr=true, la
@@ -1922,19 +1880,13 @@ ir::IrValueId emit_field_addr(ir::IrFunction *fn, ir::IrBlockId block,
     return addr;
 }
 
-
-
-
 // ---------------------------------------------------------------------
 // @Virtual: vtable estatica + init del vptr (modelo AOT, structs value-type).
 // ---------------------------------------------------------------------
 
-
-
 // ---------------------------------------------------------------------
 // Helpers de constantes y casts.
 // ---------------------------------------------------------------------
-
 
 ir::IrValueId Lowering::emit_const(ir::IrType t, uint64_t imm,
                                    uint32_t source_line) {
@@ -1954,7 +1906,6 @@ ir::IrValueId Lowering::emit_const(ir::IrType t, uint64_t imm,
 // -----------------------------------------------------------------------
 // Helpers para IR ops nativos (anteriormente RAW_ASM).  Migracion 2026-05-23.
 // -----------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------
 // C-3: ruteo del operador `+`/`==` del string built-in a una funcion
@@ -2039,8 +1990,8 @@ Lowering::emit_string_override_call(const std::string &fn_name, ast::Expr *lhs,
         al.host_alloca = true;
         al.source_line = source_line;
         emit(current_block_, std::move(al));
-        emit_call(std::move(callee_name),
-                  {v_retbuf, v_a, v_b}, ir::IrType::VOID, source_line);
+        emit_call(std::move(callee_name), {v_retbuf, v_a, v_b},
+                  ir::IrType::VOID, source_line);
         // Liberar operandos temporales (bytes ya copiados por la callee).
         // Inc 5 (SSO): solo libera si estaba en HEAP.
         if (a_temp) emit_native_str_free_if_heap(v_a, source_line);
@@ -2049,8 +2000,8 @@ Lowering::emit_string_override_call(const std::string &fn_name, ast::Expr *lhs,
         return v_retbuf;
     }
 
-    const ir::IrValueId v_ret = emit_call(std::move(callee_name),
-              {v_a, v_b}, ret_ir, source_line);
+    const ir::IrValueId v_ret =
+        emit_call(std::move(callee_name), {v_a, v_b}, ret_ir, source_line);
 
     // Liberar los operandos LITERAL/expr-temporales en native (sus bytes
     // ya estan copiados por la callee).  Inc 5 (SSO): solo libera si
@@ -2077,7 +2028,6 @@ Lowering::emit_string_override_call(const std::string &fn_name, ast::Expr *lhs,
     return v_ret;
 }
 
-
 // -----------------------------------------------------------------------
 // Vesta Embed Inc 0: string value-type (solo native_poo_).
 //
@@ -2086,7 +2036,6 @@ Lowering::emit_string_override_call(const std::string &fn_name, ast::Expr *lhs,
 // SSA de una variable `string` es el PTR al slot de 24 bytes, igual que un
 // struct value-type (ver lower_ident: STRUCT/ARRAY devuelven lookup()).
 // -----------------------------------------------------------------------
-
 
 ir::IrValueId
 Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
@@ -2138,8 +2087,9 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         ir::IrValueId v_val = emit_const(ty, val, source_line);
         emit_store_typed(v_dst, v_val, ty, source_line);
     };
-    auto pack = [](const std::vector<uint8_t> &data, uint64_t pos,
-                    int n) { return pack_le(data, pos, n); };
+    auto pack = [](const std::vector<uint8_t> &data, uint64_t pos, int n) {
+        return pack_le(data, pos, n);
+    };
     // Helper: escribir `data` (incluye el nul final) byte-a-byte agrupado
     // en qwords/dword/word/byte a partir de @p v_base + base_off.
     auto write_packed = [&](ir::IrValueId v_base, uint64_t base_off,
@@ -2197,8 +2147,8 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
     //
     // El literal se interna con su nul para que `cstr()` valga tal cual.
     (void)cap;
-    const ir::IrValueId v_buf =
-        emit_str_lit_addr(intern_string_literal_nul(*out_mod_, lit), source_line, true);
+    const ir::IrValueId v_buf = emit_str_lit_addr(
+        intern_string_literal_nul(*out_mod_, lit), source_line, true);
     store_slot_fields_prestado(v_slot, v_buf, len, source_line);
     return v_slot;
 
@@ -2240,9 +2190,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             emit_store_typed(v_dst, v_val, ty, source_line);
         };
         // Empaquetar `n` bytes de data[pos..] en un entero little-endian.
-        auto pack = [&](uint64_t pos, int n) {
-            return pack_le(data, pos, n);
-        };
+        auto pack = [&](uint64_t pos, int n) { return pack_le(data, pos, n); };
 
         uint64_t pos = 0;
         const uint64_t total_w = data.size(); // = cap
@@ -2287,9 +2235,6 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
     return v_slot;
 }
 
-
-
-
 // ---------------------------------------------------------------------
 // CPU dispatch (cimiento): global __vx_cpu_features + helper __vx_cpu_init.
 //
@@ -2314,7 +2259,6 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
 // enteros BARE como hex) sin pasar por asm_normalize_numbers (eso solo corre
 // en lower_asm, no en helpers sinteticos).
 // ---------------------------------------------------------------------
-
 
 bool Lowering::imported_global_slot_of(ast::FieldAccessExpr *e,
                                        uint64_t &out_slot) {
@@ -2389,13 +2333,9 @@ uint64_t Lowering::get_or_create_tls_global_slot(const std::string &name,
     return idx;
 }
 
-
-
-
 // ---------------------------------------------------------------------
 // Scopes.
 // ---------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------
 // Address-taken locals: pre-pase + accesos via LOAD/STORE.
@@ -2411,7 +2351,6 @@ uint64_t Lowering::get_or_create_tls_global_slot(const std::string &name,
 // nombres; el control de scope inner-shadowing es resposabilidad del
 // type checker en hitos posteriores (no usamos shadowing).
 // ---------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------
 // spawn_body_uses_coop: recorre el body de un `spawn { }` buscando el uso
@@ -2579,7 +2518,6 @@ bool Lowering::spawn_body_uses_coop(ast::Stmt *s) {
 // suya marcar el escape via su propio analisis).
 // ---------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------
 // Errores y helpers de diagnostico.
 // ---------------------------------------------------------------------
@@ -2623,7 +2561,6 @@ void Lowering::error_at(SourceLoc loc, std::string msg) {
 // ---------------------------------------------------------------------
 // Exportacion de metadata POO al IrModule (para port transpilers).
 // ---------------------------------------------------------------------
-
 
 // =====================================================================
 // BugFix R1: super(args) y super.method(args)
