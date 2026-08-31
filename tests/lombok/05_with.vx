@@ -3,14 +3,14 @@
 @AllArgsConstructor
 @Getter
 class Point {
-    public i32 x;
-    public i32 y;
+	public i32 x;
+	public i32 y;
 }
 i32 main() {
-    Point p1 = new Point(10, 20);
-    Point p2 = p1.with_x(40);     // p2 = {40, 20}, p1 intacto
-    Point p3 = p2.with_y(2);      // p3 = {40, 2}
-    if (p1.get_x() != 10) return 1;       // original intacto
-    if (p1.get_y() != 20) return 2;
-    return p3.get_x() + p3.get_y();        // 40 + 2 = 42
+	Point p1 = new Point(10, 20);
+	Point p2 = p1.with_x(40);       // p2 = {40, 20}, p1 intacto
+	Point p3 = p2.with_y(2);        // p3 = {40, 2}
+	if (p1.get_x() != 10) return 1; // original intacto
+	if (p1.get_y() != 20) return 2;
+	return p3.get_x() + p3.get_y(); // 40 + 2 = 42
 }

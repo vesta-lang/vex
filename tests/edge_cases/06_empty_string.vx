@@ -1,12 +1,9 @@
 // Edge: string vacio concat + length.
 i32 main() {
-    string a = "";
-    string b = "hola";
-    string c = a + b;
-    string d = b + a;
-    if (a.length() == 0
-     && c.length() == 4
-     && d.length() == 4
-     && c.equals(d)) return 42;
-    return 1;
+	string a = "";
+	string b = "hola";
+	string c = a + b;
+	string d = b + a;
+	if (a.length() == 0 && c.length() == 4 && d.length() == 4 && c.equals(d)) return 42;
+	return 1;
 }

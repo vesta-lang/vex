@@ -1,8 +1,8 @@
 // Edge: string con bytes NUL embedded.  STRGETBYTES debe respetar byte_len,
 // no buscar terminator.
 i32 main() {
-    string s = "ab\0cd";
-    u64 n = s.bytes();
-    if (n == 5) return 42;
-    return 1;
+	string s = "ab\0cd";
+	u64    n = s.bytes();
+	if (n == 5) return 42;
+	return 1;
 }

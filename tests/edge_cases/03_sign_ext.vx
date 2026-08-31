@@ -1,7 +1,7 @@
 // Edge: sign-extension de i32 negativo a i64.
 i32 main() {
-    i32 a = -5;
-    i64 b = (i64) a;
-    if (b == -5) return 42;
-    return (i32)(b & 0x7FFFFFFF);
+	i32 a = -5_i32;
+	i64 b =  (i64) a;
+	if (b == -5) return 42;
+	return (i32)(b & 0x7FFFFFFF);
 }

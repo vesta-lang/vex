@@ -2,10 +2,10 @@
 // en su scope.  Workaround comun: pasarse a si misma como arg.
 // Aqui: factorial CPS via funcion top-level (no lambda recursion).
 i32 fact(i32 n) {
-    if (n <= 1) return 1;
-    return n * fact(n - 1);
+	if (n <= 1) return 1;
+	return n * fact(n - 1);
 }
 i32 main() {
-    // 5! = 120, 6! = 720.  42 = ?  Combinacion: fact(3) * 7 = 42.
-    return fact(3) * 7;
+	// 5! = 120, 6! = 720.  42 = ?  Combinacion: fact(3) * 7 = 42.
+	return fact(3) * 7;
 }

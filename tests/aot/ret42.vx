@@ -1,4 +1,4 @@
 //  hito minimo: return 42 a nativo standalone.
 i32 main() {
-    return 42;
+	return 42;
 }

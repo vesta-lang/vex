@@ -1,11 +1,11 @@
 // Edge: 0.1 + 0.2 != 0.3 en IEEE 754 (precision).
 i32 main() {
-    f64 a = 0.1;
-    f64 b = 0.2;
-    f64 c = a + b;
-    f64 d = 0.3;
-    // El compilador NO debe foldear 0.1+0.2 a 0.3 (correctness IEEE).
-    if (c == d) return 1;          // si folda, FAIL
-    if (c > d) return 42;          // c es ligeramente > d
-    return 2;
+	f64 a = 0.1_f64;
+	f64 b = 0.2_f64;
+	f64 c = a + b;
+	f64 d = 0.3_f64;
+	// El compilador NO debe foldear 0.1+0.2 a 0.3 (correctness IEEE).
+	if (c == d) return 1; // si folda, FAIL
+	if (c > d) return 42; // c es ligeramente > d
+	return 2;
 }

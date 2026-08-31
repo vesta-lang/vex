@@ -1,12 +1,12 @@
 // Edge: unique<T> move semantics.  Tras move el origen debe ser invalido.
 i32 main() {
-    unique<i32> a = unique_box(42);
-    unique<i32> b = move(a);
-    // ptr_of(a) deberia ser null (zerified por mvtake).
-    i32* pa = ptr_of(a);
-    i32* pb = ptr_of(b);
-    if (pa == null && pb != null) {
-        return *pb;
-    }
-    return 1;
+	unique<i32> a = unique_box(42);
+	unique<i32> b = move(a);
+	// ptr_of(a) deberia ser null (zerified por mvtake).
+	i32* pa = ptr_of(a);
+	i32* pb = ptr_of(b);
+	if (pa == null && pb != null) {
+		return *pb;
+	}
+	return 1;
 }

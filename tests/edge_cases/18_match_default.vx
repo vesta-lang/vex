@@ -1,12 +1,16 @@
 // Edge: match con default arm para variantes no esperadas.
-enum Color { Red, Green, Blue }
+enum Color {
+	Red,
+	Green,
+	Blue
+}
 i32 main() {
-    Color c = Color.Blue;
-    i32 r = 0;
-    match c {
-        case Red => r = 1;
-        case Green => r = 2;
-        case _ => r = 42;
-    }
-    return r;
+	Color c = Color.Blue;
+	i32   r = 0_i32;
+	match c {
+		case Red   => r = 1;
+		case Green => r = 2;
+		case _     => r = 42;
+	}
+	return r;
 }

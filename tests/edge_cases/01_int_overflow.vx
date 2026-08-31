@@ -1,7 +1,7 @@
 // Edge: i32 overflow (INT32_MAX + 1).
 i32 main() {
-    i32 a = 2147483647;  // INT32_MAX
-    i32 b = a + 1;       // wraps to INT32_MIN
-    if (b == -2147483648) return 42;
-    return 1;
+	i32 a = 2_147_483_647_i32; // INT32_MAX
+	i32 b = a + 1;             // wraps to INT32_MIN
+	if (b == -2_147_483_648) return 42;
+	return 1;
 }

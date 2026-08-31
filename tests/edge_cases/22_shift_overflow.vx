@@ -1,8 +1,8 @@
 // Edge: shift >= 64.  Comportamiento UB en C, pero VM deberia normalizar
 // (x86: shr/shl con count >= 64 hace AND con 63).
 i32 main() {
-    u64 x = 0xFFFFFFFFFFFFFFFF;
-    u64 r = x >> 64;        // si masking, r = x; si shift puro, r = 0.
-    if (r == 0 || r == x) return 42;
-    return 1;
+	u64 x = 0xFFFFFFFFFFFFFFFF_u64;
+	u64 r = x >> 64; // si masking, r = x; si shift puro, r = 0.
+	if (r == 0 || r == x) return 42;
+	return 1;
 }

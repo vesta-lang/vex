@@ -1,11 +1,11 @@
 // Edge: recursion profunda (1M frames).  Stack PE va a 128 MB con el sprint
 // JIT-mem-opt; un i64 frame entero es ~64 bytes, asi que 1M * 64 = 64MB OK.
 i64 rec(i64 n) {
-    if (n == 0) return 0;
-    return rec(n - 1) + 1;
+	if (n == 0) return 0;
+	return rec(n - 1) + 1;
 }
 i32 main() {
-    i64 r = rec(100000);
-    if (r == 100000) return 42;
-    return 1;
+	i64 r = rec(100_000);
+	if (r == 100_000) return 42;
+	return 1;
 }

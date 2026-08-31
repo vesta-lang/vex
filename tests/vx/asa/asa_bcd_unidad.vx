@@ -12,71 +12,71 @@
  */
 
 struct Par {
-    u64 a;
-    u64 b;
+	u64 a;
+	u64 b;
 };
 
 struct Terna {
-    u64 x;
-    u64 y;
-    u64 z;
+	u64 x;
+	u64 y;
+	u64 z;
 };
 
 // --- las operaciones: reciben el valor entero ---
-u64 op_par_lee(Par p)   { return p.a; }
-u64 op_par_todo(Par p)  { return p.a + p.b; }
-u64 op_terna_lee(Terna t)  { return t.x; }
+u64 op_par_lee(Par p) { return p.a; }
+u64 op_par_todo(Par p) { return p.a + p.b; }
+u64 op_terna_lee(Terna t) { return t.x; }
 u64 op_terna_todo(Terna t) { return t.x + t.y + t.z; }
 
 // --- B: se pasa entero y aqui no se toca ---
 u64 b_par() {
-    Par p;
-    p.a = 1;
-    p.b = 2;
-    return op_par_lee(p);
+	Par p;
+	p.a = 1;
+	p.b = 2;
+	return op_par_lee(p);
 }
 u64 b_terna() {
-    Terna t;
-    t.x = 1;
-    t.y = 2;
-    t.z = 3;
-    return op_terna_lee(t);
+	Terna t;
+	t.x = 1;
+	t.y = 2;
+	t.z = 3;
+	return op_terna_lee(t);
 }
 
 // --- C: la operacion toca todos sus componentes ---
 u64 c_par() {
-    Par p;
-    p.a = 1;
-    p.b = 2;
-    return op_par_todo(p);
+	Par p;
+	p.a = 1;
+	p.b = 2;
+	return op_par_todo(p);
 }
 u64 c_terna() {
-    Terna t;
-    t.x = 1;
-    t.y = 2;
-    t.z = 3;
-    return op_terna_todo(t);
+	Terna t;
+	t.x = 1;
+	t.y = 2;
+	t.z = 3;
+	return op_terna_todo(t);
 }
 
 // --- D: se pasa entero Y ademas se lee una parte por separado ---
 u64 d_par() {
-    Par p;
-    p.a = 1;
-    p.b = 2;
-    u64 r = op_par_lee(p);
-    return r + p.b;
+	Par p;
+	p.a = 1;
+	p.b = 2;
+	u64 r = op_par_lee(p);
+	return r + p.b;
 }
 u64 d_terna() {
-    Terna t;
-    t.x = 1;
-    t.y = 2;
-    t.z = 3;
-    u64 r = op_terna_lee(t);
-    return r + t.z;
+	Terna t;
+	t.x = 1;
+	t.y = 2;
+	t.z = 3;
+	u64 r = op_terna_lee(t);
+	return r + t.z;
 }
 
 i32 main(string[] args) {
-    u64 s = b_par() + b_terna() + c_par() + c_terna() + d_par() + d_terna();
-    println("BCD: ${s}");
-    return 0;
+	u64 s = b_par() + b_terna() + c_par() + c_terna() + d_par() + d_terna();
+	println("BCD: ${s}");
+	return 0;
 }

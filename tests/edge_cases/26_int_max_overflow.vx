@@ -1,7 +1,7 @@
 // Edge: i32 INT_MAX + 1 -> wraps a INT_MIN.  Semantica two's complement.
 i32 main() {
-    i32 mx = 2147483647;          // INT_MAX
-    i32 res = mx + 1;             // overflow to -2147483648
-    if (res == -2147483648) return 42;
-    return 1;
+	i32 mx  = 2_147_483_647_i32; // INT_MAX
+	i32 res = mx + 1;            // overflow to -2147483648
+	if (res == -2_147_483_648) return 42;
+	return 1;
 }

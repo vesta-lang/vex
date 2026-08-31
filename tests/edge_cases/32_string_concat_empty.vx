@@ -1,12 +1,12 @@
 // Edge: concat con cadena vacia.  STRCAT con uno de los dos = "" deberia
 // devolver el otro (optimizable a identity).
 i32 main() {
-    string a = "";
-    string b = "hello";
-    string c = a + b;
-    string d = b + a;
-    u64 lc = c.length();
-    u64 ld = d.length();
-    if (lc == 5 && ld == 5) return 42;
-    return 1;
+	string a  = "";
+	string b  = "hello";
+	string c  = a + b;
+	string d  = b + a;
+	u64    lc = c.length();
+	u64    ld = d.length();
+	if (lc == 5 && ld == 5) return 42;
+	return 1;
 }

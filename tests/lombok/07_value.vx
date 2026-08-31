@@ -1,12 +1,12 @@
 // Edge: @Value = @Data inmutable.  Fields automaticamente final.
 @Value
 class Vec3 {
-    public i32 x;
-    public i32 y;
-    public i32 z;
+	public i32 x;
+	public i32 y;
+	public i32 z;
 }
 i32 main() {
-    Vec3 v = new Vec3(20, 15, 7);
-    // sin setter porque @Value.
-    return v.get_x() + v.get_y() + v.get_z();    // 42
+	Vec3 v = new Vec3(20, 15, 7);
+	// sin setter porque @Value.
+	return v.get_x() + v.get_y() + v.get_z(); // 42
 }

@@ -1,16 +1,16 @@
 // Edge: try anidado.  Throw desde inner, catch en outer si inner no captura.
 i32 main() {
-    try {
-        try {
-            i32 a = 100 / 0;
-            return 1;
-        } catch (FatalError e1) {
-            // re-throw via panic
-            panic("inner catch");
-            return 2;
-        }
-    } catch (FatalError e2) {
-        return 42;  // outer catch
-    }
-    return 99;
+	try {
+		try {
+			i32 a = 100 / 0;
+			return 1;
+		} catch (FatalError e1) {
+			// re-throw via panic
+			panic("inner catch");
+			return 2;
+		}
+	} catch (FatalError e2) {
+		return 42; // outer catch
+	}
+	return 99;
 }

@@ -1,8 +1,8 @@
 // Edge: string vs null.  Verifica null check + comparison.
 i32 main() {
-    string s = "hola";
-    string n = "";
-    if (s.equals(n)) return 1;
-    if (n.equals(n)) return 42;  // dos vacios iguales
-    return 2;
+	string s = "hola";
+	string n = "";
+	if (s.equals(n)) return 1;
+	if (n.equals(n)) return 42; // dos vacios iguales
+	return 2;
 }

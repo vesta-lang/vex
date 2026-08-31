@@ -9,37 +9,37 @@
  */
 import std.wideint only u128;
 
-u64 g_state = 0x243F6A8885A308D3;
+u64 g_state = 0x243F6A8885A308D3_u64;
 
 /** @brief xorshift64; secuencia identica a la del oraculo. */
 u64 next_rand() {
-    u64 s = g_state;
-    s = s ^ (s << 13);
-    s = s ^ (s >> 7);
-    s = s ^ (s << 17);
-    g_state = s;
-    return s;
+	u64 s = g_state;
+	s       = s ^ (s << 13);
+	s       = s ^ (s >> 7);
+	s       = s ^ (s << 17);
+	g_state = s;
+	return s;
 }
 
 i32 main() {
-    u64 h = 0xCBF29CE484222325;
-    u64 i = 0;
-    while (i < 200000) {
-        u128 a;
-        a.lo64 = next_rand();
-        a.hi64 = next_rand();
-        u128 b;
-        b.lo64 = next_rand();
-        b.hi64 = next_rand();
+	u64 h = 0xCBF29CE484222325_u64;
+	u64 i = 0_u64;
+	while (i < 200_000) {
+		u128 a;
+		a.lo64 = next_rand();
+		a.hi64 = next_rand();
+		u128 b;
+		b.lo64 = next_rand();
+		b.hi64 = next_rand();
 
-        u128 p = a * b;
+		u128 p = a * b;
 
-        h = h ^ p.lo64;
-        h = h * 1099511628211;
-        h = h ^ p.hi64;
-        h = h * 1099511628211;
-        i = i + 1;
-    }
-    println("checksum=${h:hex}");
-    return 0;
+		h = h ^ p.lo64;
+		h = h * 1_099_511_628_211;
+		h = h ^ p.hi64;
+		h = h * 1_099_511_628_211;
+		i = i + 1;
+	}
+	println("checksum=${h:hex}");
+	return 0;
 }

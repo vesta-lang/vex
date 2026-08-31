@@ -72,8 +72,7 @@ static analyze::FunctionFingerprint compose_of(const ir::IrModule &mod,
                                                bool with_module) {
     std::vector<analyze::FunctionFingerprint> fps =
         analyze::compute_module_fingerprints(mod);
-    analyze::compose_fingerprints(fps, nullptr,
-                                  with_module ? &mod : nullptr);
+    analyze::compose_fingerprints(fps, nullptr, with_module ? &mod : nullptr);
     for (const analyze::FunctionFingerprint &f : fps)
         if (f.function == "caller") return f;
     return analyze::FunctionFingerprint{};
@@ -256,7 +255,8 @@ static void two_identical_definitions_are_not_a_conflict() {
 
     for (const ir::IrNativeImport &x : mod.native_imports)
         if (x.name == "strlen")
-            CHECK(!x.effects_conflict, "decir dos veces lo mismo no contradice");
+            CHECK(!x.effects_conflict,
+                  "decir dos veces lo mismo no contradice");
 }
 
 /**
@@ -277,7 +277,8 @@ static void declaring_then_calling_is_not_a_conflict() {
 
     for (const ir::IrNativeImport &x : mod.native_imports)
         if (x.name == "strlen") {
-            CHECK(!x.effects_conflict, "no hay contradiccion: uno no dijo nada");
+            CHECK(!x.effects_conflict,
+                  "no hay contradiccion: uno no dijo nada");
             CHECK(x.effects.declared,
                   "y lo definido NO se pierde por llamarla despues");
         }

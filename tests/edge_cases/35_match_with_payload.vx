@@ -1,14 +1,14 @@
 // Edge: match con multiples variantes y payload.
 enum Shape {
-    Circle(i32),
-    Square(i32),
-    Rectangle(i32, i32)
+	Circle(i32),
+	Square(i32),
+	Rectangle(i32, i32)
 }
 i32 main() {
-    Shape s = Shape.Rectangle(6, 7);
-    match s {
-        case Circle(r) => return 1;
-        case Square(side) => return 2;
-        case Rectangle(w, h) => return w * h;       // 42
-    }
+	Shape s = Shape.Rectangle(6, 7);
+	match s {
+		case Circle(r)       => return 1;
+		case Square(side)    => return 2;
+		case Rectangle(w, h) => return w * h; // 42
+	}
 }

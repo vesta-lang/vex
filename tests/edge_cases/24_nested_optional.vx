@@ -1,7 +1,7 @@
 // Edge: Optional<Optional<i32>>.  Estructura recursiva.
 i32 main() {
-    Optional<Optional<i32>> o = Some(Some(42));
-    Optional<i32> inner = unwrap(o);
-    i32 v = unwrap(inner);
-    return v;
+	Optional<Optional<i32>> o     = Some(Some(42));
+	Optional<i32>           inner = unwrap(o);
+	i32                     v     = unwrap(inner);
+	return v;
 }

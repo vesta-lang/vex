@@ -1,14 +1,14 @@
 // Edge: null deref de class.  Debe lanzar FatalError capturable.
 class Foo {
-    public i32 x;
-    public Foo() { this.x = 0; }
+	public i32 x;
+	public Foo() { this.x = 0; }
 }
 i32 main() {
-    Foo f = null;
-    try {
-        i32 v = f.x;  // null deref -> FATAL_NULL_POINTER
-        return 99;
-    } catch (FatalError e) {
-        return 42;
-    }
+	Foo f = null;
+	try {
+		i32 v = f.x; // null deref -> FATAL_NULL_POINTER
+		return 99;
+	} catch (FatalError e) {
+		return 42;
+	}
 }

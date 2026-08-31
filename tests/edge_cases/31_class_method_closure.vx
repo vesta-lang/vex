@@ -1,13 +1,13 @@
 // Edge: closure capturando `this` de un metodo (via implicit this).
 class Box {
-    public i32 val;
-    public Box(i32 v) { val = v; }
-    public fn() -> i32 get_closure() {
-        return () => val;
-    }
+	public i32 val;
+	public Box(i32 v) { val = v; }
+	public fn() -> i32 get_closure() {
+		return () => val;
+	}
 }
 i32 main() {
-    Box b = new Box(42);
-    fn() -> i32 f = b.get_closure();
-    return f();
+	Box         b = new Box(42);
+	fn() -> i32 f = b.get_closure();
+	return f();
 }

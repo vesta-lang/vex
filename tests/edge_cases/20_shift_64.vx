@@ -1,8 +1,8 @@
 // Edge: shift por 64 (UB en C; en x86 mask & 0x3F = 0 -> no shift).
 i32 main() {
-    u64 a = 0x123456789ABCDEF0;
-    u64 b = a >> 64;  // x86: mask 0x3F = 0 -> b == a
-    if (b == a) return 42;
-    if (b == 0) return 100;   // si frontend sanitiza, espera 0
-    return 1;
+	u64 a = 0x123456789ABCDEF0_u64;
+	u64 b = a >> 64; // x86: mask 0x3F = 0 -> b == a
+	if (b == a) return 42;
+	if (b == 0) return 100; // si frontend sanitiza, espera 0
+	return 1;
 }

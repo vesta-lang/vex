@@ -1,9 +1,11 @@
 // Edge: string UTF-8 multi-byte (CJK).  byte_len != length.
 i32 main() {
-    u8[16] buf;
-    // "中" en UTF-8 = E4 B8 AD (3 bytes, 1 codepoint).
-    buf[0] = 0xE4; buf[1] = 0xB8; buf[2] = 0xAD;
-    string s = str_make(&buf[0], 3);
-    if (s.bytes() == 3 && s.length() == 1) return 42;
-    return 1;
+	u8[16] buf;
+	// "中" en UTF-8 = E4 B8 AD (3 bytes, 1 codepoint).
+	buf[0] = 0xE4;
+	buf[1] = 0xB8;
+	buf[2] = 0xAD;
+	string s = str_make(&buf[0], 3);
+	if (s.bytes() == 3 && s.length() == 1) return 42;
+	return 1;
 }

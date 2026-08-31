@@ -1,12 +1,15 @@
 // Edge: clase autorreferenciada + implicit this (Java/C# style).
 class Node {
-    public i32 v;
-    public Node next;
-    public Node(i32 x) { v = x; next = null; }
+	public i32  v;
+	public Node next;
+	public Node(i32 x) {
+		v    = x;
+		next = null;
+	}
 }
 i32 main() {
-    Node a = new Node(40);
-    Node b = new Node(2);
-    a.next = b;
-    return a.v + a.next.v;     // 40 + 2 = 42
+	Node a = new Node(40);
+	Node b = new Node(2);
+	a.next = b;
+	return a.v + a.next.v; // 40 + 2 = 42
 }

@@ -1,7 +1,7 @@
 // Edge: +0.0 == -0.0 segun IEEE 754.  Bit pattern distinto pero igual valor.
 i32 main() {
-    f64 pos = 0.0;
-    f64 neg = -0.0;
-    if (pos == neg) return 42;
-    return 1;
+	f64 pos =  0.0_f64;
+	f64 neg = -0.0_f64;
+	if (pos == neg) return 42;
+	return 1;
 }

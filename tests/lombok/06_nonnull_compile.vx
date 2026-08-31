@@ -1,17 +1,17 @@
 // Edge: @NonNull en field se traduce a `nonnull T` (compile-time).
 // El TypeChecker rechaza null literal sin overhead runtime.
 class Holder {
-    public i32 v;
-    public Holder(i32 x) { v = x; }
+	public i32             v;
+	public Holder(i32 x) { v = x; }
 }
 @AllArgsConstructor
 @Getter
 class Box {
-    @NonNull
-    public Holder ref;
+	@NonNull
+	public Holder ref;
 }
 i32 main() {
-    Holder h = new Holder(42);
-    Box b = new Box(h);
-    return b.get_ref().v;     // 42
+	Holder h = new Holder(42);
+	Box    b = new Box(h);
+	return b.get_ref().v; // 42
 }

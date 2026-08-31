@@ -56,11 +56,11 @@ inline void print_memory_stats() {
     const util::HostAllocStats s = util::host_alloc_stats();
     // Vivas = pedidas - devueltas, contando las que libero otro hilo: un bloque
     // devuelto desde fuera esta igual de libre que uno devuelto por su dueno.
-    const uint64_t alive = (s.small_allocs + s.large_allocs) -
-                           (s.small_frees + s.remote_frees);
+    const uint64_t alive =
+        (s.small_allocs + s.large_allocs) - (s.small_frees + s.remote_frees);
     std::cout << "Memoria: " << alive << " reservas vivas de "
-              << (s.small_allocs + s.large_allocs) << ", "
-              << s.bytes_reserved << " bytes comprometidos\n";
+              << (s.small_allocs + s.large_allocs) << ", " << s.bytes_reserved
+              << " bytes comprometidos\n";
 }
 
 #endif // VESTA_TESTS_UTIL_MEM_STATS_H

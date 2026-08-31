@@ -18,42 +18,42 @@
 //   4. R0 = 42 al final.
 
 extern "stdlib/native/io/vesta_io" {
-    fn vio_print_buf(u8* buf, u64 len) -> i64;
+	fn vio_print_buf(u8* buf, u64 len) -> i64;
 }
 
 class MyExc {
-    public i32 v;
-    public MyExc(i32 v) { this.v = v; }
+	public i32 v;
+	public MyExc(i32 v) { this.v = v; }
 }
 
 void leaky_func() {
-    u8[16] buf;
-    buf[0] = 88;  // 'X'
-    buf[1] = 10;  // '\n'
+	u8[16] buf;
+	buf[0] = 88; // 'X'
+	buf[1] = 10; // '\n'
 
-    // Imprimir para FORZAR que buf sea host_alloca (su &buf[0] fluye
-    // a CALLN).
-    vio_print_buf(&buf[0], 2);
+	// Imprimir para FORZAR que buf sea host_alloca (su &buf[0] fluye
+	// a CALLN).
+	vio_print_buf(&buf[0], 2);
 
-    // Lanzar excepcion ANTES de cleanup explicito.  El IR pass NO
-    // puede insertar RAW_FREE antes de este punto (no sabe que va
-    // a throw), asi que el cleanup depende del runtime do_throw.
-    throw new MyExc(7);
+	// Lanzar excepcion ANTES de cleanup explicito.  El IR pass NO
+	// puede insertar RAW_FREE antes de este punto (no sabe que va
+	// a throw), asi que el cleanup depende del runtime do_throw.
+	throw new MyExc(7);
 }
 
 i32 main() {
-    // Iterar muchas veces para detectar leaks (si los hay, eventual OOM
-    // o degradacion).  Con el fix, cada iter libera el host_ptr al
-    // do_throw -> sin acumulacion.
-    i32 i = 0;
-    while (i < 1000) {
-        try {
-            leaky_func();
-        } catch (MyExc e) {
-            // ok, capturada.
-        }
-        i = i + 1;
-    }
+	// Iterar muchas veces para detectar leaks (si los hay, eventual OOM
+	// o degradacion).  Con el fix, cada iter libera el host_ptr al
+	// do_throw -> sin acumulacion.
+	i32 i = 0_i32;
+	while (i < 1000) {
+		try {
+			leaky_func();
+		} catch (MyExc e) {
+		// ok, capturada.
+		}
+		i = i + 1;
+	}
 
-    return 42;
+	return 42;
 }

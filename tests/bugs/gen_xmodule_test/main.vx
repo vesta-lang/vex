@@ -5,18 +5,18 @@
 import "lib" only Caja, Box, doblar, Par;
 
 i32 main() {
-    Caja<i64> c = {.v = 6};
-    i64 id = c.identidad<i64>(4);     // metodo generico cross-module -> 4
-    i64 lv = c.leer();                 // 6
+	Caja<i64> c  = {.v = 6};
+	i64       id = c.identidad<i64>(4); // metodo generico cross-module -> 4
+	i64       lv = c.leer();            // 6
 
-    Box<i64> b = new Box<i64>(8);      // clase generica cross-module
-    i64 bv = b.get();                  // 8
+	Box<i64> b  = new Box<i64>(8); // clase generica cross-module
+	i64      bv = b.get();         // 8
 
-    i64 d = doblar<i64>(5);            // funcion + concepto/bound -> 10
+	i64 d = doblar<i64>(5); // funcion + concepto/bound -> 10
 
-    Par<i32> p1 = {.a = 0};            // primario -> 1
-    Par<i64> p2 = {.a = 0, .extra = 0}; // especializacion total -> 2
+	Par<i32> p1 = {.a = 0};            // primario -> 1
+	Par<i64> p2 = {.a = 0,.extra = 0}; // especializacion total -> 2
 
-    // 4 + 6 + 8 + 10 + 1 + 2 = 31; + 11 = 42
-    return (i32)(id + lv + bv + d + p1.cual() + p2.cual() + 11);
+	// 4 + 6 + 8 + 10 + 1 + 2 = 31; + 11 = 42
+	return (i32)(id + lv + bv + d + p1.cual() + p2.cual() + 11);
 }

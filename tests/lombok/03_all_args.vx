@@ -2,11 +2,11 @@
 @AllArgsConstructor
 @Getter
 class Triple {
-    public i32 a;
-    public i32 b;
-    public i32 c;
+	public i32 a;
+	public i32 b;
+	public i32 c;
 }
 i32 main() {
-    Triple t = new Triple(20, 15, 7);
-    return t.get_a() + t.get_b() + t.get_c();    // 42
+	Triple t = new Triple(20, 15, 7);
+	return t.get_a() + t.get_b() + t.get_c(); // 42
 }

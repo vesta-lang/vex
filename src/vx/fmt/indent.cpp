@@ -323,19 +323,52 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
     std::vector<uint8_t> llave_partida(pieces.size(), 0);
     {
         std::vector<size_t> abiertas;
+        /* Por cada llave abierta, si lo de dentro se va a repartir en esta
+         * MISMA pasada.
+         *
+         * Sin esto, un cuerpo escrito en una linea salia a medias: la pasada
+         * repartia sus sentencias -- por `R26`, que corta tras un `;` que
+         * cierra -- pero las llaves seguian pegadas, porque este barrido solo
+         * miraba los saltos que YA HABIA.  Hacia falta una segunda pasada, y
+         * el mismo programa tenia dos formas segun cuantas veces se hubiera
+         * formateado.  Asi se colaron 66 ficheros de `tests/`. */
+        std::vector<uint8_t> reparte_dentro;
+        int prof_par = 0; // parentesis y corchetes abiertos
         for (size_t k = 0; k < pieces.size(); ++k) {
-            if (is(pieces[k], TokenKind::LBRACE)) {
+            const TokenKind tk = static_cast<TokenKind>(pieces[k].kind);
+            if (tk == TokenKind::LPAREN || tk == TokenKind::LBRACKET) {
+                ++prof_par;
+            } else if (tk == TokenKind::RPAREN || tk == TokenKind::RBRACKET) {
+                if (prof_par > 0) --prof_par;
+            } else if (tk == TokenKind::SEMICOLON && prof_par == 0 &&
+                       k + 1 < pieces.size() && !reparte_dentro.empty()) {
+                /* La MISMA condicion que usa el corte de `R26` mas abajo: un
+                 * `;` a nivel cero que no cierra el bloque.  Los de la cabecera
+                 * de un `for` van dentro de parentesis, asi que no cuentan. */
+                const TokenKind sig =
+                    static_cast<TokenKind>(pieces[k + 1].kind);
+                if (sig != TokenKind::RBRACE && sig != TokenKind::RPAREN &&
+                    sig != TokenKind::RBRACKET)
+                    reparte_dentro.back() = 1;
+            }
+            if (tk == TokenKind::LBRACE) {
                 abiertas.push_back(k);
-            } else if (is(pieces[k], TokenKind::RBRACE) && !abiertas.empty()) {
+                reparte_dentro.push_back(0);
+            } else if (tk == TokenKind::RBRACE && !abiertas.empty()) {
                 const size_t open = abiertas.back();
                 abiertas.pop_back();
+                const bool dentro = reparte_dentro.back() != 0;
+                reparte_dentro.pop_back();
                 bool multilinea = false;
                 for (size_t j = open + 1; j <= k && !multilinea; ++j)
                     multilinea =
                         pieces[j].trivia.find(kSalto) != std::string_view::npos;
-                if (multilinea) {
+                if (multilinea || dentro) {
                     llave_partida[open] = 1;
                     llave_partida[k] = 1;
+                    /* Un bloque repartido reparte al que lo contiene: sus
+                     * llaves ya no caben en la linea de fuera. */
+                    if (!reparte_dentro.empty()) reparte_dentro.back() = 1;
                 }
             }
         }

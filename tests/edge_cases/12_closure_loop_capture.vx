@@ -1,16 +1,16 @@
 // Edge: closure capturando contador del loop por referencia.  Clasico bug
-// JS-style: cada iter crea closure, todas comparten el mismo i?  En 
+// JS-style: cada iter crea closure, todas comparten el mismo i?  En
 // las captures by-value son snapshots; verificamos.
 i32 main() {
-    fn() -> i32 first = () => 0;
-    i32 i = 0;
-    fn() -> i32 last = first;
-    while (i < 5) {
-        i32 captured = i;
-        last = () => captured;
-        i = i + 1;
-    }
-    // last() devuelve el ultimo captured = 4.
-    if (last() == 4) return 42;
-    return 1;
+	fn() -> i32 first = () => 0;
+	i32         i     = 0_i32;
+	fn() -> i32 last  = first;
+	while (i < 5) {
+		i32 captured = i;
+		last = () => captured;
+		i    = i + 1;
+	}
+	// last() devuelve el ultimo captured = 4.
+	if (last() == 4) return 42;
+	return 1;
 }

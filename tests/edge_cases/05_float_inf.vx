@@ -1,9 +1,9 @@
 // Edge: Inf y -Inf.
 i32 main() {
-    f64 one = 1.0;
-    f64 z = 0.0;
-    f64 inf = one / z;
-    f64 ninf = -one / z;
-    if (inf > 1.0e300 && ninf < -1.0e300) return 42;
-    return 1;
+	f64 one  =  1.0_f64;
+	f64 z    =  0.0_f64;
+	f64 inf  =  one / z;
+	f64 ninf = -one / z;
+	if (inf > 1.0e300 && ninf < -1.0e300) return 42;
+	return 1;
 }

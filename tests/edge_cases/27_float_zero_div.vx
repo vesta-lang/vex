@@ -1,8 +1,8 @@
 // Edge: 1.0 / 0.0 en IEEE 754 = +Inf (no throw).  Diferente de int.
 i32 main() {
-    f64 a = 1.0;
-    f64 b = 0.0;
-    f64 r = a / b;           // +Inf
-    if (r > 1.0e300) return 42;
-    return 1;
+	f64 a = 1.0_f64;
+	f64 b = 0.0_f64;
+	f64 r = a / b; // +Inf
+	if (r > 1.0e300) return 42;
+	return 1;
 }

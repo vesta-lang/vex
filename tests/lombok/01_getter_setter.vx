@@ -2,13 +2,16 @@
 @Getter
 @Setter
 class Punto {
-    public i32 x;
-    public i32 y;
-    public Punto(i32 a, i32 b) { x = a; y = b; }
+	public i32 x;
+	public i32 y;
+	public Punto(i32 a, i32 b) {
+		x = a;
+		y = b;
+	}
 }
 i32 main() {
-    Punto p = new Punto(10, 20);
-    p.set_x(40);
-    p.set_y(2);
-    return p.get_x() + p.get_y();    // 42
+	Punto p = new Punto(10, 20);
+	p.set_x(40);
+	p.set_y(2);
+	return p.get_x() + p.get_y(); // 42
 }

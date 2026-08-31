@@ -1,14 +1,14 @@
 // Edge: @Data genera Getter+Setter+ToString+EqualsAndHashCode+RequiredArgsCtor.
 @Data
 class Box {
-    public final i32 val;
+	public final i32 val;
 }
 i32 main() {
-    Box a = new Box(42);
-    Box b = new Box(42);
-    Box c = new Box(7);
-    if (!a.equals(b)) return 1;
-    if (a.equals(c))  return 2;
-    if (a.hashCode() == c.hashCode()) return 3;
-    return a.get_val();    // 42
+	Box a = new Box(42);
+	Box b = new Box(42);
+	Box c = new Box(7);
+	if (!a.equals(b)) return 1;
+	if (a.equals(c)) return 2;
+	if (a.hashCode() == c.hashCode()) return 3;
+	return a.get_val(); // 42
 }

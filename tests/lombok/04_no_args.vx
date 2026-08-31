@@ -4,11 +4,11 @@
 @Getter
 @Setter
 class Counter {
-    public i32 value;
+	public i32 value;
 }
 i32 main() {
-    Counter c = new Counter();
-    if (c.get_value() != 0) return 1;   // zero-init
-    c.set_value(42);
-    return c.get_value();
+	Counter c = new Counter();
+	if (c.get_value() != 0) return 1; // zero-init
+	c.set_value(42);
+	return c.get_value();
 }

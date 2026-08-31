@@ -1,9 +1,9 @@
 // Edge: cast truncate.  (u8) 256 = 0; (u8) 257 = 1.
 i32 main() {
-    i32 a = 256;
-    u8 b = (u8) a;
-    i32 c = 257;
-    u8 d = (u8) c;
-    if (b == 0 && d == 1) return 42;
-    return 1;
+	i32 a = 256_i32;
+	u8  b = (u8) a;
+	i32 c = 257_i32;
+	u8  d = (u8) c;
+	if (b == 0 && d == 1) return 42;
+	return 1;
 }

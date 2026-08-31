@@ -1,11 +1,11 @@
 // Edge: variable shadowing.  Inner scope re-declara x con diferente tipo/valor.
 i32 main() {
-    i32 x = 10;
-    {
-        i32 x = 32;     // shadow
-        if (x != 32) return 1;
-    }
-    // El outer x sobrevive intacto.
-    if (x != 10) return 2;
-    return x + 32;     // 42
+	i32 x = 10_i32;
+	{
+		i32 x = 32_i32; // shadow
+		if (x != 32) return 1;
+	}
+	// El outer x sobrevive intacto.
+	if (x != 10) return 2;
+	return x + 32; // 42
 }

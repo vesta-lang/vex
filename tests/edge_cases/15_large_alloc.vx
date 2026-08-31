@@ -1,15 +1,15 @@
 // Edge: alloc grande (1 MB).  No crashea, no OOM.
 i32 main() {
-    i64 N = 1048576;  // 1 MB
-    u8* buf = malloc((u64)N);
-    if (buf == null) return 1;
-    // Write/read primer y ultimo byte.
-    buf[0] = 0xAB;
-    buf[N - 1] = 0xCD;
-    if (buf[0] == 0xAB && buf[N - 1] == 0xCD) {
-        free(buf);
-        return 42;
-    }
-    free(buf);
-    return 2;
+	i64 N   = 1_048_576_i64; // 1 MB
+	u8* buf = malloc((u64)N);
+	if (buf == null) return 1;
+	// Write/read primer y ultimo byte.
+	buf[0]     = 0xAB;
+	buf[N - 1] = 0xCD;
+	if (buf[0] == 0xAB && buf[N - 1] == 0xCD) {
+		free(buf);
+		return 42;
+	}
+	free(buf);
+	return 2;
 }

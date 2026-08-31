@@ -1,10 +1,10 @@
 // Edge: unwrap de Optional None.  Debe lanzar FatalError capturable.
 i32 main() {
-    Optional<i32> opt = None();
-    try {
-        i32 v = unwrap(opt);
-        return 99;
-    } catch (FatalError e) {
-        return 42;
-    }
+	Optional<i32> opt = None();
+	try {
+		i32 v = unwrap(opt);
+		return 99;
+	} catch (FatalError e) {
+		return 42;
+	}
 }

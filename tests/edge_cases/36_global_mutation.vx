@@ -1,10 +1,10 @@
 // Edge: variable global mutable + funcion auxiliar la modifica.
-i32 g_counter = 0;
+i32 g_counter = 0_i32;
 void bump() { g_counter = g_counter + 1; }
 i32 main() {
-    bump();
-    bump();
-    bump();
-    if (g_counter == 3) return 42;
-    return g_counter;
+	bump();
+	bump();
+	bump();
+	if (g_counter == 3) return 42;
+	return g_counter;
 }

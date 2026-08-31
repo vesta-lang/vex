@@ -1,7 +1,7 @@
 // Edge: array de tamano 1 (degenerate pero valido).  N=0 explicitamente
 // rechazado por el frontend (limitacion documentada).
 i32 main() {
-    i32[1] arr;
-    arr[0] = 42;
-    return arr[0];
+	i32[1] arr;
+	arr[0] = 42;
+	return arr[0];
 }

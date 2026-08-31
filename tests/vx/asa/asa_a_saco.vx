@@ -15,40 +15,40 @@
  */
 
 struct DosEnteros {
-    u64 a;
-    u64 b;
+	u64 a;
+	u64 b;
 };
 
 struct Mezclado {
-    u64 grande;
-    u32 medio;
-    u8  chico;
+	u64 grande;
+	u32 medio;
+	u8  chico;
 };
 
 u64 saco_enteros() {
-    DosEnteros v;
-    v.a = 3;
-    v.b = 4;
-    return v.a + v.b;
+	DosEnteros v;
+	v.a = 3;
+	v.b = 4;
+	return v.a + v.b;
 }
 
 u64 saco_mezclado() {
-    Mezclado m;
-    m.grande = 10;
-    m.medio = 20;
-    m.chico = 30;
-    return m.grande;
+	Mezclado m;
+	m.grande = 10;
+	m.medio  = 20;
+	m.chico  = 30;
+	return m.grande;
 }
 
 u64 saco_array() {
-    u64 xs[4];
-    xs[0] = 1;
-    xs[1] = 2;
-    return xs[0] + xs[1];
+	u64 xs[4];
+	xs[0] = 1;
+	xs[1] = 2;
+	return xs[0] + xs[1];
 }
 
 i32 main(string[] args) {
-    u64 t = saco_enteros() + saco_mezclado() + saco_array();
-    println("A saco: ${t}");
-    return 0;
+	u64 t = saco_enteros() + saco_mezclado() + saco_array();
+	println("A saco: ${t}");
+	return 0;
 }

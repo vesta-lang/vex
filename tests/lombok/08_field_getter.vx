@@ -1,11 +1,14 @@
 // Edge: @Getter en CAMPO individual (no toda la clase).
 class Mixed {
-    @Getter
-    public i32 visible_via_getter;
-    public i32 raw_field;
-    public Mixed(i32 a, i32 b) { visible_via_getter = a; raw_field = b; }
+	@Getter
+	public i32 visible_via_getter;
+	public i32 raw_field;
+	public Mixed(i32 a, i32 b) {
+		visible_via_getter = a;
+		raw_field          = b;
+	}
 }
 i32 main() {
-    Mixed m = new Mixed(42, 99);
-    return m.get_visible_via_getter();    // 42
+	Mixed m = new Mixed(42, 99);
+	return m.get_visible_via_getter(); // 42
 }

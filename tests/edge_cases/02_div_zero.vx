@@ -1,11 +1,11 @@
 // Edge: division by zero.  Debe lanzar FatalError o exit error.
 i32 main() {
-    i32 a = 100;
-    i32 b = 0;
-    try {
-        i32 c = a / b;
-        return 99;  // si no throw, fail.
-    } catch (FatalError e) {
-        return 42;  // expected: catch the div-by-zero.
-    }
+	i32 a = 100_i32;
+	i32 b = 0_i32;
+	try {
+		i32 c = a / b;
+		return 99; // si no throw, fail.
+	} catch (FatalError e) {
+		return 42; // expected: catch the div-by-zero.
+	}
 }

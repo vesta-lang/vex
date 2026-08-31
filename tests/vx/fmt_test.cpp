@@ -299,6 +299,28 @@ void check_spacing() {
     check(cast_prefijo.find("(v + 1) & 3") != std::string::npos,
           "tras una AGRUPACION, `&` sigue siendo un `y` logico");
 
+    /* `R5` en UNA pasada: un cuerpo escrito en una linea que hay que repartir
+     * sale ya con sus llaves solas.
+     *
+     * Salia a medias -- las sentencias repartidas y las llaves pegadas --,
+     * porque el barrido que marca las parejas de llaves miraba los saltos que
+     * YA HABIA y no los que esa misma pasada iba a meter.  Hacia falta
+     * formatear dos veces, o sea que el mismo programa tenia dos formas segun
+     * cuantas veces se hubiera pasado el formateador; asi se colaron 66
+     * ficheros de `tests/` sin que nadie lo notara. */
+    const std::string una_pasada =
+        fmt("i32 main() { i32 n = 7; println(n); return 42; }\n");
+    check(una_pasada.find("i32 main() {\n") != std::string::npos,
+          "la llave de apertura no arrastra la primera sentencia");
+    check(una_pasada.find("\n}") != std::string::npos,
+          "la llave de cierre empieza linea");
+    check(fmt(una_pasada) == una_pasada,
+          "y una segunda pasada no cambia nada");
+    // Un cuerpo que SI cabe entero se queda como esta: no todo se reparte.
+    const std::string cabe = fmt("i32 f() { return 0; }\n");
+    check(cabe.find("f() { return 0; }") != std::string::npos,
+          "un cuerpo de una sola sentencia se queda en su linea");
+
     // `R4`: la llave de apertura lleva un espacio delante.
     const std::string llave = fmt("i32 f(){ return 0; }\n");
     check(llave.find("f() {") != std::string::npos,

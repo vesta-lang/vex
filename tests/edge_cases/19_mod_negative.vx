@@ -1,9 +1,9 @@
 // Edge: modulo con dividendo negativo.  /x86 convencion: el signo del
 // resultado sigue el dividendo (-7 % 3 = -1).
 i32 main() {
-    i32 a = -7;
-    i32 b = 3;
-    i32 r = a % b;
-    if (r == -1) return 42;
-    return r + 100;
+	i32 a = -7_i32;
+	i32 b =  3_i32;
+	i32 r =  a % b;
+	if (r == -1) return 42;
+	return r + 100;
 }

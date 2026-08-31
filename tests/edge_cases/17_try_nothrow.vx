@@ -1,9 +1,9 @@
 // Edge: try sin throw.  Fall-through normal, return 42.
 i32 main() {
-    try {
-        i32 x = 42;
-        return x;
-    } catch (FatalError e) {
-        return 1;
-    }
+	try {
+		i32 x = 42_i32;
+		return x;
+	} catch (FatalError e) {
+		return 1;
+	}
 }

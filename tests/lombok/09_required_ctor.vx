@@ -2,15 +2,15 @@
 @RequiredArgsConstructor
 @Getter
 class Mix {
-    public final i32 required_a;
-    public final i32 required_b;
-    public i32 optional_c;    // no entra al ctor
+	public final i32 required_a;
+	public final i32 required_b;
+	public       i32 optional_c; // no entra al ctor
 }
 i32 main() {
-    // ctor solo recibe required_a + required_b.
-    Mix m = new Mix(20, 22);
-    if (m.get_required_a() != 20) return 1;
-    if (m.get_required_b() != 22) return 2;
-    if (m.get_optional_c() != 0) return 3;    // zero-init
-    return m.get_required_a() + m.get_required_b();    // 42
+	// ctor solo recibe required_a + required_b.
+	Mix m = new Mix(20, 22);
+	if (m.get_required_a() != 20) return 1;
+	if (m.get_required_b() != 22) return 2;
+	if (m.get_optional_c() != 0) return 3;          // zero-init
+	return m.get_required_a() + m.get_required_b(); // 42
 }

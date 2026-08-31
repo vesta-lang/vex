@@ -1,14 +1,14 @@
 // Edge: break dentro de loop debe propagar PHI args correctos al exit.
 i32 main() {
-    i32 sum = 0;
-    i32 i = 0;
-    while (i < 100) {
-        sum = sum + i;
-        if (i == 9) {
-            break;        // sum debe valer 0+1+...+9 = 45 post-loop.
-        }
-        i = i + 1;
-    }
-    if (sum == 45) return 42;
-    return sum;
+	i32 sum = 0_i32;
+	i32 i   = 0_i32;
+	while (i < 100) {
+		sum = sum + i;
+		if (i == 9) {
+			break; // sum debe valer 0+1+...+9 = 45 post-loop.
+		}
+		i = i + 1;
+	}
+	if (sum == 45) return 42;
+	return sum;
 }

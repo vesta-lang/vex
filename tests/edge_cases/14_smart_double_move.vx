@@ -1,11 +1,11 @@
 // Edge: move twice de unique<T>.  El segundo move debe ser no-op safe
 // (mvtake zerifica el source) o catch.
 i32 main() {
-    unique<i32> p = unique_box(42);
-    unique<i32> q = move(p);
-    // p ahora es invalido (mvtake zerifica).  Acceso a p deberia ser
-    // safe (devuelve 0) o lanzar.
-    i32 vq = *ptr_of(q);
-    if (vq == 42) return 42;
-    return 1;
+	unique<i32> p = unique_box(42);
+	unique<i32> q = move(p);
+	// p ahora es invalido (mvtake zerifica).  Acceso a p deberia ser
+	// safe (devuelve 0) o lanzar.
+	i32 vq = *ptr_of(q);
+	if (vq == 42) return 42;
+	return 1;
 }

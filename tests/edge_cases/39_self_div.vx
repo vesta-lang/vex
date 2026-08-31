@@ -1,7 +1,7 @@
 // Edge: x / x = 1 cuando x != 0.  El optimizer foldea como const 1
 i32 main() {
-    i32 x = 7;
-    i32 r = x / x;
-    if (r == 1) return 42;
-    return r;
+	i32 x = 7_i32;
+	i32 r = x / x;
+	if (r == 1) return 42;
+	return r;
 }

@@ -5043,7 +5043,11 @@ def _(ctx):
     que el programa siga siendo el mismo --, pero si cierra el hueco de
     cobertura, que es el que no avisa.
     """
-    for d in ("examples_codes_vx", "stdlib"):
+    # `tests` y `tools` tambien: estaban fuera de la red y ahi se acumularon 66
+    # ficheros sin formatear.  Se comprobo uno a uno que formatearlos NO cambia
+    # lo que el programa hace -- compilando y ejecutando el antes y el despues
+    # --, asi que no habia nada que decidir: era cobertura que faltaba.
+    for d in ("examples_codes_vx", "stdlib", "tests", "tools"):
         rc, log = ctx.run([VM_EXE, "fmt", "check", os.path.join(ROOT, d)])
         if rc != 0:
             ctx.fail("fmt check %s: hay ficheros sin formatear (pasa "

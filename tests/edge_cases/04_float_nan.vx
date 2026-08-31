@@ -1,8 +1,8 @@
 // Edge: NaN propagation.  0.0/0.0 = NaN; NaN != NaN.
 i32 main() {
-    f64 z = 0.0;
-    f64 nan = z / z;        // NaN
-    if (nan == nan) return 1;  // NaN compared to itself = false
-    if (nan != nan) return 42; // true
-    return 2;
+	f64 z   = 0.0_f64;
+	f64 nan = z / z;           // NaN
+	if (nan == nan) return 1;  // NaN compared to itself = false
+	if (nan != nan) return 42; // true
+	return 2;
 }
