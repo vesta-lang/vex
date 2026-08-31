@@ -21,6 +21,7 @@
 #include "jit/sched/machine_effects.h"
 #include "jit/sched/isa_effects.h" // lo que depende de la arquitectura
 #include "vx/asm/instr_db.h"       // isa_name: como se llama cada una
+#include "vx/diag/diag_catalog.h"  // el texto vive en el catalogo, no aqui
 #include "jit/target_reginfo.h" // los registros del ABI: se PREGUNTAN, por ISA
 
 #include <cstdio>
@@ -64,27 +65,26 @@ void add(std::vector<uint32_t> &v, uint32_t k) {
 /// significa que el codigo que salga sera correcto por casualidad o no lo sera,
 /// y en ninguno de los dos casos se enteraria nadie.
 ///
+/// @param code Cual de los tres fallos es.  Son TRES codigos y no uno con una
+///             frase dentro: meter prosa como argumento de una plantilla la
+///             parte en dos idiomas -- el texto traducido y el trozo que no lo
+///             esta --, y ademas cada uno se arregla en otro sitio.
 /// @param mi   La instruccion que nadie supo contestar.
 /// @param isa  Para quien se preguntaba.
-/// @param que  Como se llama lo que falta, para el mensaje.
-[[noreturn]] void isa_effects_bug(const MInstr &mi, EffIsa isa,
-                                  const char *que) {
-    std::fprintf(
-        stderr,
-        "\nfallo interno del compilador: %s (MOp %d) no dice que registros toca,"
-        "\n  y para %s no hay quien lo conteste.\n\n"
-        "  Los efectos de una instruccion no se adivinan: quien optimiza se fia"
-        "\n  de ellos para decidir que puede mover y que puede borrar.  Seguir"
-        "\n  con una respuesta inventada da un binario que funciona por"
-        "\n  casualidad o no funciona, y en los dos casos sin avisar.\n\n"
-        "  Se arregla declarandolo: si la instruccion existe en la ISA, se le\n"
-        "  pone su nombre en `mnemonic` de src/jit/sched/isa_effects_%s.cpp y la"
-        "\n  base de instrucciones contesta sola; si es un pseudo de VestaVM, se"
-        "\n  anade su caso en `pseudo` (el del mismo fichero si nombra registros"
-        "\n  de la arquitectura, o `generic_pseudo` de machine_effects.cpp si"
-        "\n  todo lo que toca esta en sus operandos).\n\n",
-        que, static_cast<int>(mi.op), vx::instr_db::isa_name(isa),
-        vx::instr_db::isa_name(isa));
+/// @param fn   QUE se estaba compilando.  Es el "donde" util de este fallo:
+///             una traza de C++ diria por que camino se llego, y lo que hace
+///             falta para arreglarlo es la funcion y la instruccion.
+[[noreturn]] void isa_effects_bug(const char *code, const MInstr &mi,
+                                  EffIsa isa, const std::string &fn) {
+    /* Por el CATALOGO, como cualquier otro diagnostico: el texto vive alli en
+     * todos los idiomas y aqui solo se dan los DATOS.  Que sea un fallo del
+     * compilador y no del programa no lo saca de esa regla -- quien lo lea
+     * merece leerlo en su idioma igual --. */
+    const std::string msg =
+        vx::diag::format(code, vx::diag::current_language(),
+                         {std::to_string(static_cast<int>(mi.op)),
+                          vx::instr_db::isa_name(isa), fn.empty() ? "?" : fn});
+    std::fprintf(stderr, "\n%s\n\n", msg.c_str());
     std::fflush(stderr);
     std::abort();
 }
@@ -424,8 +424,8 @@ void real_effects(const MInstr &mi, const char *mnem, Isa isa,
  * por ISA.  Escribirlos aqui a mano daria los de x86 tambien en arm64, que es
  * justo el fallo que este modulo existe para evitar.
  */
-void abi_reads(const IsaEffects &isa, bool is_return, MEffects &e) {
-    const TargetRegInfo &t = isa.reg_info();
+void abi_reads(const TargetRegInfo &t, bool is_return, MEffects &e) {
+
     const auto anade = [&e](uint8_t r) {
         add(e.reads, static_cast<uint32_t>(r));
     };
@@ -605,7 +605,15 @@ static void narrow_write_overlay(const MInstr &mi, const IsaEffects &t,
     check(mi.src2);
 }
 
-static void abi_overlay(const MInstr &mi, const IsaEffects &t, MEffects &e) {
+static void abi_overlay(const MInstr &mi, const TargetRegInfo &abi,
+                        uint64_t pinned, MEffects &e) {
+    /* Los registros que la funcion FIJA los lee cualquier llamada suya: puede
+     * estar llamando a algo que pega sus parametros ahi.  Ver
+     * @c MFunction::pinned_regs. */
+    const auto reads_pinned = [&] {
+        for (uint8_t r = 0; r < 64; ++r)
+            if (pinned & (1ull << r)) add(e.reads, r);
+    };
     /* Sus PROPIOS operandos: en una llamada o un salto INDIRECTOS son a donde
      * se va.  Una direccion de 64 bits no cabe como inmediato, asi que se
      * materializa en un registro de apoyo y se salta a traves de el; sin
@@ -619,7 +627,7 @@ static void abi_overlay(const MInstr &mi, const IsaEffects &t, MEffects &e) {
     };
     switch (mi.op) {
     case MOp::RET:
-        abi_reads(t, /*is_return=*/true, e);
+        abi_reads(abi, /*is_return=*/true, e);
         e.is_barrier = true;
         break;
     case MOp::CALL:
@@ -627,7 +635,8 @@ static void abi_overlay(const MInstr &mi, const IsaEffects &t, MEffects &e) {
     case MOp::CALL_SYM:
     case MOp::JMP_SYM:
     case MOp::TAILCALL:
-        abi_reads(t, /*is_return=*/false, e);
+        abi_reads(abi, /*is_return=*/false, e);
+        reads_pinned();
         reads_its_target();
         e.is_barrier = true;
         break;
@@ -652,7 +661,8 @@ static void abi_overlay(const MInstr &mi, const IsaEffects &t, MEffects &e) {
          *     `std.memory`: el `mov` que calculaba el indice salia muerto
          *     porque `jmp [base + indice*8]` no lo nombra como registro. */
         if ((mi.flags & MI_FLAG_TAILCALL) != 0) {
-            abi_reads(t, /*is_return=*/false, e);
+            abi_reads(abi, /*is_return=*/false, e);
+            reads_pinned();
             reads_its_target();
         }
         if (mi.dst.kind == MOperandKind::MEM ||
@@ -679,11 +689,22 @@ const char *mop_mnemonic(MOp op, EffIsa isa) {
     return t ? t->mnemonic(op) : nullptr;
 }
 
-MEffects machine_effects(const MInstr &mi, EffIsa isa) {
+/// @brief El cuerpo comun: los efectos de @p mi para @p isa con la convencion
+///        @p abi.
+///
+/// Las DOS cosas hacen falta y son distintas.  La ISA dice QUE hace cada
+/// instruccion; la convencion, que registros importan al entrar y al salir de
+/// una funcion.  Un mismo binario de x86 compilado para Windows o para Linux
+/// tiene la MISMA ISA y OTRA convencion -- los dos primeros argumentos van en
+/// registros distintos --, y confundirlas da que esos dos estan muertos justo
+/// antes de la llamada que los usa.
+static MEffects effects_for(const MInstr &mi, EffIsa isa,
+                            const TargetRegInfo &abi, uint64_t pinned,
+                            const std::string &fn) {
     /* Lo primero: la tabla de esta arquitectura.  Sin ella no hay respuesta que
      * dar, y dar una inventada es peor que no dar ninguna. */
     const IsaEffects *t = isa_effects(isa);
-    if (t == nullptr) isa_effects_bug(mi, isa, "la arquitectura");
+    if (t == nullptr) isa_effects_bug("VXA069", mi, isa, fn);
 
     MEffects e;
     if (const char *mnem = t->mnemonic(mi.op)) {
@@ -693,18 +714,29 @@ MEffects machine_effects(const MInstr &mi, EffIsa isa) {
     } else if (!generic_pseudo(mi, e) && !t->pseudo(mi, e)) {
         /* Ni el comun ni la arquitectura saben que hace este pseudo.  Eso no es
          * una duda: es que falta declararlo. */
-        isa_effects_bug(mi, isa, "este pseudo");
+        isa_effects_bug("VXA068", mi, isa, fn);
     }
     /* Y encima, lo que la base no puede saber: la convencion de llamada y
      * cuanto escribe de verdad una escritura estrecha.  SIEMPRE, sin depender
      * de quien haya contestado antes. */
-    abi_overlay(mi, *t, e);
+    abi_overlay(mi, abi, pinned, e);
     narrow_write_overlay(mi, *t, e);
     return e;
 }
 
+MEffects machine_effects(const MInstr &mi, EffIsa isa,
+                         const TargetRegInfo &abi) {
+    return effects_for(mi, isa, abi, /*pinned=*/0, std::string());
+}
+
 MEffects machine_effects(const MFunction &mf, const MInstr &mi, EffIsa isa) {
-    MEffects e = machine_effects(mi, isa);
+    /* La convencion sale de la FUNCION, que es quien sabe para donde va.  Si
+     * nadie la puso, no se coge una cualquiera: se dice.  Coger la del
+     * anfitrion es lo que hacia que un ELF de Linux generado desde Windows
+     * creyera muertos sus dos primeros argumentos. */
+    if (mf.target == nullptr)
+        isa_effects_bug("VXA070", mi, isa, mf.name);
+    MEffects e = effects_for(mi, isa, *mf.target, mf.pinned_regs, mf.name);
     if (mi.op != MOp::INLINE_ASM_RAW) return e;
     /* Un `asm` no es opaco: sus registros estan en su bloque, no en los
      * operandos.  Con la funcion delante ya se pueden leer, asi que se dicen en

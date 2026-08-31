@@ -552,7 +552,7 @@ int schedule_function(MFunction &mf, const SchedCostModel &cm, EffIsa isa) {
         obj[static_cast<uint32_t>(MReg::RBP)] = OBJ_FRAME;
         obj[static_cast<uint32_t>(MReg::RSP)] = OBJ_FRAME;
         for (int i = 0; i < n; ++i) {
-            eff[i] = machine_effects(ins[i], isa);
+            eff[i] = machine_effects(mf, ins[i], isa);
             refs[i] = extract_memref(ins[i], eff[i], obj);
             const uint32_t d = op_reg_key(ins[i].dst);
             if (d == UINT32_MAX) continue; // dst no es un registro

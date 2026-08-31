@@ -1652,8 +1652,38 @@ struct AsmBlob {
  *   - fixups: vector de patches pendientes tras la pasada de emit.
  *   - labels: mapping label_id -> byte_offset (poblado por encoder).
  */
+struct TargetRegInfo; // en jit/target_reginfo.h
+
 struct MFunction {
     std::string name;
+    /// Para QUE objetivo se esta compilando esta funcion.
+    ///
+    /// NO es el de la maquina donde corre el compilador.  Un binario nativo
+    /// para Linux generado desde Windows usa la convencion de Linux, donde los
+    /// dos primeros argumentos van en OTROS registros; preguntarle a la del
+    /// anfitrion daba que esos dos estaban muertos justo antes de la llamada
+    /// que los usa, y el binario se caia con violacion de segmento en cuanto
+    /// alguien borraba las escrituras que nadie lee.
+    ///
+    /// Lo pone quien construye la funcion, que es el unico que sabe para donde
+    /// va.  Vacio significa que nadie lo dijo, y entonces quien lo necesite
+    /// tiene que decirlo en vez de coger uno cualquiera.
+    const TargetRegInfo *target = nullptr;
+    /// Registros que esta funcion FIJA a un valor concreto, como mascara de
+    /// bits (uno por registro fisico).
+    ///
+    /// Una funcion puede declarar sus parametros pegados a registros concretos
+    /// -- `register("r10") size_t a4` --, y entonces quien la llama tiene que
+    /// colocarlos AHI, no en los de la convencion por defecto.  La llamada a
+    /// Linux es justo eso: su cuarto argumento va en r10 y no en rcx.
+    ///
+    /// Quien mira que sigue vivo necesita saberlo: sin esto, una llamada dice
+    /// leer solo los registros de la convencion, las instrucciones que colocan
+    /// los demas parecen muertas, y el binario se cae con violacion de
+    /// segmento en cuanto alguien las borra.  Es una COTA POR ARRIBA -- se
+    /// cuentan todos los que la funcion fija, no solo los de cada llamada --,
+    /// que es el lado seguro: de mas se conserva codigo, de menos se pierde.
+    uint64_t pinned_regs = 0;
     std::vector<MBlock> blocks;
     std::vector<uint64_t> imm64_pool;
     std::vector<MFixup> fixups;

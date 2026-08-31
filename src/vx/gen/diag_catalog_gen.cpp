@@ -183,6 +183,17 @@ const CatEntry kEntries[] = {
     {"VXA051", {"the comptime set of '{0}' could not be assembled, so its compile-time code has no bytecode to run: what depends on it is compiled with placeholder values", "el conjunto comptime de '{0}' no se pudo ensamblar, asi que su codigo de compilacion no tiene bytecode que ejecutar: lo que dependa de el se compila con valores de relleno"}},
     {"VXA052", {"the body of an inline asm block in '{0}' was never generated: the compile-time code that produces it could not run, so the block would be emitted EMPTY", "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: el codigo de compilacion que lo produce no se pudo ejecutar, asi que el bloque saldria VACiO"}},
     {"VXA053", {"assembling '{0}' into a .velb failed (code {1}): no artifact was produced", "ensamblar '{0}' a .velb no salio bien (codigo {1}): no se produjo artefacto"}},
+    {"VXA060", {"not analyzed: '{0}' never ran, so nothing is known here (it is not that the knowledge is missing -- nobody asked for it)", "no analizado: '{0}' no llego a correr, asi que aqui no se sabe nada (no falta conocimiento: falta haberlo pedido)"}},
+    {"VXA061", {"nothing to say: '{0}' -- this is not ignorance, it is knowledge, and there is nothing to fix", "nada que decir: '{0}' -- no es ignorancia, es conocimiento, y no hay nada que arreglar"}},
+    {"VXA062", {"depends on execution: '{0}' is only known at run time; add a precondition, a check, or speculate with a guard", "depende de la ejecucion: '{0}' solo se sabe al ejecutar; anade una precondicion, una comprobacion, o especula con guarda"}},
+    {"VXA063", {"shape not recognized: the analysis does not cover '{0}'; write it as '{1}' and it becomes provable", "forma no reconocida: el analisis no cubre '{0}'; escribelo como '{1}' y pasa a ser demostrable"}},
+    {"VXA064", {"gave up on cost: '{0}' exceeded the budget of {1}; raise the limit or simplify -- this is a limit of the analysis, not a fault of the program", "se renuncio por coste: '{0}' paso del presupuesto de {1}; sube el limite o simplifica -- es un limite del analisis, no un fallo del programa"}},
+    {"VXA065", {"opaque boundary: cannot see through '{0}'; declaring it would also settle {1} other facts", "frontera opaca: no se ve a traves de '{0}'; declararlo resolveria ademas {1} hechos mas"}},
+    {"VXA066", {"depends on an unknown fact: '{0}' rests on '{1}', which is not known either; settle that one and this one follows", "depende de un hecho desconocido: '{0}' se apoya en '{1}', que tampoco se sabe; resuelve aquel y este cae solo"}},
+    {"VXA067", {"sources disagree about '{0}': '{1}' says one thing and '{2}' another -- this is a compiler bug, not a limit of the analysis", "fuentes en contradiccion sobre '{0}': '{1}' dice una cosa y '{2}' otra -- esto es un fallo del compilador, no un limite del analisis"}},
+    {"VXA068", {"while compiling '{2}': MOp {0} does not say which registers it touches, and nothing answers for it on {1}. An instruction's effects are never guessed: declare them in isa_effects_{1}.cpp -- its mnemonic if the ISA has that instruction, its case in `pseudo` if it is one of ours -- or in `generic_pseudo` when everything it touches is already in its operands", "al compilar '{2}': la MOp {0} no dice que registros toca, y para {1} no hay quien lo conteste.  Los efectos de una instruccion no se adivinan: hay que declararlos en isa_effects_{1}.cpp -- su mnemonico si la ISA tiene esa instruccion, su caso en `pseudo` si es de las nuestras -- o en `generic_pseudo` si todo lo que toca ya esta en sus operandos"}},
+    {"VXA069", {"while compiling '{2}': there is no effects table for {1}, so nothing can say what MOp {0} touches -- declare one in src/jit/sched/isa_effects_{1}.cpp and list it in isa_effects()", "al compilar '{2}': no hay tabla de efectos para {1}, asi que nadie puede decir que toca la MOp {0} -- hay que declararla en src/jit/sched/isa_effects_{1}.cpp y nombrarla en isa_effects()"}},
+    {"VXA070", {"the function '{2}' does not say which target it is compiled for, so its calling convention is unknown -- whoever builds it must set MFunction::target", "la funcion '{2}' no dice para que objetivo se compila, asi que su convencion de llamada se desconoce -- quien la construye tiene que poner MFunction::target"}},
     {"VXF001", {"formatter: the lexer moved backwards through the source", "formateador: el lexer retrocedio en el fuente"}},
     {"VXF002", {"formatter: a token falls outside the source buffer", "formateador: un token cae fuera del fuente"}},
     {"VXF003", {"formatter: the source could not be tokenized, left untouched", "formateador: el fuente no se pudo tokenizar; se deja intacto"}},
@@ -193,8 +204,9 @@ const CatEntry kEntries[] = {
     {"VXL003", {"integer suffix '{0}' on a literal that has a fractional part", "sufijo entero '{0}' en un literal con parte decimal"}},
     {"VXT001", {"literal {0} does not fit in {1} ({2}); write a cast if the truncation is intended", "el literal {0} no cabe en {1} ({2}); escribe un cast si la truncacion es intencionada"}},
     {"VXT002", {"literal {0} does not fit in its own suffix '{1}' ({2})", "el literal {0} no cabe en su propio sufijo '{1}' ({2})"}},
+    {"VXT003", {"'{0}' is imported from two places and they are not the same function ({1} and {2}); qualify it with its namespace or rename one with 'as'", "'{0}' llega de dos sitios y no son la misma funcion ({1} y {2}); cualificala con su namespace o renombra una con 'as'"}},
 };
-const int kEntryCount = 173;
+const int kEntryCount = 185;
 
 } // namespace
 

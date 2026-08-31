@@ -2493,6 +2493,17 @@ MFunction rewrite_to_physical(const MFunction &vf,
     MFunction pf;
     lw.pf = &pf; // labels intra-expansion (LOAD_VM/STORE_VM page-cache)
     pf.name = vf.name;
+    /* Para QUE objetivo, que aqui SI se sabe: es el descriptor con el que se
+     * reparte.  Quien pregunte luego por los efectos de una instruccion lo
+     * necesita, y sin decirlo cogeria el del anfitrion -- que en un binario
+     * cruzado es otra convencion --.  Ver @c MFunction::target. */
+    pf.target = &tri;
+    /* Y que registros FIJA, que quien mira la liveness necesita: una llamada a
+     * una funcion que pega sus parametros a registros concretos los lee ahi y
+     * no en los de la convencion.  Ver @c MFunction::pinned_regs. */
+    pf.pinned_regs = vf.pinned_regs; // lo que el selector ya anoto
+    for (const int8_t r : vf.vreg_fixed)
+        if (r >= 0 && r < 64) pf.pinned_regs |= (1ull << r);
     /* Solo-LSP (vista "Godbolt"): propagar el opt-in de la tabla
      * byte_offset -> source_line al MFunction fisico (que es el que ve el
      * encoder).  OFF por defecto -> sin efecto en produccion. */

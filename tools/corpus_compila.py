@@ -78,7 +78,11 @@ def barrer(vm: Path, fuentes: list, timeout: float, jobs: int) -> dict:
             i, f = par
             d = Path(tmp) / ("j%d" % i)
             d.mkdir(parents=True, exist_ok=True)
-            return (f.name, compilar(vm, f, d / "out", timeout))
+            # La clave es la RUTA, no el nombre: los bancos de pruebas traen
+            # una carpeta por banco y dentro todos se llaman `main.vx`, asi que
+            # por nombre se pisan unos a otros y solo se veria el ultimo -- lo
+            # que hace desaparecer de la cuenta a casi todos sin decir nada.
+            return (str(f), compilar(vm, f, d / "out", timeout))
 
         with ThreadPoolExecutor(max_workers=jobs) as ex:
             for fut in as_completed([ex.submit(uno, x)
@@ -140,7 +144,22 @@ def main() -> int:
     if not vm.is_file():
         print("[error] no encuentro %s" % vm)
         return 2
-    fuentes = sorted(Path(args.corpus).glob("*.vx"))
+    raiz = Path(args.corpus)
+    # Los ejemplos del nivel de arriba, mas los BENCHMARKS.
+    #
+    # Los benchmarks tambien tienen que compilar, y no se comprobaban: solo se
+    # tocaban al medir, que es algo que se hace de vez en cuando y no en cada
+    # cambio.  Asi que un cambio del compilador podia dejarlos rotos y no se
+    # sabia hasta la siguiente medicion.
+    #
+    # Vienen en dos formas -- un fichero suelto, o una carpeta por banco con su
+    # `main.vx` al lado de las versiones en otros lenguajes -- y las dos son
+    # autonomas.  El resto de subcarpetas del corpus NO se meten: son modulos
+    # de varios ficheros que no compilan por separado a proposito, y contarlos
+    # daria fallos que no lo son.
+    fuentes = sorted(raiz.glob("*.vx"))
+    fuentes += sorted((raiz / "benchmark").glob("*.vx"))
+    fuentes += sorted((raiz / "benchmark").glob("*/main.vx"))
     if not fuentes:
         print("[error] no hay fuentes en %s" % args.corpus)
         return 2

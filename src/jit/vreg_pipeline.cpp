@@ -474,7 +474,7 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa, sched::SchedMode mode) {
         std::fprintf(stderr, "[eff] === %s ===\n", pf.name.c_str());
         for (const MBlock &b : pf.blocks)
             for (const MInstr &mi : b.instrs) {
-                sched::MEffects e = sched::machine_effects(mi, isa);
+                sched::MEffects e = sched::machine_effects(pf, mi, isa);
                 const char *mn = sched::mop_mnemonic(mi.op, isa);
                 std::string s =
                     mn ? mn : ("op#" + std::to_string(static_cast<int>(mi.op)));

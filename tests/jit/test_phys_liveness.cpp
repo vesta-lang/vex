@@ -84,6 +84,7 @@ MOperand imm(int32_t v) { return MOperand::make_imm32(v); }
 /// @brief Una funcion de un solo bloque con las instrucciones dadas.
 MFunction one_block(std::vector<MInstr> is) {
     MFunction f;
+    f.target = &target_info(); // para QUE se compila: sin esto no hay convencion
     f.blocks.emplace_back();
     f.blocks[0].instrs = std::move(is);
     return f;
@@ -141,6 +142,7 @@ void case_address() {
 void case_across_blocks() {
     std::printf("un valor que se usa en el bloque siguiente\n");
     MFunction f;
+    f.target = &target_info();
     f.blocks.emplace_back();
     f.blocks.emplace_back();
     f.blocks[0].instrs = {MInstr::make_unary(MOp::MOV, reg(MReg::RBX), imm(7))};
@@ -158,6 +160,7 @@ void case_across_blocks() {
 void case_asm() {
     std::printf("un asm volatile lee registros que no estan en los operandos\n");
     MFunction f;
+    f.target = &target_info();
     f.blocks.emplace_back();
     AsmBlob b;
     b.bytes = {0x90};                              // nop: da igual lo que sea
@@ -203,6 +206,7 @@ void case_call_convention() {
 void case_call() {
     std::printf("una llamada lee los registros de argumento\n");
     MFunction f;
+    f.target = &target_info();
     f.blocks.emplace_back();
     MInstr c{};
     c.op = MOp::CALL;
@@ -224,6 +228,7 @@ void case_call() {
 void case_indirect_jump() {
     std::printf("un jmp por registro lee el registro, y pasa argumentos\n");
     MFunction f;
+    f.target = &target_info();
     f.blocks.emplace_back();
     MInstr j{};
     j.op = MOp::JMP;
@@ -250,6 +255,7 @@ void case_indirect_jump() {
 void case_jump_table() {
     std::printf("un jmp [base + indice*8] lee la base y el indice\n");
     MFunction f;
+    f.target = &target_info();
     f.blocks.emplace_back();
     MInstr j{};
     j.op = MOp::JMP;
@@ -295,6 +301,7 @@ void case_narrow_write() {
 void case_island_in_block() {
     std::printf("un bloque con un salto y una etiqueta dentro: no se sabe\n");
     MFunction f;
+    f.target = &target_info();
     f.blocks.emplace_back();
     MInstr jc = MInstr::make_jcc(MCond::NE, 7);
     f.blocks[0].instrs = {
@@ -344,6 +351,32 @@ void case_rep_stosb() {
            "rax vivo: es el byte que escribe");
 }
 
+/* --- 13.  Una llamada lee los registros que el DESTINO fija. ------------ */
+void case_pinned_call_args() {
+    std::printf("una llamada a algo que fija sus parametros los lee ahi\n");
+    MFunction f;
+    f.target = &target_info();
+    /* r10 no es registro de argumento en ninguna convencion normal, pero la
+     * llamada al sistema de Linux pone ahi su cuarto argumento, y la funcion
+     * que la envuelve lo declara asi: `register("r10") size_t a4`. */
+    f.pinned_regs = 1ull << static_cast<unsigned>(MReg::R10);
+    f.blocks.emplace_back();
+    MInstr c{};
+    c.op = MOp::CALL;
+    c.dst = MOperand::make_label(0);
+    f.blocks[0].instrs = {
+        MInstr::make_unary(MOp::MOV, reg(MReg::R10), imm(7)),
+        c,
+        MInstr::make_ret(),
+    };
+    const PhysLivenessFacts F = compute_phys_liveness(f);
+    /* Sin esto la llamada dice leer solo los registros de la convencion, ese
+     * `mov` sale muerto, y el binario se cae con violacion de segmento en
+     * cuanto alguien lo borra -- visto en `342_syscalls_os` bajo WSL. */
+    expect(F, 0, 0, static_cast<uint8_t>(MReg::R10), true,
+           "r10 vivo: el destino fija ahi un parametro");
+}
+
 } // namespace
 
 int main() {
@@ -360,6 +393,7 @@ int main() {
     case_narrow_write();
     case_island_in_block();
     case_rep_stosb();
+    case_pinned_call_args();
     if (failures == 0) {
         std::printf("\nTODO OK\n");
         return 0;

@@ -1106,9 +1106,21 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 (void)gmax;
                 MInstr arg =
                     MInstr::make_arg(static_cast<uint8_t>(gi_a), vr(av));
-                if (custom_phys >= 0)
+                if (custom_phys >= 0) {
                     arg.dst =
                         MOperand::make_reg(static_cast<MReg>(custom_phys), 8);
+                    /* Y se ANOTA en la funcion, porque quien mire luego que
+                     * sigue vivo no puede deducirlo: la llamada dice leer los
+                     * registros de la convencion por defecto, y este no es uno
+                     * de ellos -- la llamada al sistema de Linux pone su cuarto
+                     * argumento en r10 y no en rcx --.  Sin anotarlo, la
+                     * instruccion que lo coloca parece muerta y el binario se
+                     * cae con violacion de segmento en cuanto alguien la borra
+                     * (visto en `342_syscalls_os` bajo WSL).  Ver
+                     * @c MFunction::pinned_regs. */
+                    if (custom_phys < 64)
+                        out.pinned_regs |= (1ull << custom_phys);
+                }
                 OO.push_back(arg);
                 ++gi_a;
             }

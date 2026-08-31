@@ -803,3 +803,88 @@ es = "el literal {0} no cabe en su propio sufijo '{1}' ({2})"
 [VXF005]
 en = "formatter: cannot read file '{0}'"
 es = "formateador: no se puede leer el fichero '{0}'"
+
+[VXT003]
+en = "'{0}' is imported from two places and they are not the same function ({1} and {2}); qualify it with its namespace or rename one with 'as'"
+es = "'{0}' llega de dos sitios y no son la misma funcion ({1} y {2}); cualificala con su namespace o renombra una con 'as'"
+
+# --- por que el analisis no sabe algo (VXA060-VXA066) --------------------------
+#
+# Una clase de "no lo se" por entrada, y cada una con su ACCION dentro del
+# mensaje.  Un motivo sin accion no le sirve a nadie: "no pude" solo enfada;
+# "no pude porque cruza un extern sin efectos declarados, declaralos" se arregla.
+#
+# El CODIGO de cada dominio (`asm_flujo.terminador_desconocido`) dice el caso
+# exacto y viaja como dato; esto dice de que CLASE es, que es lo que decide la
+# accion y lo unico que puede leer quien no conoce el dominio.
+
+[VXA060]
+en = "not analyzed: '{0}' never ran, so nothing is known here (it is not that the knowledge is missing -- nobody asked for it)"
+es = "no analizado: '{0}' no llego a correr, asi que aqui no se sabe nada (no falta conocimiento: falta haberlo pedido)"
+
+[VXA061]
+en = "nothing to say: '{0}' -- this is not ignorance, it is knowledge, and there is nothing to fix"
+es = "nada que decir: '{0}' -- no es ignorancia, es conocimiento, y no hay nada que arreglar"
+
+[VXA062]
+en = "depends on execution: '{0}' is only known at run time; add a precondition, a check, or speculate with a guard"
+es = "depende de la ejecucion: '{0}' solo se sabe al ejecutar; anade una precondicion, una comprobacion, o especula con guarda"
+
+[VXA063]
+en = "shape not recognized: the analysis does not cover '{0}'; write it as '{1}' and it becomes provable"
+es = "forma no reconocida: el analisis no cubre '{0}'; escribelo como '{1}' y pasa a ser demostrable"
+
+[VXA064]
+en = "gave up on cost: '{0}' exceeded the budget of {1}; raise the limit or simplify -- this is a limit of the analysis, not a fault of the program"
+es = "se renuncio por coste: '{0}' paso del presupuesto de {1}; sube el limite o simplifica -- es un limite del analisis, no un fallo del programa"
+
+[VXA065]
+en = "opaque boundary: cannot see through '{0}'; declaring it would also settle {1} other facts"
+es = "frontera opaca: no se ve a traves de '{0}'; declararlo resolveria ademas {1} hechos mas"
+
+[VXA066]
+en = "depends on an unknown fact: '{0}' rests on '{1}', which is not known either; settle that one and this one follows"
+es = "depende de un hecho desconocido: '{0}' se apoya en '{1}', que tampoco se sabe; resuelve aquel y este cae solo"
+
+[VXA067]
+en = "sources disagree about '{0}': '{1}' says one thing and '{2}' another -- this is a compiler bug, not a limit of the analysis"
+es = "fuentes en contradiccion sobre '{0}': '{1}' dice una cosa y '{2}' otra -- esto es un fallo del compilador, no un limite del analisis"
+
+# --- una instruccion sin efectos declarados (VXA068) ---
+#
+# Quien optimiza se fia de lo que cada instruccion LEE y ESCRIBE para decidir
+# que puede mover y que puede borrar.  Si una llega sin que nadie sepa
+# contestar por ella, lo que hay es un objetivo al que se le olvido declarar
+# algo suyo.
+#
+# Antes esto no existia: habia un caso por defecto que daba por leidos y
+# escritos todos los operandos, la memoria y las banderas, y ademas marcaba
+# barrera.  O sea "no se sabe" con otro nombre.  Con eso, una instruccion sin
+# declarar no daba ningun aviso -- solo hacia que el optimizador no tocara
+# nada a su alrededor --, y asi llevaban tiempo cuatro operaciones de coma
+# flotante fusionada, en silencio.  {0} es lo que falta, {1} el numero de la
+# operacion, {2} la arquitectura.
+
+[VXA068]
+en = "while compiling '{2}': MOp {0} does not say which registers it touches, and nothing answers for it on {1}. An instruction's effects are never guessed: declare them in isa_effects_{1}.cpp -- its mnemonic if the ISA has that instruction, its case in `pseudo` if it is one of ours -- or in `generic_pseudo` when everything it touches is already in its operands"
+es = "al compilar '{2}': la MOp {0} no dice que registros toca, y para {1} no hay quien lo conteste.  Los efectos de una instruccion no se adivinan: hay que declararlos en isa_effects_{1}.cpp -- su mnemonico si la ISA tiene esa instruccion, su caso en `pseudo` si es de las nuestras -- o en `generic_pseudo` si todo lo que toca ya esta en sus operandos"
+
+# --- una arquitectura sin tabla de efectos (VXA069) ---
+#
+# El eje de arquitectura tiene cuatro valores y no todas han declarado la suya.
+# Coger la de otra es dar registros que esa maquina no tiene.
+
+[VXA069]
+en = "while compiling '{2}': there is no effects table for {1}, so nothing can say what MOp {0} touches -- declare one in src/jit/sched/isa_effects_{1}.cpp and list it in isa_effects()"
+es = "al compilar '{2}': no hay tabla de efectos para {1}, asi que nadie puede decir que toca la MOp {0} -- hay que declararla en src/jit/sched/isa_effects_{1}.cpp y nombrarla en isa_effects()"
+
+# --- una funcion que no dijo para donde se compila (VXA070) ---
+#
+# La convencion de llamada NO es la del anfitrion: un binario para Linux
+# generado desde Windows usa otra, y sus dos primeros argumentos viajan en
+# registros distintos.  Sin saberla, quien mira que sigue vivo cree que esos dos
+# estan muertos justo antes de la llamada que los usa.
+
+[VXA070]
+en = "the function '{2}' does not say which target it is compiled for, so its calling convention is unknown -- whoever builds it must set MFunction::target"
+es = "la funcion '{2}' no dice para que objetivo se compila, asi que su convencion de llamada se desconoce -- quien la construye tiene que poner MFunction::target"

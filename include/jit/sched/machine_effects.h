@@ -39,6 +39,8 @@
 #include "jit/machine_ir.h"
 #include "vx/asm/instr_db.h"
 
+#include "jit/target_reginfo.h" // la CONVENCION: no es del anfitrion
+
 #include <cstdint>
 #include <vector>
 
@@ -111,8 +113,12 @@ inline void add_reg(std::vector<uint32_t> &v, uint32_t k) {
  *
  * @param mi   instruccion maquina.
  * @param isa  ISA de la DB a consultar.
+ * @param abi  El descriptor del OBJETIVO: de el salen los registros de la
+ *             convencion de llamada.  NO es el del anfitrion -- un binario
+ *             cruzado usa otra --, y por eso se pasa en vez de elegirlo aqui.
  */
-MEffects machine_effects(const MInstr &mi, EffIsa isa);
+MEffects machine_effects(const MInstr &mi, EffIsa isa,
+                         const TargetRegInfo &abi);
 
 /**
  * @brief Igual, pero pudiendo llegar al bloque de `asm`.
