@@ -13532,11 +13532,23 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 fn.name, fn.version,
                 [&]() { return analysis::build_ir_facts(fn); });
     };
+    /* El gestor guarda el PUNTERO, no una copia.
+     *
+     * `RangeFacts` lleva dentro el estado de entrada de cada bloque, asi que
+     * copiarlo no es copiar un resultado: es copiar el analisis entero.  Y
+     * debajo ya existe UNA instancia -- `compute_ranges_ptr` la devuelve de su
+     * cache por dependencias --, asi que cada `compute_ranges` era pedir la
+     * que hay y duplicarla acto seguido.
+     *
+     * Con el puntero, los tres gestores que piden rangos -- este, el de
+     * efectos y el del ASA -- apuntan a la MISMA, que es lo que centralizar
+     * significa: no tres copias bien sincronizadas, una sola cosa. */
     auto ranges_of = [&](IrFunction &fn) -> const analysis::RangeFacts & {
-        return am
-            .get_or_compute_v<analysis::RangeAnalysis, analysis::RangeFacts>(
-                fn.name, fn.version,
-                [&]() { return analysis::compute_ranges(fn, facts_of(fn)); });
+        return *am.get_or_compute_v<analysis::RangeAnalysis,
+                                    std::shared_ptr<const analysis::RangeFacts>>(
+            fn.name, fn.version, [&]() {
+                return analysis::compute_ranges_ptr(fn, facts_of(fn));
+            });
     };
     auto hechos_asm_de = [&](IrFunction &fn) {
         HechosDeAsmParaDse h;

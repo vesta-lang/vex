@@ -136,8 +136,17 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {
     /* La factoria pide la estructura POR LA BASE, no por su cuenta: asi el
      * gestor anota que los rangos dependen de ella y una invalidacion arrastra
      * a los dos.  Pedirla aparte dejaria rangos vivos sobre hechos muertos. */
-    const RangeFacts &rf = manager_.get_or_compute<RangeAnalysis, RangeFacts>(
-        key, [this, &fn]() { return compute_ranges(fn, structure(fn)); });
+    /* El gestor guarda el PUNTERO, no una copia.  `RangeFacts` lleva dentro el
+     * estado de entrada de cada bloque, asi que copiarlo es duplicar el
+     * analisis entero, y debajo ya existe UNA instancia en la cache por
+     * dependencias.  Los otros dos gestores que piden rangos -- el del
+     * optimizador y el de efectos -- apuntan a la MISMA. */
+    const RangeFacts &rf =
+        *manager_.get_or_compute<RangeAnalysis,
+                                 std::shared_ptr<const RangeFacts>>(
+            key, [this, &fn]() {
+                return compute_ranges_ptr(fn, structure(fn));
+            });
     if (fresh) {
         /* La certeza sale del propio analisis, no de quien pregunta: llegar a
          * punto fijo es haber visto todo lo que podia contradecirlo; pararse

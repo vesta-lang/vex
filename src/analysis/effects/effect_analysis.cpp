@@ -45,14 +45,20 @@ const RangeFacts &EffectAnalysis::ranges_of(const ir::IrFunction &fn) {
     // Otro hecho fundacional cacheado por el gestor: un productor, muchos
     // consumidores (points-to lo usa para acotar; el comprobador de limites,
     // para juzgar).
-    return facts_mgr_.get_or_compute<RangeAnalysis, RangeFacts>(fn.name, [&]() {
-        /* Con los resumenes si alguien los dio.  Es lo que convierte esto en el
-         * unico productor: quien necesita rangos acotados por lo que cruza las
-         * fronteras -- el comprobador de limites -- ya no tiene que calcularse
-         * los suyos aparte.  Y de paso points-to trabaja con rangos mas
-         * estrechos, que solo puede mejorar lo que distingue. */
-        return compute_ranges(fn, facts_of(fn), RangeOptions{}, resumenes_);
-    });
+    /* El PUNTERO, no una copia: ver la nota de `ranges_of` en el optimizador.
+     * `RangeFacts` lleva dentro el estado de entrada de cada bloque, y debajo
+     * ya existe una sola instancia en la cache por dependencias. */
+    return *facts_mgr_.get_or_compute<RangeAnalysis,
+                                      std::shared_ptr<const RangeFacts>>(
+        fn.name, [&]() {
+            /* Con los resumenes si alguien los dio.  Es lo que convierte esto
+             * en el unico productor: quien necesita rangos acotados por lo que
+             * cruza las fronteras -- el comprobador de limites -- ya no tiene
+             * que calcularse los suyos aparte.  Y de paso points-to trabaja con
+             * rangos mas estrechos, que solo puede mejorar lo que distingue. */
+            return compute_ranges_ptr(fn, facts_of(fn), RangeOptions{},
+                                      resumenes_);
+        });
 }
 
 const PointsTo &EffectAnalysis::points_to_of(const ir::IrFunction &fn) {
