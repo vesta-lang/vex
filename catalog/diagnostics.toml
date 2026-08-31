@@ -1299,3 +1299,18 @@ es = "'{0}' lleva '{1}' en su tipo de retorno: la marca da un permiso sobre lo q
 [VXT011]
 en = "argument {0} is passed to an '{1}' parameter, which the callee writes: it needs somewhere to write to (a name, a field, an array element or a dereference), not a computed value"
 es = "el argumento {0} va a un parametro '{1}', que el llamado ESCRIBE: necesita un sitio donde escribir (un nombre, un campo, un elemento de array o un deref), no un valor calculado"
+
+# --- un parametro de SALIDA que nadie escribe (VXT012) ---
+#
+# `out T x` PROMETE que quien llama recibira un valor.  Si el cuerpo no lo
+# escribe nunca, el llamante lee lo que hubiera en su hueco: la marca prometeria
+# y no cumpliria, que es justo lo que no puede pasar.
+#
+# Se comprueba que se escriba ALGUNA vez, no que se escriba en todos los
+# caminos.  Lo segundo pide analisis de flujo y esta sin hacer; lo primero coge
+# el fallo real -- declararlo y olvidarse -- y no puede dar un falso positivo
+# sobre codigo que si lo escribe.
+
+[VXT012]
+en = "'{0}' is declared 'out' -- the caller expects to get a value back through it -- but this body never writes it; assign it, or declare it 'inout' if what you want is to read what came in"
+es = "'{0}' se declara 'out' -- quien llama espera recibir un valor por ahi -- pero este cuerpo no lo escribe nunca; asignalo, o declaralo 'inout' si lo que quieres es leer lo que venia"

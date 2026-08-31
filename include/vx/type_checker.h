@@ -1998,6 +1998,30 @@ class TypeChecker {
                           SourceLoc loc, Type &pt,
                           DirSite site = DirSite::Storage);
 
+    /// Nombres a los que el cuerpo que se esta comprobando ASIGNA.  Se llena
+    /// en @c check_assign -- que ya recorre el cuerpo entero -- y lo consume
+    /// @c check_out_params_written_.  Se vacia al empezar cada cuerpo.
+    std::unordered_set<std::string> assigned_names_;
+
+    /**
+     * @brief Exige que cada parametro de SALIDA se haya escrito.
+     * @param params Los parametros de la funcion o metodo.
+     *
+     * `out T x` promete que quien llama recibira un valor.  Sin esto, un
+     * cuerpo que nunca lo escribe compila y el llamante lee lo que hubiera en
+     * su hueco: la marca prometeria y no cumpliria, que es justo lo que no
+     * puede pasar.
+     *
+     * Comprueba que se escriba ALGUNA vez, no que se escriba en todos los
+     * caminos.  Lo segundo pide un analisis de flujo y esta sin hacer; lo
+     * primero ya coge el fallo real -- declararlo y olvidarse -- y no puede
+     * dar un falso positivo sobre codigo que si lo escribe.
+     *
+     * `inout` no entra: ahi ya llega un valor, y no cambiarlo es legitimo.
+     */
+    void check_out_params_written_(
+        const std::vector<std::unique_ptr<ast::ParamDecl>> &params);
+
     /**
      * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.
      *

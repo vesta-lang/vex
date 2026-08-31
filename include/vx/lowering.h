@@ -3395,6 +3395,18 @@ class Lowering {
      */
     ir::IrValueId lower_addr_of_lvalue(ast::Expr *lvalue);
 
+    /**
+     * @brief Que parametros de un METODO son de salida por referencia.
+     * @param fa El acceso que nombra al metodo (`obj.m`).
+     * @return La mascara, o 0 si no se resuelve o ninguno lo es.
+     *
+     * Lo necesita el pre-pase de direcciones tomadas: `k.m(r)` toma la
+     * direccion de `r` aunque en el fuente no haya ningun `&`, igual que una
+     * funcion suelta.  Con solo el caso de la funcion suelta, `r` se quedaba
+     * en un registro y el bajado le pedia una direccion que no tenia.
+     */
+    uint64_t method_by_ref_mask_(const ast::FieldAccessExpr *fa) const;
+
     /// Externs cuyo `&fn` (o promocion a cfn) se uso como function value.
     /// Para cada uno generamos un thunk Vesta `__cfnthunk_<fn>` que reenvia
     /// al CALLN nativo, asi el cfn es invocable por CALLIND en cualquier

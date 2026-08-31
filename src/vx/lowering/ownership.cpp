@@ -795,6 +795,29 @@ void Lowering::mark_loop_assigned_vars(const ast::Node *n) {
 /**
  * @copydoc vx::Lowering::scan_address_taken_expr
  */
+/**
+ * @copydoc vx::Lowering::method_by_ref_mask_
+ */
+uint64_t Lowering::method_by_ref_mask_(const ast::FieldAccessExpr *fa) const {
+    if (fa == nullptr || !fa->base) return 0;
+    const Type &bt = fa->base->result_type;
+    if (bt.struct_name.empty()) return 0;
+    // Una clase y un struct guardan sus metodos en sitios distintos, pero la
+    // ficha es la MISMA (`ClassMethodInfo`), asi que se busca en los dos.
+    const auto buscar =
+        [&fa](const std::vector<ClassMethodInfo> &ms) -> uint64_t {
+        for (const ClassMethodInfo &m : ms)
+            if (!m.is_constructor && m.name == fa->field_name)
+                return m.param_by_ref_mask;
+        return 0;
+    };
+    const auto itc = tc_.class_layouts().find(bt.struct_name);
+    if (itc != tc_.class_layouts().end()) return buscar(itc->second.methods);
+    const auto its = tc_.struct_layouts().find(bt.struct_name);
+    if (its != tc_.struct_layouts().end()) return buscar(its->second.methods);
+    return 0;
+}
+
 void Lowering::scan_address_taken_expr(ast::Expr *e, int &depth) {
     if (!e) return;
     switch (e->kind) {
@@ -872,18 +895,29 @@ void Lowering::scan_address_taken_expr(ast::Expr *e, int &depth) {
          *
          * La condicion sale del MISMO predicado que uso la firma, sobre lo
          * apuntado por el parametro -- que es donde la firma dejo la `T`. */
-        if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr) {
-            auto *cid = static_cast<ast::IdentExpr *>(c->callee.get());
-            const FunctionSig *sg = tc_.function_sig_by_name(cid->name);
-            if (sg != nullptr && sg->param_by_ref_mask != 0) {
-                const size_t n = std::min<size_t>(c->args.size(), 64);
-                for (size_t i = 0; i < n; ++i) {
-                    if ((sg->param_by_ref_mask & (1ull << i)) == 0) continue;
-                    ast::Expr *a = c->args[i].get();
-                    if (a && a->kind == ast::NodeKind::IdentExpr)
-                        address_taken_locals_.insert(
-                            static_cast<ast::IdentExpr *>(a)->name);
-                }
+        {
+            /* La mascara se busca igual venga de una funcion suelta o de un
+             * metodo: lo que importa es cuales de sus parametros son de
+             * salida, no como se llame a la funcion.  Con solo el primer caso,
+             * `k.m(r)` no marcaba `r` y el bajado le pedia la direccion a un
+             * local que se habia quedado en un registro. */
+            uint64_t mask = 0;
+            if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr) {
+                auto *cid = static_cast<ast::IdentExpr *>(c->callee.get());
+                if (const FunctionSig *sg = tc_.function_sig_by_name(cid->name))
+                    mask = sg->param_by_ref_mask;
+            } else if (c->callee &&
+                       c->callee->kind == ast::NodeKind::FieldAccessExpr) {
+                mask = method_by_ref_mask_(
+                    static_cast<ast::FieldAccessExpr *>(c->callee.get()));
+            }
+            const size_t n = std::min<size_t>(c->args.size(), 64);
+            for (size_t i = 0; mask != 0 && i < n; ++i) {
+                if ((mask & (1ull << i)) == 0) continue;
+                ast::Expr *a = c->args[i].get();
+                if (a && a->kind == ast::NodeKind::IdentExpr)
+                    address_taken_locals_.insert(
+                        static_cast<ast::IdentExpr *>(a)->name);
             }
         }
         scan_address_taken_expr(c->callee.get(), depth);

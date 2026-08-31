@@ -177,6 +177,17 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
 
         // Pre-pase de address-taken para variables locales del cuerpo.
         address_taken_locals_.clear();
+        /* Los parametros de SALIDA por referencia, DESPUES del clear.
+         *
+         * Un metodo se baja por aqui y no por `lower_function`, asi que sin
+         * esto la marca no le llegaba: el parametro se quedaba como un valor
+         * corriente y `c = a / b;` compilaba a un calculo MUERTO -- ni store ni
+         * error --, que es la peor forma de fallar. */
+        for (const auto &mp : m->params)
+            if (mp && mp->dir != ast::ParamDir::None && mp->type &&
+                is_by_ref_out_param(mp->dir,
+                                    tc_.resolve_type_node(mp->type.get())))
+                address_taken_locals_.insert(mp->name);
         host_bearing_locals_.clear();
         // fix.cleanup-leak - limpiar el stack de cleanups entre
         // metodos de clase.  Sin esto, si un metodo anterior (e.g. el
@@ -1829,6 +1840,17 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     for (size_t ai = 0; ai < e->args.size(); ++ai) {
         auto &a = e->args[ai];
         if (!a) return ir::IR_NO_VALUE;
+        /* Parametro de SALIDA por referencia: lo que viaja es la DIRECCION del
+         * hueco.  Un metodo no es un caso aparte -- lo mismo que en una
+         * funcion suelta --, y sin esto el argumento viajaba por VALOR donde el
+         * llamado espera una direccion: escribia a traves de un numero que no
+         * es una direccion, y el resultado no volvia. */
+        if (ai < 64 && (mtd->param_by_ref_mask & (1ull << ai)) != 0) {
+            const ir::IrValueId av = lower_addr_of_lvalue(a.get());
+            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            arg_vals.push_back(av);
+            continue;
+        }
         // Auto-promocion literal -> StringObject cuando el parametro
         // espera STRING y el arg es un StringLit no interpolado.
         // Mismo patron que @c lower_call usa para funciones libres:

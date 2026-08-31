@@ -4776,5 +4776,60 @@ modes3_case("parametros_salida",
             "524_parametros_salida.vx", 59)
 
 
+
+
+# Los dos que se colaron al implementar el parametro de salida.  El positivo no
+# los habria cogido: los dos COMPILAN, y uno hasta ejecuta.
+DIR_OUT_BUG_CASES = [
+    ("dir_neg_out_sin_escribir", """void f(out i64 x) {
+    return;
+}
+i32 main() {
+    i64 v = 9;
+    f(v);
+    return (i32) v;
+}
+""", "VXT012",
+     "un `out` que el cuerpo nunca escribe: promete y no cumple",
+     "un `out` sin escribir debio fallar"),
+]
+
+for _t, _s, _p, _m, _f in DIR_OUT_BUG_CASES:
+    _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
+
+
+@case("out_en_metodo")
+def _(ctx):
+    """Un `out` en un METODO tiene que devolver el valor, igual que en una
+    funcion suelta.
+
+    Se colo: el metodo se baja por otro camino, asi que el parametro se quedaba
+    como un valor corriente.  La asignacion del cuerpo compilaba a un calculo
+    MUERTO -- sin store y sin error -- y el argumento viajaba por VALOR donde el
+    llamado esperaba una direccion.  Devolvia 0 y no se quejaba nadie.
+    """
+    src = """class C {
+    public void dividir(i32 a, i32 b, out i32 c) { c = a / b; }
+}
+i32 main() {
+    C k = new C();
+    i32 r;
+    k.dividir(9, 3, r);
+    return r;
+}
+"""
+    vx = _write_vx(ctx, "out_metodo.vx", src)
+    if not ctx.compile_vx(vx, "outmet"):
+        return
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("outmet", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 3:
+            ctx.fail("out en metodo (-m %s): R00 == %s, se esperaba 3"
+                     % (modo, got), log)
+            return
+        ctx.ok("out en metodo (-m %s) -> 3" % modo)
+
+
 if __name__ == "__main__":
     main()

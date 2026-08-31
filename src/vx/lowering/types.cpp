@@ -485,6 +485,20 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
 Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
     ParamAbi abi;
 
+    /* Un parametro de SALIDA por referencia (`out T x` sobre un valor) no
+     * recibe una `T`: recibe la DIRECCION de un hueco del llamante.  Se decide
+     * aqui porque este es el unico sitio que dice con que forma entra un
+     * parametro, y por el pasan los dos caminos -- la funcion suelta y el
+     * metodo --.  Decidirlo en cada uno dejaba al metodo fuera: su parametro
+     * se quedaba como un valor y la asignacion del cuerpo compilaba a un
+     * calculo MUERTO, sin store y sin error. */
+    if (p.type && p.dir != ast::ParamDir::None &&
+        is_by_ref_out_param(p.dir, tc_.resolve_type_node(p.type.get()))) {
+        abi.type = ir::IrType::PTR;
+        abi.mem.is_host_ptr = true; // la direccion de un hueco del anfitrion
+        return abi;
+    }
+
     if (p.type && p.type->kind == ast::NodeKind::PrimitiveTypeNode) {
         const auto *ptn =
             static_cast<const ast::PrimitiveTypeNode *>(p.type.get());
