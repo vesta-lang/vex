@@ -189,6 +189,34 @@ class AotTest:
     def have(tool):
         return shutil.which(tool) is not None
 
+    def saltar(self, motivo):
+        """Termina el test como NO APLICABLE, no como fallido.
+
+        No es lo mismo "esto esta roto" que "esto no se puede comprobar aqui".
+        Confundirlos tiene las dos formas malas: un rojo permanente que se
+        aprende a ignorar -- y con el, los rojos de verdad --, o un verde que
+        no comprobo nada.  Sale con 77, que el lanzador cuenta aparte.
+        """
+        print("SALTADO: %s" % motivo)
+        shutil.rmtree(self.work, ignore_errors=True)
+        sys.exit(77)
+
+    @staticmethod
+    def buscar_gcc_windows():
+        """El gcc del lado de WINDOWS, o None.
+
+        Se BUSCA, no se escribe.  Habia una ruta de una maquina concreta
+        (`F:\\msys\\ucrt64\\bin\\gcc.exe`) metida en dos tests: en cualquier
+        otro equipo eso no es un fallo del compilador, es un fichero que no
+        esta, y salia como si Vesta estuviera rota.
+        """
+        for c in ("C:/TDM-GCC-64/bin/gcc.exe", "F:/msys/ucrt64/bin/gcc.exe",
+                  "C:/msys64/ucrt64/bin/gcc.exe",
+                  "C:/msys64/mingw64/bin/gcc.exe"):
+            if os.path.isfile(c):
+                return c
+        return shutil.which("gcc")
+
     def write(self, name, content):
         """Escribe un fichero auxiliar (.vx/.c) en el tmpdir."""
         p = self.wpath(name)

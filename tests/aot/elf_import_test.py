@@ -14,8 +14,17 @@ Escenario: un .vx llama a toupper() de libc; toupper(97) = 'A' = 65.
 Uso:  python tests/aot/elf_import_test.py <build_dir>
 """
 import os
+import shutil
 import subprocess
 import sys
+
+
+# LADO: windows  (prueba los DOS objetivos: el PE aqui, el ELF via WSL)
+#
+# `wsl` solo existe DESDE Windows.  Lanzado desde dentro de WSL este test
+# moria con "No such file or directory: 'wsl'", que parecia un fallo suyo y
+# era estar del lado equivocado.  Ahora se dice y se salta.
+HAY_WSL = shutil.which("wsl") is not None
 
 
 def wsl(cmd):
@@ -31,6 +40,11 @@ def main():
     if len(sys.argv) < 2:
         print("uso: elf_import_test.py <build_dir>")
         return 2
+    if not HAY_WSL:
+        print("SALTADO: no hay `wsl`.  Este test se lanza DESDE Windows y usa "
+              "WSL para la mitad de Linux; desde dentro de WSL no aplica.")
+        return 77
+
     build = os.path.abspath(sys.argv[1])
     vm = os.path.join(build, "vm.exe")
     if not os.path.exists(vm):

@@ -18,7 +18,13 @@ import subprocess
 import sys
 import tempfile
 
-GCC = r"F:\msys\ucrt64\bin\gcc.exe"
+# LADO: windows  (prueba el objetivo PE con herramientas de Windows)
+#
+# El gcc/ar se BUSCAN.  Aqui habia la ruta de una maquina concreta, y en
+# cualquier otro equipo eso no era un fallo del compilador sino un fichero
+# que no esta -- pero salia como si Vesta estuviera rota.
+from aot_harness import AotTest
+GCC = AotTest.buscar_gcc_windows()
 
 
 def run(cmd, **kw):
@@ -36,6 +42,11 @@ def main():
     if not os.path.exists(vm):
         print(f"no se encuentra vm en {build}")
         return 2
+
+    if not GCC or not os.path.isfile(GCC):
+        print("SALTADO: no hay gcc del lado de Windows (este test prueba "
+              "el objetivo PE con herramientas de Windows)")
+        return 77
 
     work = tempfile.mkdtemp(prefix="ar_dll_")
     rc = 0
