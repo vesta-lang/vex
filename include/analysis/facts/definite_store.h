@@ -38,11 +38,23 @@
 #define ANALYSIS_FACTS_DEFINITE_STORE_H
 
 #include <cstdint>
+#include <utility>
+#include <vector>
 
 #include "analysis/asa/fact.h" // UnknownReason: el vocabulario del "no se"
 #include "ir/ssa_ir.h"
 
 namespace analysis {
+
+/// Marcador del analisis (identidad para el @c AnalysisManager).
+///
+/// Con el, el hecho se pide con @c get_or_compute_v y sale PEREZOSO y
+/// CACHEADO: se calcula la primera vez que alguien pregunta, se reutiliza
+/// mientras la funcion no cambie -- la clave lleva su @c version -- y se
+/// recalcula sola cuando cambia.  Nadie tiene que acordarse de invalidarlo.
+struct DefiniteStoreAnalysis {
+    static char ID;
+};
 
 /**
  * @struct DefiniteStoreFacts
@@ -78,6 +90,28 @@ struct DefiniteStoreFacts {
 };
 
 /**
+ * @struct DefiniteStoreMap
+ * @brief El veredicto de CADA puntero de una funcion.
+ *
+ * El resultado es de la FUNCION y no de un puntero suelto porque asi es como se
+ * cachea: el gestor de analisis indexa por (analisis, funcion) y version, asi
+ * que un hecho por puntero no se podria guardar ni invalidar.  Y de paso sale
+ * mas barato: el recorrido de bloques es el mismo para todos.
+ */
+struct DefiniteStoreMap {
+    /// Un veredicto por puntero mirado.  Pocos por funcion: los parametros que
+    /// apuntan, que es donde la pregunta tiene sentido.
+    std::vector<std::pair<ir::IrValueId, DefiniteStoreFacts>> per_pointer;
+
+    /// Lo que se sabe de @p v.  Nulo si no se pregunto por el.
+    const DefiniteStoreFacts *of(ir::IrValueId v) const noexcept {
+        for (const auto &e : per_pointer)
+            if (e.first == v) return &e.second;
+        return nullptr;
+    }
+};
+
+/**
  * @brief Calcula si @p target se escribe en todos los caminos hasta un retorno.
  * @param fn     La funcion, ya construida.
  * @param target El puntero por el que se pregunta (normalmente un parametro).
@@ -85,6 +119,17 @@ struct DefiniteStoreFacts {
  */
 DefiniteStoreFacts compute_definite_store(const ir::IrFunction &fn,
                                           ir::IrValueId target);
+
+/**
+ * @brief Lo mismo para todos los parametros de @p fn que apuntan.
+ * @param fn La funcion.
+ * @return El mapa, listo para cachear.
+ *
+ * Es la forma que consumen el gestor de analisis y el ASA.  La de un puntero
+ * suelto se queda para quien ya sabe cual le interesa -- el bajado, que acaba
+ * de construir la funcion y pregunta por un parametro concreto --.
+ */
+DefiniteStoreMap compute_definite_stores(const ir::IrFunction &fn);
 
 } // namespace analysis
 

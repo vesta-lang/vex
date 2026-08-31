@@ -195,6 +195,10 @@ std::vector<const char *> registered_producers();
  */
 void register_value_shape_producer();
 
+/// Da de alta el dominio `asa.definite_store`.  Vive en otra unidad por lo
+/// mismo que el de la forma de un valor: el hecho es suyo y se registra el.
+void register_definite_store_producer();
+
 /**
  * @brief Corre los productores pedidos sobre @p mod y deposita en @p store.
  *

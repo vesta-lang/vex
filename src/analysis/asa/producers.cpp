@@ -655,6 +655,7 @@ void register_builtin_producers() {
      * con procedencia y certeza, y no llegaban al almacen -- o sea que nadie
      * podia consultarlos aunque quisiera. */
     register_value_shape_producer();
+    register_definite_store_producer();
 }
 
 } // namespace

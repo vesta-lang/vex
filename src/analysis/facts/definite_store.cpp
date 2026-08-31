@@ -25,6 +25,8 @@
 
 namespace analysis {
 
+char DefiniteStoreAnalysis::ID = 0;
+
 namespace {
 
 /// @c true si la instruccion puede escribir memoria que no se ve aqui.
@@ -166,6 +168,19 @@ DefiniteStoreFacts compute_definite_store(const ir::IrFunction &fn,
 
     f.verdict = DefiniteStoreFacts::Verdict::Always;
     return f;
+}
+
+DefiniteStoreMap compute_definite_stores(const ir::IrFunction &fn) {
+    DefiniteStoreMap m;
+    /* Solo los parametros que APUNTAN.  Es donde la pregunta tiene sentido --
+     * lo que se escribe por un valor no se ve fuera -- y ademas acota el
+     * trabajo: son unos pocos, no todos los valores de la funcion. */
+    for (ir::IrValueId v : fn.params) {
+        if (v >= fn.values.size()) continue;
+        if (fn.values[v].type != ir::IrType::PTR) continue;
+        m.per_pointer.emplace_back(v, compute_definite_store(fn, v));
+    }
+    return m;
 }
 
 } // namespace analysis
