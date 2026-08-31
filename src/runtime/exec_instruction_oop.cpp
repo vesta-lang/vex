@@ -211,6 +211,12 @@ void do_throw(ProcessVM *vm, uint64_t exception_ptr) {
         ef = ef->prev;
     }
 
+    /* La cadena se RECORRE sin tocarla, y solo se desmonta cuando ya se sabe
+     * a donde se va.  Antes se liberaba cada marco segun se descartaba, y eso
+     * traia dos cosas malas: si el manejador aparecia mas arriba, el desenrollo
+     * de abajo volvia a soltar los mismos marcos -- devueltos DOS VECES al
+     * almacen --, y si no aparecia ninguno ya no quedaba cadena que contar,
+     * que es justo cuando hace falta para la traza. */
     loader::FrameHeader *frame =
         vm->frame_stack; // continuar con la cadena de FrameHeaders
 
@@ -260,18 +266,27 @@ void do_throw(ProcessVM *vm, uint64_t exception_ptr) {
             }
         }
 
-        // handler no encontrado en este frame: subir al anterior
-        loader::FrameHeader *done = frame;
+        // handler no encontrado en este frame: subir al anterior, sin
+        // soltarlo todavia (ver la nota del principio del recorrido).
         frame = frame->prev;
-        // Sprint MMM-ext leak-fix: liberar host_allocas antes de
-        // descartar el frame durante el unwind.
-        host_alloca_release_all(vm, done);
-        vm->frame_pool.release(done); // fix13
     }
 
-    // excepcion no capturada en ningun frame: matar el proceso.
-    // Antes de matarlo, liberar host_allocas de cualquier frame
-    // remanente para no leakear al destruir el ProcessVM.
+    /* Nadie la recogio.  Se CUENTA antes de desmontar nada -- la traza sale de
+     * la cadena de marcos, y despues de soltarla no hay de donde sacarla --, y
+     * no se cuentan los fallos del motor: esos ya los conto `throw_fatal` con
+     * su propio codigo, y repetirlo imprimiria la misma averia dos veces. */
+    if (exc_class != g_fatal_error_class) {
+        /* `stringx` NO acaba en nul: se acota por su tamano.  Tomarlo como
+         * cadena de C leeria hasta el primer cero que hubiera detras. */
+        std::string nombre = "?";
+        if (exc_class && exc_class->name.data && exc_class->name.size > 0)
+            nombre.assign(reinterpret_cast<const char *>(exc_class->name.data),
+                          exc_class->name.size);
+        report_uncaught_exception(vm, nombre.c_str());
+    }
+
+    // Ahora si: liberar host_allocas de cualquier frame remanente para no
+    // leakear al destruir el ProcessVM.
     while (vm->frame_stack != nullptr) {
         loader::FrameHeader *tmp = vm->frame_stack;
         vm->frame_stack = tmp->prev;

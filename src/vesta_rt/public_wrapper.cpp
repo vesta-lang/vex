@@ -296,13 +296,55 @@ void vrt_monitor_notify_all(vrt_proc *proc, vrt_handle obj) {
 /* Excepciones                                                              */
 /* ----------------------------------------------------------------------- */
 
+/**
+ * @brief Deja apuntado DESDE DONDE se rindio el codigo compilado.
+ *
+ * Cuando el programa se rinde por su cuenta -- un `throw`, un `panic`, un
+ * desenvolver que no tenia nada -- no hay ningun fallo que el sistema avise,
+ * asi que no queda ninguna direccion capturada.  Y el PC de la maquina virtual
+ * no sirve: dentro del codigo compilado no se va actualizando, asi que la traza
+ * acababa senalando una sentencia cualquiera de mas arriba -- o la primera
+ * funcion del programa.
+ *
+ * Lo que SI se sabe es quien llamo a este ayudante, y esa es exactamente la
+ * instruccion que se rindio.
+ *
+ * No pisa lo que ya hubiera: si el sistema aviso de un fallo, esa direccion es
+ * mas precisa que esta.
+ *
+ * @param p     Proceso.
+ * @param ret   Direccion de RETORNO del llamante (apunta al byte de despues de
+ *              la llamada, de ahi @c pending_fault_native_is_return).
+ * @param frame Por donde iba la pila nativa, para recorrer la cadena.
+ */
+static void anotar_origen_nativo(runtime::ProcessVM *p, void *ret,
+                                 void *frame) {
+    if (!p || p->pending_fault_native_pc != 0) return;
+    p->pending_fault_native_pc = reinterpret_cast<uint64_t>(ret);
+    p->pending_fault_native_sp = reinterpret_cast<uint64_t>(frame);
+    p->pending_fault_native_is_return = true;
+}
+
+/* Los dos builtins tienen que evaluarse EN el llamante -- dentro del ayudante
+ * darian la direccion del ayudante --, por eso se toman aqui y se pasan. */
+#if defined(__GNUC__) || defined(__clang__)
+#define VESTA_ANOTAR_ORIGEN(p)                                                 \
+    anotar_origen_nativo((p), __builtin_return_address(0),                     \
+                         __builtin_frame_address(0))
+#else
+#define VESTA_ANOTAR_ORIGEN(p) ((void)0)
+#endif
+
 void vrt_throw_fatal(vrt_proc *proc, uint32_t kind, const char *message) {
     if (!proc) return;
-    runtime::throw_fatal(as_proc(proc), kind, message);
+    runtime::ProcessVM *p = as_proc(proc);
+    VESTA_ANOTAR_ORIGEN(p);
+    runtime::throw_fatal(p, kind, message);
 }
 
 void vrt_unwrap_throw(vrt_proc *proc) {
     if (!proc) return;
+    VESTA_ANOTAR_ORIGEN(as_proc(proc));
     /* Lo MISMO que exec_instr_unwrap (bytecode 0x26), y ahi esta explicado por
      * que no es capturable: desenvolver es afirmar que hay algo, y fallar la
      * afirmacion es un bug, no una condicion recuperable.  El nativo ya se
@@ -465,7 +507,9 @@ void vrt_throw_user(vrt_proc *proc, uint64_t exc_handle) {
      * en codigo bytecode (caso comun: el frontend emite catch como bloque
      * de bytecode, NO como JIT-callable function). */
     if (!proc) return;
-    vrt_internal_do_throw(as_proc(proc), exc_handle);
+    runtime::ProcessVM *p = as_proc(proc);
+    VESTA_ANOTAR_ORIGEN(p);
+    vrt_internal_do_throw(p, exc_handle);
 }
 
 void vrt_rethrow(vrt_proc *proc) {
@@ -476,6 +520,7 @@ void vrt_rethrow(vrt_proc *proc) {
      * Mismas limitaciones que vrt_throw_user. */
     if (!proc) return;
     runtime::ProcessVM *p = as_proc(proc);
+    VESTA_ANOTAR_ORIGEN(p);
     vrt_internal_do_throw(p, p->current_exception);
 }
 
@@ -1670,24 +1715,7 @@ void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len) {
         p->vm_mem.read_bytes(msg_vaddr, msg, msg_len);
     }
     msg[msg_len] = '\0';
-    /* De donde vino la llamada.  Un `panic` no lo avisa el sistema -- lo lanza
-     * el propio programa --, asi que aqui no hay ninguna direccion de fallo
-     * que capturar; pero este ayudante SI sabe quien le llamo, y esa es
-     * exactamente la instruccion que revento.  Sin esto, un panic en codigo
-     * compilado se contaba con el PC de la maquina virtual, que ahi no se va
-     * actualizando, y senalaba una sentencia cualquiera de mas arriba. */
-#if defined(__GNUC__) || defined(__clang__)
-    if (p->pending_fault_native_pc == 0) {
-        p->pending_fault_native_pc =
-            reinterpret_cast<uint64_t>(__builtin_return_address(0));
-        // Y por donde iba la pila nativa, para recorrer la cadena.
-        p->pending_fault_native_sp =
-            reinterpret_cast<uint64_t>(__builtin_frame_address(0));
-        // Es una direccion de RETORNO: apunta al byte de despues de la
-        // llamada, no a ella (ver pending_fault_native_is_return).
-        p->pending_fault_native_is_return = true;
-    }
-#endif
+    VESTA_ANOTAR_ORIGEN(p);
     /* throw_fatal(proc, FATAL_USER_ABORT, msg) -- nunca retorna.  El
      * handler del JIT (run_jit -> longjmp) propaga la excepcion al
      * frame de tryenter mas cercano o termina el proceso si no hay

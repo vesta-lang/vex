@@ -216,6 +216,27 @@ const MethodDebug *lookup_method_debug(loader::MethodInfo *method);
  */
 size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size);
 
+/**
+ * @brief Cuenta una excepcion del PROGRAMA que ningun @c catch recogio.
+ *
+ * No es un fallo del motor -- lanzar es lo que se le pidio --, pero terminar
+ * callando es indistinguible de terminar bien: el proceso paraba en seco, sin
+ * mensaje, sin la cadena de llamadas y saliendo con codigo CERO.  Un guion o
+ * una integracion continua se lo creian.
+ *
+ * Se llama con la cadena de marcos TODAVIA ENTERA: la traza se saca de ella, y
+ * despues ya se puede desmontar.
+ *
+ * Los fallos del motor (@c FatalError) NO pasan por aqui: los cuenta
+ * @c throw_fatal con su propio codigo del catalogo, y hacerlo dos veces
+ * imprimiria el mismo fallo dos veces.
+ *
+ * @param vm         Proceso donde se lanzo.
+ * @param class_name Nombre de la clase lanzada; es lo unico que el motor sabe
+ *                   de un objeto que es del usuario.
+ */
+void report_uncaught_exception(ProcessVM *vm, const char *class_name);
+
 // ---------------------------------------------------------------------
 // OS-level access violation -> FatalError capturable.
 //

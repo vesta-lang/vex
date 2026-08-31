@@ -507,6 +507,18 @@ es = "ensamblar '{0}' a .velb no salio bien (codigo {1}): no se produjo artefact
 # `367_std_memory_variantes` un puntero -- y en otra de sus rutinas, el propio
 # byte de relleno -- en lugar de su resultado, sin una queja.
 
+# VX7026 -- una excepcion del PROGRAMA que nadie recogio.
+#
+# No es un fallo del motor: el motor hizo justo lo que se le pidio.  Pero
+# terminar callando es lo mismo que no haber pasado nada -- antes el proceso
+# paraba en seco, sin mensaje, sin la cadena de llamadas y saliendo con codigo
+# cero, o sea AFIRMANDO que todo fue bien --.  Se dice que clase se lanzo,
+# porque es el unico dato que el motor tiene de un objeto que es del usuario.
+
+[VX7026]
+en = "uncaught exception: {0}"
+es = "excepcion sin capturar: {0}"
+
 [VX7025]
 en = "assembly block with wide-bank operands (xmm/ymm/zmm) cannot run this way: their values do not fit in the integer list the operands travel in, so they neither go in nor come out"
 es = "bloque de ensamblador con operandos del banco ancho (xmm/ymm/zmm) no ejecutable por esta via: sus valores no caben en la lista de enteros por la que viajan los operandos, asi que ni entran ni salen"
@@ -888,3 +900,81 @@ es = "al compilar '{2}': no hay tabla de efectos para {1}, asi que nadie puede d
 [VXA070]
 en = "the function '{2}' does not say which target it is compiled for, so its calling convention is unknown -- whoever builds it must set MFunction::target"
 es = "la funcion '{2}' no dice para que objetivo se compila, asi que su convencion de llamada se desconoce -- quien la construye tiene que poner MFunction::target"
+
+# ===========================================================================
+# VXW -- HALLAZGOS DEL LINTER
+# ===========================================================================
+#
+# Familia propia, separada de los errores (VXE) y de los avisos del analisis
+# (VXA), y por una razon que se nota al usarla: un hallazgo del linter NO dice
+# que el programa este mal.  Dice que hay una decision que tomar, y la toma una
+# persona.  Mezclarlos haria imposible apagar lo segundo sin apagar lo primero.
+#
+# Regla de esta familia: la ACCION va DENTRO del mensaje.  Un hallazgo que solo
+# describe -- "este contrato no se comprueba" -- deja al lector buscando que
+# hacer; con el que hacer al lado se arregla en el momento.
+
+# --- un contrato que nadie esta comprobando (VXW001) ---
+#
+# El verificador de contratos tiene tres veredictos -- se cumple, NO se cumple,
+# no se puede decidir -- y hasta ahora los tres sitios que lo consumian hacian
+# lo mismo: quedarse solo con el segundo.  Un contrato indecidible se descartaba
+# EN SILENCIO, y entonces parecia comprobado porque nadie protestaba.
+#
+# Eso es peor que no tenerlo: miente con autoridad.  Alguien lee `@nothrow` y
+# construye encima algo que da por hecho que no lanza.
+
+[VXW001]
+en = "the contracts of '{0}' ({1}) are NOT being verified: {2} -- declare the effects of what it calls, or drop the contract: one nobody checks is worse than none"
+es = "los contratos de '{0}' ({1}) NO se estan verificando: {2} -- declara los efectos de lo que llama, o quita el contrato: uno que nadie comprueba es peor que ninguno"
+
+# --- una cota mas floja que la demostrada (VXW002) ---
+#
+# Sugerencia CON EL VALOR PUESTO: no se dice "podrias apretar esto", se dice el
+# numero que el analisis demostro.  El arreglo lo firma el humano porque una
+# cota es una promesa hacia fuera, y prometer menos de lo que hoy cumples puede
+# ser deliberado -- dejar margen para cambiar la implementacion.
+
+[VXW002]
+en = "'{0}' declares {1}({2}) and only {3} was proven -- tightening it makes the promise say what the code really does"
+es = "'{0}' declara {1}({2}) y solo se demostro {3} -- apretarlo hace que la promesa diga lo que el codigo hace de verdad"
+
+# --- una propiedad demostrada y sin declarar (VXW003) ---
+#
+# Solo en funciones que YA declaran algun contrato: quien escribio uno ha
+# decidido que esta funcion tiene una promesa que mantener.  Ofrecerselo a toda
+# funcion que no lance seria ruido -- casi ninguna lanza --, y un linter ruidoso
+# se apaga entero, y apagado no protege de nada.
+
+[VXW003]
+en = "'{0}' provably satisfies {1} and does not declare it -- declaring it turns today's fact into a promise the compiler will enforce"
+es = "'{0}' cumple {1} de forma demostrable y no lo declara -- declararlo convierte un hecho de hoy en una promesa que el compilador hara cumplir"
+
+# --- lo que el propio linter dice de si mismo (VXW900-VXW902) ---
+#
+# Tambien por el catalogo, y no como texto suelto en el codigo.  Un subcomando
+# que habla en espanol mientras sus hallazgos salen en el idioma de quien
+# compila es un subcomando a medias, y la mitad que falta es justo la que se ve
+# cuando algo va mal.
+
+[VXW900]
+en = "cannot open '{0}'"
+es = "no se puede abrir '{0}'"
+
+[VXW901]
+en = "'{0}' produced no IR to look at (check the diagnostics above)"
+es = "'{0}' no dejo IR que mirar (revisa los diagnosticos de arriba)"
+
+[VXW902]
+en = "no findings: the linter only speaks about what it can prove"
+es = "sin hallazgos: el linter solo habla de lo que puede demostrar"
+
+# --- un contrato incumplido (VXT004) ---
+#
+# Esto SI es un error: el programa promete algo que el compilador ha demostrado
+# que no cumple.  Iba como prosa espanola incrustada en TRES sitios del
+# compilador; ahora sale del catalogo, como todo, y de un solo sitio.
+
+[VXT004]
+en = "'{0}' declares {1} and provably breaks it: {2}"
+es = "'{0}' declara {1} y esta demostrado que no lo cumple: {2}"

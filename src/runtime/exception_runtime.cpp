@@ -1988,6 +1988,26 @@ static state_err_thread fatal_to_thread_err(uint32_t kind) noexcept {
 // throw_fatal: ruta dual (capturable / fatal-original).
 // ---------------------------------------------------------------------
 
+void report_uncaught_exception(ProcessVM *vm, const char *class_name) {
+    /* Sale con codigo distinto de cero por la misma razon que `panic`: el
+     * programa se rindio.  Sin esto el proceso afirmaba haber terminado bien. */
+    g_last_fatal_kind.store(FATAL_USER_ABORT, std::memory_order_relaxed);
+    /* Con el nombre ESCRITO, no el aplanado: la traza de al lado dice
+     * `atr.hondo`, y decir aqui `atr__MiExc` obliga a traducir a mano. */
+    const std::string texto = vx::diag::format(
+        "VX7026", {class_name ? demangle_symbol(class_name) : "?"});
+    std::fprintf(stderr, "\n%s [VX7026]\n", texto.c_str());
+    /* La traza se saca AQUI, con la cadena de marcos todavia en pie; quien
+     * llama la desmonta despues. */
+    ensure_fatal_buffers(vm);
+    if (vm->fatal_trace_buf) {
+        build_stack_trace(vm, vm->fatal_trace_buf, 4096);
+        if (vm->fatal_trace_buf[0] != '\0')
+            std::fprintf(stderr, "%s", vm->fatal_trace_buf);
+    }
+    std::fflush(stderr);
+}
+
 void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message,
                  bool catchable) {
     if (!vm) return;

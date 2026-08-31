@@ -73,6 +73,7 @@ const CatEntry kEntries[] = {
     {"VX7023", {"this processor has: {0}", "este procesador tiene: {0}"}},
     {"VX7024", {"a catch below takes it, so the program continues", "un catch de mas abajo se hace cargo, asi que el programa continua"}},
     {"VX7025", {"assembly block with wide-bank operands (xmm/ymm/zmm) cannot run this way: their values do not fit in the integer list the operands travel in, so they neither go in nor come out", "bloque de ensamblador con operandos del banco ancho (xmm/ymm/zmm) no ejecutable por esta via: sus valores no caben en la lista de enteros por la que viajan los operandos, asi que ni entran ni salen"}},
+    {"VX7026", {"uncaught exception: {0}", "excepcion sin capturar: {0}"}},
     {"VX9100", {"Container: `{0}`", "Contenedor: `{0}`"}},
     {"VX9101", {"Complexity: **{0}**", "Complejidad: **{0}**"}},
     {"VX9102", {"(own body {0})", "(cuerpo propio {0})"}},
@@ -205,8 +206,15 @@ const CatEntry kEntries[] = {
     {"VXT001", {"literal {0} does not fit in {1} ({2}); write a cast if the truncation is intended", "el literal {0} no cabe en {1} ({2}); escribe un cast si la truncacion es intencionada"}},
     {"VXT002", {"literal {0} does not fit in its own suffix '{1}' ({2})", "el literal {0} no cabe en su propio sufijo '{1}' ({2})"}},
     {"VXT003", {"'{0}' is imported from two places and they are not the same function ({1} and {2}); qualify it with its namespace or rename one with 'as'", "'{0}' llega de dos sitios y no son la misma funcion ({1} y {2}); cualificala con su namespace o renombra una con 'as'"}},
+    {"VXT004", {"'{0}' declares {1} and provably breaks it: {2}", "'{0}' declara {1} y esta demostrado que no lo cumple: {2}"}},
+    {"VXW001", {"the contracts of '{0}' ({1}) are NOT being verified: {2} -- declare the effects of what it calls, or drop the contract: one nobody checks is worse than none", "los contratos de '{0}' ({1}) NO se estan verificando: {2} -- declara los efectos de lo que llama, o quita el contrato: uno que nadie comprueba es peor que ninguno"}},
+    {"VXW002", {"'{0}' declares {1}({2}) and only {3} was proven -- tightening it makes the promise say what the code really does", "'{0}' declara {1}({2}) y solo se demostro {3} -- apretarlo hace que la promesa diga lo que el codigo hace de verdad"}},
+    {"VXW003", {"'{0}' provably satisfies {1} and does not declare it -- declaring it turns today's fact into a promise the compiler will enforce", "'{0}' cumple {1} de forma demostrable y no lo declara -- declararlo convierte un hecho de hoy en una promesa que el compilador hara cumplir"}},
+    {"VXW900", {"cannot open '{0}'", "no se puede abrir '{0}'"}},
+    {"VXW901", {"'{0}' produced no IR to look at (check the diagnostics above)", "'{0}' no dejo IR que mirar (revisa los diagnosticos de arriba)"}},
+    {"VXW902", {"no findings: the linter only speaks about what it can prove", "sin hallazgos: el linter solo habla de lo que puede demostrar"}},
 };
-const int kEntryCount = 185;
+const int kEntryCount = 193;
 
 } // namespace
 
