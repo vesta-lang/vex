@@ -975,6 +975,34 @@ es = "en el nativo la seccion la coloca el guion de enlazado; sin verlo no se pu
 en = "it has no loops"
 es = "no tiene bucles"
 
+["loop.header"]
+en = "loop header, depth {0}"
+es = "cabecera de bucle, profundidad {0}"
+
+["loop.trip_count"]
+en = "the loop runs {0} times"
+es = "el bucle da {0} vueltas"
+
+["loop.trip_at_most"]
+en = "the loop runs at most {0} times (bound taken from the range of its limit, not from a written constant)"
+es = "el bucle da como mucho {0} vueltas (la cota sale del rango de su limite, no de una constante escrita)"
+
+["loop.trip_bounded"]
+en = "the exact count cannot be stated, but its limit is bounded, so the loop is bounded"
+es = "no se puede afirmar el numero exacto, pero su limite esta acotado, asi que el bucle lo esta"
+
+["loop.shape_unsupported"]
+en = "its shape is not a simple counted loop (several latches, several exits, or a header that does more than test)"
+es = "su forma no es un bucle contado simple (varios latches, varias salidas, o una cabecera que hace mas que comprobar)"
+
+["loop.no_induction"]
+en = "no counted induction variable was found in the header"
+es = "no se encontro una variable de induccion contada en la cabecera"
+
+["loop.trip_unknown"]
+en = "how many times it runs cannot be stated"
+es = "no se puede afirmar cuantas vueltas da"
+
 ["value_shape.none"]
 en = "it has no values with components"
 es = "no tiene valores con componentes"
@@ -1314,6 +1342,14 @@ es = "un parametro que nadie lee"
 en = "how much memory a function touches without the compiler knowing where"
 es = "cuanta memoria toca una funcion sin que se sepa donde"
 
+[VXW914]
+en = "a loop whose body never runs"
+es = "un bucle cuyo cuerpo no se ejecuta nunca"
+
+[VXW915]
+en = "a loop that runs exactly once"
+es = "un bucle que da exactamente una vuelta"
+
 # --- los hallazgos de esas dos familias ---
 #
 # `params.unused` habla de un PARAMETRO y no de cualquier valor sin usar: un
@@ -1338,6 +1374,21 @@ es = "'{1}' toca memoria en {0} sitio(s) donde no se puede saber DoNDE -- no es 
 # Callarse no es una opcion: quien lee la salida no puede distinguir "aqui esta
 # todo bien" de "aqui no he mirado".  Un analisis que renuncia sin decir por que
 # parece que funciona.
+
+# --- los hallazgos de la familia de bucles ---
+#
+# Las vueltas salen del analisis de induccion (con los rangos de segunda
+# fuente) y llegan aqui SELLADAS: la familia solo mira las demostradas, porque
+# acusar de codigo muerto a partir de una inferencia que pudo pararse por
+# presupuesto seria acusar sin prueba.
+
+[VXW916]
+en = "the body of a loop in '{0}' never runs: its count is proven to be zero -- usually a limit that fell below the start, or a '<' where '<=' was meant"
+es = "el cuerpo de un bucle de '{0}' no se ejecuta nunca: sus vueltas estan demostradas y son cero -- suele ser un limite que quedo por debajo del inicio, o un '<' donde iba '<='"
+
+[VXW917]
+en = "a loop in '{0}' runs exactly once, so it does not loop: it reads as if it repeated and it does not"
+es = "un bucle de '{0}' da exactamente una vuelta, asi que no es un bucle: se lee como si repitiera y no repite"
 
 [VXW008]
 en = "cannot tell whether the parameters of '{0}' are read: it has values bound to an asm block, which take them through a register rather than through a use the count can see. The bindings say which register carries which slot; joining that to a parameter needs the store between them, which is another domain's knowledge"

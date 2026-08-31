@@ -24,6 +24,11 @@
 #include <cstring>
 #include <sstream>
 #include "analysis/facts/alignment.h"
+/* La forma de un bucle, su variable de induccion y cuantas vueltas da: lo que
+ * hace falta para que el dominio de bucles diga algo mas que "aqui hay uno". */
+#include "analysis/facts/loop_iv.h"
+#include "analysis/facts/loop_structure.h"
+#include "analysis/facts/loop_trip_count.h"
 #include "vx/asm/asm_cfg.h"
 #include "vx/asm/asm_effects.h" // isa_actual
 
@@ -641,7 +646,7 @@ void produce_memory(Production &p) {
     }
 }
 
-/// Bucles: donde estan y como de anidados.
+/// Bucles: donde estan, como de anidados, y CUANTAS VUELTAS dan.
 void produce_loops(Production &p) {
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
@@ -655,9 +660,10 @@ void produce_loops(Production &p) {
             f.what.domain = kProducerLoops;
             f.what.code = "loop.header";
             f.what.a = lf.depth_of(b);
-            std::ostringstream o;
-            o << "cabecera de bucle, profundidad " << lf.depth_of(b);
-            f.what.detail = p.store.intern(o.str());
+            /* El detalle lleva DATOS, no una frase: el texto sale del catalogo
+             * multi-idioma como el de cualquier otro diagnostico.  Aqui habia
+             * espanol escrito a mano, que es justo lo que un usuario en otro
+             * idioma no puede leer. */
             f.about.kind = Subject::Kind::Block;
             f.about.function = p.store.intern(fn.name);
             f.about.id = b;
@@ -665,9 +671,76 @@ void produce_loops(Production &p) {
             support_with_structure(p, fn, f, "back-edges");
             p.assert_fact(std::move(f));
         }
-        if (seen == 0)
+        if (seen == 0) {
             p.say_unknown(function_subject(p, fn), UnknownReason::NothingToSay,
                           "loop.none", kProducerLoops, "");
+            continue;
+        }
+
+        /* Y lo que de verdad se pregunta de un bucle: cuantas vueltas da.
+         *
+         * El analisis YA hablaba el vocabulario del ASA -- `LoopTripInfo`
+         * lleva dentro un `asa::UnknownReason` --, pero nadie lo publicaba:
+         * el conocimiento se calculaba, se usaba en el sitio y se tiraba.  Sin
+         * esto, ni `--asa` lo ensena, ni viaja al fichero de hechos, ni el
+         * linter puede preguntarlo.
+         *
+         * El `def_block` sale de la estructura, que la base ya tiene cacheada:
+         * no se recorre la funcion otra vez. */
+        const IrFacts &st = p.base.structure(fn);
+        for (uint32_t L = 0; L < lf.loop_count; ++L) {
+            Subject about;
+            about.kind = Subject::Kind::Block;
+            about.function = p.store.intern(fn.name);
+            about.id = lf.header_block_of(L);
+
+            const LoopStructure ls = detect_loop_structure(fn, lf, L);
+            if (!ls.valid) {
+                /* No es un bucle contado SIMPLE (varios latches, varias
+                 * salidas, header sucio...).  No es un error: es la forma la
+                 * que no deja afirmar, y hay que decirlo. */
+                p.say_unknown(about, UnknownReason::ShapeNotRecognized,
+                              "loop.shape_unsupported", kProducerLoops, "");
+                continue;
+            }
+            LoopIV iv;
+            if (!detect_loop_iv(fn, st.def_block, ls.header, ls.preheader,
+                                ls.latch, iv)) {
+                p.say_unknown(about, UnknownReason::ShapeNotRecognized,
+                              "loop.no_induction", kProducerLoops, "");
+                continue;
+            }
+            /* Con los RANGOS: son una segunda fuente para lo mismo.  Un
+             * limite que no es una constante escrita puede seguir estando
+             * acotado, y eso es un bucle acotado.  La base ya los tiene
+             * cacheados, asi que preguntarlos no cuesta un analisis mas. */
+            const LoopTripInfo tc =
+                compute_trip_count(fn, st.def_block, iv, &p.base.ranges(fn));
+            if (!tc.bounded()) {
+                /* La razon la da el ANALISIS, no quien pregunta: el ya sabe
+                 * en cual de sus pasos se quedo. */
+                p.say_unknown(about, tc.reason, "loop.trip_unknown",
+                              kProducerLoops, "");
+                continue;
+            }
+            Fact f;
+            f.what.domain = kProducerLoops;
+            /* "Da N vueltas" y "da como mucho N" son hechos DISTINTOS, no el
+             * mismo con menos confianza: con el primero se puede quitar una
+             * comprobacion, con el segundo solo elegir.  Por eso van con
+             * codigos distintos y no se colapsan en uno. */
+            const bool is_exact = tc.known();
+            f.what.code = is_exact ? "loop.trip_count" : "loop.trip_at_most";
+            f.what.a = static_cast<int64_t>(is_exact ? tc.trip : tc.trip_max);
+            f.about = about;
+            f.seal = s;
+            /* La certeza la trae el hecho, no la pone quien lo publica. */
+            f.seal.certainty = tc.certainty;
+            support_with_structure(p, fn, f,
+                                   is_exact ? "induction-variable"
+                                            : "induction-variable+ranges");
+            p.assert_fact(std::move(f));
+        }
     }
 }
 

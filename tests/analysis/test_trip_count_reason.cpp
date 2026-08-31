@@ -32,6 +32,7 @@
 #include "ir/ssa_ir.h"
 
 #include <cstdio>
+#include <string>
 #include <vector>
 
 static int g_checks = 0;
@@ -200,6 +201,108 @@ static void the_two_classes_stay_apart() {
           "un limite de ejecucion y una forma no cubierta NO son lo mismo");
 }
 
+/**
+ * @brief Los RANGOS como segunda fuente: un limite que no esta escrito.
+ *
+ * El programa no dice `10`, pero el compilador ya SABE que ese valor solo
+ * puede ser 10 -- su rango es un unico punto --.  Es el mismo hecho por otro
+ * camino, y antes se tiraba: el analisis solo miraba la constante escrita.
+ *
+ * La certeza baja a @c Inferred a proposito: el rango sale de un punto fijo
+ * que puede pararse por presupuesto, asi que sirve para elegir pero no para
+ * quitar una comprobacion.  Eso lo decide el hecho, no quien pregunta.
+ */
+static void a_single_point_range_is_a_value() {
+    std::printf("-- un rango de un solo punto es un valor\n");
+    Harness h;
+    h.constant(1, 0); // init escrito; el bound NO se define en el IR.
+
+    analysis::RangeFacts rg;
+    rg.r.assign(h.fn.values.size(), analysis::ValueRange{});
+    const analysis::RangeType ty = analysis::rango_del_tipo(ir::IrType::I64).t;
+    rg.r[2] = analysis::ValueRange::de_enteros(ty, 10, 10);
+
+    const analysis::LoopTripInfo t =
+        analysis::compute_trip_count(h.fn, h.def_block, rising_iv(), &rg);
+    CHECK(t.known(), "con el rango fijado, el bucle esta contado");
+    CHECK(t.trip == 10, "y son diez iteraciones");
+    CHECK(t.certainty == analysis::asa::Certainty::Inferred,
+          "por rango se INFIERE, no se demuestra");
+}
+
+/**
+ * @brief Un limite que no se fija pero SI esta acotado: el bucle lo esta.
+ *
+ * "No se cuantas vueltas da" y "no se nada" no son lo mismo, y esta es la
+ * diferencia: con una cota se puede decidir si compensa desenrollar o acotar
+ * un coste.  Antes los dos casos caian en el mismo -1.
+ */
+static void a_bounded_limit_bounds_the_loop() {
+    std::printf("-- un limite acotado acota el bucle\n");
+    Harness h;
+    h.constant(1, 0);
+
+    analysis::RangeFacts rg;
+    rg.r.assign(h.fn.values.size(), analysis::ValueRange{});
+    const analysis::RangeType ty = analysis::rango_del_tipo(ir::IrType::I64).t;
+    rg.r[2] = analysis::ValueRange::de_enteros(ty, 1, 16); // el bound: [1, 16]
+
+    const analysis::LoopTripInfo t =
+        analysis::compute_trip_count(h.fn, h.def_block, rising_iv(), &rg);
+    CHECK(!t.known(), "no se puede dar el numero exacto");
+    CHECK(t.bounded(), "pero SI se sabe que esta acotado");
+    CHECK(t.trip_max == 16, "como mucho, tantas vueltas como el limite mayor");
+    CHECK(t.code == std::string("loop.trip_bounded"),
+          "y se dice con su codigo propio, no con el de no saber nada");
+    CHECK(t.certainty == analysis::asa::Certainty::Inferred,
+          "una cota por rangos se infiere");
+}
+
+/**
+ * @brief Sin rangos, el analisis se comporta EXACTAMENTE como antes.
+ *
+ * La segunda fuente es opcional: quien no la da tiene que obtener la misma
+ * respuesta que obtenia.  Sin esto, anadirla seria cambiar el analisis para
+ * todo el mundo por la puerta de atras.
+ */
+static void without_ranges_nothing_changes() {
+    std::printf("-- sin rangos, la respuesta es la de siempre\n");
+    Harness h;
+    h.constant(1, 0);
+    const analysis::LoopTripInfo t =
+        analysis::compute_trip_count(h.fn, h.def_block, rising_iv());
+    CHECK(!t.known() && !t.bounded(), "sin rangos no hay ni cota");
+    CHECK(t.reason == UnknownReason::RuntimeDependent,
+          "y el motivo sigue siendo el limite de ejecucion");
+    CHECK(t.certainty == analysis::asa::Certainty::Proven,
+          "no haber usado rangos no rebaja la certeza de lo que si se sabe");
+}
+
+/**
+ * @brief Lo ESCRITO gana: si hay constante, no se pregunta a los rangos.
+ *
+ * No es una preferencia de estilo -- cambia la CERTEZA del hecho: lo que el
+ * programa dice esta demostrado, y deducirlo otra vez por aproximaciones lo
+ * degradaria a inferido sin ganar nada.
+ */
+static void written_constants_win() {
+    std::printf("-- lo escrito gana al rango\n");
+    Harness h;
+    h.constant(1, 0);
+    h.constant(2, 10);
+
+    analysis::RangeFacts rg;
+    rg.r.assign(h.fn.values.size(), analysis::ValueRange{});
+    const analysis::RangeType ty = analysis::rango_del_tipo(ir::IrType::I64).t;
+    rg.r[2] = analysis::ValueRange::de_enteros(ty, 1, 999); // mas flojo
+
+    const analysis::LoopTripInfo t =
+        analysis::compute_trip_count(h.fn, h.def_block, rising_iv(), &rg);
+    CHECK(t.trip == 10, "el numero sale de la constante escrita");
+    CHECK(t.certainty == analysis::asa::Certainty::Proven,
+          "y sigue estando DEMOSTRADO, no inferido");
+}
+
 int main() {
     std::printf("=== test_trip_count_reason ===\n");
     known_has_no_reason();
@@ -208,6 +311,10 @@ int main() {
     decreasing_loop_is_a_shape_we_dont_cover();
     unsupported_guard_is_a_shape_too();
     the_two_classes_stay_apart();
+    a_single_point_range_is_a_value();
+    a_bounded_limit_bounds_the_loop();
+    without_ranges_nothing_changes();
+    written_constants_win();
     std::printf("=== test_trip_count_reason: %d comprobaciones, %d fallidas "
                 "===\n",
                 g_checks, g_fail);

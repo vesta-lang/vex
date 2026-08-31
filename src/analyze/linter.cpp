@@ -350,9 +350,44 @@ void family_opaque_memory(const LintInput &in, vx::Diagnostics &diags) {
     }
 }
 
+/**
+ * @brief Un bucle cuyo cuerpo NO se ejecuta nunca, o como mucho una vez.
+ *
+ * Lo dice el dominio de bucles: si las vueltas estan CONTADAS y salen cero, el
+ * cuerpo es codigo muerto -- y casi siempre es un error de quien lo escribio,
+ * no una intencion: un limite mal puesto, un `<` donde iba `<=`, una constante
+ * que quedo por debajo del inicio.  Con una sola vuelta, lo que hay no es un
+ * bucle: se lee como si repitiera y no repite.
+ *
+ * La familia no cuenta NADA por su cuenta: pregunta.  Quien decidio que el
+ * bucle esta contado es el analisis de induccion, con los rangos de segunda
+ * fuente, y la certeza viene sellada en el hecho -- por eso aqui solo se
+ * miran los DEMOSTRADOS: avisar de codigo muerto a partir de una inferencia
+ * que pudo pararse por presupuesto seria acusar sin prueba.
+ */
+void family_dead_loop(const LintInput &in, vx::Diagnostics &diags) {
+    for (const ir::IrFunction &fn : in.mod.functions) {
+        if (fn.is_native || fn.blocks.empty()) continue;
+        for (const analysis::asa::Fact *f :
+             in.facts.find_all("loop.trip_count", fn.name.c_str(), in.here)) {
+            if (f->seal.certainty != analysis::asa::Certainty::Proven) continue;
+            if (f->what.a == 0)
+                diags.diag(where_is(in, fn.name), vx::DiagLevel::WARN, "VXW916",
+                           {readable(fn.name)});
+            else if (f->what.a == 1)
+                diags.diag(where_is(in, fn.name), vx::DiagLevel::NOTE, "VXW917",
+                           {readable(fn.name)});
+        }
+    }
+}
+
 /* Lo que consulta cada familia.  Listas nombradas y no literales sueltos para
  * que se lean al lado de su familia y no haya que buscarlas. */
 const char *const kNeedsFingerprint[] = {"asa.fingerprint", nullptr};
+/* `loops.dead` consulta el dominio de bucles, que es quien sabe cuantas
+ * vueltas da cada uno.  Uno solo: no pide los rangos aparte porque el
+ * productor de bucles ya los consulta al armar su hecho. */
+const char *const kNeedsLoops[] = {"asa.loops", nullptr};
 /* `params.unused` consulta DOS: cuantas veces se usa cada valor, y por que
  * registro lo toma un bloque de asm.  Sin el segundo acusaba a 34 funciones de
  * no usar un parametro que el asm lee -- y la familia declara los dos, asi que
@@ -377,6 +412,11 @@ void register_builtin_families() {
                          kNeedsUseDef);
     register_lint_family("memory.not_localizable", "VXW913",
                          &family_opaque_memory, kNeedsMemoryAccess);
+    /* Y la del dominio de bucles.  Igual que las dos de arriba: no cuenta
+     * vueltas -- las pregunta --, asi que anadirla no ha costado un analisis
+     * nuevo, que es exactamente lo que el ASA promete. */
+    register_lint_family("loops.dead", "VXW914", &family_dead_loop,
+                         kNeedsLoops);
 }
 
 /* NO hay familia "contrato que nadie comprueba", y no es un olvido: eso lo dice

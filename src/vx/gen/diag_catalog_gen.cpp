@@ -293,6 +293,10 @@ const CatEntry kEntries[] = {
     {"VXW911", {"what one boundary costs: how many functions cannot prove their effects because the closure leaves the program there", "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efectos porque el cierre sale del programa por ahi"}},
     {"VXW912", {"a parameter nobody reads", "un parametro que nadie lee"}},
     {"VXW913", {"how much memory a function touches without the compiler knowing where", "cuanta memoria toca una funcion sin que se sepa donde"}},
+    {"VXW914", {"a loop whose body never runs", "un bucle cuyo cuerpo no se ejecuta nunca"}},
+    {"VXW915", {"a loop that runs exactly once", "un bucle que da exactamente una vuelta"}},
+    {"VXW916", {"the body of a loop in '{0}' never runs: its count is proven to be zero -- usually a limit that fell below the start, or a '<' where '<=' was meant", "el cuerpo de un bucle de '{0}' no se ejecuta nunca: sus vueltas estan demostradas y son cero -- suele ser un limite que quedo por debajo del inicio, o un '<' donde iba '<='"}},
+    {"VXW917", {"a loop in '{0}' runs exactly once, so it does not loop: it reads as if it repeated and it does not", "un bucle de '{0}' da exactamente una vuelta, asi que no es un bucle: se lee como si repitiera y no repite"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"definite_store.always", {"'{2}' is written on every path that returns", "'{2}' se escribe en todos los caminos que retornan"}},
     {"definite_store.escapes", {"the pointer is handed to something else, so it cannot be told whether it gets written", "el puntero se le pasa a otro, asi que no se puede decir si se escribe"}},
@@ -300,7 +304,14 @@ const CatEntry kEntries[] = {
     {"definite_store.no_pointer_params", {"none of its parameters points at anything", "ninguno de sus parametros apunta a nada"}},
     {"layout.no_static_data", {"the module has no static data in .data, so there is no section whose alignment to state", "el modulo no tiene datos estaticos en .data; no hay ninguna seccion cuya alineacion afirmar"}},
     {"layout.placement_is_configurable", {"in native builds the linker script places the section; without seeing it, its alignment cannot be stated", "en el nativo la seccion la coloca el guion de enlazado; sin verlo no se puede afirmar su alineacion"}},
+    {"loop.header", {"loop header, depth {0}", "cabecera de bucle, profundidad {0}"}},
+    {"loop.no_induction", {"no counted induction variable was found in the header", "no se encontro una variable de induccion contada en la cabecera"}},
     {"loop.none", {"it has no loops", "no tiene bucles"}},
+    {"loop.shape_unsupported", {"its shape is not a simple counted loop (several latches, several exits, or a header that does more than test)", "su forma no es un bucle contado simple (varios latches, varias salidas, o una cabecera que hace mas que comprobar)"}},
+    {"loop.trip_at_most", {"the loop runs at most {0} times (bound taken from the range of its limit, not from a written constant)", "el bucle da como mucho {0} vueltas (la cota sale del rango de su limite, no de una constante escrita)"}},
+    {"loop.trip_bounded", {"the exact count cannot be stated, but its limit is bounded, so the loop is bounded", "no se puede afirmar el numero exacto, pero su limite esta acotado, asi que el bucle lo esta"}},
+    {"loop.trip_count", {"the loop runs {0} times", "el bucle da {0} vueltas"}},
+    {"loop.trip_unknown", {"how many times it runs cannot be stated", "no se puede afirmar cuantas vueltas da"}},
     {"memory_access.no_accesses", {"none of its instructions touch memory", "ninguna de sus instrucciones toca memoria"}},
     {"memory_access.not_localizable", {"it touches memory but the location cannot be determined", "toca memoria pero no se puede localizar"}},
     {"memory_access.read", {"reads {2}", "lee {2}"}},
@@ -313,7 +324,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 292;
+const int kEntryCount = 303;
 
 } // namespace
 
