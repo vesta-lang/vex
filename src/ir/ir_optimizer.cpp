@@ -616,7 +616,8 @@ bool ir_pass_dead_stack_slot_elim(IrFunction &fn) {
                 }
                 marcar(v);
             }
-            for (const auto &pa : ins.phi_args) marcar(pa.value);
+            for (const auto &pa : ins.phi_args)
+                marcar(pa.value);
             marcar(ins.func_ptr);
         }
     }
@@ -624,7 +625,8 @@ bool ir_pass_dead_stack_slot_elim(IrFunction &fn) {
     while (!pendientes.empty()) {
         const IrValueId v = pendientes.back();
         pendientes.pop_back();
-        for (const IrValueId d : arrastra[v]) marcar(d);
+        for (const IrValueId d : arrastra[v])
+            marcar(d);
     }
 
     const auto muerto = [&](IrValueId v) {
@@ -2790,8 +2792,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
      * `callvirt` emitidos era exactamente el mismo con aspecto y sin el. */
     if (!mod.all_advices_attributed) return bail("hay aspectos sin atribuir");
     for (const auto &m : cls->methods) {
-        if (!m.ir_fn_name.empty() &&
-            mod.advice_chains.count(m.ir_fn_name) != 0)
+        if (!m.ir_fn_name.empty() && mod.advice_chains.count(m.ir_fn_name) != 0)
             return bail("un metodo de la clase lleva aspectos");
     }
 
@@ -3700,7 +3701,8 @@ bool sr_mem2reg_object(
                 in.operands.clear();
                 in.operands.push_back(it->second);
                 in.func_name.clear();
-                if (in.dst < fn.values.size()) fn.values[in.dst].is_const = false;
+                if (in.dst < fn.values.size())
+                    fn.values[in.dst].is_const = false;
                 /* De que memoria era se PASA al valor adelantado, no se borra.
                  * Ver  sr_forward_mem_marks: fue asi como el indice 0 de un
                  * buffer salia a basura y el 1 bien. */
@@ -7360,7 +7362,8 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
             fx_env.rangos = fx_rangos.get();
             fx_env.rangos_de = &fn;
             ns_peticiones += util::reloj::a_ns(util::reloj::ahora() - t_r);
-            if ((++n_peticiones % 500) == 0 && util::flag_on(util::FlagId::Times))
+            if ((++n_peticiones % 500) == 0 &&
+                util::flag_on(util::FlagId::Times))
                 std::fprintf(stderr, "[dce-rangos] %lld peticiones | %lld ms\n",
                              n_peticiones.load(),
                              ns_peticiones.load() / 1000000);
@@ -9537,6 +9540,13 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * callee-saved vs 6 en Win64) -> resultado erroneo en ELF.  Una sola
          * CALL por uso elimina la presion y unifica el codegen PE/ELF. */
         if (name.rfind("__vx_str", 0) == 0) return true;
+        /* `__vx_uncaught`: es un GANCHO.  Existe para que el usuario lo pueda
+         * sustituir y para que el driver lo pueda completar -- ahi le antepone
+         * el volcado del buffer de salida cuando hay runtime de I/O, para que
+         * un programa que se rinde no se lleve por delante lo que llevaba
+         * impreso.  Un gancho inlinado dentro de su unico llamante deja de ser
+         * las dos cosas: ya no hay funcion a la que apuntar. */
+        if (name == "__vx_uncaught") return true;
         return false;
     };
 
@@ -10660,7 +10670,8 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
          * emite como llamada (ver @c Lowering::emit_proceed).
          *
          * Todo son llamadas directas, asi que el inliner se las come.  La
-         * semantica que se reproduce esta fijada en los ejemplos 379, 380 y 381.
+         * semantica que se reproduce esta fijada en los ejemplos 379, 380 y
+         * 381.
          *
          * Los sitios con receptor DESCONOCIDO siguen por el `callvirt` y su
          * cadena en ejecucion, que se sigue registrando: es lo que hara falta
@@ -10713,7 +10724,8 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
                     continue;
                 std::vector<IrValueId> ops = orig.operands;
                 /* `@AfterReturning` recibe el RESULTADO en el sitio del primer
-                 * argumento declarado; un `@After` a secas ve los originales. */
+                 * argumento declarado; un `@After` a secas ve los originales.
+                 */
                 if (a.kind == loader::ADVICE_AFTER_RETURNING) {
                     if (ops.size() >= 2)
                         ops[1] = r;
@@ -10725,7 +10737,8 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
                 r = r2;
             }
 
-            /* Lo que la llamada original dejaba, lo deja ahora el ultimo paso. */
+            /* Lo que la llamada original dejaba, lo deja ahora el ultimo paso.
+             */
             if (orig.dst != IR_NO_VALUE) woven.back().dst = orig.dst;
 
             instrs.erase(instrs.begin() + static_cast<long>(s.instr));
@@ -13184,7 +13197,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
 #define APLICA(llamada)                                                        \
     do {                                                                       \
         const bool cambio__ = PASE(llamada);                                   \
-        if (cambio__) any.store(true, std::memory_order_relaxed);                                                 \
+        if (cambio__) any.store(true, std::memory_order_relaxed);              \
         sucia = sucia || cambio__;                                             \
         efectos_sucios = efectos_sucios || cambio__;                           \
         if (cambio__) ++fn.version;                                            \
@@ -13206,7 +13219,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
 #define APLICA_PRESERVA_EFECTOS(llamada)                                       \
     do {                                                                       \
         const bool cambio__ = PASE(llamada);                                   \
-        if (cambio__) any.store(true, std::memory_order_relaxed);                                                 \
+        if (cambio__) any.store(true, std::memory_order_relaxed);              \
         sucia = sucia || cambio__;                                             \
         if (cambio__) ++fn.version;                                            \
     } while (0)
@@ -13216,7 +13229,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
 #define APLICA_N(llamada)                                                      \
     do {                                                                       \
         const bool cambio__ = (PASE(llamada) > 0);                             \
-        if (cambio__) any.store(true, std::memory_order_relaxed);                                                 \
+        if (cambio__) any.store(true, std::memory_order_relaxed);              \
         sucia = sucia || cambio__;                                             \
         efectos_sucios = efectos_sucios || cambio__;                           \
         if (cambio__) ++fn.version;                                            \
@@ -13307,7 +13320,8 @@ char AsmBindingsAnalysis::ID = 0;
 
 const bool g_no_promote_local_allocas =
     util::flag_on(util::FlagId::NoPromoteLocalAllocas);
-const bool g_no_promote_raw_alloc = util::flag_on(util::FlagId::NoPromoteRawAlloc);
+const bool g_no_promote_raw_alloc =
+    util::flag_on(util::FlagId::NoPromoteRawAlloc);
 const bool g_no_spec_devirt = util::flag_on(util::FlagId::NoSpecDevirt);
 const bool g_no_escape_scalar = util::flag_on(util::FlagId::NoEscapeScalar);
 const bool g_no_dead_stack_slot = util::flag_on(util::FlagId::NoDeadStackSlot);
@@ -13570,166 +13584,182 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
          * puesto mientras calcula.  `VESTA_PARALELO=0` vuelve a fila de uno,
          * que es con lo que se comprueba que el `.velb` sale identico. */
         {
-        /* El bucle en su propio ambito para que el cronometro mida SOLO el
-         * bucle: declarado suelto mediria hasta el final de la vuelta y se
-         * comeria el tramo cross-modulo que viene detras.
-         *
-         * (pared) en el nombre porque esto reparte entre hilos: lo que mide es
-         * reloj de pared de la region, mientras que los contadores por pase de
-         * mas abajo suman CPU de TODOS los hilos.  Restar unos de otros no
-         * significa nada, y confundirlos ya llevo a buscar 330 ms que no
-         * existian. */
-        CronoTramo crono_fn__("opt:bucle-por-funcion (pared)");
-        for_each_function(mod, [&](IrFunction &fn) {
-            if (fn.is_native) return; // no optimizar stubs nativos
+            /* El bucle en su propio ambito para que el cronometro mida SOLO el
+             * bucle: declarado suelto mediria hasta el final de la vuelta y se
+             * comeria el tramo cross-modulo que viene detras.
+             *
+             * (pared) en el nombre porque esto reparte entre hilos: lo que mide
+             * es reloj de pared de la region, mientras que los contadores por
+             * pase de mas abajo suman CPU de TODOS los hilos.  Restar unos de
+             * otros no significa nada, y confundirlos ya llevo a buscar 330 ms
+             * que no existian. */
+            CronoTramo crono_fn__("opt:bucle-por-funcion (pared)");
+            for_each_function(mod, [&](IrFunction &fn) {
+                if (fn.is_native) return; // no optimizar stubs nativos
 
-            /* Referencia, no copia: la marca tiene que sobrevivir a la vuelta.
-             * La primera vez se inserta en true (no hay nada calculado aun). */
-            auto it_sucia = sucias.emplace(fn.name, true).first;
-            bool &sucia = it_sucia->second;
-            /* Referencia, no busqueda por vuelta: esto esta en el bucle por
-             * funcion y se consulta en cada pase.  Empieza en true porque al
-             * principio no hay nada guardado. */
-            auto it_ef = efectos_sucios_de.emplace(fn.name, true).first;
-            bool &efectos_sucios = it_ef->second;
+                /* Referencia, no copia: la marca tiene que sobrevivir a la
+                 * vuelta. La primera vez se inserta en true (no hay nada
+                 * calculado aun). */
+                auto it_sucia = sucias.emplace(fn.name, true).first;
+                bool &sucia = it_sucia->second;
+                /* Referencia, no busqueda por vuelta: esto esta en el bucle por
+                 * funcion y se consulta en cada pase.  Empieza en true porque
+                 * al principio no hay nada guardado. */
+                auto it_ef = efectos_sucios_de.emplace(fn.name, true).first;
+                bool &efectos_sucios = it_ef->second;
 
-            // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
-            APLICA(ir_pass_copy_prop(fn));
-            APLICA(ir_pass_simplify(fn)); /* algebraic + cast fold + phi simp */
-            APLICA(ir_pass_narrow_cmp(fn)); /* cmp(ext(x),K) -> cmp.<W>(x,K) */
-            // Contraccion FMA (fmul+fadd -> fma) DESPUES de simplify, que ya
-            // quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract). Decision
-            // unica en el IR -> interp/JIT/AOT consistentes (1 redondeo).
-            APLICA(ir_pass_fuse_fma(fn));
-            /* Consumidores de ValueFacts: computan el analisis UNA vez y lo
-             * comparten -- elim SEXT/ZEXT/AND-mask + fold de CMP probado +
-             * strength reduction (MUL/DIV/MOD por 2^k -> shift/and, incluido el
-             * caso signed cuando el dividendo se prueba no-negativo). */
-            APLICA(ir_pass_valuefacts_consumers(fn));
-            APLICA(
-                ir_pass_reassoc(fn)); /* (x op c1) op c2 -> x op (c1 op c2) */
-            // LICM RECIBE la tabla points-to del AnalysisManager (no la
-            // construye).  Solo se pide si el LICM alias-aware esta activo
-            // (coste 0 en el default: el manager no computa nada).
-            if (g_licm_alias) {
-                /* Solo si algo la ha tocado desde el ultimo calculo. */
-                if (sucia) {
-                    pt_invalidate(fn);
-                    sucia = false;
-                }
-                APLICA(ir_pass_licm(fn, &pt_of(fn), &pure_callees));
-            } else {
-                APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
-            }
-            APLICA(ir_pass_dead_alloc_elim(fn));
-            /* Y detras, los huecos de PILA que nadie lee.  Va aqui y no antes
-             * porque necesita que la promocion a pila y el reenvio de lecturas
-             * ya hayan corrido: hasta entonces el hueco TIENE lectores.
-             * Se apaga con VESTA_NO_DEAD_STACK_SLOT=1 para poder comparar. */
-            if (!g_no_dead_stack_slot) APLICA(ir_pass_dead_stack_slot_elim(fn));
-            /* Si algo toco la funcion desde el ultimo calculo, lo guardado del
-             * modelo ya no describe estas instrucciones.  Hay que mirarlo AQUI
-             * y no solo en `pt_invalidate`: esa senal se emite antes de LICM y
-             * del DSE, y entre ella y este punto corren mas pases que pueden
-             * cambiar una instruccion SIN cambiar cuantas hay -- con lo que ni
-             * la comprobacion de tamano lo veria. */
-            if (efectos_sucios) {
-                cache_efectos[fn.name].invalidar();
-                efectos_sucios = false; // queda refrescada en esta ronda
-            }
-            APLICA_PRESERVA_EFECTOS(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
-                                                &cache_efectos[fn.name]));
-            /* Punto seguro: terminado con esta funcion, ya no se va a usar
-             * ninguna referencia que diera el gestor.  Sin soltarlas, el
-             * respaldo que las mantiene vivas frente a una invalidacion ajena
-             * creceria hasta el final del proceso. */
-            am.release_retained();
-
-            if (level >= OptLevel::O2) {
-                // O2: plegado de constantes + bloques inalcanzables + TCO.
-                APLICA(ir_pass_const_fold(fn));
-                // If-conversion: diamante/if-anidado/ternario -> SELECT (solo
-                // legalidad; la rentabilidad la decide el pase de coste cercano
-                // al backend).  Debe preceder a `unreachable` para que este
-                // limpie los bloques de rama que quedan vacios.  El SELECT es
-                // una primitiva SEMANTICA: el JIT/AOT lo bajan a cmov, y el
-                // INTERPRETE a la super-instruccion `csel` (1 despacho).
-                APLICA_N(ir_pass_if_conversion(fn));
-                // Canonicalizacion algebraica de los SELECT recien creados
-                // (select(c,x,x)->x, ->imin/imax, anidados, ...) antes de que
-                // el resto de pases (DCE/CSE) los vean.
-                APLICA_N(ir_pass_select_simplify(fn));
-                APLICA(ir_pass_unreachable(fn));
-                APLICA(ir_pass_tailcall(fn));
-                // Inline de header trivial de loop -> habilita decjnz fusion.
-                APLICA(ir_pass_inline_loop_header(fn));
-                // Dead store elimination: limpia STOREs muertos consecutivos.
-                // Con Fase 4, las CALL a callees puros no cortan el forwarding.
-                // Recibe la tabla points-to del manager (no la construye).
-                if (g_dse_unified) {
+                // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
+                APLICA(ir_pass_copy_prop(fn));
+                APLICA(ir_pass_simplify(
+                    fn)); /* algebraic + cast fold + phi simp */
+                APLICA(
+                    ir_pass_narrow_cmp(fn)); /* cmp(ext(x),K) -> cmp.<W>(x,K) */
+                // Contraccion FMA (fmul+fadd -> fma) DESPUES de simplify, que
+                // ya quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract).
+                // Decision unica en el IR -> interp/JIT/AOT consistentes (1
+                // redondeo).
+                APLICA(ir_pass_fuse_fma(fn));
+                /* Consumidores de ValueFacts: computan el analisis UNA vez y lo
+                 * comparten -- elim SEXT/ZEXT/AND-mask + fold de CMP probado +
+                 * strength reduction (MUL/DIV/MOD por 2^k -> shift/and,
+                 * incluido el caso signed cuando el dividendo se prueba
+                 * no-negativo). */
+                APLICA(ir_pass_valuefacts_consumers(fn));
+                APLICA(ir_pass_reassoc(
+                    fn)); /* (x op c1) op c2 -> x op (c1 op c2) */
+                // LICM RECIBE la tabla points-to del AnalysisManager (no la
+                // construye).  Solo se pide si el LICM alias-aware esta activo
+                // (coste 0 en el default: el manager no computa nada).
+                if (g_licm_alias) {
                     /* Solo si algo la ha tocado desde el ultimo calculo. */
                     if (sucia) {
                         pt_invalidate(fn);
                         sucia = false;
                     }
-                    {
-                        const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
-                        APLICA(
-                            ir_pass_dse(fn, &pt_of(fn), &pure_callees, &h__));
-                    }
+                    APLICA(ir_pass_licm(fn, &pt_of(fn), &pure_callees));
                 } else {
-                    {
-                        const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
-                        APLICA(ir_pass_dse(fn, nullptr, &pure_callees, &h__));
-                    }
+                    APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
                 }
-                // Global const CSE solamente (safer than full CSE).
-                // El full CSE local tiene bugs sutiles con LOAD/STORE alias
-                // que necesitan alias analysis (deferido a O3+).
-                // Global const dedup via DIRECT rewrite (no MOV+copy_prop
-                // intermedio).  La version vieja con MOV dejaba is_const
-                // stale en fn.values causando fallos no-deterministicos en
-                // test 110 (smart pointers SRET).  Esta version sustituye
-                // operandos directamente y elimina las CONSTs duplicadas.
-                APLICA(ir_pass_const_cse_entry(fn));
-                // CSE local de aritmetica pura (ADD/SUB/MUL/etc.) -- dedupea
-                // `add.ptr this, off` triplicados en getters/setters.  Tiene
-                // invalidacion correcta para LOAD via side-effects.  Habilita
-                // store-to-load forwarding al unificar punteros equivalentes.
-                APLICA(ir_pass_cse(fn));
-                // Load Narrow: elide SEXT redundante tras LOAD i8/i16/i32
-                // cuando todos los usos son arith narrow-safe (ADD/SUB/MUL/
-                // AND/OR/XOR) + STORE/RET del mismo ancho.  Ahorra 3 instr VM
-                // por LOAD elidido.  Bench struct_field: ~270M instr ahorradas.
-                APLICA(ir_pass_load_narrow(fn));
-                // Elision COMPTIME de unwrap: si el valor es provably non-null
-                // (CONST!=0, &local/ALLOCA, STR_LIT_ADDR, LABEL_ADDR,
-                // Some(const) tras const-prop/SLF) el UNWRAP se vuelve MOV ->
-                // copy_prop/DCE lo borran -> cero overhead.  Beneficia
-                // VM/JIT/AOT.
-                APLICA(ir_pass_elide_unwrap(fn));
-                // Suma/resta cuyo acarreo se deduce comparando el resultado
-                // con un sumando: la maquina ya dejo esa respuesta en un flag,
-                // asi que se marca el par para leerla en vez de recalcularla.
-                // Va despues del CSE porque este unifica los operandos y deja
-                // la comparacion pegada a su suma, que es lo que el patron
-                // necesita.
-                APLICA(ir_pass_carry_idiom(fn));
-                // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
-                /* Misma razon que arriba: entre medias han corrido pases que
-                 * pueden haber cambiado instrucciones sin cambiar su numero. */
+                APLICA(ir_pass_dead_alloc_elim(fn));
+                /* Y detras, los huecos de PILA que nadie lee.  Va aqui y no
+                 * antes porque necesita que la promocion a pila y el reenvio de
+                 * lecturas ya hayan corrido: hasta entonces el hueco TIENE
+                 * lectores. Se apaga con VESTA_NO_DEAD_STACK_SLOT=1 para poder
+                 * comparar. */
+                if (!g_no_dead_stack_slot)
+                    APLICA(ir_pass_dead_stack_slot_elim(fn));
+                /* Si algo toco la funcion desde el ultimo calculo, lo guardado
+                 * del modelo ya no describe estas instrucciones.  Hay que
+                 * mirarlo AQUI y no solo en `pt_invalidate`: esa senal se emite
+                 * antes de LICM y del DSE, y entre ella y este punto corren mas
+                 * pases que pueden cambiar una instruccion SIN cambiar cuantas
+                 * hay -- con lo que ni la comprobacion de tamano lo veria. */
                 if (efectos_sucios) {
                     cache_efectos[fn.name].invalidar();
-                    efectos_sucios = false;
+                    efectos_sucios = false; // queda refrescada en esta ronda
                 }
                 APLICA_PRESERVA_EFECTOS(ir_pass_dce(
                     fn, &decls_nativas, &asm_of(fn), &cache_efectos[fn.name]));
-            }
+                /* Punto seguro: terminado con esta funcion, ya no se va a usar
+                 * ninguna referencia que diera el gestor.  Sin soltarlas, el
+                 * respaldo que las mantiene vivas frente a una invalidacion
+                 * ajena creceria hasta el final del proceso. */
+                am.release_retained();
 
-            if (level >= OptLevel::O3) {
-                // O3: pasadas mas costosas (GVN, scheduling, etc.) -- TBD.
-            }
-        });
+                if (level >= OptLevel::O2) {
+                    // O2: plegado de constantes + bloques inalcanzables + TCO.
+                    APLICA(ir_pass_const_fold(fn));
+                    // If-conversion: diamante/if-anidado/ternario -> SELECT
+                    // (solo legalidad; la rentabilidad la decide el pase de
+                    // coste cercano al backend).  Debe preceder a `unreachable`
+                    // para que este limpie los bloques de rama que quedan
+                    // vacios.  El SELECT es una primitiva SEMANTICA: el JIT/AOT
+                    // lo bajan a cmov, y el INTERPRETE a la super-instruccion
+                    // `csel` (1 despacho).
+                    APLICA_N(ir_pass_if_conversion(fn));
+                    // Canonicalizacion algebraica de los SELECT recien creados
+                    // (select(c,x,x)->x, ->imin/imax, anidados, ...) antes de
+                    // que el resto de pases (DCE/CSE) los vean.
+                    APLICA_N(ir_pass_select_simplify(fn));
+                    APLICA(ir_pass_unreachable(fn));
+                    APLICA(ir_pass_tailcall(fn));
+                    // Inline de header trivial de loop -> habilita decjnz
+                    // fusion.
+                    APLICA(ir_pass_inline_loop_header(fn));
+                    // Dead store elimination: limpia STOREs muertos
+                    // consecutivos. Con Fase 4, las CALL a callees puros no
+                    // cortan el forwarding. Recibe la tabla points-to del
+                    // manager (no la construye).
+                    if (g_dse_unified) {
+                        /* Solo si algo la ha tocado desde el ultimo calculo. */
+                        if (sucia) {
+                            pt_invalidate(fn);
+                            sucia = false;
+                        }
+                        {
+                            const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
+                            APLICA(ir_pass_dse(fn, &pt_of(fn), &pure_callees,
+                                               &h__));
+                        }
+                    } else {
+                        {
+                            const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
+                            APLICA(
+                                ir_pass_dse(fn, nullptr, &pure_callees, &h__));
+                        }
+                    }
+                    // Global const CSE solamente (safer than full CSE).
+                    // El full CSE local tiene bugs sutiles con LOAD/STORE alias
+                    // que necesitan alias analysis (deferido a O3+).
+                    // Global const dedup via DIRECT rewrite (no MOV+copy_prop
+                    // intermedio).  La version vieja con MOV dejaba is_const
+                    // stale en fn.values causando fallos no-deterministicos en
+                    // test 110 (smart pointers SRET).  Esta version sustituye
+                    // operandos directamente y elimina las CONSTs duplicadas.
+                    APLICA(ir_pass_const_cse_entry(fn));
+                    // CSE local de aritmetica pura (ADD/SUB/MUL/etc.) --
+                    // dedupea `add.ptr this, off` triplicados en
+                    // getters/setters.  Tiene invalidacion correcta para LOAD
+                    // via side-effects.  Habilita store-to-load forwarding al
+                    // unificar punteros equivalentes.
+                    APLICA(ir_pass_cse(fn));
+                    // Load Narrow: elide SEXT redundante tras LOAD i8/i16/i32
+                    // cuando todos los usos son arith narrow-safe (ADD/SUB/MUL/
+                    // AND/OR/XOR) + STORE/RET del mismo ancho.  Ahorra 3 instr
+                    // VM por LOAD elidido.  Bench struct_field: ~270M instr
+                    // ahorradas.
+                    APLICA(ir_pass_load_narrow(fn));
+                    // Elision COMPTIME de unwrap: si el valor es provably
+                    // non-null (CONST!=0, &local/ALLOCA, STR_LIT_ADDR,
+                    // LABEL_ADDR, Some(const) tras const-prop/SLF) el UNWRAP se
+                    // vuelve MOV -> copy_prop/DCE lo borran -> cero overhead.
+                    // Beneficia VM/JIT/AOT.
+                    APLICA(ir_pass_elide_unwrap(fn));
+                    // Suma/resta cuyo acarreo se deduce comparando el resultado
+                    // con un sumando: la maquina ya dejo esa respuesta en un
+                    // flag, asi que se marca el par para leerla en vez de
+                    // recalcularla. Va despues del CSE porque este unifica los
+                    // operandos y deja la comparacion pegada a su suma, que es
+                    // lo que el patron necesita.
+                    APLICA(ir_pass_carry_idiom(fn));
+                    // Segunda ronda de DCE tras plegado/TCO/loop header
+                    // inline/CSE.
+                    /* Misma razon que arriba: entre medias han corrido pases
+                     * que pueden haber cambiado instrucciones sin cambiar su
+                     * numero. */
+                    if (efectos_sucios) {
+                        cache_efectos[fn.name].invalidar();
+                        efectos_sucios = false;
+                    }
+                    APLICA_PRESERVA_EFECTOS(
+                        ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
+                                    &cache_efectos[fn.name]));
+                }
+
+                if (level >= OptLevel::O3) {
+                    // O3: pasadas mas costosas (GVN, scheduling, etc.) -- TBD.
+                }
+            });
         } // fin del ambito del cronometro del bucle
 
         CronoTramo crono_cross__("opt:cross-modulo devirt+inline (pared)");

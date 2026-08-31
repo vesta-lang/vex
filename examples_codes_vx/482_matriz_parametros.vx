@@ -304,7 +304,7 @@ i64 fila_lambda(i64[] arr, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
 	// del contexto.  Eso no justifica que las demas formas no valgan ahi, que
 	// era lo que pasaba.
 	fn(i64) -> i64  l_plano   = (x) => { return x; };
-	fn(i64*) -> i64 l_puntero = (i64 *p) => { return *p; };
+	fn(i64*) -> i64 l_puntero = (i64* p) => { return *p; };
 	fn(i64) -> i64  l_nonulo  = (i64 !!x) => { return x; };
 	fn(i64 (*)(i64), i64) -> i64 l_cstyle =
 		(i64 (*cb)(i64), i64 v) => { return cb(v); };

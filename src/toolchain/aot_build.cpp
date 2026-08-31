@@ -229,6 +229,42 @@ static uint64_t mezclar_str_(uint64_t h, const std::string &s) {
 }
 
 /**
+ * @brief Le pone el bit de ejecucion a un artefacto recien escrito.
+ *
+ * Los emisores abren el fichero con @c fopen(path,"wb"), que en POSIX lo crea
+ * con 0666 & ~umask -- o sea 0644 -- y por tanto SIN permiso de ejecucion.  El
+ * resultado era un ELF perfectamente valido que no se podia ejecutar:
+ * `Permission denied` al lanzarlo, sin que nada en la compilacion hubiera
+ * fallado.  En Windows no se veia porque no existe ese bit, asi que el fallo
+ * solo aparecia en Linux y parecia un problema de permisos del usuario.
+ *
+ * Se hace aqui, en el toolchain, y no en cada emisor: los emisores tambien
+ * escriben `.o` y binarios planos, que NO deben ser ejecutables, y este es el
+ * unico sitio que sabe que clase de artefacto se pidio.
+ *
+ * Anade el bit a los tres grupos respetando lo que ya haya (0644 -> 0755).  Un
+ * fallo no aborta la compilacion: el fichero esta bien escrito, y avisar es
+ * mas util que tirar un build entero por un permiso.
+ *
+ * @param ruta Artefacto a marcar.  En Windows no hace nada.
+ */
+static void marcar_ejecutable_(const std::string &ruta) {
+#ifndef _WIN32
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::permissions(ruta,
+                    fs::perms::owner_exec | fs::perms::group_exec |
+                        fs::perms::others_exec,
+                    fs::perm_options::add, ec);
+    if (ec)
+        std::cerr << "[aot] aviso: no se pudo marcar '" << ruta
+                  << "' como ejecutable: " << ec.message() << "\n";
+#else
+    (void)ruta;
+#endif
+}
+
+/**
  * @struct EntradaModulo
  * @brief Lo que se recuerda de UN modulo: su huella y de quien depende.
  *
@@ -874,9 +910,13 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             // Mismo target bits que el modulo principal (el @Naked
             // setjmp/longjmp x86-32 debe ensamblarse en mode32).
             ve_opts.asm_target_bits = copts.asm_target_bits;
+            /* Por PROYECTO: desde que la excepcion que nadie recoge se CUENTA
+             * en vez de colgar el programa, el modulo importa `std.os` (write
+             * y exit), y solo esta ruta resuelve los imports.  Mismo criterio
+             * que vx_io, vx_thread y vx_fault. */
             ir::IrModule ve_mod;
             if (!traer_modulo_stdlib_(ve_path, ve_src, ve_opts,
-                                      /*proyecto=*/false, tel, ve_mod)) {
+                                      /*proyecto=*/true, tel, ve_mod)) {
                 std::cerr << "[aot] no pude compilar el runtime de "
                              "excepciones vx_exc.vx.\n";
                 return EXIT_FAILURE;
@@ -1414,6 +1454,28 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     }
                     b.instrs = std::move(ni);
                 }
+            }
+            /* Y lo mismo antes de contar una excepcion que nadie recogio: ese
+             * camino tambien TERMINA el proceso, asi que sin volcar aqui se
+             * perdia todo lo que el programa hubiera impreso antes de fallar
+             * -- que suele ser justo lo que dice como llego hasta ahi --.
+             *
+             * Se inyecta desde el driver, y no se llama desde `vx_exc.vx`,
+             * para que el runtime de excepciones no pase a depender del de
+             * impresion: aqui ya se sabe que hay uno (este bloque solo corre
+             * cuando se incluyo), y en un binario sin I/O no se inyecta nada y
+             * `__vx_uncaught` sigue valiendo. */
+            for (auto &af : aot_mod.functions) {
+                if (af.name != "__vx_uncaught" || af.blocks.empty()) continue;
+                ir::IrInstr fl{};
+                fl.op = ir::IrOp::CALL;
+                fl.dst = ir::IR_NO_VALUE;
+                fl.func_name = "__vx_flush";
+                if (!af.blocks[0].instrs.empty())
+                    fl.source_line = af.blocks[0].instrs[0].source_line;
+                af.blocks[0].instrs.insert(af.blocks[0].instrs.begin(),
+                                           std::move(fl));
+                break;
             }
             std::cout << "[aot] runtime de I/O (stdlib/vx/vx_io.vx) "
                          "incluido en el objeto.\n";
@@ -3442,6 +3504,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             std::cerr << "[aot] auto-link error: " << lerr << "\n";
             return EXIT_FAILURE;
         }
+        marcar_ejecutable_(link_real_out);
         std::cout << "[aot] ejecutable nativo "
                   << (fmt == aot::ObjFormat::PE ? "PE" : "ELF")
                   << " STANDALONE escrito en '" << link_real_out << "' ("
@@ -3453,6 +3516,11 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     }
 
     const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
+    // Ejecutable y libreria compartida SI llevan el bit; el `.o` y el binario
+    // plano NO: el primero es una entrada para el enlazador y el segundo es
+    // una imagen para una ROM o un bootloader, y marcarlos como ejecutables
+    // seria mentir sobre lo que son.
+    if (emit_shared || !(emit_obj || emit_bin)) marcar_ejecutable_(out_prefix);
     if (emit_shared)
         std::cout << "[aot] libreria compartida " << fmt_name
                   << (fmt == aot::ObjFormat::PE ? " (.dll)" : " (.so)")

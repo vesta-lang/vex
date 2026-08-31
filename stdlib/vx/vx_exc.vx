@@ -21,6 +21,11 @@
 // v1: type matching = catch-all (al top); subtype = v2.
 // ===========================================================================
 
+// Para contar una excepcion que nadie recogio (ver __vx_uncaught).  Es EL
+// SISTEMA, no el runtime de impresion de Vesta: asi el runtime de excepciones
+// no pasa a depender del de I/O y los dos se enlazan por separado.
+import std.os only write, exit, Stream;
+
 // --- Parametros de layout segun el target del binario (no del host) ---
 // Tamano del jmp_buf:  SysV = 8 regs*8 = 64;  Win64 = 10 regs*8 = 80;
 // x86-32 = 6 regs*4 = 24.
@@ -217,10 +222,33 @@ public void __vx_pop_frame() {
 	}
 }
 
+// Nadie recogio la excepcion.
+//
+// Antes esto era `while (true) { }`.  Un programa que lanzaba y no capturaba se
+// quedaba colgado PARA SIEMPRE, sin decir nada: peor que terminar mal, porque
+// ni siquiera termina -- en una integracion continua se come el tiempo de
+// espera y el motivo no aparece por ningun lado.
+//
+// Se dice lo que paso y se sale con 134, que es con lo que salen el interprete
+// y el JIT ante lo mismo.  Los tres modos coinciden.
+//
+// Se escribe con `std.os`, que es EL SISTEMA, no el runtime de I/O de Vesta:
+// asi el runtime de excepciones no pasa a depender del de impresion -- se
+// enlazan por separado, y un binario sin I/O sigue pudiendo usar try/catch.
+// El mensaje va a la salida de ERROR, como todos los fallos.
+// Nota: aqui no hay nombre de clase que dar -- en nativo una excepcion es un
+// valor y un identificador de tipo, no un objeto con metadatos --, asi que se
+// dice lo que se sabe.  El interprete y el JIT si lo nombran.
+public void __vx_uncaught() {
+	write(Stream.stderr, "uncaught exception\n",
+		"uncaught exception\n".bytes());
+	exit(134);
+}
+
 // throw: guarda el valor + type-id y hace longjmp al frame top.  El handler
 // (lower_try) despacha por tipo: si ningun catch matchea, re-llama a __vx_throw
 // con el mismo (value, type) tras popear su frame -> longjmp al frame externo
-// (propagacion).  Sin frame (uncaught) -> bucle (overridable via __vx_panic).
+// (propagacion).  Sin frame, la lanzo alguien y no la recogio nadie.
 public void __vx_throw(i64 value, i64 type_id) {
 	i64 base = (i64) section_start(".vxexc");
 	*((i64*)(base + VX_PTR))     = value;
@@ -229,8 +257,7 @@ public void __vx_throw(i64 value, i64 type_id) {
 	if (top != 0) {
 		__vx_longjmp(top, 1);
 	}
-	// uncaught: por ahora bucle infinito (v2: __vx_panic overridable).
-	while (true) { }
+	__vx_uncaught();
 }
 
 // el valor de la excepcion activa (para el landingpad del catch).

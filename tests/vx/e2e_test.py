@@ -4283,6 +4283,52 @@ fault3_case("fallo_division_cero",
             "369_fallo_division_cero.vx", "VX7002", 136)
 fault3_case("fallo_panic", "panic sin capturar",
             "370_fallo_panic.vx", "VX7011", 134)
+
+
+@case("excepcion_sin_capturar")
+def _(ctx):
+    """Un `throw` que nadie recoge: se ve, y se ve IGUAL en los tres modos.
+
+    Aqui no vale el criterio flojo de `fault3_case` -- "que al menos no salga
+    con cero" --, porque los tres fallaban de tres maneras distintas y las tres
+    eran silenciosas o peores: interprete y JIT paraban sin decir nada y
+    saliendo con CERO, y el nativo se colgaba para siempre.
+
+    Se exige lo mismo a los tres: que lo impreso antes de fallar siga estando,
+    que se cuente por la salida de error y que se salga con 134.  Y a los dos
+    que tienen metadatos, ademas, el nombre de la clase y la cadena.
+    """
+    tag = "excsc"
+    ctx.compile_vx(ctx.src("519_excepcion_sin_capturar.vx"), tag)
+    for modo in ("vm", "jit"):
+        rc, log = ctx.run_velb(tag, schedulers=1, stats=False, mode=modo)
+        if exit_code(rc) != 134:
+            ctx.fail("sin capturar (-m %s): sale %d, se esperaba 134"
+                     % (modo, exit_code(rc)), log)
+        if "saldo inicial: 100" not in log:
+            ctx.fail("sin capturar (-m %s): se perdio lo impreso antes de "
+                     "fallar" % modo, log)
+        if "VX7026" not in log:
+            ctx.fail("sin capturar (-m %s): no se cuenta" % modo, log)
+        if "SinFondos" not in log:
+            ctx.fail("sin capturar (-m %s): no dice que clase se lanzo"
+                     % modo, log)
+        if "Stack trace" not in log:
+            ctx.fail("sin capturar (-m %s): sin cadena de llamadas"
+                     % modo, log)
+        ctx.ok("sin capturar (-m %s) -> VX7026 SinFondos, sale 134" % modo)
+    exe = aot_build(ctx, ctx.src("519_excepcion_sin_capturar.vx"),
+                    tag + "_aot", "sin capturar (-m aot)")
+    rc, log = ctx.run([exe])
+    if exit_code(rc) != 134:
+        ctx.fail("sin capturar (-m aot): sale %d, se esperaba 134"
+                 % exit_code(rc), log)
+    if "saldo inicial: 100" not in log:
+        ctx.fail("sin capturar (-m aot): se perdio lo impreso antes de fallar",
+                 log)
+    if "uncaught exception" not in log:
+        ctx.fail("sin capturar (-m aot): no se cuenta", log)
+    ctx.ok("sin capturar (-m aot) -> se cuenta y sale 134")
 @case("expect508")
 def _(ctx):
     """`expect` que falla: dice QUE se dio por hecho, y despues muere.

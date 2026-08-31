@@ -1,0 +1,43 @@
+namespace ejemplos.excepcion_sin_capturar;
+
+// Una excepcion que NADIE recoge.
+//
+// El programa se rinde, y eso tiene que VERSE en los tres modos.  Antes no se
+// veia de tres maneras distintas:
+//
+//   interprete y JIT   paraban en seco -- sin mensaje, sin cadena de llamadas
+//                      y saliendo con codigo CERO, o sea afirmando que todo
+//                      fue bien.
+//   nativo             se quedaba colgado PARA SIEMPRE (`while (true) { }`),
+//                      que es peor: ni siquiera termina.
+//
+// Lo que se exige ahora, y es lo que este ejemplo fija:
+//
+//   1. Lo impreso ANTES de fallar no se pierde.  Suele ser justo lo que dice
+//      como llego hasta ahi.
+//   2. Se cuenta por la salida de ERROR, no mezclado con los datos.
+//   3. Se sale con 134, el mismo codigo que `panic`.
+//
+// El interprete y el JIT ademas NOMBRAN la clase y ensenan la cadena de
+// llamadas.  El nativo no puede: alli una excepcion es un valor y un
+// identificador de tipo, no un objeto con metadatos que consultar.
+
+class SinFondos {
+	public i64 faltan;
+
+	public SinFondos(i64 faltan) { this.faltan = faltan; }
+}
+
+i64 retirar(i64 saldo, i64 cuanto) {
+	if (cuanto > saldo) {
+		throw new SinFondos(cuanto - saldo);
+	}
+	return saldo - cuanto;
+}
+
+i32 main() {
+	println("saldo inicial: 100");
+	i64 queda = retirar(100, 250);
+	println("no se llega aqui: ${queda}");
+	return 0_i32;
+}
