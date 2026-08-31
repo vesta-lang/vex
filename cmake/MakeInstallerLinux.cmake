@@ -135,6 +135,11 @@ foreach(_f IN LISTS FORMATOS)
 endforeach()
 
 # --- 5. Traer los paquetes al lado de Windows -------------------------------
+# El directorio de destino se CREA antes de copiar.  Si no existe, `cp` no
+# escribe nada y lo que se ve al final es "no se genero ningun paquete" --
+# habiendose generado los dos --, que manda a mirar la compilacion cuando lo que
+# fallo fue traerlos.
+file(MAKE_DIRECTORY "${OUT_DIR}")
 execute_process(COMMAND "${WSL_EXE}" ${_wsl_args} -- wslpath -a "${OUT_DIR}"
                 OUTPUT_VARIABLE _out_wsl OUTPUT_STRIP_TRAILING_WHITESPACE)
 execute_process(
@@ -142,7 +147,20 @@ execute_process(
             "cp -f \"${_build_wsl}\"/*.deb \"${_build_wsl}\"/*.rpm \"${_build_wsl}\"/*.tar.gz '${_out_wsl}'/ 2>/dev/null; ls -1 '${_out_wsl}'/*.deb '${_out_wsl}'/*.rpm '${_out_wsl}'/*.tar.gz 2>/dev/null"
     OUTPUT_VARIABLE _hechos OUTPUT_STRIP_TRAILING_WHITESPACE)
 if (_hechos STREQUAL "")
-    message(FATAL_ERROR "No se genero ningun paquete.")
+    # Se distinguen los DOS casos, porque llevan a sitios distintos: o no se
+    # construyo nada, o se construyo y no se pudo traer.  Decir siempre lo
+    # primero manda a depurar una compilacion que salio bien.
+    execute_process(
+        COMMAND "${WSL_EXE}" ${_wsl_args} -- bash -lc
+                "ls -1 \"${_build_wsl}\"/*.deb \"${_build_wsl}\"/*.rpm \"${_build_wsl}\"/*.tar.gz 2>/dev/null"
+        OUTPUT_VARIABLE _dentro OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if (_dentro STREQUAL "")
+        message(FATAL_ERROR "No se genero ningun paquete dentro de WSL.")
+    endif()
+    message(FATAL_ERROR
+            "Los paquetes SI se generaron, pero no se pudieron copiar a\n"
+            "  ${OUT_DIR}\n"
+            "Estan dentro de WSL, en ${_build_wsl}:\n${_dentro}")
 endif()
 message(STATUS "[linux] paquetes en ${OUT_DIR}:")
 string(REPLACE "\n" ";" _lista "${_hechos}")
