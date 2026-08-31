@@ -149,6 +149,21 @@ bool is_modifier(TokenKind k);
 bool precedes_type(TokenKind k);
 
 /**
+ * @brief Salta los calificadores que van DELANTE del tipo en una declaracion.
+ * @param pieces Las piezas de la linea.
+ * @param i      Donde empieza la declaracion.
+ * @return El indice donde empieza el TIPO (== @p i si no habia calificadores).
+ *
+ * Lo usa quien decide roles, para saber si un `*` va pegado al tipo o al
+ * nombre.  Esta aparte -- y no metido en su bucle -- porque quien ALINEA lo
+ * necesitaria igual el dia que el tipo pase a ser columna propia (ver la nota
+ * en @c align.cpp), y entonces la lista de calificadores tiene que ser UNA: con
+ * dos copias, el dia que se anada uno se anadiria a una y la otra lo colocaria
+ * mal, que es un fallo mudo -- sale bien formateado y en el sitio equivocado --.
+ */
+size_t skip_decl_qualifiers(const std::vector<Piece> &pieces, size_t i);
+
+/**
  * @brief Que separacion pide el estandar entre dos tokens.
  */
 enum class Spacing {

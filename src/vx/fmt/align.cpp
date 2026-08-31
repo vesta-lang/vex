@@ -410,6 +410,24 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
 
     if (name > i && !qualified) {
         line.shape = Shape::Decl;
+        /* TRES columnas: tipo (con sus calificadores dentro), nombre y `=`.
+         *
+         * Se probo partir el calificador en una CUARTA columna para que el
+         * tipo quedara a la misma altura:
+         *
+         *     in         i64* solo_lee = &a;
+         *     in nonnull i64* firme    = &a;
+         *
+         * Alinea, y ademas arreglaria el mismo caso con `const`.  Pero medido
+         * sobre el corpus toca 77 ficheros y el precio se paga en el caso
+         * COMUN: una declaracion sin calificador queda empujada a la derecha
+         * por el hueco de la columna vacia --  `Item a = new Item(10);` sale
+         * con cinco espacios delante solo porque una linea vecina lleva
+         * `const` --, y esa sangria no significa nada.
+         *
+         * Se deja como esta a la espera de decidirlo: alinear el tipo solo
+         * cuando TODAS las lineas del grupo llevan calificador evitaria el
+         * empujon, y es la variante que habria que medir. */
         line.anchors = {i, name, assign}; // tipo, nombre, `=`
     } else {
         line.shape = Shape::Assign;
