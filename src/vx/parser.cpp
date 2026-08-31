@@ -1049,8 +1049,16 @@ void Parser::parse_extern_block(ast::ModuleNode &mod) {
         std::vector<std::unique_ptr<ast::ParamDecl>> params;
         if (current_.kind != TokenKind::RPAREN) {
             while (true) {
-                // Param: `<type> [<name>]` (nombre opcional para parecerse
-                // a declaraciones C de cabecera).
+                // Param: `[in|out|inout] <type> [<name>]` (el nombre es
+                // opcional, para parecerse a una declaracion C de cabecera).
+                //
+                // Aqui la direccion no es un contrato sino una DEFINICION: no
+                // hay cuerpo que mirar, asi que lo unico que hay es la palabra
+                // de quien lo escribe.  De ella salen las mascaras por
+                // argumento de `IrNativeEffects`, que es lo que permite decir
+                // "escribe lo apuntado por su primer argumento" y que el
+                // analisis lo resuelva en cada sitio de llamada.
+                const ast::ParamDir p_dir = parse_opt_param_dir_();
                 auto p_type = parse_type_node();
                 if (!p_type) {
                     synchronize();
@@ -1058,6 +1066,7 @@ void Parser::parse_extern_block(ast::ModuleNode &mod) {
                 }
                 auto pd = std::make_unique<ast::ParamDecl>();
                 pd->loc = current_.loc;
+                pd->dir = p_dir;
                 pd->type = std::move(p_type);
                 if (current_.kind == TokenKind::IDENTIFIER) {
                     pd->name = current_.lexeme;
@@ -2826,6 +2835,13 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
         // funcion sea @Naked.
         return p;
     }
+    // Direccion: `in T* p` / `out T* p` / `inout T* p`.  Va la PRIMERA, delante
+    // de `register(...)` y del tipo.  Como esto es el lector de parametros que
+    // comparten los siete contextos donde se declaran -- funcion suelta,
+    // metodo, constructor, metodo de interfaz, funcion comptime, lambda con
+    // tipos y bloque extern --, la marca vale en todos ellos por construccion,
+    // que es justo la propiedad que el lenguaje promete de sus parametros.
+    const ast::ParamDir param_dir = parse_opt_param_dir_();
     // ABI custom por funcion: `register("rXX") T name` fija el registro fisico
     // en el que este parametro se recibe (y donde el caller lo coloca).  Mismo
     // patron que la storage-class de var-decls; aqui el nombre se guarda en
@@ -2849,6 +2865,7 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
     }
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = current_.loc;
+    p->dir = param_dir;
     p->abi_reg = std::move(param_abi_reg);
     p->type = parse_type_node();
     // Parametro puntero a funcion estilo C: `R (*name)(params)`.
@@ -3132,6 +3149,63 @@ bool Parser::looks_like_compound_literal() const noexcept {
     if (mut_lex.peek_at(off).kind != TokenKind::RPAREN) return false;
     ++off;
     return mut_lex.peek_at(off).kind == TokenKind::LBRACE;
+}
+
+// ---------------------------------------------------------------------------
+// Direccion de un parametro: `in` / `out` / `inout` delante del tipo.
+//
+// `in` ya es palabra reservada (KW_IN, del `for (x in col)`), asi que ahi no
+// hay nada que decidir.  `out` e `inout` NO pueden serlo: `out` aparece en el
+// corpus como nombre de variable (`register("rax") i64 out`), como nombre de
+// parametro (`void set_to(i32* out, i32 v)`) y -- lo que zanja la cuestion --
+// como INSTRUCCION x86 dentro de un bloque `asm` (`out 0xE9, al`).  Reservarla
+// romperia los tres.
+//
+// Por eso se reconocen SOLO al inicio de un parametro y solo si detras viene
+// algo que empieza un tipo.  Un `out` en cualquier otra posicion sigue siendo
+// un identificador corriente, que es lo que era ayer.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief El token puede ABRIR un tipo (mirando solo el token, sin contexto).
+ *
+ * Es la misma pregunta que responde @c starts_type, pero sobre un token del
+ * lookahead: @c starts_type opera sobre @c current_ y aqui hay que decidir
+ * mirando lo que viene DESPUES de la marca sin haberla consumido todavia.
+ */
+static bool token_opens_type(const Token &t) noexcept {
+    if (primitive_kind_from_token(t.kind) != PrimitiveKind::COUNT) return true;
+    switch (t.kind) {
+    case TokenKind::KW_NONNULL:
+    case TokenKind::KW_FN:
+    case TokenKind::KW_CFN:
+    case TokenKind::KW_CONST:
+    case TokenKind::KW_UNIQUE:
+    case TokenKind::KW_SHARED:
+    case TokenKind::KW_BORROW:
+    case TokenKind::KW_BORROW_MUT:
+    case TokenKind::IDENTIFIER: // tipo nombrado, typedef, `register(...)`
+        return true;
+    default: return false;
+    }
+}
+
+ast::ParamDir Parser::parse_opt_param_dir_() {
+    // `in`: reservada, no hay ambiguedad posible.
+    if (current_.kind == TokenKind::KW_IN) {
+        (void)consume();
+        return ast::ParamDir::In;
+    }
+    // `out` / `inout`: contextuales.  Solo cuentan si detras abre un tipo; si
+    // no, se dejan intactas para que las lea quien las leia antes.
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        (current_.lexeme == "out" || current_.lexeme == "inout") &&
+        token_opens_type(lex_.peek_at(0))) {
+        const bool both = (current_.lexeme == "inout");
+        (void)consume();
+        return both ? ast::ParamDir::InOut : ast::ParamDir::Out;
+    }
+    return ast::ParamDir::None;
 }
 
 std::string Parser::parse_opt_param_reg() {

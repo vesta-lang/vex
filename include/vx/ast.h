@@ -1614,12 +1614,43 @@ struct AsmStmt : Stmt {
 // -------------------------------------------------------------------
 
 /**
+ * @enum ParamDir
+ * @brief Direccion declarada de un parametro: que hace la funcion con lo que
+ *        ese parametro APUNTA.
+ *
+ * `in T* p` = lo lee y no lo escribe;  `out T* p` = lo escribe y no lo lee;
+ * `inout T* p` = las dos cosas.  Sin marca, @c None: no se dice nada, que NO
+ * es lo mismo que decir que no toca nada.
+ *
+ * Habla de lo APUNTADO, no del parametro: el parametro siempre viaja por valor
+ * (Vesta no tiene paso por referencia), asi que `out i32 x` no tiene sentido y
+ * el type checker lo rechaza.  Por eso vive aqui y no en el tipo: es una
+ * propiedad de COMO la funcion usa ese argumento, no de que es el argumento.
+ *
+ * El mismo marcador significa dos cosas segun donde este, y es a proposito:
+ *   - en un @c ExternFnDecl DEFINE, porque no hay cuerpo que mirar y lo unico
+ *     que hay es la palabra de quien lo escribe;
+ *   - en una funcion Vesta es un CONTRATO, que el compilador COMPRUEBA contra
+ *     lo que el analisis ve de verdad.
+ * Una palabra, dos sitios; lo que cambia es quien responde por ella.
+ */
+enum class ParamDir : uint8_t {
+    None = 0, ///< sin marca: no se afirma nada sobre lo apuntado.
+    In,       ///< `in`: la funcion LEE lo apuntado y no lo escribe.
+    Out,      ///< `out`: la funcion ESCRIBE lo apuntado y no lo lee.
+    InOut,    ///< `inout`: lo lee y lo escribe.
+};
+
+/**
  * @struct ParamDecl
  * @brief Declaracion de un parametro de funcion.
  */
 struct ParamDecl : Node {
     std::unique_ptr<TypeNode> type;
     std::string name;
+    /** Direccion declarada (`in`/`out`/`inout`), ver @c ParamDir.  @c None
+     * cuando no se escribio ninguna. */
+    ParamDir dir = ParamDir::None;
     /** @c true si el tipo declarado fue `expr` (solo valido en @Macro):
      * el parser captura el texto raw del call site como string en lugar
      * de parsear la expresion. El @c type queda materializado como
@@ -2703,7 +2734,6 @@ struct GenericTemplateExport {
 
 struct ModuleNode : Node {
     std::vector<std::unique_ptr<Node>> decls; ///< FunctionDecl o GlobalVarDecl.
-
 
     /// @NoExceptions a nivel modulo: deshabilita excepciones en TODO el
     /// modulo (todas las funciones + metodos lo heredan).  Para contextos

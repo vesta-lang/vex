@@ -585,6 +585,19 @@ class Parser {
     std::string parse_opt_param_reg();
 
     /**
+     * @brief Lee la direccion opcional de un parametro (`in`/`out`/`inout`).
+     *
+     * @return La direccion leida, o @c ParamDir::None si no habia marca (y
+     *         entonces no se ha consumido nada).
+     *
+     * Se llama al INICIO de cada parametro, antes de `register(...)` y del
+     * tipo.  `out`/`inout` son contextuales a proposito: son identificadores
+     * corrientes en cualquier otra posicion, incluido el `out` de x86 dentro
+     * de un bloque @c asm.
+     */
+    ast::ParamDir parse_opt_param_dir_();
+
+    /**
      * @brief Decide si el `(` actual inicia un cast C-style `(T) expr`.
      *
      * El parser reconoce el patron `(<type>) <unary>` solo cuando el
