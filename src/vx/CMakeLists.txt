@@ -94,6 +94,11 @@ add_library(vx_lib STATIC
     # De cuanto es multiplo un valor: el hecho con el que se pliega una
     # comprobacion de alineacion y se comprueba lo que una instruccion EXIGE.
     ${CMAKE_SOURCE_DIR}/src/analysis/facts/alignment.cpp
+    # Si un puntero se escribe en TODOS los caminos que llegan a un retorno.
+    # Es lo que hace que `out T x` sea una promesa y no una etiqueta: sin esto,
+    # escribirlo en una rama y no en la otra compilaba, y el llamante leia lo
+    # que hubiera en su hueco.
+    ${CMAKE_SOURCE_DIR}/src/analysis/facts/definite_store.cpp
     # De que valor del programa habla cada operando de un bloque de asm.  Es el
     # puente entre el texto (donde un operando se llama `$0`) y el IR (donde es
     # un valor), y lo comparten el modelo de efectos, el eliminador de

@@ -33,6 +33,7 @@
 #include <set>
 #include <sstream>
 #include <utility>
+#include "analysis/facts/definite_store.h" // si un `out` se escribe SIEMPRE
 #include "lowering_internal.h" // la cocina compartida del lowering
 
 namespace vx {
@@ -1091,7 +1092,13 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      *
      * Se guardan y se re-insertan mas abajo por la misma razon que los de ABI
      * custom: `address_taken_locals_` se limpia despues de este punto. */
-    std::vector<std::string> by_ref_params;
+    struct ByRefParam {
+        std::string name;
+        ir::IrValueId value;
+        ast::ParamDir dir;
+        SourceLoc loc;
+    };
+    std::vector<ByRefParam> by_ref_params;
     // Hidden retbuf param para sret (si aplica): primero en la lista.
     ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
     if (sret) {
@@ -1127,7 +1134,8 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         if (d.decl && d.decl->dir != ast::ParamDir::None && d.decl->type &&
             is_by_ref_out_param(d.decl->dir,
                                 tc_.resolve_type_node(d.decl->type.get())))
-            by_ref_params.push_back(d.decl->name);
+            by_ref_params.push_back(
+                {d.decl->name, d.value, d.decl->dir, d.decl->loc});
     }
 
     // Bloque entry.
@@ -1252,8 +1260,8 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Y los de salida por referencia, por lo mismo: el clear() de arriba borra
     // el marcado, y sin el `read_local` devolveria la DIRECCION en vez de leer
     // el hueco -- el cuerpo veria un puntero donde escribio una `T`.
-    for (const std::string &n : by_ref_params)
-        address_taken_locals_.insert(n);
+    for (const ByRefParam &p : by_ref_params)
+        address_taken_locals_.insert(p.name);
     // fix9 - eliminados los pre-pases scan_try / scan_loops.
     // Las flags `current_fn_has_try_` y `current_fn_has_loops_` solo
     // se usaban para decidir si emitir el cleanup RAW_ASM de fix
@@ -1432,6 +1440,28 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         }
     }
     propagate_is_gc_object_through_phis(fn);
+    /* `out T x` PROMETE que quien llama recibira un valor.  Escribirlo en una
+     * rama y no en la otra es justo lo que el llamante paga -- lee lo que
+     * hubiera en su hueco --, asi que se pregunta AQUI: es el primer punto
+     * donde existe el grafo de flujo, y sigue estando delante la declaracion
+     * que puso la marca.
+     *
+     * Solo habla cuando esta DEMOSTRADO que falta.  Si el analisis no entendio
+     * algo -- el puntero se pasa a otra funcion, que es una forma legitima de
+     * rellenarlo -- se calla: acusar a codigo correcto es peor que no avisar.
+     *
+     * `inout` no entra: alli ya llega un valor y no cambiarlo es legitimo. */
+    for (const ByRefParam &p : by_ref_params) {
+        if (p.dir != ast::ParamDir::Out) continue;
+        const analysis::DefiniteStoreFacts d =
+            analysis::compute_definite_store(fn, p.value);
+        if (!d.proven_missing()) continue;
+        SourceLoc donde = p.loc;
+        // La linea del retorno por el que se sale sin escribir: es donde el
+        // programa incumple, y es la prueba del veredicto.
+        if (d.witness_line != 0) donde.line = d.witness_line;
+        diags_.diag(donde, DiagLevel::ERR, "VXT012", {p.name});
+    }
     out.add_function(std::move(fn));
     fn_ = nullptr;
 }

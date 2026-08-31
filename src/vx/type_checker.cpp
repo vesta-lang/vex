@@ -2834,18 +2834,6 @@ void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
         borrow_checker_.on_borrow_drop(b, e->loc);
 }
 
-void TypeChecker::check_out_params_written_(
-    const std::vector<std::unique_ptr<ast::ParamDecl>> &params) {
-    for (const auto &p : params) {
-        if (!p || p->dir != ast::ParamDir::Out || !p->type) continue;
-        // Solo `out`: un `inout` ya trae un valor, y no cambiarlo es legitimo.
-        if (!is_by_ref_out_param(p->dir, resolve_type_node(p->type.get())))
-            continue;
-        if (assigned_names_.count(p->name) != 0) continue;
-        diags_.diag(p->loc, DiagLevel::ERR, "VXT012", {p->name});
-    }
-}
-
 void TypeChecker::check_param_dir_(const std::string &name, ast::ParamDir dir,
                                    SourceLoc loc, Type &pt, DirSite site) {
     if (dir == ast::ParamDir::None) return;
@@ -6025,10 +6013,6 @@ void TypeChecker::check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
  */
 void TypeChecker::declare_params_in_scope(
     const std::vector<std::unique_ptr<ast::ParamDecl>> &params) {
-    // Empieza un cuerpo nuevo: lo que escribio el anterior no cuenta.  Se
-    // vacia aqui porque por este punto pasan los tres cuerpos -- funcion
-    // suelta, metodo y constructor -- justo antes de mirarse.
-    assigned_names_.clear();
     for (const auto &p : params) {
         if (p->is_raw_variadic) continue;
         Symbol sp;
@@ -6305,7 +6289,6 @@ void TypeChecker::check_free_function_bodies() {
         const bool sup_prev =
             fn->is_macro ? diags_.set_suppressed(true) : false;
         check_block(fn->body.get(), fn_ret);
-        check_out_params_written_(fn->params);
         if (fn->is_macro) diags_.set_suppressed(sup_prev);
         if (fn->is_macro) pop_comptime_scope();
         current_fn_is_macro_ = saved_is_macro;
@@ -6856,7 +6839,6 @@ void TypeChecker::check_class_method(const ClassLayout &cls,
     struct_stack_closure_taint_.clear();
     moved_locals_.clear();
     check_block(m->body.get(), fn_ret);
-    check_out_params_written_(m->params);
     current_fn_return_type_ = saved_ret;
     pop_scope();
     current_method_is_static_ = saved_static;
@@ -6902,7 +6884,6 @@ void TypeChecker::check_struct_method(const StructLayout &lay,
     struct_stack_closure_taint_.clear();
     moved_locals_.clear();
     check_block(m->body.get(), fn_ret);
-    check_out_params_written_(m->params);
     current_fn_return_type_ = saved_ret;
     pop_scope();
     current_method_is_static_ = saved_static;
@@ -12287,14 +12268,6 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
                      "no se puede escribir a un lvalue 'const' (el tipo de "
                      "destino es de solo lectura)");
     }
-    /* Se apunta a QUE se escribio, para poder exigir despues que un parametro
-     * de salida se haya escrito.  Se hace aqui y no con un recorrido aparte
-     * porque el cuerpo YA se esta recorriendo: una segunda travesia seria otra
-     * cosa que mantener, y que se quedaria atras el dia que se anada una forma
-     * de asignar. */
-    if (e->target && e->target->kind == ast::NodeKind::IdentExpr)
-        assigned_names_.insert(
-            static_cast<ast::IdentExpr *>(e->target.get())->name);
     return t;
 }
 

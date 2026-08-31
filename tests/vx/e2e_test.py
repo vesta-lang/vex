@@ -5012,5 +5012,68 @@ modes3_case("escritura_por_puntero_indirecto",
             "526_escritura_por_puntero_indirecto.vx", 21)
 
 
+
+
+# `out` en TODOS los caminos, no solo "alguna vez".  El hecho que lo contesta
+# vive en el ASA (`DefiniteStoreFacts`) y se calcula sobre el IR, que es quien
+# ya tiene el grafo de flujo: escribir un segundo recorrido sobre el AST habria
+# sido producir dos veces lo mismo, y el segundo se queda atras.
+DIR_OUT_FLUJO_CASES = [
+    ("dir_neg_out_una_rama", """void f(out i64 x, bool c) {
+    if (c) {
+        x = 1;
+    }
+}
+i32 main() {
+    i64 v = 9;
+    f(v, false);
+    return (i32) v;
+}
+""", "VXT012",
+     "un `out` escrito en UNA rama y no en la otra: la version que solo miraba "
+     "si se escribia ALGUNA vez dejaba pasar esto",
+     "un `out` sin escribir en todos los caminos debio fallar"),
+]
+
+for _t, _s, _p, _m, _f in DIR_OUT_FLUJO_CASES:
+    _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
+
+
+@case("dir_out_flujo_ok")
+def _(ctx):
+    """Los dos casos que NO debe acusar, que importan tanto como el negativo.
+
+    Un analisis de "para todos los caminos" que se equivoque hacia el lado malo
+    rechaza codigo correcto, y entonces se aprende a rodearlo.  Aqui: escribirlo
+    en las dos ramas vale, y DELEGAR el relleno en otra funcion tambien -- por
+    ahi el analisis no puede ver si se escribe, asi que se calla en vez de
+    acusar.
+    """
+    src = """void en_las_dos(out i64 x, bool c) {
+    if (c) { x = 1; } else { x = 2; }
+}
+void relleno(i64* p) { (*p) = 3; }
+void delega(out i64 x) { relleno(&x); }
+i32 main() {
+    i64 a = 0;
+    en_las_dos(a, false);
+    i64 b = 0;
+    delega(b);
+    return (i32) (a + b);
+}
+"""
+    vx = _write_vx(ctx, "dir_out_flujo_ok.vx", src)
+    if not ctx.compile_vx(vx, "dsok"):
+        return
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("dsok", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 5:
+            ctx.fail("out en todos los caminos (-m %s): R00 == %s, se esperaba 5"
+                     % (modo, got), log)
+            return
+        ctx.ok("out en todos los caminos (-m %s) -> 5" % modo)
+
+
 if __name__ == "__main__":
     main()

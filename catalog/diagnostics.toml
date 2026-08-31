@@ -1312,8 +1312,8 @@ es = "el argumento {0} va a un parametro '{1}', que el llamado ESCRIBE: necesita
 # sobre codigo que si lo escribe.
 
 [VXT012]
-en = "'{0}' is declared 'out' -- the caller expects to get a value back through it -- but this body never writes it; assign it, or declare it 'inout' if what you want is to read what came in"
-es = "'{0}' se declara 'out' -- quien llama espera recibir un valor por ahi -- pero este cuerpo no lo escribe nunca; asignalo, o declaralo 'inout' si lo que quieres es leer lo que venia"
+en = "'{0}' is declared 'out' -- the caller expects to get a value back through it -- but there is a path that returns without writing it, and the caller would read whatever was in its slot; assign it on every path, or declare it 'inout' if what you want is to read what came in"
+es = "'{0}' se declara 'out' -- quien llama espera recibir un valor por ahi -- pero hay un camino que retorna sin escribirlo, y el llamante leeria lo que hubiera en su hueco; asignalo en todos los caminos, o declaralo 'inout' si lo que quieres es leer lo que venia"
 
 # ===========================================================================
 #  Borrow checker (VX2026-VX2040)
