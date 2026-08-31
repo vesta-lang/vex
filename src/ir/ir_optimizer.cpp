@@ -3664,7 +3664,26 @@ bool sr_mem2reg_object(
                 in.func_name.clear();
                 if (in.dst < fn.values.size()) {
                     fn.values[in.dst].is_const = false;
-                    fn.values[in.dst].is_host_ptr = false;
+                    /* De QUE MEMORIA es NO se borra: se PASA al valor
+                     * reenviado.
+                     *
+                     * Quien leia el campo lo sabia -- se lo dice el TIPO del
+                     * campo --, y quien lo escribio puede no saberlo: una copia
+                     * palabra a palabra de un struct mueve punteros sin
+                     * enterarse de que lo son.  Al adelantar el valor
+                     * almacenado a la lectura, borrar la marca tira lo unico
+                     * que distinguia las dos memorias, y despues el acceso sale
+                     * de donde no es.  Eso no da un error, da otro valor.
+                     *
+                     * Se vio en un campo `unique<T>`: el indice 0 de su buffer
+                     * salia a basura y el 1 bien, porque el 1 pasa por una suma
+                     * que si conservaba la marca. */
+                    if (it->second < fn.values.size()) {
+                        if (fn.values[in.dst].is_host_ptr)
+                            fn.values[it->second].is_host_ptr = true;
+                        if (fn.values[in.dst].is_gc_object)
+                            fn.values[it->second].is_gc_object = true;
+                    }
                 }
             }
         }
@@ -8989,6 +9008,21 @@ bool ir_pass_cse(IrFunction &fn) {
             std::ostringstream key;
             key << static_cast<int>(ins.op) << ":" << static_cast<int>(ins.type)
                 << ":" << ins.imm << ":" << ins.func_name;
+            /* Y DE QUE MEMORIA es el resultado.  Dos instrucciones que se leen
+             * igual pero producen una direccion de memorias distintas NO son la
+             * misma expresion: quien use la superviviente decidira el acceso
+             * mirando esa marca, y si se quedo la que no la lleva, leera de la
+             * memoria equivocada -- lo que no da un error, da otro valor.
+             *
+             * Se vio asi: dos cargas de la misma direccion, una marcada como
+             * puntero del anfitrion y otra no, se fundieron en la que no lo
+             * estaba.  El indice 0 de un buffer salia a basura y el 1 bien,
+             * porque el 1 pasa por una suma que si conserva la marca.  Lo mismo
+             * vale para saber si es un objeto del recolector. */
+            if (ins.dst < static_cast<IrValueId>(fn.values.size())) {
+                key << ":" << (fn.values[ins.dst].is_host_ptr ? 'h' : '-')
+                    << (fn.values[ins.dst].is_gc_object ? 'g' : '-');
+            }
             for (IrValueId op : ins.operands) {
                 // Resolver sustituciones previas en los operandos
                 IrValueId canonical = op;

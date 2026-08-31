@@ -601,6 +601,17 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
     // prefijo de asignacion: %dst = op[.type] ...
     if (ins.dst != IR_NO_VALUE) {
         print_val(o, fn, ins.dst);
+        /* Y DE QUE MEMORIA es, cuando es una direccion del anfitrion.
+         *
+         * Es lo unico que distingue dos instrucciones que se leen igual y
+         * hacen cosas distintas: una lee de la memoria de la maquina virtual y
+         * la otra de la del proceso.  Equivocarse ahi no da un error, da otro
+         * valor -- y el volcado, que es donde se mira cuando algo no cuadra, no
+         * lo decia.  Hubo que deducirlo instruccion a instruccion mas de una
+         * vez. */
+        if (ins.dst < static_cast<IrValueId>(fn.values.size()) &&
+            fn.values[ins.dst].is_host_ptr)
+            o << "@host";
         o << " = ";
     }
 
