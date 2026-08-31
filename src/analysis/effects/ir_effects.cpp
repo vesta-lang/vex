@@ -42,7 +42,14 @@ using ir::IrOp;
 bool funcion_tiene_asm(const ir::IrFunction &fn) {
     for (const ir::IrBlock &b : fn.blocks)
         for (const ir::IrInstr &in : b.instrs)
-            if (in.op == ir::IrOp::INLINE_ASM || in.op == ir::IrOp::ASM_MICRO)
+            /* Los TRES.  `RAW_ASM` es una funcion `@Asm` entera, y faltaba:
+             * quien pregunta esto lo hace para decidir si vale la pena traer
+             * los hechos que el asm necesita, asi que dejarse una forma fuera
+             * no da un error -- da menos conocimiento, en silencio, justo
+             * donde el compilador tiene que entender codigo que no escribio
+             * el.  El runtime de excepciones es `@Asm`. */
+            if (in.op == ir::IrOp::RAW_ASM || in.op == ir::IrOp::INLINE_ASM ||
+                in.op == ir::IrOp::ASM_MICRO)
                 return true;
     return false;
 }

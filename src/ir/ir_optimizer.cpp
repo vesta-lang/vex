@@ -8185,6 +8185,19 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
             for (const analysis::LigaduraAsm &l : lig_usar->ligaduras)
                 clases_asm_fn.emplace_back(l.marcador, l.clase);
         };
+        /* AQUI, antes de tocar nada, si la funcion tiene asm.
+         *
+         * Los hechos tienen que describir la funcion al ENTRAR -- es lo que
+         * promete el comentario de arriba y de lo que depende que valgan --, y
+         * la rama de repuesto los calculaba al TOPARSE con el primer asm, o
+         * sea con stores ya borrados: describian una funcion a medio
+         * modificar.  Quien llama desde el optimizador siempre los da hechos,
+         * asi que no se notaba; cualquier otro que use los valores por defecto
+         * caia en la version tardia.
+         *
+         * Sigue sin costar nada en una funcion SIN asm, que es lo que se
+         * queria: ahi no se pide ninguno de los tres analisis. */
+        if (analysis::effects::funcion_tiene_asm(fn)) asegurar_hechos_asm();
         /* Y el analisis de CADA bloque, memorizado por su nombre.  El texto del
          * bloque y las clases son los mismos toda la pasada, asi que volver a
          * analizarlo por cada instruccion que lo menciona es rehacer un trabajo
@@ -13552,6 +13565,21 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     };
     auto hechos_asm_de = [&](IrFunction &fn) {
         HechosDeAsmParaDse h;
+        /* Sin un solo bloque de asm no hay nada que atar, asi que los tres
+         * punteros se quedan en nulo y no se pide NINGUNO de los tres
+         * analisis.
+         *
+         * DSE ya era perezoso por dentro -- solo los mira al toparse con una
+         * instruccion de asm --, pero este sitio se los daba masticados
+         * SIEMPRE, con lo que la pereza no servia de nada: una funcion sin
+         * asm pagaba igualmente un punto fijo de rangos entero.  Y no una
+         * vez: el gestor cachea por (nombre, version), y la version sube con
+         * cada cambio que hace el propio bucle de optimizacion, asi que se
+         * recalculaba tras cada pasada que tocara algo.
+         *
+         * Es exactamente lo que el ASA existe para evitar: quien pide una
+         * cosa no debe pagar otra. */
+        if (!analysis::effects::funcion_tiene_asm(fn)) return h;
         h.ligaduras = &asm_of(fn);
         h.estructura = &facts_of(fn);
         h.rangos = &ranges_of(fn);

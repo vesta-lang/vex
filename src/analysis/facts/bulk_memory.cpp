@@ -131,18 +131,9 @@ std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn) {
     std::vector<BulkMemoryFact> out;
     if (fn.blocks.empty()) return out;
 
-    // Quien define cada valor, y en que bloque.  Dos vistas del mismo hecho:
-    // una para saber si algo es invariante (bloque) y otra para seguir la
-    // cadena de una direccion (instruccion).
-    std::vector<int> def_block(fn.values.size(), -1);
-    std::vector<const ir::IrInstr *> def(fn.values.size(), nullptr);
-    for (size_t bi = 0; bi < fn.blocks.size(); ++bi)
-        for (const ir::IrInstr &in : fn.blocks[bi].instrs)
-            if (in.dst != ir::IR_NO_VALUE && in.dst < def_block.size()) {
-                def_block[in.dst] = (int)bi;
-                def[in.dst] = &in;
-            }
-
+    /* Lo PRIMERO, lo que decide si hay algo que hacer.  Sin un bucle no puede
+     * haber un movimiento de memoria, asi que preparar antes las tablas era
+     * recorrer la funcion entera para tirarlo. */
     const LoopFacts lf = compute_loop_facts(fn);
     if (lf.loop_count == 0) return out;
 
@@ -155,6 +146,16 @@ std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn) {
 
     const IrFacts hechos = build_ir_facts(fn);
     const PointsTo pt = compute_points_to(fn, hechos);
+
+    /* En QUE BLOQUE se define cada valor.  Solo esto: quien lo define ya lo
+     * sabe `hechos.def_of`, y se construia aqui otra vez a mano por delante
+     * -- el mismo recorrido, el mismo resultado, dos veces.  El bloque no lo
+     * lleva `IrFacts`, asi que ese si hay que sacarlo. */
+    std::vector<int> def_block(fn.values.size(), -1);
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi)
+        for (const ir::IrInstr &in : fn.blocks[bi].instrs)
+            if (in.dst != ir::IR_NO_VALUE && in.dst < def_block.size())
+                def_block[in.dst] = (int)bi;
 
     for (uint32_t L = 0; L < lf.loop_count; ++L) {
         if (tiene_hijo[L]) continue;
@@ -253,8 +254,8 @@ std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn) {
         // continuo.  Si avanza mas, hay huecos; si menos, se pisan.
         ir::IrValueId base_d = ir::IR_NO_VALUE;
         int64_t esc_d = 0;
-        if (!resolve_direccion(fn, def, el_store->operands[1], f.iv.phi, base_d,
-                               esc_d))
+        if (!resolve_direccion(fn, hechos.def_of, el_store->operands[1],
+                               f.iv.phi, base_d, esc_d))
             continue;
         if (esc_d != w) continue;
         // Y la base no puede moverse dentro del bucle.
@@ -308,8 +309,8 @@ std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn) {
         if (ancho_de(*el_load) != w) continue;
         ir::IrValueId base_s = ir::IR_NO_VALUE;
         int64_t esc_s = 0;
-        if (!resolve_direccion(fn, def, el_load->operands[0], f.iv.phi, base_s,
-                               esc_s))
+        if (!resolve_direccion(fn, hechos.def_of, el_load->operands[0],
+                               f.iv.phi, base_s, esc_s))
             continue;
         if (esc_s != w) continue;
         if (base_s < def_block.size() && def_block[base_s] >= 0 &&
