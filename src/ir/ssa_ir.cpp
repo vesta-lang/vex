@@ -518,22 +518,54 @@ void IrModule::register_native_import(std::string lib, std::string name) {
 }
 
 /**
- * @brief Igual, pero declarando lo que la nativa hace.
+ * @brief Igual, pero definiendo lo que la nativa hace.
  *
- * Si la pareja ya estaba registrada sin declaracion, esta la completa: que se
- * sepa o no lo que hace una funcion no puede depender del orden en que se
- * emitieron sus llamadas.
+ * Tres casos, y hasta ahora los tres acababan igual porque solo se miraba uno:
+ *
+ *   1. Ya estaba SIN definir -- esta la completa.  Que se sepa o no lo que hace
+ *      una funcion no puede depender del orden en que se emitieron sus
+ *      llamadas.
+ *   2. Ya estaba definida IGUAL -- no hay nada que hacer.
+ *   3. Ya estaba definida DISTINTA -- eso es una contradiccion, y antes se
+ *      descartaba en silencio: ganaba la primera.  La misma nativa declarada en
+ *      dos modulos que no coinciden es un caso normal, no exotico, y elegir por
+ *      orden de emision hace que el programa compile segun algo que no es una
+ *      propiedad del programa.
+ *
+ * En el tercero se marca el conflicto y se queda la UNION DE LO PEOR: perder
+ * precision es aceptable, afirmar de menos no.  Quien tenga canal de
+ * diagnostico lo dira; aqui no lo hay a proposito.
  */
 void IrModule::register_native_import(std::string lib, std::string name,
                                       const IrNativeEffects &effects) {
     for (auto &ni : native_imports) {
         if (ni.lib == lib && ni.name == name) {
-            if (effects.declared && !ni.effects.declared)
+            if (!effects.declared) return; // no aporta nada
+            if (!ni.effects.declared) {
                 ni.effects = effects;
+                return;
+            }
+            if (ni.effects == effects) return; // dicen lo mismo
+            ni.effects_conflict = true;
+            // Union de lo peor: lo que CUALQUIERA de las dos atribuye, se
+            // atribuye.  Asi ninguna de las dos puede quedar sobre-aprobada por
+            // culpa de la otra.
+            ni.effects.reads_pointee |= effects.reads_pointee;
+            ni.effects.writes_pointee |= effects.writes_pointee;
+            ni.effects.reads_global |= effects.reads_global;
+            ni.effects.writes_global |= effects.writes_global;
+            ni.effects.io |= effects.io;
+            ni.effects.may_throw |= effects.may_throw;
+            ni.effects.nondeterministic |= effects.nondeterministic;
+            ni.effects.may_panic |= effects.may_panic;
+            ni.effects.allocates |= effects.allocates;
+            // `comptime` NO se une: no es un efecto sobre el programa sino
+            // sobre la compilacion, asi que unirlo mezclaria dos cosas que no
+            // se suman.
             return;
         }
     }
-    native_imports.push_back({std::move(lib), std::move(name), effects});
+    native_imports.push_back({std::move(lib), std::move(name), effects, false});
 }
 
 /**

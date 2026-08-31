@@ -256,6 +256,26 @@ ContractReport report_contract_checks(const std::vector<ContractCheck> &checks,
                                       vx::Diagnostics &diags);
 
 /**
+ * @brief Avisa de las nativas definidas dos veces con efectos distintos.
+ * @param mod   Modulo ya construido (o fusionado).
+ * @param file  Fichero al que atribuir el aviso.
+ * @param diags Donde se depositan.
+ * @return Cuantas nativas estaban en conflicto.
+ *
+ * `IrModule::register_native_import` detecta el choque y se pone a salvo solo
+ * -- se queda con la union de lo peor --, pero no puede DECIRLO: no tiene canal
+ * de diagnostico, y ponerselo lo ataria al frontend.  Asi que lo dice quien si
+ * lo tiene, y desde un unico sitio, igual que los veredictos de contrato.
+ *
+ * Es aviso y no error a proposito: los dos modulos que se contradicen pueden no
+ * ser del mismo dueno, y romper la compilacion por algo que no esta en tu mano
+ * arreglar es peor que perder precision.  Lo que NO puede pasar es callarlo.
+ */
+size_t report_native_effect_conflicts(const ir::IrModule &mod,
+                                      const std::string &file,
+                                      vx::Diagnostics &diags);
+
+/**
  * @struct TypeFingerprint
  * @brief Huella de un TIPO agregado (struct / clase / enum): propiedades de
  *        layout y de recurso que el compilador INFIERE de sus campos.

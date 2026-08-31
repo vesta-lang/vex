@@ -254,6 +254,7 @@ const CatEntry kEntries[] = {
     {"VXT005", {"parameter '{0}' is marked '{1}', which says what the function does with what it POINTS TO -- but its type '{2}' does not point to anything", "el parametro '{0}' lleva '{1}', que dice lo que la funcion hace con lo que APUNTA -- pero su tipo '{2}' no apunta a nada"}},
     {"VXT006", {"parameter '{0}' is marked '{1}' -- it promises to write what it points to -- but what it points to is declared 'const'", "el parametro '{0}' lleva '{1}' -- promete escribir lo que apunta -- pero lo que apunta esta declarado 'const'"}},
     {"VXT007", {"writing through '{0}', which is marked 'in': through an 'in' parameter the function only reads", "escritura a traves de '{0}', que lleva 'in': por un parametro 'in' la funcion solo lee"}},
+    {"VXT008", {"'{0}:{1}' is defined twice with different effects ({2}); continuing with the union of the worst of both, so some caller may fail to prove effects it could otherwise prove", "'{0}:{1}' esta definida dos veces con efectos distintos ({2}); se sigue con la union de lo peor de las dos, asi que algun llamante puede quedarse sin demostrar efectos que si podria"}},
     {"VXW001", {"the contracts of '{0}' ({1}) are NOT being verified: {2} -- a contract is a CHECK, so one that cannot be checked promises without guarding anything: keep it as documented intent, or drop it, but do not read it as proven", "los contratos de '{0}' ({1}) NO se estan verificando: {2} -- un contrato es una COMPROBACION, asi que uno que no se puede comprobar promete sin guardar nada: dejalo como intencion documentada, o quitalo, pero no lo leas como demostrado"}},
     {"VXW002", {"'{0}' declares {1}({2}) and only {3} was proven -- tightening it makes the promise say what the code really does", "'{0}' declara {1}({2}) y solo se demostro {3} -- apretarlo hace que la promesa diga lo que el codigo hace de verdad"}},
     {"VXW003", {"'{0}' provably satisfies {1} and does not declare it -- declaring it turns today's fact into a promise the compiler will enforce", "'{0}' cumple {1} de forma demostrable y no lo declara -- declararlo convierte un hecho de hoy en una promesa que el compilador hara cumplir"}},
@@ -267,7 +268,7 @@ const CatEntry kEntries[] = {
     {"VXW910", {"a declared bound looser than what was proven, and properties provable but not declared", "una cota declarada mas floja que la demostrada, y propiedades demostrables sin declarar"}},
     {"VXW911", {"what one boundary costs: how many functions cannot prove their effects because the closure leaves the program there", "lo que cuesta una frontera: cuantas funciones no pueden demostrar sus efectos porque el cierre sale del programa por ahi"}},
 };
-const int kEntryCount = 246;
+const int kEntryCount = 247;
 
 } // namespace
 

@@ -1204,6 +1204,13 @@ CompileResult compile_vx_source(const std::string &source,
         // contra la huella del IR PRE-opt (@c irmod, donde TODAS las funciones
         // existen -> enforcement completo; semantica source-level: source<=N =>
         // efectivo<=N, sound).  Sound/asimetrico: solo error si es demostrable.
+        /* Antes que nada: si DOS definiciones de la misma nativa se contradicen,
+         * decirlo.  Va fuera del `if (!res.contracts.empty())` a proposito --
+         * un conflicto lo es aunque el programa no escriba ni un contrato --, y
+         * antes de verificarlos porque explica por que uno puede no salir: el
+         * modulo ya se quedo con la union de lo peor de las dos. */
+        analyze::report_native_effect_conflicts(irmod, filename,
+                                                res.diagnostics);
         collect_contracts_(mod->decls, res.contracts);
         if (!res.contracts.empty()) {
             // Arch del TARGET activo (@Target/AOT cross-compile); vacio = host

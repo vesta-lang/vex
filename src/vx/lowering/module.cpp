@@ -295,6 +295,32 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
             fn_return_types_[efd->name] = rt;
             extern_lib_by_fn_name_[efd->name] = efd->lib;
+            // Lo DEFINIDO sobre la nativa: `in`/`out`/`inout` de cada param a
+            // las mascaras por argumento.  Que sean por ARGUMENTO y no una
+            // frase suelta es lo que hace que se escriba una vez y siga siendo
+            // preciso en cada sitio de llamada: el analisis resuelve "lo que
+            // apunta su primer argumento" con points-to alli donde se llama.
+            //
+            // `declared` solo si alguien dijo algo.  Al ser una DESCRIPCION
+            // COMPLETA -- lo que no se escribe, no ocurre --, marcarla sin que
+            // nadie haya escrito nada afirmaria que la funcion es inofensiva
+            // por el mero hecho de existir.
+            {
+                ir::IrNativeEffects fx;
+                for (size_t pi = 0; pi < efd->params.size() && pi < 32; ++pi) {
+                    const ast::ParamDecl *p = efd->params[pi].get();
+                    if (!p || p->dir == ast::ParamDir::None) continue;
+                    fx.declared = true;
+                    const uint32_t bit = 1u << (uint32_t)pi;
+                    if (p->dir == ast::ParamDir::In ||
+                        p->dir == ast::ParamDir::InOut)
+                        fx.reads_pointee |= bit;
+                    if (p->dir == ast::ParamDir::Out ||
+                        p->dir == ast::ParamDir::InOut)
+                        fx.writes_pointee |= bit;
+                }
+                if (fx.declared) extern_effects_by_fn_name_[efd->name] = fx;
+            }
         }
     }
 

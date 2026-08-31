@@ -769,6 +769,40 @@ std::vector<ContractCheck> verify_type_contracts(
     return out;
 }
 
+size_t report_native_effect_conflicts(const ir::IrModule &mod,
+                                      const std::string &file,
+                                      vx::Diagnostics &diags) {
+    size_t n = 0;
+    for (const ir::IrNativeImport &ni : mod.native_imports) {
+        if (!ni.effects_conflict) continue;
+        ++n;
+        // Se nombra QUE eje choca, no solo que hay choque: "difieren" sin decir
+        // en que obliga a ir a leer las dos declaraciones para saber si importa
+        // -- y muchas veces no importa.
+        std::string ejes;
+        const ir::IrNativeEffects &e = ni.effects;
+        auto anota = [&ejes](const char *nombre) {
+            if (!ejes.empty()) ejes += ", ";
+            ejes += nombre;
+        };
+        // Se listan los ejes que la union acabo ATRIBUYENDO: son exactamente
+        // los que alguna de las dos afirmo y por los que el llamante paga.
+        if (e.writes_pointee != 0) anota("writes_pointee");
+        if (e.reads_pointee != 0) anota("reads_pointee");
+        if (e.writes_global) anota("writes_global");
+        if (e.reads_global) anota("reads_global");
+        if (e.io) anota("io");
+        if (e.may_throw) anota("may_throw");
+        if (e.may_panic) anota("may_panic");
+        if (e.allocates) anota("allocates");
+        if (e.nondeterministic) anota("nondeterministic");
+        diags.diag(vx::SourceLoc{}, vx::DiagLevel::WARN, "VXT008",
+                   {ni.lib, ni.name, ejes});
+    }
+    (void)file;
+    return n;
+}
+
 ContractReport report_contract_checks(const std::vector<ContractCheck> &checks,
                                       const std::string &file,
                                       vx::Diagnostics &diags) {

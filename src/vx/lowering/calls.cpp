@@ -298,7 +298,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     rt = it_rt0->second;
                 return emit_const(rt, 0, e->loc.line);
             }
-            out_mod_->register_native_import(lib, id->name);
+            register_extern_import_(*out_mod_, lib, id->name);
             std::vector<ir::IrValueId> arg_ids;
             arg_ids.reserve(e->args.size());
             for (auto &a : e->args) {
@@ -1622,8 +1622,11 @@ void Lowering::generate_extern_cfn_thunks(ir::IrModule &out) {
         }
 
         const ir::IrBlockId entry = fn.new_block("entry");
-        // CALLN @Method("<lib>:<fn>") con los params como args.
-        out.register_native_import(sig->extern_lib, fn_name);
+        // CALLN @Method("<lib>:<fn>") con los params como args.  Por el mismo
+        // sitio que la llamada directa: el thunk llama a la MISMA nativa, asi
+        // que lo definido sobre ella no puede depender de por cual de los dos
+        // caminos se llegue.
+        register_extern_import_(out, sig->extern_lib, fn_name);
         const ir::IrValueId dst = (ret_ir == ir::IrType::VOID)
                                       ? ir::IR_NO_VALUE
                                       : fn.new_value(ret_ir);
@@ -1709,6 +1712,24 @@ ir::IrValueId Lowering::emit_calln(const std::string &name,
     in.source_line = source_line;
     emit(current_block_, std::move(in));
     return dst;
+}
+
+/**
+ * @copydoc vx::Lowering::register_extern_import_
+ */
+void Lowering::register_extern_import_(ir::IrModule &out,
+                                       const std::string &lib,
+                                       const std::string &fn) {
+    const auto it = extern_effects_by_fn_name_.find(fn);
+    if (it == extern_effects_by_fn_name_.end()) {
+        // Nadie dijo nada de ella.  Se registra igual -- el import hace falta
+        // para llamarla -- pero sin declaracion, asi que el analisis seguira
+        // suponiendo lo peor.  Es lo unico honesto sobre codigo que no esta en
+        // el programa.
+        out.register_native_import(lib, fn);
+        return;
+    }
+    out.register_native_import(lib, fn, it->second);
 }
 
 /**

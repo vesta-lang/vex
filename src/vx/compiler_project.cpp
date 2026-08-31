@@ -3976,6 +3976,12 @@ CompileResult compile_vx_project(
         for (auto &pm : work)
             if (pm.ast) collect(pm.ast->decls);
 
+        /* Aqui es donde MAS aparece: `merged` es la fusion de los modulos del
+         * proyecto, asi que la misma nativa declarada en dos de ellos llega
+         * junta por primera vez.  Fuera del `if` de contratos, porque el choque
+         * existe aunque nadie haya escrito uno. */
+        analyze::report_native_effect_conflicts(merged, root_path,
+                                                res.diagnostics);
         if (!res.contracts.empty()) {
             // Arch del TARGET activo (@Target/AOT); vacio = host (x86_64).
             std::string fp_os, fp_arch;

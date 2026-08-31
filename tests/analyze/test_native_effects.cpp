@@ -191,8 +191,103 @@ static void without_the_module_it_stays_conservative() {
           "sin a quien preguntar, el cierre sigue siendo opaco");
 }
 
+/**
+ * @brief Dos definiciones de la misma nativa que NO coinciden.
+ *
+ * Es el caso normal cuando dos modulos declaran la misma funcion del sistema y
+ * no dicen lo mismo; al fusionarlos llegan juntas.  Antes ganaba la primera y
+ * la otra desaparecia: el programa se compilaba segun el ORDEN en que se
+ * emitieron las llamadas, que no es una propiedad del programa.
+ *
+ * Lo que se fija aqui es que el conflicto se MARQUE (para que alguien pueda
+ * avisar) y que la resolucion sea la union de lo PEOR: perder precision es
+ * aceptable, aprobar de mas no.
+ */
+static void two_definitions_that_disagree() {
+    std::printf("-- dos definiciones que no coinciden: se marca y se pone a "
+                "salvo\n");
+    ir::IrModule mod = module_calling("libc:memcpy");
+
+    ir::IrNativeEffects solo_lee; // un modulo dice que solo lee
+    solo_lee.declared = true;
+    solo_lee.reads_pointee = 1u << 1;
+    mod.register_native_import("libc", "memcpy", solo_lee);
+
+    ir::IrNativeEffects escribe; // el otro dice que escribe, y que reserva
+    escribe.declared = true;
+    escribe.writes_pointee = 1u << 0;
+    escribe.allocates = true;
+    mod.register_native_import("libc", "memcpy", escribe);
+
+    const ir::IrNativeImport *ni = nullptr;
+    for (const ir::IrNativeImport &x : mod.native_imports)
+        if (x.name == "memcpy") ni = &x;
+    CHECK(ni != nullptr, "la nativa sigue registrada una sola vez");
+    if (ni == nullptr) return;
+    CHECK(ni->effects_conflict, "y el choque queda MARCADO, no tragado");
+    CHECK(ni->effects.reads_pointee == (1u << 1),
+          "se conserva lo que dijo la primera");
+    CHECK(ni->effects.writes_pointee == (1u << 0),
+          "y tambien lo que dijo la segunda: es la union, no una eleccion");
+    CHECK(ni->effects.allocates,
+          "lo peor de las dos se atribuye: aqui, que reserva");
+
+    // Y el llamante lo PAGA: con `allocates` puesto por una de las dos, un
+    // @alloc(0) sobre quien la llama tiene que incumplirse.
+    const analyze::FunctionFingerprint fp = compose_of(mod, true);
+    CHECK(fp.alloc_sites_total > 0,
+          "el llamante hereda lo peor, que es el sentido de la union");
+}
+
+/**
+ * @brief Dos definiciones que dicen LO MISMO no son un conflicto.
+ *
+ * Importa tanto como lo anterior: un aviso que salta cuando no pasa nada se
+ * aprende a ignorar, y entonces tampoco se ve el dia que si pasa.
+ */
+static void two_identical_definitions_are_not_a_conflict() {
+    std::printf("-- dos definiciones iguales no son un choque\n");
+    ir::IrModule mod = module_calling("libc:strlen");
+    ir::IrNativeEffects fx;
+    fx.declared = true;
+    fx.reads_pointee = 1u << 0;
+    mod.register_native_import("libc", "strlen", fx);
+    mod.register_native_import("libc", "strlen", fx);
+
+    for (const ir::IrNativeImport &x : mod.native_imports)
+        if (x.name == "strlen")
+            CHECK(!x.effects_conflict, "decir dos veces lo mismo no contradice");
+}
+
+/**
+ * @brief Una definicion y un registro SIN definir tampoco chocan.
+ *
+ * Es lo que pasa siempre: se declara en un sitio y se llama en otro, y el sitio
+ * de llamada registra el import a secas.  Si eso contara como choque, el aviso
+ * saltaria en todos los programas que usen la funcion.
+ */
+static void declaring_then_calling_is_not_a_conflict() {
+    std::printf("-- declarar y luego llamar no es un choque\n");
+    ir::IrModule mod = module_calling("libc:strlen");
+    ir::IrNativeEffects fx;
+    fx.declared = true;
+    fx.reads_pointee = 1u << 0;
+    mod.register_native_import("libc", "strlen", fx);
+    mod.register_native_import("libc", "strlen"); // el sitio de llamada
+
+    for (const ir::IrNativeImport &x : mod.native_imports)
+        if (x.name == "strlen") {
+            CHECK(!x.effects_conflict, "no hay contradiccion: uno no dijo nada");
+            CHECK(x.effects.declared,
+                  "y lo definido NO se pierde por llamarla despues");
+        }
+}
+
 int main() {
     std::printf("=== test_native_effects ===\n");
+    two_definitions_that_disagree();
+    two_identical_definitions_are_not_a_conflict();
+    declaring_then_calling_is_not_a_conflict();
     undeclared_is_opaque();
     declared_harmless_keeps_the_closure_known();
     what_is_declared_is_what_counts();

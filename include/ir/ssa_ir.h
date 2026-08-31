@@ -1798,6 +1798,24 @@ struct IrNativeEffects {
     /// Corre AL COMPILAR, no en ejecucion.  Sus efectos son sobre la propia
     /// compilacion, no sobre el programa compilado.
     bool comptime = false;
+
+    /// Igualdad campo a campo.  Sirve para detectar que DOS declaraciones de la
+    /// misma nativa dicen cosas distintas; sin esto, la segunda se descartaba
+    /// en silencio y el programa se compilaba con una de las dos elegida por el
+    /// ORDEN en que se emitieron las llamadas.
+    bool operator==(const IrNativeEffects &o) const noexcept {
+        return declared == o.declared && reads_pointee == o.reads_pointee &&
+               writes_pointee == o.writes_pointee &&
+               reads_global == o.reads_global &&
+               writes_global == o.writes_global && io == o.io &&
+               may_throw == o.may_throw &&
+               nondeterministic == o.nondeterministic &&
+               may_panic == o.may_panic && allocates == o.allocates &&
+               comptime == o.comptime;
+    }
+    bool operator!=(const IrNativeEffects &o) const noexcept {
+        return !(*this == o);
+    }
 };
 
 struct IrNativeImport {
@@ -1805,6 +1823,20 @@ struct IrNativeImport {
         lib; ///< Ruta logica de la libreria (p.ej. "stdlib/native/io/vesta_io")
     std::string name; ///< Nombre de la funcion nativa (p.ej. "vio_println")
     IrNativeEffects effects; ///< Lo que hace, si alguien lo ha dicho.
+
+    /// DOS declaraciones de esta misma nativa dijeron cosas distintas.
+    ///
+    /// No es un caso raro: la misma funcion del sistema puede declararse en dos
+    /// modulos, y al fusionarlos las dos llegan aqui.  Antes ganaba la primera
+    /// y la otra desaparecia sin dejar rastro, asi que el programa se compilaba
+    /// segun el ORDEN en que se emitieron las llamadas -- que no es una
+    /// propiedad del programa.
+    ///
+    /// Cuando pasa, @c effects se queda con la union de lo PEOR de las dos: el
+    /// compilador puede perder precision sin equivocarse, pero no al reves.  Y
+    /// se marca aqui para que quien tenga un canal de diagnostico lo diga; este
+    /// tipo no lo tiene, y ponerselo lo ataria al frontend.
+    bool effects_conflict = false;
 };
 
 // =========================================================================

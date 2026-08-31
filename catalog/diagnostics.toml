@@ -1244,3 +1244,22 @@ es = "el parametro '{0}' lleva '{1}' -- promete escribir lo que apunta -- pero l
 [VXT007]
 en = "writing through '{0}', which is marked 'in': through an 'in' parameter the function only reads"
 es = "escritura a traves de '{0}', que lleva 'in': por un parametro 'in' la funcion solo lee"
+
+# --- dos definiciones de la misma nativa que no coinciden (VXT008) ---
+#
+# La misma funcion del sistema declarada en dos modulos que dicen cosas
+# distintas es un caso normal, no exotico.  Antes ganaba la primera y la otra
+# desaparecia sin dejar rastro: el programa se compilaba segun el ORDEN en que
+# se emitieron las llamadas, que no es una propiedad del programa.
+#
+# Se avisa y se sigue con la union de lo PEOR de las dos.  Perder precision es
+# aceptable; afirmar de menos no.  Por eso es aviso y no error: quien lo lee
+# puede no ser el dueno de los dos modulos, y el compilador ya se ha puesto a
+# salvo solo.
+#
+# OJO: dos definiciones para OBJETIVOS distintos no son un conflicto -- son dos
+# hechos ciertos, cada uno en su ambito.  Esto solo salta cuando conviven.
+
+[VXT008]
+en = "'{0}:{1}' is defined twice with different effects ({2}); continuing with the union of the worst of both, so some caller may fail to prove effects it could otherwise prove"
+es = "'{0}:{1}' esta definida dos veces con efectos distintos ({2}); se sigue con la union de lo peor de las dos, asi que algun llamante puede quedarse sin demostrar efectos que si podria"

@@ -3355,6 +3355,34 @@ class Lowering {
     /// el flujo normal CALLVM (funcion Vesta local) sigue intacto.
     std::unordered_map<std::string, std::string> extern_lib_by_fn_name_;
 
+    /// Lo que se DEFINIO de cada extern (`in`/`out`/`inout` en sus params),
+    /// pasado a las mascaras por argumento de @c ir::IrNativeEffects.  Se llena
+    /// en el mismo pase 1 que @c extern_lib_by_fn_name_ y se entrega al
+    /// registrar el import en el SITIO DE LLAMADA, no al declararlo: un extern
+    /// declarado y nunca llamado no debe meter un import que obligue a resolver
+    /// un simbolo que el programa no usa.
+    ///
+    /// Sin entrada = nadie dijo nada = el analisis supone lo peor, que es lo
+    /// unico honesto sobre codigo que no esta en el programa.
+    std::unordered_map<std::string, ir::IrNativeEffects>
+        extern_effects_by_fn_name_;
+
+    /**
+     * @brief Registra el import de una nativa declarada con `extern`, llevando
+     *        consigo lo que se DEFINIO de ella.
+     * @param out Modulo destino (la llamada directa y el thunk escriben en
+     *            modulos distintos).
+     * @param lib Libreria.
+     * @param fn  Nombre de la funcion nativa.
+     *
+     * Un solo sitio para las dos vias de llamar a un extern.  Con dos, lo
+     * definido valdria o no segun por cual se llegara, que es una diferencia
+     * que nadie nota hasta que un contrato se aprueba por un camino y falla
+     * por el otro.
+     */
+    void register_extern_import_(ir::IrModule &out, const std::string &lib,
+                                 const std::string &fn);
+
     /// Externs cuyo `&fn` (o promocion a cfn) se uso como function value.
     /// Para cada uno generamos un thunk Vesta `__cfnthunk_<fn>` que reenvia
     /// al CALLN nativo, asi el cfn es invocable por CALLIND en cualquier
