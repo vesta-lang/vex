@@ -330,7 +330,7 @@ bool BorrowChecker::on_borrow_escape(const std::string &borrower_name,
     // Owner es local -> el borrow no puede sobrevivir a la funcion.
     diags_.error(
         loc_escape,
-        std::string("error: el borrow no puede sobrevivir a su origen\n") +
+        std::string("el borrow no puede sobrevivir a su origen\n") +
             "  el local '" + owner + "' al que apunta '" + borrower_name +
             "' vive solo durante esta funcion;\n" + "  " + escape_kind +
             " del borrow lo expone fuera del scope donde el local existe.");
@@ -352,11 +352,11 @@ void BorrowChecker::error_aliasing(SourceLoc loc_conflict,
                                    const BorrowRecord &rec, bool trying_mut) {
     std::string msg;
     if (rec.kind == BorrowKind::Mutable) {
-        msg = std::string("error: no se puede prestar '") + owner_name +
+        msg = std::string("no se puede prestar '") + owner_name +
               "' como " + (trying_mut ? "mutable" : "shared") +
               " porque ya esta prestado como mutable";
     } else {
-        msg = std::string("error: no se puede prestar '") + owner_name +
+        msg = std::string("no se puede prestar '") + owner_name +
               "' como mutable porque ya hay " +
               std::to_string(rec.shared_count) +
               " prestamo(s) shared activo(s)";
@@ -381,10 +381,10 @@ void BorrowChecker::error_use_while_borrowed(SourceLoc loc_use,
                                              bool is_mutation) {
     std::string msg;
     if (is_mutation) {
-        msg = std::string("error: no se puede mutar '") + owner_name +
+        msg = std::string("no se puede mutar '") + owner_name +
               "' porque tiene un prestamo " + kind_label(rec.kind) + " activo";
     } else {
-        msg = std::string("error: no se puede leer '") + owner_name +
+        msg = std::string("no se puede leer '") + owner_name +
               "' porque tiene un prestamo mutable activo (exclusivo)";
     }
     diags_.error(loc_use, msg);
@@ -399,7 +399,7 @@ void BorrowChecker::error_use_while_borrowed(SourceLoc loc_use,
 void BorrowChecker::error_move_while_borrowed(SourceLoc loc_move,
                                               const std::string &owner_name,
                                               const BorrowRecord &rec) {
-    diags_.error(loc_move, std::string("error: no se puede mover '") +
+    diags_.error(loc_move, std::string("no se puede mover '") +
                                owner_name + "' porque tiene un prestamo " +
                                kind_label(rec.kind) + " activo");
     std::string note_msg = std::string("prestamo ") + kind_label(rec.kind);

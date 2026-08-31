@@ -2761,6 +2761,74 @@ Type TypeChecker::enum_type_of(const EnumLayout &lay,
 // puntero de fuera y lo de dentro sigue siendo const.  Colapsar los dos ejes
 // haria de `out T const**` algo inexpresable sin ganar nada.
 // ---------------------------------------------------------------------------
+/**
+ * @brief El nombre de lo que se presta al pasar @p a como argumento.
+ * @param a La expresion del argumento.
+ * @return El nombre, o vacio si no se puede decir cual es.
+ *
+ * Solo se contesta cuando se SABE: un nombre, `&nombre`, o el objeto de un
+ * campo.  Con un puntero calculado no hay a quien atribuirlo, y inventar un
+ * dueno seria peor que no comprobar -- daria errores sobre algo que no es.
+ */
+static std::string borrowed_root_name(const ast::Expr *a) {
+    if (a == nullptr) return std::string();
+    if (a->kind == ast::NodeKind::IdentExpr)
+        return static_cast<const ast::IdentExpr *>(a)->name;
+    if (a->kind == ast::NodeKind::UnaryExpr) {
+        const auto *u = static_cast<const ast::UnaryExpr *>(a);
+        if (u->op == ast::UnOp::AddrOf) return borrowed_root_name(u->operand.get());
+        return std::string();
+    }
+    if (a->kind == ast::NodeKind::FieldAccessExpr)
+        return borrowed_root_name(
+            static_cast<const ast::FieldAccessExpr *>(a)->base.get());
+    if (a->kind == ast::NodeKind::IndexExpr)
+        return borrowed_root_name(
+            static_cast<const ast::IndexExpr *>(a)->base.get());
+    return std::string();
+}
+
+void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
+                                          const std::vector<ast::ParamDir> &dirs,
+                                          const std::vector<Type> &ptypes,
+                                          uint64_t by_ref,
+                                          const std::string &callee) {
+    if (e == nullptr || dirs.empty()) return;
+    // Los prestamos que se toman aqui duran lo que la llamada; se sueltan al
+    // final, en el mismo orden en que se pidieron.
+    std::vector<std::string> tomados;
+    const size_t n = std::min(e->args.size(), dirs.size());
+    for (size_t i = 0; i < n; ++i) {
+        const ast::ParamDir d = dirs[i];
+        if (d == ast::ParamDir::None) continue;
+        // La marca tiene que hablar de MEMORIA prestada: o el parametro apunta
+        // a algo, o es de salida por referencia (y entonces lo que viaja es la
+        // direccion de un hueco del llamante).
+        const bool por_ref = (i < 64) && ((by_ref & (1ull << i)) != 0);
+        const bool apunta = i < ptypes.size() &&
+                            (ptypes[i].kind == PrimitiveKind::PTR ||
+                             ptypes[i].kind == PrimitiveKind::ARRAY);
+        if (!por_ref && !apunta) continue;
+
+        const std::string owner = borrowed_root_name(e->args[i].get());
+        if (owner.empty()) continue;
+
+        /* `in` presta COMPARTIDO y `out`/`inout` EXCLUSIVO, que es exactamente
+         * la distincion de `borrow<T>` y `borrow_mut<T>`.  Por eso se pregunta
+         * al mismo checker: asi `f(x, x)` con dos `inout` sale como lo que es
+         * -- dos prestamos exclusivos del mismo dueno -- sin que nadie tenga
+         * que escribir una segunda regla de aliasing. */
+        const bool is_mut = (d != ast::ParamDir::In);
+        const std::string borrower = "el argumento " + std::to_string(i + 1) +
+                                     (callee.empty() ? std::string()
+                                                     : (" de " + callee));
+        if (borrow_checker_.on_lend(owner, borrower, e->args[i]->loc, is_mut))
+            tomados.push_back(borrower);
+    }
+    for (const std::string &b : tomados)
+        borrow_checker_.on_borrow_drop(b, e->loc);
+}
+
 void TypeChecker::check_out_params_written_(
     const std::vector<std::unique_ptr<ast::ParamDecl>> &params) {
     for (const auto &p : params) {
@@ -5930,6 +5998,9 @@ void TypeChecker::check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
         check_call_arg(e->args[i].get(), tp, i, "el metodo '" + name + "'", d,
                        by_ref);
     }
+    // Un metodo presta igual que una funcion suelta, y por el mismo sitio.
+    check_call_arg_borrows_(e, mi.param_dirs, mi.param_types,
+                            mi.param_by_ref_mask, name);
 }
 
 /**
@@ -17256,6 +17327,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                        i < sig.param_dirs.size() ? sig.param_dirs[i]
                                                  : ast::ParamDir::None,
                        i < 64 && (sig.param_by_ref_mask & (1ull << i)) != 0);
+    /* Y lo que esos argumentos PRESTAN, por el mismo checker que los
+     * `borrow<T>`: dos ideas parecidas de quien puede aliasar a quien acaban
+     * divergiendo, y la que se quede corta no avisa a nadie. */
+    check_call_arg_borrows_(e, sig.param_dirs, sig.param_types,
+                            sig.param_by_ref_mask,
+                            e->callee && e->callee->kind ==
+                                             ast::NodeKind::IdentExpr
+                                ? static_cast<ast::IdentExpr *>(e->callee.get())
+                                      ->name
+                                : std::string());
     // Chequear los argumentos extra para sus efectos (si la aridad fallo).
     for (size_t i = n; i < e->args.size(); ++i)
         (void)check_expr(e->args[i].get());

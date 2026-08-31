@@ -2023,6 +2023,31 @@ class TypeChecker {
         const std::vector<std::unique_ptr<ast::ParamDecl>> &params);
 
     /**
+     * @brief Los argumentos de una llamada, como PRESTAMOS.
+     * @param e       La llamada.
+     * @param dirs    Direccion por parametro (vacio = ninguno la lleva).
+     * @param ptypes  Tipos de los parametros.
+     * @param by_ref  Mascara de los que van por referencia.
+     * @param callee  Nombre del llamado, para citarlo en el mensaje.
+     *
+     * `in T* p` es un prestamo COMPARTIDO de lo que se le pasa, y
+     * `out`/`inout` uno EXCLUSIVO, mientras dura la llamada.  Eso es lo mismo
+     * que dicen `borrow<T>` y `borrow_mut<T>`, asi que se comprueba con el
+     * MISMO checker en vez de con una segunda idea de quien puede aliasar a
+     * quien: dos ideas parecidas de lo mismo divergen, y la que se quede corta
+     * no avisa a nadie.
+     *
+     * El prestamo dura lo que la llamada: se suelta al volver.  Que el llamado
+     * se lo lleve fuera es otra pregunta, y la contesta la regla de escape que
+     * ya existe.
+     */
+    void check_call_arg_borrows_(const ast::CallExpr *e,
+                                 const std::vector<ast::ParamDir> &dirs,
+                                 const std::vector<Type> &ptypes,
+                                 uint64_t by_ref,
+                                 const std::string &callee);
+
+    /**
      * @brief Devuelve el nombre de un tipo NO resuelto dentro de @p tn.
      *
      * Recorre punteros/arrays/optional hasta el @c NamedTypeNode base.  Si ese

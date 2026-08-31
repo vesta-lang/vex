@@ -1980,6 +1980,96 @@ modulo_case("mod_ns_xmod_concept", "ns_xmod_concept", 42)
 modulo_case("mod_generic_fn_infer", "generic_fn_infer", 42)
 
 
+def _resumen_aot(salida):
+    """Lee la linea de resumen de `tests/aot/run_all.py`.
+
+    Devuelve (ok, fallidos, saltados) o None si no aparecio -- que ya es un
+    fallo: significa que el lanzador no llego a terminar.
+    """
+    m = re.search(r"tests/aot en '(\w+)': (\d+) OK, (\d+) fallidos, (\d+) saltados",
+                  salida)
+    if not m:
+        return None
+    return (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+
+
+@case("aot_harness", serial=True)
+def _(ctx):
+    """Los tests de `tests/aot/`, enganchados a la suite que decide.
+
+    Son 26 comprobaciones del camino NATIVO -- enlazador propio, archivador,
+    secciones, sectores de arranque, TLS, POO nativa, ancho SIMD, excepciones,
+    despacho por CPU -- que hasta ahora solo se lanzaban a mano, una a una.  Por
+    eso nadie sabia como estaban: al correrlas en tanda por primera vez fallaban
+    15 de 26, y dentro habia fallos REALES del producto vivos desde hacia meses.
+
+    No los cubre nada mas: la e2e compila los ejemplos de `aot/` como mucho,
+    pero no enlaza con nuestro enlazador ni ejecuta el resultado ni pasa
+    valgrind, que es donde salieron.
+
+    Se corren los DOS lados, cada uno donde se puede:
+
+      - el de aqui, siempre;
+      - el de Linux, si hay WSL Y un build de Linux hecho.  Sin eso se SALTA
+        dejando constancia, nunca un falso OK -- misma regla que el resto de
+        casos que dependen de WSL.
+    """
+    build = os.path.dirname(VM_EXE)
+    runner = os.path.join(ROOT, "tests", "aot", "run_all.py")
+    if not os.path.isfile(runner):
+        ctx.fail("no encuentro tests/aot/run_all.py")
+        return
+
+    # --- el lado de aqui ---
+    _, log = ctx.run([sys.executable, runner, build], timeout=2400)
+    r = _resumen_aot(log)
+    if r is None:
+        ctx.fail("tests/aot (lado local): el lanzador no dio resumen", log)
+        return
+    ok_n, mal_n, salt_n = r
+    if mal_n:
+        fallos = "\n".join(l for l in log.splitlines() if "FALLA" in l)
+        ctx.fail("tests/aot (lado local): %d fallidos" % mal_n, fallos or log)
+        return
+    ctx.ok("tests/aot (lado local): %d OK, %d saltados" % (ok_n, salt_n))
+
+    # --- el lado de Linux ---
+    if not wsl_disponible():
+        ctx.skip("tests/aot (lado linux): WSL no disponible, no se ejecuta")
+        return
+    # El build de Linux lo deja ahi el empaquetado (`installer-linux`).  Si no
+    # esta, no es un fallo: es que en esta maquina no se ha construido.
+    sonda = subprocess.run(
+        ["wsl.exe", "-e", "sh", "-c",
+         "test -x $HOME/.cache/vesta/linux-build/vm && echo hay"],
+        capture_output=True, timeout=120)
+    if b"hay" not in (sonda.stdout or b""):
+        ctx.skip("tests/aot (lado linux): no hay build de Linux "
+                 "(~/.cache/vesta/linux-build); construyelo con "
+                 "`cmake --build <build> --target installer-linux`")
+        return
+    # La raiz se traduce con `wslpath`, que es quien sabe como esta montado
+    # cada disco; escribir `/mnt/f/...` da por hecho un punto de montaje y una
+    # maquina concretos.
+    r2 = subprocess.run(
+        ["wsl.exe", "-e", "sh", "-c",
+         "cd \"$(wslpath -a '%s')\" && "
+         "python3 tests/aot/run_all.py $HOME/.cache/vesta/linux-build"
+         % ROOT.replace("\\", "/")],
+        capture_output=True, text=True, errors="replace", timeout=2400)
+    salida = (r2.stdout or "") + (r2.stderr or "")
+    r = _resumen_aot(salida)
+    if r is None:
+        ctx.fail("tests/aot (lado linux): el lanzador no dio resumen", salida)
+        return
+    ok_n, mal_n, salt_n = r
+    if mal_n:
+        fallos = "\n".join(l for l in salida.splitlines() if "FALLA" in l)
+        ctx.fail("tests/aot (lado linux): %d fallidos" % mal_n, fallos or salida)
+        return
+    ctx.ok("tests/aot (lado linux): %d OK, %d saltados" % (ok_n, salt_n))
+
+
 @case("syscalls_linux_wsl")
 def _(ctx):
     """La rama LINUX de las syscalls, compilada a ELF y EJECUTADA en WSL.
@@ -4829,6 +4919,57 @@ i32 main() {
                      % (modo, got), log)
             return
         ctx.ok("out en metodo (-m %s) -> 3" % modo)
+
+
+
+
+# `in`/`out` y el borrow checker son LO MISMO dicho de dos formas: `in` presta
+# compartido y `out`/`inout` exclusivo.  Lo comprueba el mismo checker, asi que
+# estos casos salen de las reglas que ya existian (R1/R2) y no de una segunda
+# idea de quien puede aliasar a quien.
+DIR_ALIAS_CASES = [
+    ("dir_neg_alias_inout", """void f(inout i64 a, inout i64 b) {
+    a = b;
+}
+i32 main() {
+    i64 x = 1;
+    f(x, x);
+    return 0;
+}
+""", "ya esta prestado como mutable",
+     "dos `inout` al mismo dueno: aliasing mutable, por R1 del borrow checker",
+     "dos `inout` al mismo dueno debio fallar"),
+]
+
+for _t, _s, _p, _m, _f in DIR_ALIAS_CASES:
+    _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
+
+
+@case("dir_alias_compartido")
+def _(ctx):
+    """Dos `in` al MISMO dueno SI valen: son prestamos compartidos.
+
+    Importa tanto como el negativo.  Una regla de aliasing que rechazara esto
+    seria inutilizable -- pasar la misma cosa dos veces para leerla es normal --
+    y se aprenderia a desactivar.  Sale de R2, que ya existia.
+    """
+    src = """i64 suma(in i64* a, in i64* b) {
+    return (*a) + (*b);
+}
+i32 main() {
+    i64 x = 21;
+    return (i32) suma(&x, &x);
+}
+"""
+    vx = _write_vx(ctx, "dir_alias_ok.vx", src)
+    if not ctx.compile_vx(vx, "diralias"):
+        return
+    _, log = ctx.run_velb("diralias", schedulers=1)
+    got = get_r00(log)
+    if got != 42:
+        ctx.fail("dos `in` al mismo dueno: R00 == %s, se esperaba 42" % got, log)
+        return
+    ctx.ok("dos `in` al mismo dueno -> 42: compartidos, es legitimo")
 
 
 if __name__ == "__main__":
