@@ -69,6 +69,13 @@ def main():
     # Los programas viven como EJEMPLOS en examples_codes_vx/aot/ (no
     # hardcodeados aqui): el test compila cada uno a PE y verifica el exit. ---
     aot_ex = os.path.join(repo, "examples_codes_vx", "aot")
+    # Los directorios de trabajo llevan el PID.  Estaban con nombre FIJO en
+    # la raiz del repo, asi que dos ejecuciones a la vez se pisaban: al
+    # engancharlo a la suite -- que corre con -j 8 -- salia
+    # "WinError 32: el proceso no tiene acceso al archivo porque esta siendo
+    # utilizado por otro proceso", que parece un fallo del test y es una
+    # colision.  Siguen en la raiz porque la mitad de WSL traduce esa ruta.
+    marca = "_%d" % os.getpid()
     # (fichero del ejemplo, exit esperado).  Ver la cabecera de cada .vx.
     pe_cases = [
         ("64_thread_local_basico.vx", 5),
@@ -79,7 +86,7 @@ def main():
         ("69_thread_local_puntero.vx", 33),    # &tls + thread_local puntero
     ]
     if vm.endswith(".exe") and os.name == "nt":
-        pe = os.path.join(repo, "_tls_pe")
+        pe = os.path.join(repo, "_tls_pe" + marca)
         os.makedirs(pe, exist_ok=True)
         try:
             for ex, exp in pe_cases:
@@ -105,7 +112,7 @@ def main():
             ex70 = os.path.join(aot_ex, "70_thread_local_dll.vx")
             host70 = os.path.join(aot_ex, "70_thread_local_dll_host.c")
             if gcc_ok and os.path.exists(ex70) and os.path.exists(host70):
-                dpe = os.path.join(repo, "_tls_dll")
+                dpe = os.path.join(repo, "_tls_dll" + marca)
                 os.makedirs(dpe, exist_ok=True)
                 try:
                     dll = os.path.join(dpe, "tls.dll")
@@ -140,9 +147,9 @@ def main():
         print("TLS: gcc no disponible en WSL, omitido")
         return rc_pe
 
-    work = os.path.join(repo, "_tls_test")
-    wm = "/mnt/" + repo[0].lower() + repo[1:].replace("\\", "/").replace(
-        ":", "") + "/_tls_test"
+    work = os.path.join(repo, "_tls_test" + marca)
+    wm = ("/mnt/" + repo[0].lower() + repo[1:].replace("\\", "/").replace(
+        ":", "") + "/_tls_test" + marca)
     os.makedirs(work, exist_ok=True)
     rc = 0
     try:

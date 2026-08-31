@@ -4972,5 +4972,31 @@ i32 main() {
     ctx.ok("dos `in` al mismo dueno -> 42: compartidos, es legitimo")
 
 
+
+
+@case("fmt_corpus_formateado")
+def _(ctx):
+    """Todo el corpus esta formateado, y se comprueba SIN una lista que
+    mantener.
+
+    `fmt_test` corre sobre `tests/vx/fmt_corpus.txt`, que se genera a mano.
+    Eso deja un hueco silencioso: al anadir un ejemplo, el formateador deja de
+    mirarlo hasta que alguien se acuerda de regenerar la lista -- y se
+    acumulan: en un momento dado faltaban 31 ficheros --.
+
+    `vesta fmt check` recorre el DIRECTORIO, asi que no hay lista que se quede
+    atras.  No sustituye a `fmt_test` -- ese comprueba ademas idempotencia y
+    que el programa siga siendo el mismo --, pero si cierra el hueco de
+    cobertura, que es el que no avisa.
+    """
+    for d in ("examples_codes_vx", "stdlib"):
+        rc, log = ctx.run([VM_EXE, "fmt", "check", os.path.join(ROOT, d)])
+        if rc != 0:
+            ctx.fail("fmt check %s: hay ficheros sin formatear (pasa "
+                     "`vesta fmt %s`)" % (d, d), log)
+            return
+        ctx.ok("fmt check %s: todo formateado" % d)
+
+
 if __name__ == "__main__":
     main()
