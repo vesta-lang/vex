@@ -13364,7 +13364,8 @@ const bool g_no_dead_stack_slot = util::flag_on(util::FlagId::NoDeadStackSlot);
 
 } // namespace
 
-void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
+void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
+                 analysis::asa::FactStore *facts) {
     if (level == OptLevel::O0) return; // sin optimizacion
 
     /* Lo declarado sobre las nativas del modulo.  Se recoge UNA vez y se pasa
@@ -13976,7 +13977,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     if (level >= OptLevel::O2) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
-            if (ir_pass_unroll(fn)) {
+            if (ir_pass_unroll(fn, /*factor=*/0, facts)) {
                 ir_pass_copy_prop(fn);
                 ir_pass_cse(fn);
                 ir_pass_const_fold(fn);

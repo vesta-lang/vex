@@ -56,11 +56,36 @@
 #ifndef IR_PASSES_UNROLL_H
 #define IR_PASSES_UNROLL_H
 
+namespace analysis {
+namespace asa {
+class FactStore;
+} // namespace asa
+} // namespace analysis
+
 namespace ir {
 
 struct IrFunction;
 
-bool ir_pass_unroll(IrFunction &fn, int factor = 0);
+/**
+ * @brief Desenrolla los bucles contados que compensen.
+ *
+ * @param fn     Funcion a transformar.
+ * @param factor 0 = lo decide la politica.
+ * @param facts  Donde DEJAR lo que se sepa de cada bucle antes de tocarlo, o
+ *               nulo para no publicar nada.
+ *
+ * Lo segundo no es un extra: este pase reconoce el bucle, averigua cuantas
+ * vueltas da y acto seguido lo REESCRIBE, con lo que ese conocimiento moria
+ * con la transformacion que lo produjo -- despues ya no hay bucle que contar,
+ * y quien preguntaba se encontraba "no se puede afirmar cuantas vueltas da"
+ * sobre un bucle que el compilador tenia perfectamente contado --.
+ *
+ * Los hechos salen sellados en el momento `in-opt`: son ciertos del codigo que
+ * habia AQUI, ni antes ni despues.  Y como el almacen viaja a disco, la
+ * proxima compilacion puede reutilizarlos en vez de volver a deducirlos.
+ */
+bool ir_pass_unroll(IrFunction &fn, int factor = 0,
+                    analysis::asa::FactStore *facts = nullptr);
 
 } // namespace ir
 

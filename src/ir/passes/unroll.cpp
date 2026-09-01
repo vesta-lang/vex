@@ -17,6 +17,7 @@
 #include "util/env_flags.h"
 #include "ir/passes/unroll.h"
 
+#include "analysis/asa/observed.h" // publicar lo que se sabe ANTES de deshacerlo
 #include "analysis/facts/ir_facts.h" // def_block: el hecho, no un recorrido propio
 #include "analysis/facts/loop_facts.h"
 #include "analysis/facts/loop_iv.h"
@@ -331,7 +332,8 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
 
 } // namespace
 
-bool ir_pass_unroll(IrFunction &fn, int factor) {
+bool ir_pass_unroll(IrFunction &fn, int factor,
+                    analysis::asa::FactStore *facts) {
     if (unroll_disabled()) return false;
     if (fn.blocks.size() < 3) return false;
 
@@ -351,8 +353,8 @@ bool ir_pass_unroll(IrFunction &fn, int factor) {
      * interno).  Sale de los hechos, no de un recorrido propio: era el mismo
      * doble bucle que ya hace `build_ir_facts`, y lo repetian ademas el
      * resolvedor de punteros y el reconocedor de memoria por lotes. */
-    const analysis::IrFacts facts = analysis::build_ir_facts(fn);
-    const std::vector<int32_t> &def_block = facts.def_block;
+    const analysis::IrFacts ir_facts = analysis::build_ir_facts(fn);
+    const std::vector<int32_t> &def_block = ir_facts.def_block;
 
     // Solo bucles INNERMOST (sin hijos): los que tienen cuerpo cloneable
     // simple.
@@ -386,6 +388,27 @@ bool ir_pass_unroll(IrFunction &fn, int factor) {
 
     static UnrollStats g_stats;
     static const bool want_stats = util::flag_on(util::FlagId::UnrollStats);
+
+    /* Lo que se sabe de cada bucle, DICHO antes de tocarlo.
+     *
+     * Aqui esta lo que el pase averiguo -- forma, induccion y vueltas -- y
+     * dentro de un momento no va a estar: desenrollar reescribe el bucle, y
+     * despues ya no hay bucle que contar.  Ese conocimiento se tiraba.
+     *
+     * Se publica de TODOS los elegibles, incluso de los que luego no se
+     * desenrollen: que la politica decida que no compensa no lo hace menos
+     * cierto, y quien pregunte "cuantas vueltas da esto" quiere el numero,
+     * no la decision del optimizador. */
+    if (facts != nullptr) {
+        for (const LoopInfo &li : eligible) {
+            analysis::asa::Fact f;
+            if (analysis::asa::loop_trip_fact(
+                    *facts, fn, li.st.header, li.trip,
+                    analysis::asa::kStageDuringOpt,
+                    analysis::asa::Source::Static, f))
+                facts->add(std::move(f));
+        }
+    }
 
     bool changed = false;
     for (const LoopInfo &li : eligible) {

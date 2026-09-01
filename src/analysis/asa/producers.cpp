@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstring>
 #include <sstream>
+#include "analysis/asa/observed.h" // el hecho de bucle, armado en UN sitio
 #include "analysis/facts/alignment.h"
 /* La forma de un bucle, su variable de induccion y cuantas vueltas da: lo que
  * hace falta para que el dominio de bucles diga algo mas que "aqui hay uno". */
@@ -735,22 +736,18 @@ void produce_loops(Production &p) {
                               kProducerLoops, "");
                 continue;
             }
+            /* El hecho lo arma UN solo sitio (@c loop_trip_fact), el mismo que
+             * usa el pase que lo descubre antes de deshacer el bucle.  Con dos
+             * constructores bastaria que uno se quedara atras para que el mismo
+             * bucle se contara distinto segun quien lo mirara. */
             Fact f;
-            f.what.domain = kProducerLoops;
-            /* "Da N vueltas" y "da como mucho N" son hechos DISTINTOS, no el
-             * mismo con menos confianza: con el primero se puede quitar una
-             * comprobacion, con el segundo solo elegir.  Por eso van con
-             * codigos distintos y no se colapsan en uno. */
-            const bool is_exact = tc.known();
-            f.what.code = is_exact ? "loop.trip_count" : "loop.trip_at_most";
-            f.what.a = static_cast<int64_t>(is_exact ? tc.trip : tc.trip_max);
-            f.about = about;
-            f.seal = s;
-            /* La certeza la trae el hecho, no la pone quien lo publica. */
-            f.seal.certainty = tc.certainty;
-            support_with_structure(p, fn, f,
-                                   is_exact ? "induction-variable"
-                                            : "induction-variable+ranges");
+            if (!loop_trip_fact(p.store, fn, about.id, tc, p.stage,
+                                Source::Static, f))
+                continue; // no habia nada que afirmar (ya se dijo por que)
+            /* El apoyo CONCRETO -- no solo el nombre del productor -- para que
+             * la derivacion se pueda recorrer.  Eso solo lo sabe quien produce
+             * el dominio, que es quien tiene el hecho de estructura a mano. */
+            support_with_structure(p, fn, f, f.proof.rule);
             p.assert_fact(std::move(f));
         }
     }

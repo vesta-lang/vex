@@ -4183,8 +4183,13 @@ CompileResult compile_vx_project(
 
     {
         util::CronoTramo t_("fase-opt:ir_optimize");
+        /* Con el almacen si se pidio el momento de EN MEDIO.  Ver la nota en
+         * el camino de fichero suelto. */
         ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
-                        /*allow_inline=*/!opts.emit_ir_preopt);
+                        /*allow_inline=*/!opts.emit_ir_preopt,
+                        wants_stage_(opts, analysis::asa::kStageDuringOpt)
+                            ? &facts
+                            : nullptr);
     }
 
     /* Sobre el codigo que DE VERDAD se va a emitir: lo que el analisis puede

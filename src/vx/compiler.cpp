@@ -1362,8 +1362,15 @@ CompileResult compile_vx_source(const std::string &source,
                                      s.end());
         }
 
+        /* Y el almacen, si alguien pidio el momento de EN MEDIO: lo que un
+         * pase averigua y acto seguido deshace -- el desenrollador sabe
+         * cuantas vueltas da el bucle justo antes de reescribirlo -- no esta
+         * ni antes ni despues, asi que si no se recoge aqui no se recoge. */
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
-                        /*allow_inline=*/!opts.emit_ir_preopt);
+                        /*allow_inline=*/!opts.emit_ir_preopt,
+                        wants_stage(analysis::asa::kStageDuringOpt)
+                            ? &res.facts
+                            : nullptr);
         res.tiempos.optimizar_us += static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 RelojFase::now() - marca_opt)

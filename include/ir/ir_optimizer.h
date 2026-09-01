@@ -79,6 +79,11 @@
 namespace analysis {
 struct PointsTo; // resolvedor points-to compartido
                  // (analysis/memory/points_to.h)
+namespace asa {
+/// Donde un pase DEJA lo que descubre (analysis/asa/fact_store.h).  Declarado
+/// y no incluido: el optimizador no necesita conocer el almacen para pasarlo.
+class FactStore;
+} // namespace asa
 } // namespace analysis
 
 namespace ir {
@@ -196,7 +201,8 @@ std::vector<TiempoPase> tiempos_de_pases();
 /// otra: se llama al empezar cada @ref ir_optimize del modulo raiz).
 void reiniciar_tiempos_de_pases();
 
-void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true);
+void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true,
+                 analysis::asa::FactStore *facts = nullptr);
 
 // =========================================================================
 //  Pases individuales (se pueden invocar directamente si se desea)

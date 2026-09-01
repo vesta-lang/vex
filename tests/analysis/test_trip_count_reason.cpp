@@ -28,6 +28,7 @@
  * Esto fija que cada uno diga lo suyo.
  */
 
+#include "analysis/asa/observed.h" // el hecho del bucle, armado en UN sitio
 #include "analysis/facts/loop_trip_count.h"
 #include "ir/ssa_ir.h"
 
@@ -303,6 +304,75 @@ static void written_constants_win() {
           "y sigue estando DEMOSTRADO, no inferido");
 }
 
+/**
+ * @brief El hecho del bucle lo arma UN solo sitio, lo pida quien lo pida.
+ *
+ * Lo construyen dos: el productor del dominio, mirando el modulo, y el pase
+ * que lo descubre justo antes de deshacer el bucle.  Con dos constructores
+ * bastaria que uno se quedara atras para que el MISMO bucle se contara
+ * distinto segun quien lo mirara -- y eso no da error, da otra respuesta.
+ *
+ * Lo que cambia entre los dos es la PROCEDENCIA y el MOMENTO; lo que dice, no.
+ */
+static void the_loop_fact_is_built_in_one_place() {
+    std::printf("-- el hecho del bucle se arma en un solo sitio\n");
+    analysis::asa::FactStore store;
+    ir::IrFunction fn;
+    fn.name = "f";
+
+    // Exacto: "da 10 vueltas", demostrado.
+    analysis::LoopTripInfo exact;
+    exact.trip = 10;
+    analysis::asa::Fact fe;
+    CHECK(analysis::asa::loop_trip_fact(store, fn, /*header=*/3, exact,
+                                        analysis::asa::kStageDuringOpt,
+                                        analysis::asa::Source::Static, fe),
+          "con un numero exacto SI hay hecho");
+    CHECK(std::string(fe.what.code) == "loop.trip_count",
+          "un numero exacto sale con su codigo");
+    CHECK(fe.what.a == 10, "y con el numero");
+    CHECK(fe.about.kind == analysis::asa::Subject::Kind::Block &&
+              fe.about.id == 3,
+          "el sujeto es la CABECERA del bucle, no la funcion");
+    CHECK(std::string(fe.scope.stage) == analysis::asa::kStageDuringOpt,
+          "sellado en el momento que dijo quien publica");
+    CHECK(fe.seal.certainty == analysis::asa::Certainty::Proven,
+          "la certeza viene del analisis");
+
+    /* Cota: es un hecho DISTINTO, no el mismo con menos confianza.  Con el
+     * exacto se puede quitar una comprobacion; con la cota, solo elegir. */
+    analysis::LoopTripInfo bound;
+    bound.trip_max = 16;
+    bound.certainty = analysis::asa::Certainty::Inferred;
+    analysis::asa::Fact fb;
+    CHECK(analysis::asa::loop_trip_fact(store, fn, 3, bound,
+                                        analysis::asa::kStagePreOpt,
+                                        analysis::asa::Source::Static, fb),
+          "con una cota tambien hay hecho");
+    CHECK(std::string(fb.what.code) == "loop.trip_at_most",
+          "una cota no se disfraza del numero exacto");
+    CHECK(fb.what.a == 16, "y lleva la cota");
+    CHECK(fb.seal.certainty == analysis::asa::Certainty::Inferred,
+          "y se infiere, no se demuestra");
+
+    /* Sin cota NO se afirma nada.  Devolver un hecho sin codigo -- y no uno
+     * que diga "-1" -- es lo que deja que el no-saber vaya por su camino, con
+     * su motivo, en vez de colarse como ruido que ademas se cuenta. */
+    const analysis::LoopTripInfo nothing;
+    analysis::asa::Fact empty;
+    CHECK(!analysis::asa::loop_trip_fact(store, fn, 3, nothing,
+                                         analysis::asa::kStagePostOpt,
+                                         analysis::asa::Source::Static, empty),
+          "sin cota NO hay hecho");
+    /* Y el hecho no se toca: quien llame sin mirar el retorno no se lleva algo
+     * a medio rellenar.  Los campos traen "?" de fabrica -- ni nulos ni vacios
+     * --, asi que cualquier centinela que se mirara despues diria "hay hecho"
+     * siempre; por eso se contesta con un bool y no con un hecho vacio. */
+    CHECK(std::string(empty.what.code) == "?" &&
+              std::string(empty.what.domain) == "?",
+          "y el hecho de salida se queda intacto");
+}
+
 int main() {
     std::printf("=== test_trip_count_reason ===\n");
     known_has_no_reason();
@@ -315,6 +385,7 @@ int main() {
     a_bounded_limit_bounds_the_loop();
     without_ranges_nothing_changes();
     written_constants_win();
+    the_loop_fact_is_built_in_one_place();
     std::printf("=== test_trip_count_reason: %d comprobaciones, %d fallidas "
                 "===\n",
                 g_checks, g_fail);

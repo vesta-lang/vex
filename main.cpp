@@ -2410,6 +2410,7 @@ int main(int argc, char *argv[]) {
          * criterio de cuando fiarse de lo guardado. */
         copts.asa_all_domains = true;
         copts.asa_stages = {analysis::asa::kStagePreOpt,
+                            analysis::asa::kStageDuringOpt,
                             analysis::asa::kStagePostOpt};
         const bool como_proyecto = vx::vx_source_has_imports(vx_source) ||
                                    vx::vx_source_declara_namespace(vx_source);
