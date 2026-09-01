@@ -2541,6 +2541,22 @@ int main(int argc, char *argv[]) {
         copts.module_name = "main";
         copts.opt_level = 2;
         copts.emit_ir_preopt = true;
+        /* Y los HECHOS de los bucles, en los tres momentos.
+         *
+         * El coste dejaba de deducirse por anidamiento a secas: un bucle cuyas
+         * vueltas estan DEMOSTRADAS constantes multiplica por una constante,
+         * no por `n`.  Sin esto, `for (i = 0; i < 64; i++)` salia O(n) -- y
+         * con el remainder que deja el desenrollador, O(n^2), con el informe
+         * acusando al optimizador de haber empeorado el coste de una funcion
+         * cuyo coste es CONSTANTE.
+         *
+         * Los tres momentos porque el bucle puede ser reconocible en uno y no
+         * en otro: lo que se pregunta -- "da un numero fijo de vueltas?" -- no
+         * cambia segun quien lo mirara. */
+        copts.asa_domains = {"asa.loops"};
+        copts.asa_stages = {analysis::asa::kStagePreOpt,
+                            analysis::asa::kStageDuringOpt,
+                            analysis::asa::kStagePostOpt};
         /* Y ademas el modulo con el inline puesto: el informe necesita los DOS
          * -- el cuerpo escrito para el coste, el codigo real para todo lo
          * demas -- y antes eso eran dos compilaciones del fuente entero. */
@@ -2689,7 +2705,10 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-        analyze::ModuleCost mc_post = analyze::analyze_module(amod_post);
+        /* Con los hechos: el coste PREGUNTA cuantas vueltas da cada bucle en
+         * vez de suponerlo por el anidamiento. */
+        analyze::ModuleCost mc_post = analyze::analyze_module(
+            amod_post, &cr.facts, analysis::asa::kStagePostOpt);
         analyze::compose_interproc(mc_post);
 
         // Huella computacional (recursos + efectos) sobre el modulo POST-opt +
@@ -2794,7 +2813,8 @@ int main(int argc, char *argv[]) {
         analyze::ModuleCost mc_pre;
         if (have_pre && ir::parse_ir_module_cache(
                             cr.ir_module_cache_bytes_preopt, amod_pre)) {
-            mc_pre = analyze::analyze_module(amod_pre);
+            mc_pre = analyze::analyze_module(amod_pre, &cr.facts,
+                                             analysis::asa::kStagePreOpt);
             analyze::compose_interproc(mc_pre);
         } else {
             have_pre = false;

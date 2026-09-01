@@ -34,6 +34,14 @@
 #include <string>
 #include <vector>
 
+namespace analysis {
+namespace asa {
+/// Lo que el compilador sabe del modulo.  Declarado y no incluido: el coste lo
+/// CONSULTA, no lo construye.
+class FactStore;
+} // namespace asa
+} // namespace analysis
+
 namespace ir {
 struct IrFunction;
 struct IrModule;
@@ -201,8 +209,28 @@ struct ModuleCost {
  *
  * @param fn  Funcion IR a analizar (no se modifica).
  * @return    Resultado de coste con la cota inferida + estado del contrato.
+ *
+ * @param facts Lo que el ASA sabe del modulo, o nulo.
+ *
+ *        Con hechos, un bucle cuyas vueltas estan DEMOSTRADAS constantes deja
+ *        de contar como profundidad: da las mismas vueltas den lo que den las
+ *        entradas, asi que multiplica por una constante y no por `n`.  Sin
+ *        ellos se comporta como siempre -- estructural puro --, que es lo
+ *        correcto para quien llama sin ASA.
+ *
+ *        No lo deduce por su cuenta: quien cuenta vueltas es el dominio de
+ *        bucles, y el coste es un consumidor mas.  Con dos respuestas a la
+ *        misma pregunta, una se queda vieja sin que nadie se entere.
+ *
+ * @param stage MOMENTO del que es @p fn (@c analysis::asa::kStage*).  Es
+ *        obligatorio con hechos, y no un detalle: un hecho de bucle nombra su
+ *        cabecera por ID DE BLOQUE y el optimizador los renumera, asi que uno
+ *        de antes leido sobre el codigo de despues no habla de un bloque
+ *        parecido -- habla de OTRO --.
  */
-CostResult analyze_function(const ir::IrFunction &fn);
+CostResult analyze_function(const ir::IrFunction &fn,
+                            const analysis::asa::FactStore *facts = nullptr,
+                            const char *stage = nullptr);
 
 /**
  * @brief Analiza el coste de todas las funciones de un modulo (PARCIAL).
@@ -212,7 +240,9 @@ CostResult analyze_function(const ir::IrFunction &fn);
  * Solo computa el coste PARCIAL (cuerpo, calls=O(1)); el coste TOTAL queda
  * igual al parcial salvo que se llame despues @c compose_interproc.
  */
-ModuleCost analyze_module(const ir::IrModule &mod);
+ModuleCost analyze_module(const ir::IrModule &mod,
+                          const analysis::asa::FactStore *facts = nullptr,
+                          const char *stage = nullptr);
 
 /**
  * @brief Composicion interprocedural: rellena @c total_class / @c

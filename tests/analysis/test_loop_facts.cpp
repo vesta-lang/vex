@@ -12,8 +12,10 @@
  *        loops anidados).
  */
 
+#include "analysis/asa/observed.h" // el hecho de bucle, para darselo al coste
 #include "analysis/facts/ir_facts.h"
 #include "analysis/facts/loop_facts.h"
+#include "analyze/bigo.h" // el CONSUMIDOR: deja de contar por anidamiento
 #include "analysis/facts/loop_iv.h"
 #include "analysis/facts/loop_structure.h"
 #include "analysis/facts/loop_trip_count.h"
@@ -179,6 +181,124 @@ static void counted_loop_before_optimizing() {
     CHECK(tc.trip == 64, "sesenta y cuatro vueltas");
 }
 
+/**
+ * @brief El COSTE deja de llamar lineal a un bucle de vueltas constantes.
+ *
+ * Un `for (i = 0; i < 64; i++)` da 64 vueltas den lo que den las entradas: es
+ * un factor constante, no `n`.  El analisis lo deducia del ANIDAMIENTO a
+ * secas, asi que lo declaraba O(n) -- y con el bucle de resto que deja el
+ * desenrollador, O(n^2), llegando a acusar al optimizador de haber empeorado
+ * el coste de una funcion cuyo coste es constante.
+ *
+ * No era un error, era una RESPUESTA equivocada, que es peor.  Ahora lo
+ * pregunta: quien cuenta vueltas es el dominio de bucles, y el coste es un
+ * consumidor mas.
+ *
+ * Se comprueba con y SIN hechos: sin ellos tiene que comportarse como antes,
+ * o el cambio seria una regresion para todo el que llame sin ASA.
+ */
+static void constant_trip_loop_is_not_linear() {
+    std::printf("\n[coste: un bucle de vueltas constantes NO es lineal]\n");
+
+    ir::IrFunction fn;
+    fn.name = "counted";
+    for (int i = 0; i < 7; ++i) fn.values.push_back({});
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+    IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    {
+        IrInstr c = val(IrOp::CONST, 0, IrType::I64);
+        c.imm = 0;
+        entry.instrs.push_back(c);
+    }
+    entry.instrs.push_back(br(1));
+
+    IrBlock header;
+    header.id = 1;
+    header.name = "header";
+    {
+        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
+        phi.phi_args.push_back({/*value=*/5, /*block=*/2});
+        header.instrs.push_back(phi);
+        IrInstr lim = val(IrOp::CONST, 3, IrType::I64);
+        lim.imm = 64;
+        header.instrs.push_back(lim);
+        IrInstr cmp = val(IrOp::CMP_LT, 4, IrType::BOOL);
+        cmp.operands.push_back(1);
+        cmp.operands.push_back(3);
+        header.instrs.push_back(cmp);
+        IrInstr t = brcond(2, 3);
+        t.operands[0] = 4;
+        header.instrs.push_back(t);
+    }
+    IrBlock body;
+    body.id = 2;
+    body.name = "body";
+    {
+        IrInstr one = val(IrOp::CONST, 6, IrType::I64);
+        one.imm = 1;
+        body.instrs.push_back(one);
+        IrInstr add = val(IrOp::ADD, 5, IrType::I64);
+        add.operands.push_back(1);
+        add.operands.push_back(6);
+        body.instrs.push_back(add);
+        body.instrs.push_back(br(1));
+    }
+    fn.blocks = {entry, header, body, block(3, "exit", ret())};
+    /* El coste recorre `succs`, no los terminadores: sin esto no ve el
+     * back-edge y no hay bucle que contar -- el test pasaria sin probar
+     * nada. */
+    fn.blocks[0].succs = {1};
+    fn.blocks[1].succs = {2, 3};
+    fn.blocks[2].succs = {1};
+    fn.blocks[1].preds = {0, 2};
+    fn.blocks[2].preds = {1};
+    fn.blocks[3].preds = {1};
+
+    /* SIN hechos: el anidamiento manda, como siempre.  Se compara con el otro
+     * caso en vez de fijar un numero: lo que se prueba es que el hecho CAMBIA
+     * la respuesta, no cuanto vale la cuenta estructural -- eso es cosa del
+     * detector de bucles, y clavarlo aqui ataria este test a el. */
+    const analyze::CostResult sin_hechos = analyze::analyze_function(fn);
+    CHECK(sin_hechos.max_loop_depth >= 1,
+          "sin hechos, el bucle cuenta como profundidad");
+
+    /* CON el hecho de que da 64 vueltas, demostradas.  Se sella en el mismo
+     * momento por el que se pregunta: un hecho de bucle nombra su cabecera por
+     * ID DE BLOQUE, y preguntarlo desde otro momento seria leer otro bloque. */
+    analysis::asa::FactStore store;
+    analysis::LoopTripInfo trip;
+    trip.trip = 64;
+    analysis::asa::Fact f;
+    CHECK(analysis::asa::loop_trip_fact(store, fn, /*header=*/1, trip,
+                                        analysis::asa::kStagePreOpt,
+                                        analysis::asa::Source::Static, f),
+          "hay hecho que publicar");
+    store.add(std::move(f));
+
+    const analyze::CostResult con_hechos = analyze::analyze_function(
+        fn, &store, analysis::asa::kStagePreOpt);
+    CHECK(con_hechos.max_loop_depth == 0,
+          "con las vueltas demostradas constantes, NO cuenta como profundidad");
+
+    /* Y preguntando por OTRO momento no se ve: el hecho habla de los ids de su
+     * codigo, no de los de este.  Que no case es lo correcto -- lo peligroso
+     * seria que casara. */
+    const analyze::CostResult otro_momento = analyze::analyze_function(
+        fn, &store, analysis::asa::kStagePostOpt);
+    CHECK(otro_momento.max_loop_depth == sin_hechos.max_loop_depth,
+          "un hecho de otro momento no se aplica a este codigo");
+}
+
 int main() {
     std::printf("=== test_loop_facts (Fase 0.25: LoopFacts) ===\n");
 
@@ -260,6 +380,7 @@ int main() {
     }
 
     counted_loop_before_optimizing();
+    constant_trip_loop_is_not_linear();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

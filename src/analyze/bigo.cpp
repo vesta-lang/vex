@@ -41,6 +41,7 @@
  */
 #include "analyze/bigo.h"
 
+#include "analysis/asa/fact_store.h" // el coste PREGUNTA cuantas vueltas da
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h" // un `asm` puede llevar un bucle dentro
 #include "vx/asm/asm_cfg.h" // ...y su grafo de flujo dice cuantos y anidados
@@ -116,6 +117,24 @@ CostClass parse_cost_class(const std::string &expr) {
     }
     return CostClass::O_UNKNOWN;
 }
+
+/**
+ * @brief Que cabeceras tienen las vueltas DEMOSTRADAS constantes.
+ *
+ * No lo averigua: lo PREGUNTA.  Quien cuenta vueltas es el dominio de bucles
+ * del ASA, y el coste es un consumidor mas -- si lo dedujera por su cuenta
+ * habria dos respuestas a la misma pregunta y una se quedaria vieja sin que
+ * nadie se entere.
+ *
+ * Vacio si no se dan hechos: entonces el coste se comporta como siempre, que
+ * es lo correcto para quien llama sin ASA (un test, una herramienta suelta).
+ */
+struct BoundedLoops {
+    std::unordered_set<ir::IrBlockId> constant;
+    bool is_constant(ir::IrBlockId header) const {
+        return constant.count(header) != 0;
+    }
+};
 
 /// @brief Mapea una profundidad de loop a la clase polinomica que aporta.
 /**
@@ -323,14 +342,31 @@ static uint32_t block_loop_depth(ir::IrBlockId b,
  */
 static uint32_t compute_loop_depths(const ir::IrFunction &fn,
                                     const std::vector<LoopRange> &ranges,
-                                    std::vector<LoopCost> &out_loops) {
+                                    std::vector<LoopCost> &out_loops,
+                                    const BoundedLoops &bounded) {
     using Range = LoopRange;
     uint32_t max_depth = 0;
     for (const Range &r : ranges) {
+        /* Un bucle con las vueltas DEMOSTRADAS constantes no aporta a la
+         * profundidad: da 64 vueltas den lo que den las entradas, asi que
+         * multiplica por una constante y no por `n`.
+         *
+         * Contarlo era decir que `for (i = 0; i < 64; i++)` es lineal, y con
+         * el remainder que deja el desenrollador, CUADRATICO -- el informe
+         * llegaba a acusar al optimizador de haber empeorado el coste de una
+         * funcion cuyo coste es constante --.  No era un error: era una
+         * respuesta equivocada, que es peor.
+         *
+         * Solo las DEMOSTRADAS.  Una cota inferida por rangos acota el bucle
+         * pero no dice que sea constante para toda entrada, y descontarla
+         * seria afirmar de mas. */
+        if (bounded.is_constant(r.h)) continue;
+
         // Profundidad = 1 + numero de loops que contienen estrictamente a r.
         uint32_t depth = 1;
         for (const Range &o : ranges) {
             if (o.h == r.h && o.last == r.last) continue;
+            if (bounded.is_constant(o.h)) continue; // idem para los de fuera
             // o contiene estrictamente a r.
             if (o.h <= r.h && o.last >= r.last &&
                 !(o.h == r.h && o.last == r.last))
@@ -390,14 +426,45 @@ static void detect_recursion(const ir::IrFunction &fn, uint32_t &self_calls,
 /*  Analisis de funcion                                                   */
 /* ===================================================================== */
 
-CostResult analyze_function(const ir::IrFunction &fn) {
+/**
+ * @brief Pregunta al ASA que bucles de @p fn tienen vueltas constantes.
+ *
+ * Solo las DEMOSTRADAS (`Certainty::Proven`): una cota inferida por rangos
+ * acota el bucle, pero no dice que sea constante para toda entrada, y
+ * descontarla del coste seria afirmar de mas.
+ *
+ * Se pregunta por el MOMENTO del modulo que se esta mirando, y es obligatorio:
+ * un hecho de bucle nombra su cabecera por ID DE BLOQUE, y el optimizador los
+ * renumera.  Un hecho de antes leido sobre el codigo de despues no habla de un
+ * bloque parecido: habla de OTRO.
+ */
+static BoundedLoops ask_bounded_loops(const ir::IrFunction &fn,
+                                      const analysis::asa::FactStore *facts,
+                                      const char *stage) {
+    BoundedLoops b;
+    if (facts == nullptr || stage == nullptr) return b;
+    analysis::asa::Scope here;
+    here.stage = stage;
+    for (const analysis::asa::Fact *f :
+         facts->find_all("loop.trip_count", fn.name.c_str(), here)) {
+        if (f->seal.certainty != analysis::asa::Certainty::Proven) continue;
+        if (f->about.kind != analysis::asa::Subject::Kind::Block) continue;
+        b.constant.insert(static_cast<ir::IrBlockId>(f->about.id));
+    }
+    return b;
+}
+
+CostResult analyze_function(const ir::IrFunction &fn,
+                            const analysis::asa::FactStore *facts,
+                            const char *stage) {
     CostResult r;
     r.function = fn.name;
 
     // 1. Loops + profundidad de anidamiento.
     std::vector<ir::IrBlockId> headers = collect_loop_headers(fn);
     std::vector<LoopRange> ranges = compute_loop_ranges(fn, headers);
-    uint32_t max_depth = compute_loop_depths(fn, ranges, r.loops);
+    const BoundedLoops bounded = ask_bounded_loops(fn, facts, stage);
+    uint32_t max_depth = compute_loop_depths(fn, ranges, r.loops, bounded);
     r.max_loop_depth = max_depth;
 
     // 1.b. Recolectar los call sites (CALL/TAILCALL a una funcion con nombre)
@@ -621,14 +688,16 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     return r;
 }
 
-ModuleCost analyze_module(const ir::IrModule &mod) {
+ModuleCost analyze_module(const ir::IrModule &mod,
+                          const analysis::asa::FactStore *facts,
+                          const char *stage) {
     ModuleCost mc;
     for (const auto &fn : mod.functions) {
         // Saltar stubs nativos (sin cuerpo IR) y macros compiladas (solo
         // existen en compile-time, no representan trabajo runtime).
         if (fn.is_native) continue;
         if (fn.is_macro_compiled) continue;
-        mc.functions.push_back(analyze_function(fn));
+        mc.functions.push_back(analyze_function(fn, facts, stage));
     }
     return mc;
 }
