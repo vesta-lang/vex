@@ -41,6 +41,7 @@
  */
 #include "analyze/bigo.h"
 
+#include "analysis/asa/fact_base.h"  // el vocabulario de productores
 #include "analysis/asa/fact_store.h" // el coste PREGUNTA cuantas vueltas da
 #include "analysis/facts/loop_facts.h" // ...y CUALES son los bucles, y su anidamiento
 #include "ir/ssa_ir.h"
@@ -425,14 +426,25 @@ static BoundedLoops ask_bounded_loops(const ir::IrFunction &fn,
     }
     /* Y los que NO se entendieron, que es otra cosa: aqui no entra el bucle
      * cuyo limite depende de la ejecucion -- ese se entiende y es O(n) --,
-     * sino el que ni se reconocio como bucle contado.  El dominio lo dice con
-     * codigos propios y con su motivo; el coste solo los cuenta. */
-    for (const char *code : {"loop.shape_unsupported", "loop.no_induction"}) {
-        for (const analysis::asa::Fact *f :
-             facts->find_all(code, fn.name.c_str(), here)) {
-            if (f->about.kind != analysis::asa::Subject::Kind::Block) continue;
-            b.not_understood.insert(static_cast<ir::IrBlockId>(f->about.id));
-        }
+     * sino el que ni se reconocio como bucle contado.
+     *
+     * Se pregunta por el MOTIVO, no por una lista de codigos.  Antes se
+     * miraban dos (`loop.shape_unsupported` y `loop.no_induction`) y el
+     * dominio paso a dar veinticuatro -- uno por condicion, para que se sepa
+     * CUAL fallo --; desde entonces el coste creia entender todos los bucles
+     * que no entendia.  No dio un error: dio CONFIANZA EXACTA sobre una clase
+     * que no habia medido, y con ella un aviso de "contrato incumplido"
+     * contra codigo correcto -- los bucles CAS de `std.atomic`, siete por
+     * compilacion --.  Que un aviso conservador se vuelva ruidoso es
+     * exactamente lo que la regla de validacion venia a impedir.
+     *
+     * La lista de codigos de otro dominio se queda vieja EN SILENCIO; la
+     * clase de hueco no, porque son cuatro y son del vocabulario comun. */
+    for (const analysis::asa::Fact *f : facts->find_unknown(
+             analysis::asa::kProducerLoops, fn.name.c_str(),
+             analysis::asa::UnknownReason::ShapeNotRecognized, here)) {
+        if (f->about.kind != analysis::asa::Subject::Kind::Block) continue;
+        b.not_understood.insert(static_cast<ir::IrBlockId>(f->about.id));
     }
     return b;
 }

@@ -242,6 +242,34 @@ std::vector<const Fact *> FactStore::find_all(const char *code,
     return r;
 }
 
+std::vector<const Fact *> FactStore::find_unknown(const char *domain,
+                                                  const char *function,
+                                                  UnknownReason reason,
+                                                  const Scope &here) const {
+    std::vector<const Fact *> r;
+    if (domain == nullptr) return r;
+    /* Por el indice del dominio, que ya existe: recorrer el almacen entero
+     * para esto seria pagar todos los dominios por preguntar por uno. */
+    for (FactId id : of_domain(domain)) {
+        if (id >= facts_.size()) continue;
+        const Fact &f = facts_[id];
+        if (f.seal.certainty != Certainty::Unknown) continue;
+        if (f.seal.unknown_reason != reason) continue;
+        /* Por texto y no por puntero, igual que en `find`: quien pregunta
+         * tiene el nombre a mano, no el literal que guardo el almacen. */
+        if (function != nullptr) {
+            if (f.about.function == nullptr) continue;
+            if (f.about.function != function &&
+                std::strcmp(f.about.function, function) != 0)
+                continue;
+        }
+        if (!f.scope.holds_in(here)) continue;
+        queried_[id] = 1;
+        r.push_back(&f);
+    }
+    return r;
+}
+
 bool FactStore::has_domain(const char *domain, const char *stage) const {
     if (domain == nullptr) return false;
     /* Por texto y no por puntero: quien pregunta suele tener el literal a mano,

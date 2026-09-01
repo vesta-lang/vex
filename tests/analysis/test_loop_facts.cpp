@@ -1013,6 +1013,141 @@ static void a_counting_down_loop_is_counted_too() {
     }
 }
 
+/**
+ * @brief El coste pregunta por el MOTIVO del hueco, no por una lista de
+ *        codigos que se queda vieja en silencio.
+ *
+ * El dominio de bucles daba dos codigos genericos y paso a dar veinticuatro,
+ * uno por condicion, para que se sepa CUAL fallo.  El coste seguia mirando los
+ * dos viejos, asi que desde entonces creia entender todos los bucles que no
+ * entendia.  No dio un error: dio CONFIANZA EXACTA sobre una clase que no
+ * habia medido, y con ella un aviso de "contrato incumplido" contra codigo
+ * correcto -- los bucles CAS de `std.atomic`, siete por compilacion, mas de
+ * mil avisos falsos en el corpus.
+ *
+ * El test usa a proposito un codigo que este fichero se INVENTA.  Si el
+ * consumidor volviera a mirar codigos concretos, no lo reconoceria y el test
+ * fallaria: es la unica forma de comprobar que el acoplamiento no ha vuelto.
+ */
+static void the_cost_asks_for_the_reason_not_the_code() {
+    std::printf("\n[el coste pregunta por el motivo, no por el codigo]\n");
+
+    /* Un bucle cualquiera; lo que importa no es su forma sino lo que el
+     * dominio diga de el.  Valores: 0=cte 0 | 1=phi | 2=cte 8 | 3=cmp | 4=i+1
+     * | 5=cte 1 */
+    ir::IrFunction fn;
+    fn.name = "opaco";
+    for (int i = 0; i < 6; ++i) fn.values.push_back({});
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+    auto cte = [&](ir::IrValueId dst, uint64_t v) {
+        IrInstr c = val(IrOp::CONST, dst, IrType::I64);
+        c.imm = v;
+        return c;
+    };
+
+    IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    entry.instrs.push_back(cte(0, 0));
+    entry.instrs.push_back(cte(5, 1));
+    entry.instrs.push_back(br(1));
+
+    IrBlock header;
+    header.id = 1;
+    header.name = "header";
+    {
+        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
+        phi.phi_args.push_back({/*value=*/4, /*block=*/2});
+        header.instrs.push_back(phi);
+        header.instrs.push_back(cte(2, 8));
+        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
+        cmp.operands.push_back(1);
+        cmp.operands.push_back(2);
+        header.instrs.push_back(cmp);
+        IrInstr t = brcond(2, 3);
+        t.operands[0] = 3;
+        header.instrs.push_back(t);
+    }
+
+    IrBlock body;
+    body.id = 2;
+    body.name = "body";
+    {
+        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
+        add.operands.push_back(1);
+        add.operands.push_back(5);
+        body.instrs.push_back(add);
+        body.instrs.push_back(br(1));
+    }
+
+    fn.blocks = {entry, header, body, block(3, "exit", ret())};
+    fn.blocks[0].succs = {1};
+    fn.blocks[1].succs = {2, 3};
+    fn.blocks[2].succs = {1};
+    fn.blocks[1].preds = {0, 2};
+    fn.blocks[2].preds = {1};
+    fn.blocks[3].preds = {1};
+
+    const LoopFacts lf = compute_loop_facts(fn);
+    const ir::IrBlockId h =
+        static_cast<ir::IrBlockId>(lf.header_block_of(lf.innermost(1)));
+
+    /* El dominio dice que no supo leer la FORMA de este bucle, con un codigo
+     * que el coste no ha visto nunca.  Lo que tiene que leer es el motivo. */
+    analysis::asa::FactStore store;
+    analysis::asa::Fact f;
+    f.what.domain = analysis::asa::kProducerLoops;
+    f.what.code = "loop.una_condicion_que_este_test_se_inventa";
+    f.about.kind = analysis::asa::Subject::Kind::Block;
+    f.about.function = store.intern(fn.name);
+    f.about.id = h;
+    f.seal.certainty = analysis::asa::Certainty::Unknown;
+    f.seal.unknown_reason =
+        analysis::asa::UnknownReason::ShapeNotRecognized;
+    f.seal.origin.producer = analysis::asa::kProducerLoops;
+    f.scope.stage = analysis::asa::kStagePreOpt;
+    store.add(std::move(f));
+
+    const analyze::CostResult r =
+        analyze::analyze_function(fn, &store, analysis::asa::kStagePreOpt);
+    CHECK(r.loops_not_understood == 1,
+          "el hueco se cuenta aunque su codigo sea nuevo");
+    CHECK(r.confidence != analyze::Confidence::EXACT,
+          "y la confianza BAJA: no se puede afirmar una clase que no se midio");
+
+    /* Y el otro lado del eje: un limite que depende de la EJECUCION si se
+     * entiende -- el bucle es O(n) y se sabe que lo es --, asi que ese hueco
+     * NO tiene que bajar la confianza.  Si los dos motivos se trataran igual,
+     * cualquier `for (i = 0; i < n; i++)` dejaria de poder afirmarse. */
+    analysis::asa::FactStore otro;
+    analysis::asa::Fact g;
+    g.what.domain = analysis::asa::kProducerLoops;
+    g.what.code = "loop.non_constant_bound";
+    g.about.kind = analysis::asa::Subject::Kind::Block;
+    g.about.function = otro.intern(fn.name);
+    g.about.id = h;
+    g.seal.certainty = analysis::asa::Certainty::Unknown;
+    g.seal.unknown_reason = analysis::asa::UnknownReason::RuntimeDependent;
+    g.seal.origin.producer = analysis::asa::kProducerLoops;
+    g.scope.stage = analysis::asa::kStagePreOpt;
+    otro.add(std::move(g));
+
+    const analyze::CostResult r2 =
+        analyze::analyze_function(fn, &otro, analysis::asa::kStagePreOpt);
+    CHECK(r2.loops_not_understood == 0,
+          "un limite de ejecucion NO es un bucle sin entender");
+    CHECK(r2.confidence == analyze::Confidence::EXACT,
+          "y la clase se puede afirmar: es O(n) y consta que lo es");
+}
+
 int main() {
     std::printf("=== test_loop_facts (Fase 0.25: LoopFacts) ===\n");
 
@@ -1100,6 +1235,7 @@ int main() {
     a_constant_outer_loop_does_not_square_the_cost();
     a_multiplying_loop_is_logarithmic();
     a_counting_down_loop_is_counted_too();
+    the_cost_asks_for_the_reason_not_the_code();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

@@ -238,6 +238,31 @@ class FactStore {
                                        const Scope &here) const;
 
     /**
+     * @brief Lo que un dominio NO supo, por el MOTIVO y no por el codigo.
+     *
+     * Hay consumidores a los que no les importa cual de los huecos de un
+     * dominio se dio, sino de que CLASE es: "no supe leer esta forma" y "el
+     * limite solo existe al ejecutar" se arreglan de formas distintas y
+     * habilitan cosas distintas -- lo segundo admite una guarda, lo primero no
+     * --.  Esa distincion es el motivo, no el codigo.
+     *
+     * Preguntar por codigos obliga al consumidor a llevar la lista de los de
+     * cada dominio, y esa lista se queda vieja EN SILENCIO: el coste buscaba
+     * dos codigos de bucles, el dominio paso a dar veinticuatro, y desde
+     * entonces creia entender todos los bucles que no entendia -- de ahi salio
+     * un aviso de contrato incumplido contra codigo correcto.
+     *
+     * @param domain   Dominio del que se pregunta.
+     * @param function Nombre de la funcion, o nulo para no filtrar por ella.
+     * @param reason   Clase de hueco que se busca.
+     * @param here     Objetivo desde el que se pregunta.
+     */
+    std::vector<const Fact *> find_unknown(const char *domain,
+                                           const char *function,
+                                           UnknownReason reason,
+                                           const Scope &here) const;
+
+    /**
      * @brief Hechos que se PRODUJERON y no consulto nadie.
      *
      * Un hecho que no mira nadie es o bien trabajo tirado, o bien conocimiento
