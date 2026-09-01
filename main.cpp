@@ -2439,14 +2439,38 @@ int main(int argc, char *argv[]) {
          * se contradicen, hablan de codigos distintos.  Ver la diferencia es
          * justo lo util -- "esto lo escribiste asi y acaba siendo asa otra
          * cosa" --, y colapsarlas obligaria a elegir una y a callar la otra. */
+        /* Y con `--vx-emit-ir`, el IR QUE SE ESTA MIRANDO, uno por momento.
+         *
+         * Hacia falta y costo descubrirlo: cuando un dominio contesta "no
+         * reconozco esta forma", lo primero que hay que ver es la forma -- y
+         * no habia por donde.  El volcado normal ensena OTRA instantanea (la
+         * del frontend a pelo, sin el plegado de constantes ni la poda que
+         * esta si lleva), asi que se leia una cosa y se analizaba otra: dos
+         * cosas distintas llamandose las dos "pre-opt".
+         *
+         * Se reusa la opcion que ya existe en vez de inventar una: quien pide
+         * ver el IR quiere ver ESTE cuando esta preguntando por los hechos. */
+        const bool ver_ir = result.count("vx-emit-ir") > 0;
+        auto mostrar_ir = [&](const ir::IrModule &m, const char *momento) {
+            std::ostringstream o;
+            o << "// ============================================\n"
+              << "// SSA IR que MIRA el ASA -- momento: " << momento << "\n"
+              << "// ============================================\n";
+            ir::ir_print(m, o);
+            std::fputs(o.str().c_str(), stdout);
+        };
+
         ir::IrModule asa_mod_pre;
         if (!cr.ir_module_cache_bytes_preopt.empty() &&
             ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt,
                                       asa_mod_pre)) {
+            if (ver_ir)
+                mostrar_ir(asa_mod_pre, analysis::asa::kStagePreOpt);
             const auto pre = analysis::asa::produce(
                 asa_mod_pre, almacen, {}, analysis::asa::kStagePreOpt);
             resumenes.insert(resumenes.end(), pre.begin(), pre.end());
         }
+        if (ver_ir) mostrar_ir(asa_mod, analysis::asa::kStagePostOpt);
         const auto post = analysis::asa::produce(asa_mod, almacen, {},
                                                  analysis::asa::kStagePostOpt);
         resumenes.insert(resumenes.end(), post.begin(), post.end());

@@ -55,20 +55,26 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     st.body_entry = t_in ? term.target_block : term.false_block;
     st.exit = t_in ? term.false_block : term.target_block;
 
-    /* Ningun instr del header salvo PHIs, CONSTANTES y el que define cond.
+    /* Ningun instr del header salvo PHIs, COPIAS PURAS y el que define cond.
      *
      * El criterio es el que dice el parrafo de arriba -- efectos laterales que
-     * el clonado no pueda replicar --, y una constante no tiene ninguno: se
-     * copia sola.  Rechazarla no protegia de nada y costaba caro: ANTES de
-     * optimizar el limite del bucle esta materializado DENTRO de la cabecera
-     * (`%5 = const.i64 64`), y solo sale de ahi cuando el optimizador lo saca.
-     * O sea que la forma solo se reconocia DESPUES de optimizar, y la foto de
-     * antes -- la de lo que el programa dice -- contestaba
-     * `shape_unsupported` a todo. */
+     * el clonado no pueda replicar --, y ni una constante ni un `mov` tienen
+     * ninguno: se copian solos.  Rechazarlos no protegia de nada, y costaba
+     * que la forma solo se reconociera DESPUES de optimizar:
+     *
+     *   - el limite esta materializado DENTRO de la cabecera (`const.i64 64`)
+     *     hasta que el optimizador lo saca;
+     *   - y la construccion de SSA deja una copia del PHI (`mov %m2rphi14`)
+     *     hasta que la propagacion de copias la borra.
+     *
+     * O sea que la foto de ANTES -- la de lo que el programa dice -- contestaba
+     * `shape_unsupported` a todo, no porque el bucle tuviera nada raro, sino
+     * porque le faltaban dos pasadas de limpieza.  Un analisis que renuncia por
+     * eso esta midiendo al optimizador, no al programa. */
     for (size_t i = 0; i + 1 < hins.size(); ++i) { // sin el terminador.
         const IrInstr &in = hins[i];
         if (in.op == IrOp::PHI) continue;
-        if (in.op == IrOp::CONST) continue;
+        if (in.op == IrOp::CONST || in.op == IrOp::MOV) continue;
         if (in.dst != cond)
             return st; // instr extra en el header -> no elegible.
     }

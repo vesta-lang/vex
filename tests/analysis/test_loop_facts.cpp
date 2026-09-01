@@ -12,7 +12,11 @@
  *        loops anidados).
  */
 
+#include "analysis/facts/ir_facts.h"
 #include "analysis/facts/loop_facts.h"
+#include "analysis/facts/loop_iv.h"
+#include "analysis/facts/loop_structure.h"
+#include "analysis/facts/loop_trip_count.h"
 #include "ir/ssa_ir.h"
 
 #include <cstdio>
@@ -67,6 +71,112 @@ static IrBlock block(IrBlockId id, const char *name, IrInstr term) {
     b.name = name;
     b.instrs.push_back(term);
     return b;
+}
+
+/**
+ * @brief Un bucle contado tal y como sale ANTES de optimizar.
+ *
+ * No es un CFG inventado para pasar el test: es exactamente la forma que deja
+ * la construccion de SSA -- el limite materializado DENTRO de la cabecera
+ * (`const`) y una COPIA del PHI (`mov`) que el `cmp` usa en su lugar --, y que
+ * la propagacion de copias limpia mas tarde.
+ *
+ * Lo que se fija aqui es que el analisis mida el PROGRAMA y no al optimizador:
+ * el mismo bucle no puede estar contado despues de optimizar y no estarlo
+ * antes.  Los dos estorbos son puras copias, sin efectos laterales, y
+ * rechazarlos hacia que el conocimiento solo existiera cuando ya era tarde --
+ * el desenrollador reescribe el bucle, y para cuando alguien preguntaba ya no
+ * habia bucle que contar.
+ */
+static void counted_loop_before_optimizing() {
+    std::printf("\n[bucle contado ANTES de optimizar: con copias en la "
+                "cabecera]\n");
+
+    ir::IrFunction fn;
+    fn.name = "counted";
+    // %0 init(0)  %1 phi  %2 mov(%1)  %3 const(64)  %4 cmp  %5 add(%2,1)
+    for (int i = 0; i < 7; ++i) fn.values.push_back({});
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+
+    IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    {
+        IrInstr c = val(IrOp::CONST, 0, IrType::I64);
+        c.imm = 0;
+        entry.instrs.push_back(c);
+    }
+    entry.instrs.push_back(br(1));
+
+    IrBlock header;
+    header.id = 1;
+    header.name = "header";
+    {
+        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+        phi.phi_args.push_back({/*value=*/0, /*block=*/0}); // init, preheader
+        phi.phi_args.push_back({/*value=*/5, /*block=*/2}); // iv+1, latch
+        header.instrs.push_back(phi);
+        // La COPIA que deja la construccion de SSA.
+        IrInstr mv = val(IrOp::MOV, 2, IrType::I64);
+        mv.operands.push_back(1);
+        header.instrs.push_back(mv);
+        // El limite, materializado DENTRO de la cabecera.
+        IrInstr lim = val(IrOp::CONST, 3, IrType::I64);
+        lim.imm = 64;
+        header.instrs.push_back(lim);
+        IrInstr cmp = val(IrOp::CMP_LT, 4, IrType::BOOL);
+        cmp.operands.push_back(2); // compara la COPIA, no el PHI
+        cmp.operands.push_back(3);
+        header.instrs.push_back(cmp);
+        IrInstr t = brcond(2, 3);
+        t.operands[0] = 4;
+        header.instrs.push_back(t);
+    }
+
+    IrBlock body;
+    body.id = 2;
+    body.name = "body";
+    {
+        IrInstr one = val(IrOp::CONST, 6, IrType::I64);
+        one.imm = 1;
+        body.instrs.push_back(one);
+        IrInstr add = val(IrOp::ADD, 5, IrType::I64);
+        add.operands.push_back(2); // sobre la COPIA
+        add.operands.push_back(6);
+        body.instrs.push_back(add);
+        body.instrs.push_back(br(1)); // back-edge
+    }
+
+    fn.blocks = {entry, header, body, block(3, "exit", ret())};
+
+    const analysis::IrFacts facts = analysis::build_ir_facts(fn);
+    const LoopFacts lf = compute_loop_facts(fn);
+    CHECK(lf.loop_count == 1, "no se detecto el bucle");
+
+    const analysis::LoopStructure st = analysis::detect_loop_structure(fn, lf, 0);
+    CHECK(st.valid,
+          "una copia y una constante en la cabecera NO descalifican el bucle");
+    if (!st.valid) return;
+
+    analysis::LoopIV iv;
+    const bool hay = analysis::detect_loop_iv(fn, facts.def_block, st.header,
+                                              st.preheader, st.latch, iv);
+    CHECK(hay, "la variable de induccion se ve A TRAVES de la copia");
+    if (!hay) return;
+    CHECK(iv.phi == 1, "el IV es el PHI, no su copia");
+    CHECK(iv.stride == 1, "paso 1");
+
+    const analysis::LoopTripInfo tc =
+        analysis::compute_trip_count(fn, facts.def_block, iv);
+    CHECK(tc.known(), "y con eso el bucle esta CONTADO antes de optimizar");
+    CHECK(tc.trip == 64, "sesenta y cuatro vueltas");
 }
 
 int main() {
@@ -148,6 +258,8 @@ int main() {
                   f.header_block_of(outer_id) == 1,
               "header_block_of incorrecto");
     }
+
+    counted_loop_before_optimizing();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

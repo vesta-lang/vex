@@ -4072,7 +4072,24 @@ CompileResult compile_vx_project(
                 if (ir::ir_pass_unreachable(fn)) changed = true;
             }
         }
-        res.ir_module_cache_bytes_preopt = ir::emit_ir_module_cache(merged);
+        /* Los locales a REGISTRO, sobre una COPIA.
+         *
+         * Es construccion de SSA, no optimizacion: no quita un bucle ni cambia
+         * cuantas vueltas da, pone el programa en la forma en la que los
+         * analisis hablan.  Sin ella "antes de optimizar" no es analizable --
+         * el contador de un `for` vive en un `alloca` y se lee con un `load`
+         * en cada vuelta, asi que no hay PHI, y sin PHI no hay variable de
+         * induccion que encontrar --.
+         *
+         * Sobre una COPIA y no sobre `merged` porque de ahi sale el codigo que
+         * se emite, y el orden en que corren los pases influye en lo que
+         * deciden los siguientes: mutarlo aqui haria que el compilador
+         * generase codigo distinto SEGUN SI LE PIDES ANaLISIS. */
+        ir::IrModule pre_snapshot = merged;
+        for (auto &fn : pre_snapshot.functions)
+            ir::ir_pass_sroa_stack_structs(fn);
+        res.ir_module_cache_bytes_preopt =
+            ir::emit_ir_module_cache(pre_snapshot);
     }
 
     // --vx-emit-ir: copia del IR PRE-opt (antes de optimizar) para el dump.

@@ -44,6 +44,37 @@ bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
     return false;
 }
 
+/**
+ * @brief El valor del que @p v es una COPIA, siguiendo la cadena de `mov`.
+ *
+ * Un `mov` es identidad: `%4 = mov %3` significa que %4 ES %3.  Comparar los
+ * dos identificadores como si fueran cosas distintas hace que el analisis
+ * dependa de que la propagacion de copias haya corrido antes -- y ANTES de
+ * optimizar no ha corrido: la construccion de SSA deja una copia del PHI en la
+ * cabecera, con lo que el `cmp` compara la copia y no el PHI, y la variable de
+ * induccion "no se encuentra" estando delante.
+ *
+ * El tope de saltos no es por miedo a un ciclo -- en SSA no puede haberlo --,
+ * sino por si el IR llega roto: un analisis no debe colgar el compilador.
+ */
+IrValueId skip_copies(const ir::IrFunction &fn,
+                      const std::vector<int> &def_block, IrValueId v) {
+    for (int hops = 0; hops < 16; ++hops) {
+        if (v == IR_NO_VALUE || v >= fn.values.size()) return v;
+        const int db = (v < def_block.size()) ? def_block[v] : -1;
+        if (db < 0 || (size_t)db >= fn.blocks.size()) return v;
+        IrValueId next = IR_NO_VALUE;
+        for (const IrInstr &in : fn.blocks[db].instrs)
+            if (in.dst == v && in.op == IrOp::MOV && in.operands.size() == 1) {
+                next = in.operands[0];
+                break;
+            }
+        if (next == IR_NO_VALUE) return v;
+        v = next;
+    }
+    return v;
+}
+
 // Descompone @p v = ADD(base, const) (en cualquier orden).  Devuelve base y c.
 bool add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
             IrValueId v, IrValueId &base, int64_t &c) {
@@ -88,8 +119,12 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
     for (const IrInstr &in : hins) {
         if (in.dst == cond && is_lt_cmp(in.op) && in.operands.size() == 2) {
             cmp_op = in.op;
-            cmp_a = in.operands[0];
-            cmp_b = in.operands[1];
+            /* A traves de las copias: lo que se compara es el VALOR, y un
+             * `mov` no cambia el valor.  Sin esto, la copia que la
+             * construccion de SSA deja en la cabecera hacia que el IV no se
+             * reconociera hasta que otro pase la borrara. */
+            cmp_a = skip_copies(fn, def_block, in.operands[0]);
+            cmp_b = skip_copies(fn, def_block, in.operands[1]);
             break;
         }
     }
@@ -111,7 +146,11 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
         if (init == IR_NO_VALUE || back == IR_NO_VALUE) continue;
         IrValueId base;
         int64_t s;
-        if (add_of(fn, def_block, back, base, s) && base == in.dst && s > 0) {
+        /* Y el valor que vuelve por el latch, tambien a traves de las copias:
+         * `%12 = add %11, 1` donde `%11 = mov %phi` es el mismo `phi + 1`. */
+        back = skip_copies(fn, def_block, back);
+        if (add_of(fn, def_block, back, base, s) &&
+            skip_copies(fn, def_block, base) == in.dst && s > 0) {
             // 3) La cota: el cmp compara `iv` o `iv + c` con N (el otro lado).
             int64_t off = 0;
             IrValueId bound = IR_NO_VALUE;
@@ -121,7 +160,8 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
             } else {
                 IrValueId cb;
                 int64_t c;
-                if (add_of(fn, def_block, cmp_a, cb, c) && cb == in.dst) {
+                if (add_of(fn, def_block, cmp_a, cb, c) &&
+                    skip_copies(fn, def_block, cb) == in.dst) {
                     off = c;
                     bound = cmp_b;
                 } else {

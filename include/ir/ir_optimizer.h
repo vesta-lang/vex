@@ -358,6 +358,23 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn);
 bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
 
 /**
+ * @brief SROA/mem2reg de los locales de pila: de memoria a REGISTRO (SSA).
+ *
+ * Lo llamaba solo el optimizador, pero no es una optimizacion en el sentido de
+ * hacer el programa mas rapido: es CONSTRUCCION DE SSA.  No quita un bucle ni
+ * cambia cuantas vueltas da; pone el programa en la forma en la que los
+ * analisis hablan -- con PHIs en las cabeceras --.
+ *
+ * Por eso se declara: el ASA lo necesita para que su foto de ANTES de
+ * optimizar sea analizable.  Sin el, el contador de un `for` vive en un
+ * `alloca` y se lee con un `load` en cada vuelta, asi que no hay PHI, y sin
+ * PHI no hay variable de induccion que encontrar.
+ *
+ * @return true si promociono algo.
+ */
+bool ir_pass_sroa_stack_structs(IrFunction &fn);
+
+/**
  * @brief Propaga @c is_host_ptr por las cadenas de aritmetica de punteros.
  *
  * Recorre ADD/SUB/casts/PHI marcando el destino como host cuando alguno de sus
