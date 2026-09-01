@@ -55,11 +55,20 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     st.body_entry = t_in ? term.target_block : term.false_block;
     st.exit = t_in ? term.false_block : term.target_block;
 
-    // Ningun instr del header salvo PHIs y el UNICO que define cond (sin
-    // efectos laterales que el clonado no pueda replicar).
+    /* Ningun instr del header salvo PHIs, CONSTANTES y el que define cond.
+     *
+     * El criterio es el que dice el parrafo de arriba -- efectos laterales que
+     * el clonado no pueda replicar --, y una constante no tiene ninguno: se
+     * copia sola.  Rechazarla no protegia de nada y costaba caro: ANTES de
+     * optimizar el limite del bucle esta materializado DENTRO de la cabecera
+     * (`%5 = const.i64 64`), y solo sale de ahi cuando el optimizador lo saca.
+     * O sea que la forma solo se reconocia DESPUES de optimizar, y la foto de
+     * antes -- la de lo que el programa dice -- contestaba
+     * `shape_unsupported` a todo. */
     for (size_t i = 0; i + 1 < hins.size(); ++i) { // sin el terminador.
         const IrInstr &in = hins[i];
         if (in.op == IrOp::PHI) continue;
+        if (in.op == IrOp::CONST) continue;
         if (in.dst != cond)
             return st; // instr extra en el header -> no elegible.
     }
