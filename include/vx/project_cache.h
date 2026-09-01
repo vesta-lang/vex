@@ -278,10 +278,16 @@ uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;
  * @param wanted      Dominios que alguien va a consultar.  Vacio = todos.
  * @param path        Fichero de hechos, o vacio para no tocar disco.
  * @param fingerprint Identidad del modulo: si no coincide, lo guardado no vale.
+ * @param stage       EN QUE MOMENTO de la compilacion esta @p mod
+ *                    (@c analysis::asa::kStage*).  Se sella en cada hecho: lo
+ *                    que vale antes de optimizar no tiene por que valer
+ *                    despues, y un hecho que nombra un valor por su id habla
+ *                    de una numeracion que el optimizador cambia.
  */
 void ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
                   const std::vector<const char *> &wanted,
-                  const std::string &path, uint64_t fingerprint);
+                  const std::string &path, uint64_t fingerprint,
+                  const char *stage);
 
 /// Path del fichero de hechos de @p source_path (`.vxfacts` en la cache).
 std::string vxfacts_path_for(const std::string &source_path,

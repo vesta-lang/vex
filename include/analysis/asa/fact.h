@@ -380,10 +380,42 @@ constexpr const char *kIsaRiscv = "riscv";
 constexpr const char *kOsWindows = "windows";
 constexpr const char *kOsLinux = "linux";
 
+/// EN QUE MOMENTO de la compilacion vale lo que se afirma.
+///
+/// No es lo mismo lo que el programa DICE que lo que va a EJECUTARSE, y entre
+/// una cosa y otra esta el optimizador.  Un `for` de 64 vueltas que el
+/// desenrollador convierte en cuatro de dieciseis es el mismo bucle en las dos
+/// fotos y NO da el mismo numero: "da 64 vueltas" y "da 16" son los dos
+/// ciertos -- en momentos distintos --, y colapsarlos obliga a elegir uno y a
+/// mentir en el otro.
+///
+/// Es el mismo eje que `isa` u `os`: una condicion bajo la cual el hecho vale.
+/// Vacio = vale en todos los momentos, que es lo correcto para lo que el
+/// optimizador no puede cambiar -- cuantos parametros declara una funcion, que
+/// registros toca un bloque de asm --.
+///
+/// Y son TRES, no dos.  El de en medio es el que se estaba perdiendo entero:
+/// un pase descubre cosas que no estan ni antes ni despues -- el desenrollador
+/// SABE que el bucle da 64 vueltas justo antes de deshacerlo --, y ese
+/// conocimiento moria con la transformacion que lo produjo.
+constexpr const char *kStagePreOpt = "pre-opt";   ///< lo que el programa dice
+constexpr const char *kStageDuringOpt = "in-opt"; ///< lo que un pase descubrio
+constexpr const char *kStagePostOpt = "post-opt"; ///< lo que se va a emitir
+
 struct Scope {
     const char *isa = "";     ///< @see kIsa*.      "" = cualquiera.
     const char *os = "";      ///< @see kOs*.       "" = cualquiera.
     const char *backend = ""; ///< @see kBackend*.  "" = cualquiera.
+    /**
+     * @brief EN QUE MOMENTO vale.  @see kStage*.  "" = en cualquiera.
+     *
+     * OJO al indexar por identificador: un @c Subject de valor o de bloque
+     * nombra un id, y el optimizador los renumera.  Un hecho de `pre-opt`
+     * habla de los ids de ANTES; preguntarlo mirando el codigo de despues es
+     * leer otro valor con el mismo numero.  Por eso quien pregunta dice en que
+     * momento esta, y el emparejamiento lo hace @c holds_in.
+     */
+    const char *stage = "";
     /**
      * @brief POR QUE se restringe.  Vacio solo si el alcance es universal.
      *
@@ -414,7 +446,7 @@ struct Scope {
             }
         };
         return matches(isa, here.isa) && matches(os, here.os) &&
-               matches(backend, here.backend);
+               matches(backend, here.backend) && matches(stage, here.stage);
     }
     /**
      * @brief Esta el alcance JUSTIFICADO?
@@ -432,7 +464,8 @@ struct Scope {
     bool universal() const {
         return (isa == nullptr || isa[0] == '\0') &&
                (os == nullptr || os[0] == '\0') &&
-               (backend == nullptr || backend[0] == '\0');
+               (backend == nullptr || backend[0] == '\0') &&
+               (stage == nullptr || stage[0] == '\0');
     }
 };
 

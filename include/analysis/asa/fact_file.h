@@ -87,9 +87,12 @@ constexpr uint16_t kContainerVersion = 1;
 /// Version del layout de un HECHO.  La 2 anade el ambito (donde vale); la 3, el
 /// POR QUE de ese ambito y la CLASE de lo que no se supo -- sin ellos, la cache
 /// devolvia hechos sin justificar y convertia cualquier motivo en "no
-/// preguntado".  Va en cada registro: cambiarla descarta los registros viejos
-/// de todos los dominios, pero no rompe el fichero.
-constexpr uint16_t kFactVersion = 3;
+/// preguntado" --; la 4, el MOMENTO de la compilacion en que vale, sin el cual
+/// un hecho de antes de optimizar volvia del disco valiendo tambien para
+/// despues y nombrando ids ya renumerados.  Va en cada registro: cambiarla
+/// descarta los registros viejos de todos los dominios, pero no rompe el
+/// fichero.
+constexpr uint16_t kFactVersion = 4;
 
 /**
  * @brief Cuanto se guarda.  Ajustable con @c VESTA_ASA_CACHE.

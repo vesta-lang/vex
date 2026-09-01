@@ -2635,7 +2635,11 @@ nlohmann::json Inspector::asa(const std::string &uri) {
 
     analysis::asa::FactStore almacen;
     const std::vector<analysis::asa::ProductionSummary> resumenes =
-        analysis::asa::produce(mod, almacen);
+        /* POST-optimizacion, y lo dice el propio `parse_post_opt_module` de
+         * arriba: esta vista ensena lo que se sabe del codigo que de verdad se
+         * va a emitir. */
+        analysis::asa::produce(mod, almacen, {},
+                               analysis::asa::kStagePostOpt);
 
     /* La vista del subsistema escribe a un fichero abierto, no a una cadena, y
      * asi debe seguir: quien decide como se ensena el conocimiento es el, no
@@ -3386,7 +3390,11 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
     analyze::register_asm_producer();
     analysis::asa::FactStore almacen;
     const std::vector<analysis::asa::ProductionSummary> resumenes =
-        analysis::asa::produce(mod, almacen);
+        /* POST-optimizacion, y lo dice el propio `parse_post_opt_module` de
+         * arriba: esta vista ensena lo que se sabe del codigo que de verdad se
+         * va a emitir. */
+        analysis::asa::produce(mod, almacen, {},
+                               analysis::asa::kStagePostOpt);
 
     nlohmann::json hechos = nlohmann::json::array();
     for (size_t i = 0; i < almacen.size(); ++i) {

@@ -161,6 +161,16 @@ struct Production {
      */
     std::unordered_map<std::string, FactId> &structure_of;
 
+    /**
+     * @brief EN QUE MOMENTO esta el modulo del que se habla.  @see kStage*.
+     *
+     * Lo sella @c assert_fact y @c say_unknown en cada hecho, para que ningun
+     * productor tenga que acordarse -- y sobre todo para que ninguno pueda
+     * olvidarse: un hecho sin momento valdria en todos, incluido aquel en el
+     * que es falso.
+     */
+    const char *stage = "";
+
     /// Si hay algo que mirar en ella (los stubs de funciones nativas no tienen
     /// cuerpo del que sacar nada).
     bool is_interesting(const ir::IrFunction &fn) const;
@@ -284,14 +294,22 @@ void register_use_def_producer();
  * Es IDEMPOTENTE: un dominio que ya corrio sobre @p store -- porque lo pidio
  * otro consumidor, o porque vino de la cache en disco -- no se vuelve a correr.
  *
- * @param mod    Modulo IR ya optimizado (el codigo que de verdad va a existir).
+ * @param mod    Modulo IR del que se habla.
  * @param store  Donde se depositan los hechos.
  * @param wanted Dominios a correr.  Vacio = todos.
+ * @param stage  EN QUE MOMENTO esta ese modulo (@see kStage*).  Se sella en
+ *               cada hecho producido, porque cambia lo que el hecho SIGNIFICA:
+ *               un bucle de 64 vueltas antes de optimizar puede ser de 16
+ *               despues, y un `Subject` de valor nombra ids que el optimizador
+ *               renumera.  No tiene valor por defecto a proposito -- quien
+ *               produce sabe con que codigo esta hablando, y heredar un
+ *               momento equivocado en silencio es la clase de fallo que este
+ *               eje viene a impedir.
  * @return El resumen de los dominios que de verdad corrieron.
  */
 std::vector<ProductionSummary>
 produce(const ir::IrModule &mod, FactStore &store,
-        const std::vector<const char *> &wanted = {});
+        const std::vector<const char *> &wanted, const char *stage);
 
 } // namespace asa
 } // namespace analysis

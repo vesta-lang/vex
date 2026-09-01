@@ -101,6 +101,12 @@ void write_fact(const FactStore &a, FactId id, FILE *out) {
      * propia y sin que la vista tenga que cambiar. */
     std::fprintf(out, "   [%s, de %s", certainty_name(f.seal.certainty),
                  source_name(f.seal.origin.source));
+    /* El MOMENTO en que vale, si esta restringido.  Se ensena porque cambia lo
+     * que el hecho significa: "da 64 vueltas" antes de optimizar y "da 16"
+     * despues son los dos ciertos, y sin ver de cual se habla parecen
+     * contradecirse. */
+    if (f.scope.stage != nullptr && f.scope.stage[0] != '\0')
+        std::fprintf(out, ", en %s", f.scope.stage);
     if (f.proof.rule != nullptr && f.proof.rule[0] != '\0')
         std::fprintf(out, ", por %s", f.proof.rule);
     std::fprintf(out, "]\n");

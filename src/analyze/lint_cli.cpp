@@ -153,13 +153,28 @@ int run(int argc, char **argv) {
      * en cuanto entro una familia que consultaba otro dominio se quedo sin sus
      * hechos -- y calladamente: una familia sin hechos no falla, no dice nada,
      * que es indistinguible de "aqui no hay nada que decir" --. */
-    analysis::asa::produce(mod, facts, analyze::lint_required_domains(wanted));
+    /* POST-optimizacion: el modulo que se lintea es el que salio de la cache
+     * del IR, que se escribe despues de optimizar.  Decirlo importa porque el
+     * momento va sellado en cada hecho y quien pregunta tiene que preguntar
+     * por el suyo -- un hecho de antes de optimizar habla de un codigo que ya
+     * no es este. */
+    analysis::asa::produce(mod, facts, analyze::lint_required_domains(wanted),
+                           analysis::asa::kStagePostOpt);
 
-    /* El alcance va vacio -- universal -- porque los hallazgos de hoy salen de
-     * propiedades del codigo y no del objetivo.  El dia que una familia mire
-     * algo que dependa del backend, se rellena aqui y los hechos de otro
-     * objetivo dejan de verse solos, sin tocar ninguna familia. */
-    LintInput in{mod, facts, cr.contracts, {}, path};
+    /* El alcance va vacio en isa/os/backend -- universal -- porque los
+     * hallazgos de hoy salen de propiedades del codigo y no del objetivo.  El
+     * dia que una familia mire algo que dependa del backend, se rellena aqui y
+     * los hechos de otro objetivo dejan de verse solos, sin tocar ninguna
+     * familia.
+     *
+     * El MOMENTO si va puesto, y tiene que coincidir con el del modulo que se
+     * esta mirando: preguntar sin decirlo no significa "cualquier momento",
+     * significa que no casa con ninguno de los sellados.  Es a proposito --
+     * asi un consumidor no puede leer por descuido hechos de un codigo que ya
+     * no existe. */
+    analysis::asa::Scope here;
+    here.stage = analysis::asa::kStagePostOpt;
+    LintInput in{mod, facts, cr.contracts, here, path};
     vx::Diagnostics findings;
     const uint32_t n = run_lint(in, findings, wanted);
     for (const auto &d : findings.all())

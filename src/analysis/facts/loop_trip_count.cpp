@@ -50,13 +50,26 @@ bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
  */
 static int64_t trips_between(int64_t init, int64_t bound, int64_t cmp_offset,
                              int64_t stride, ir::IrOp cmp_op) {
-    const int64_t room = bound - cmp_offset - init;
+    /* La resta primero, y COMPROBADA.  Con extremos grandes -- que es
+     * justo lo que llega cuando la cota sale de un rango -- desbordaba, y un
+     * desbordamiento con signo no da un numero grande: da uno cualquiera, y
+     * ese numero se publicaba como si fuera el trip count.  Mejor no afirmar
+     * que afirmar de mas. */
+    int64_t room = 0;
+    if (__builtin_sub_overflow(bound, cmp_offset, &room)) return -1;
+    if (__builtin_sub_overflow(room, init, &room)) return -1;
     if (room <= 0) return 0; // no itera (guarda falsa de entrada).
-    if (cmp_op == IrOp::CMP_LT || cmp_op == IrOp::CMP_ULT)
-        return (room + stride - 1) / stride; // ceil
-    if (cmp_op == IrOp::CMP_LE || cmp_op == IrOp::CMP_ULE)
-        return room / stride + 1; // floor + 1
-    return -1;                    // guarda que este analisis no cubre.
+    if (cmp_op == IrOp::CMP_LT || cmp_op == IrOp::CMP_ULT) {
+        int64_t techo = 0; // ceil, sin desbordar al redondear hacia arriba
+        if (__builtin_add_overflow(room, stride - 1, &techo)) return -1;
+        return techo / stride;
+    }
+    if (cmp_op == IrOp::CMP_LE || cmp_op == IrOp::CMP_ULE) {
+        int64_t t = 0; // floor + 1
+        if (__builtin_add_overflow(room / stride, (int64_t)1, &t)) return -1;
+        return t;
+    }
+    return -1; // guarda que este analisis no cubre.
 }
 
 LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
@@ -72,6 +85,13 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
         if (ranges == nullptr || v >= ranges->r.size()) return false;
         const ValueRange &rg = ranges->r[v];
         if (!rg.acotada()) return false;
+        /* El rango ENTERO del tipo no acota nada: es la forma que tiene el
+         * analisis de decir "cualquier valor".  Tomarlo por una cota publicaba
+         * "el bucle da como mucho 9223372036854775807 vueltas", que es cierto
+         * y no significa nada -- y peor, viste de conocimiento lo que es
+         * justamente su ausencia, que es como un respaldo permisivo acaba
+         * pareciendo que funciona. */
+        if (rg.es_todo()) return false;
         return rg.vista_con_signo(lo, hi);
     };
     /* El valor exacto: primero lo escrito, y si no, un rango de un solo punto

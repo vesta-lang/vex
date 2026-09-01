@@ -1305,14 +1305,16 @@ CompileResult compile_vx_source(const std::string &source,
                              ir_errs.size(), filename.c_str());
             }
         }
-        ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
-                        /*allow_inline=*/!opts.emit_ir_preopt);
-        res.tiempos.optimizar_us += static_cast<long>(
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                RelojFase::now() - marca_opt)
-                .count());
-
-        /* Lo que se sabe de este modulo, GUARDADO para la proxima vez.
+        /* Lo que se sabe de este modulo, ANTES de optimizarlo.
+         *
+         * El orden no es un detalle: el ASA es donde vive lo que el compilador
+         * sabe, y el optimizador es un CONSUMIDOR de ese conocimiento.  Mirar
+         * despues invertia la relacion -- alguien ya habia opinado sobre el
+         * programa sin preguntarle a la capa que existe justamente para que no
+         * haga falta opinar --, y ademas destruia lo que iba a publicarse: el
+         * desenrollador reconoce un bucle contado, lo reescribe, y para cuando
+         * el ASA llegaba ya no habia bucle que contar.  El mismo `for` con 64
+         * vueltas se publicaba como "no se puede afirmar cuantas vueltas da".
          *
          * Compilar un fichero suelto no producia ni reutilizaba ni un hecho:
          * todo lo que el compilador sabia se recalculaba en cada compilacion y
@@ -1334,8 +1336,16 @@ CompileResult compile_vx_source(const std::string &source,
             const uint64_t huella =
                 hash_de_tokens(source, /*con_lineas=*/false);
             ensure_facts(irmod_for_section, res.facts, opts.asa_domains,
-                         vxfacts_path_for(filename, std::string()), huella);
+                         vxfacts_path_for(filename, std::string()), huella,
+                         analysis::asa::kStagePreOpt);
         }
+
+        ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
+                        /*allow_inline=*/!opts.emit_ir_preopt);
+        res.tiempos.optimizar_us += static_cast<long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                RelojFase::now() - marca_opt)
+                .count());
         /* Y aqui otra vez, si se pidio.  Es el sitio donde mas falta hace: el
          * optimizador opera SOBRE el grafo -- corta bloques, los une, mueve
          * instrucciones -- y una cirugia mal cerrada no se nota hasta que el

@@ -133,6 +133,68 @@ static void axes_are_independent() {
 }
 
 /**
+ * @brief El MOMENTO es un eje mas, y se cruza con los otros.
+ *
+ * Es el eje que faltaba, y su ausencia no daba un error: daba una respuesta.
+ * "Este bucle da 64 vueltas" es cierto antes de optimizar y falso despues --
+ * el desenrollador lo convierte en cuatro de dieciseis --, asi que sin el
+ * momento el mismo hecho valia en un codigo donde no vale.  Y peor: un sujeto
+ * de valor nombra un id, y el optimizador los renumera, con lo que preguntar
+ * fuera de su momento no lee un valor equivocado por poco -- lee otro valor.
+ */
+static void stage_is_an_axis_too() {
+    std::printf("-- el momento tambien es un eje\n");
+
+    Scope pre;
+    pre.stage = kStagePreOpt;
+    Scope post;
+    post.stage = kStagePostOpt;
+    Scope during;
+    during.stage = kStageDuringOpt;
+
+    CHECK(pre.holds_in(pre), "lo de antes de optimizar vale antes de optimizar");
+    CHECK(!pre.holds_in(post), "y NO vale despues");
+    CHECK(!post.holds_in(pre), "ni al reves");
+    CHECK(!pre.holds_in(during), "ni en medio: son tres, no dos");
+
+    /* Vacio en el HECHO = vale en cualquier momento.  Es lo correcto para lo
+     * que el optimizador no puede cambiar: cuantos parametros declara una
+     * funcion no depende de si ya se optimizo. */
+    const Scope siempre;
+    CHECK(siempre.holds_in(pre) && siempre.holds_in(post) &&
+              siempre.holds_in(during),
+          "un hecho sin momento vale en todos");
+
+    /* Vacio en la PREGUNTA no es "cualquiera": es no casar con ninguno de los
+     * sellados.  A proposito -- asi un consumidor no puede leer por descuido
+     * hechos de un codigo que ya no existe --, y por eso quien pregunta tiene
+     * que decir en que momento esta. */
+    CHECK(!pre.holds_in(Scope{}),
+          "preguntar sin momento no trae los hechos sellados con uno");
+
+    // Y se cruza con los demas ejes: tienen que cumplirse TODOS.
+    Scope x86_post;
+    x86_post.isa = kIsaX8664;
+    x86_post.stage = kStagePostOpt;
+    Scope aqui;
+    aqui.isa = kIsaX8664;
+    aqui.stage = kStagePostOpt;
+    CHECK(x86_post.holds_in(aqui), "misma isa y mismo momento");
+    aqui.stage = kStagePreOpt;
+    CHECK(!x86_post.holds_in(aqui), "misma isa pero otro momento: no vale");
+
+    // El vocabulario viaja al disco: se comprueba por VALOR, no por identidad.
+    CHECK(std::string(kStagePreOpt) == "pre-opt", "kStagePreOpt");
+    CHECK(std::string(kStageDuringOpt) == "in-opt", "kStageDuringOpt");
+    CHECK(std::string(kStagePostOpt) == "post-opt", "kStagePostOpt");
+
+    // Un alcance que SOLO restringe el momento sigue siendo restringido, asi
+    // que tiene que justificarse igual que cualquier otro.
+    CHECK(!post.universal(), "restringir el momento es restringir");
+    CHECK(!post.justified(), "y sin motivo no esta justificado");
+}
+
+/**
  * @brief El vocabulario, fijado.
  *
  * Estos nombres se ESCRIBEN en el fichero de hechos y se sirven por el MCP.
@@ -198,7 +260,10 @@ static void producer_scopes_by_isa() {
     }
 
     FactStore store;
-    produce(mod, store);
+    /* Con el momento: producir sin decirlo ya no se puede, y es a proposito --
+     * un hecho sin momento valdria en todos, incluido aquel en el que es
+     * falso. */
+    produce(mod, store, {}, kStagePostOpt);
 
     // El hecho de la alineacion que coloca el cargador de la maquina.
     const Scope *found_scope = nullptr;
@@ -217,7 +282,13 @@ static void producer_scopes_by_isa() {
           "sellado por la ISA del bytecode, que es lo que explica el numero");
     CHECK(found_scope->backend == nullptr || found_scope->backend[0] == '\0',
           "y SIN restringir el backend: vale interpretando y con el JIT");
-    CHECK(found_scope->holds_in(scope(kIsaVelb, kOsLinux, kBackendJit)),
+    /* Y el JIT lo encuentra desde SU momento.  Que haya que decirlo es la
+     * regla, no un estorbo: el hecho se produjo mirando el codigo de despues
+     * de optimizar, y preguntarlo desde otro momento seria leerlo sobre un
+     * codigo que no es del que habla. */
+    Scope desde_el_jit = scope(kIsaVelb, kOsLinux, kBackendJit);
+    desde_el_jit.stage = kStagePostOpt;
+    CHECK(found_scope->holds_in(desde_el_jit),
           "de modo que el JIT lo encuentra -- que es lo que fallaba");
 }
 
@@ -342,6 +413,11 @@ static void disk_round_trip_keeps_scope_and_reason() {
         f.what.code = "prueba.sellado";
         f.what.a = 64;
         f.scope.isa = kIsaVelb;
+        /* El MOMENTO tambien viaja.  Sin guardarlo, un hecho de antes de
+         * optimizar volvia del disco valiendo tambien para despues -- y
+         * nombrando ids que el optimizador ya habia renumerado --, que es un
+         * fallo que no da error: da otra respuesta. */
+        f.scope.stage = kStagePreOpt;
         f.scope.why = "prueba.lo_coloca_el_cargador";
         f.seal.certainty = Certainty::Proven;
         f.seal.origin.producer = "prueba.disco";
@@ -381,6 +457,8 @@ static void disk_round_trip_keeps_scope_and_reason() {
               "con su ISA intacta");
         CHECK(sealed->scope.justified(),
               "y con su motivo: un alcance sin por que no se puede comprobar");
+        CHECK(std::strcmp(sealed->scope.stage, kStagePreOpt) == 0,
+              "y con su MOMENTO: sin el valdria tambien despues de optimizar");
         CHECK(sealed->what.a == 64, "y con su valor");
     }
     CHECK(unknown != nullptr, "y el que no sabia, tambien");
@@ -403,6 +481,7 @@ int main() {
     empty_field_matches_anything();
     bytecode_fact_visible_in_both();
     axes_are_independent();
+    stage_is_an_axis_too();
     vocabulary_is_pinned();
     producer_scopes_by_isa();
     query_tells_absent_from_out_of_scope();

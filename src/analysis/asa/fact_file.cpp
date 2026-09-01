@@ -277,6 +277,13 @@ std::vector<uint8_t> serialize(const FactStore &almacen, uint64_t huella,
             w.u32(cad(f.scope.isa));
             w.u32(cad(f.scope.os));
             w.u32(cad(f.scope.backend));
+            /* En que MOMENTO de la compilacion vale.  Va con el resto del
+             * alcance porque es lo mismo que ellos: una condicion bajo la cual
+             * el hecho es cierto.  Sin guardarlo, un hecho de antes de
+             * optimizar volvia del disco valiendo tambien para despues, que es
+             * justo lo que no vale -- y peor: nombra ids que el optimizador ya
+             * habia renumerado. */
+            w.u32(cad(f.scope.stage));
             /* Por que el alcance esta restringido.  Va con el alcance y no
              * aparte: restringir es afirmar que algo NO vale en otro sitio, y
              * sin el motivo esa afirmacion no se puede comprobar.  Sin este
@@ -519,6 +526,7 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
             f.scope.isa = cad(L.u32());
             f.scope.os = cad(L.u32());
             f.scope.backend = cad(L.u32());
+            f.scope.stage = cad(L.u32());
             f.scope.why = cad(L.u32());
             f.about.kind = static_cast<Subject::Kind>(L.u8());
             f.about.function = cad(L.u32());

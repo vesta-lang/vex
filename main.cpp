@@ -2394,6 +2394,13 @@ int main(int argc, char *argv[]) {
         copts.opt_level = 2;
         copts.ir_only = true;
         copts.report_bounds = false;
+        /* Tambien el modulo de ANTES de optimizar.  Es la mitad que faltaba:
+         * lo que el programa DICE y lo que va a EJECUTARSE no son lo mismo, y
+         * entre los dos esta el optimizador.  Un `for` de 64 vueltas que el
+         * desenrollador convierte en cuatro de dieciseis salia aqui como "no
+         * se puede afirmar cuantas vueltas da" -- el conocimiento existia y se
+         * habia destruido antes de que nadie lo publicara. */
+        copts.emit_ir_preopt = true;
         const bool como_proyecto = vx::vx_source_has_imports(vx_source) ||
                                    vx::vx_source_declara_namespace(vx_source);
         vx::CompileResult cr =
@@ -2420,8 +2427,29 @@ int main(int argc, char *argv[]) {
         analyze::register_fingerprint_producer();
 
         analysis::asa::FactStore almacen;
-        const std::vector<analysis::asa::ProductionSummary> resumenes =
-            analysis::asa::produce(asa_mod, almacen);
+        std::vector<analysis::asa::ProductionSummary> resumenes;
+
+        /* PRIMERO lo que el programa dice, y solo despues lo que va a
+         * ejecutarse.  El orden no es estetico: el ASA es donde vive lo que el
+         * compilador sabe, asi que mirar solo despues de optimizar deja que
+         * alguien opine sobre el programa antes que la capa que existe para no
+         * tener que opinar -- y peor, destruye lo que iba a publicarse.
+         *
+         * Los dos van al MISMO almacen, cada hecho sellado con su momento: no
+         * se contradicen, hablan de codigos distintos.  Ver la diferencia es
+         * justo lo util -- "esto lo escribiste asi y acaba siendo asa otra
+         * cosa" --, y colapsarlas obligaria a elegir una y a callar la otra. */
+        ir::IrModule asa_mod_pre;
+        if (!cr.ir_module_cache_bytes_preopt.empty() &&
+            ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt,
+                                      asa_mod_pre)) {
+            const auto pre = analysis::asa::produce(
+                asa_mod_pre, almacen, {}, analysis::asa::kStagePreOpt);
+            resumenes.insert(resumenes.end(), pre.begin(), pre.end());
+        }
+        const auto post = analysis::asa::produce(asa_mod, almacen, {},
+                                                 analysis::asa::kStagePostOpt);
+        resumenes.insert(resumenes.end(), post.begin(), post.end());
         analysis::asa::print_dump(almacen, resumenes, stdout);
         return EXIT_SUCCESS;
     }

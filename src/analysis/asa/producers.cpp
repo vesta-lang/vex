@@ -55,6 +55,14 @@ bool Production::is_interesting(const ir::IrFunction &fn) const {
 FactId Production::assert_fact(Fact f) {
     ++summary.looked_at;
     ++summary.facts;
+    /* El MOMENTO se sella aqui, no en cada productor.  Un productor habla del
+     * codigo que le dan y no tiene por que saber en que punto del pipeline se
+     * lo dieron; y si tuviera que ponerlo el, bastaria que uno se olvidara
+     * para que su hecho valiera en TODOS los momentos, incluido aquel en el
+     * que es falso.  Se respeta el que ya venga puesto: un productor puede
+     * saber que lo suyo no cambia al optimizar. */
+    if (f.scope.stage == nullptr || f.scope.stage[0] == '\0')
+        f.scope.stage = stage;
     return store.add(std::move(f));
 }
 
@@ -88,6 +96,10 @@ void Production::say_unknown(Subject about, UnknownReason reason,
     f.seal.unknown_reason = reason;
     f.seal.origin.producer = domain;
     f.seal.origin.function = about.function;
+    /* Tambien el no-saber lleva momento: no saber cuantas vueltas da un bucle
+     * ANTES de optimizar y no saberlo DESPUES son dos huecos distintos, y solo
+     * el primero se arregla mirando lo que el usuario escribio. */
+    f.scope.stage = stage;
     store.add(std::move(f));
 }
 
@@ -815,7 +827,7 @@ std::vector<const char *> registered_producers() {
 
 std::vector<ProductionSummary>
 produce(const ir::IrModule &mod, FactStore &store,
-        const std::vector<const char *> &wanted) {
+        const std::vector<const char *> &wanted, const char *stage) {
     /* Antes de producir nada: los nombres de los productores tienen que ser
      * canonicos para que un hecho leido de disco se reconozca como suyo. */
     register_asa_canonical_names();
@@ -854,7 +866,7 @@ produce(const ir::IrModule &mod, FactStore &store,
          * conocimiento ya esta ahi.  Es lo que permite que cada consumidor pida
          * lo suyo sin coordinarse con los demas y el trabajo se haga UNA vez,
          * sea cual sea el orden en que pregunten. */
-        if (store.has_domain(d.name)) continue;
+        if (store.has_domain(d.name, stage)) continue;
         summaries.push_back(ProductionSummary{});
         ProductionSummary &r = summaries.back();
         r.domain = d.name;
@@ -863,7 +875,7 @@ produce(const ir::IrModule &mod, FactStore &store,
          * sus hechos para que la proxima compilacion pueda validarlos sin
          * volver a producirlos. */
         if (d.fingerprint != nullptr) r.fingerprint = d.fingerprint(mod);
-        Production p{mod, base, store, r, structure_of};
+        Production p{mod, base, store, r, structure_of, stage};
         d.producer(p);
         r.micros = static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
@@ -872,7 +884,7 @@ produce(const ir::IrModule &mod, FactStore &store,
         /* Corrio: queda dicho.  Se marca aunque no haya afirmado nada -- "ya se
          * miro" y "no dio nada" son cosas distintas, y confundirlas haria
          * correrlo otra vez cada vez que alguien pregunte. */
-        store.mark_domain(d.name);
+        store.mark_domain(d.name, stage);
     }
     return summaries;
 }

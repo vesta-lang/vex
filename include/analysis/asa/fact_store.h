@@ -112,11 +112,19 @@ class FactStore {
     // haber corrido y no afirmar nada: "ya se miro" y "no dio nada" son cosas
     // distintas, y confundirlas haria correrlo una y otra vez.
 
-    /// Ya corrio @p domain sobre este almacen?
-    bool has_domain(const char *domain) const;
-    /// Deja constancia de que corrio.  Lo llama @ref produce; un productor
-    /// suelto no tiene por que saber de esto.
-    void mark_domain(const char *domain);
+    /**
+     * @brief Ya corrio @p domain sobre este almacen, EN ESE MOMENTO?
+     *
+     * El momento forma parte de la pregunta porque el mismo dominio sobre el
+     * mismo modulo dice cosas distintas antes y despues de optimizar -- que es
+     * lo que permite ensenar las dos fotos --.  Sin el, producir la segunda se
+     * saltaba entera creyendo que ya estaba hecha, y la vista quedaba con una
+     * sola sin que nada lo dijera.
+     */
+    bool has_domain(const char *domain, const char *stage = "") const;
+    /// Deja constancia de que corrio, en que momento.  Lo llama @ref produce;
+    /// un productor suelto no tiene por que saber de esto.
+    void mark_domain(const char *domain, const char *stage = "");
 
     /// Hechos que hablan de @p function (cualquier clase de sujeto dentro).
     const std::vector<FactId> &of_function(const std::string &function) const;
@@ -239,7 +247,13 @@ class FactStore {
     mutable std::vector<uint8_t> queried_;
     /// Dominios ya corridos.  Son pocos y se recorren enteros; un mapa aqui
     /// seria indireccion para nada.
-    std::vector<const char *> produced_;
+    /// Dominio y MOMENTO en que corrio.  Son pocos: un vector plano se
+    /// recorre antes de lo que un mapa calcula el hash.
+    struct ProducedDomain {
+        const char *domain = nullptr;
+        const char *stage = "";
+    };
+    std::vector<ProducedDomain> produced_;
     std::deque<std::string> names_; ///< arena: no invalida punteros al crecer.
     std::unordered_map<std::string, const char *> interned_;
     std::unordered_map<std::string, std::vector<FactId>> by_function_;

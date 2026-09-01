@@ -533,11 +533,12 @@ recuperar_hechos_(const std::string &ruta, analysis::asa::FactStore &destino,
 void ensure_facts_impl_(const ir::IrModule &mod,
                         analysis::asa::FactStore &store,
                         const std::vector<const char *> &wanted,
-                        const std::string &path, uint64_t fingerprint) {
+                        const std::string &path, uint64_t fingerprint,
+                        const char *stage) {
     /* Sin ruta no hay cache entre compilaciones: se produce y ya.  Pasa en los
      * caminos que no tienen un fichero al que atribuir el modulo. */
     if (path.empty()) {
-        analysis::asa::produce(mod, store, wanted);
+        analysis::asa::produce(mod, store, wanted, stage);
         return;
     }
 
@@ -558,7 +559,7 @@ void ensure_facts_impl_(const ir::IrModule &mod,
     /* Y lo que falte.  `producir` se salta los dominios que la lectura ya
      * marco, asi que esto es exactamente el trabajo que la cache no cubrio. */
     const std::vector<analysis::asa::ProductionSummary> summaries =
-        analysis::asa::produce(mod, store, wanted);
+        analysis::asa::produce(mod, store, wanted, stage);
     if (summaries.empty()) return; // todo vino de la cache: nada que guardar
 
     /* Se guarda lo que costo, para que el nivel de cache decida que merece ir a
@@ -1204,8 +1205,9 @@ std::string vxfacts_path_for(const std::string &source_path,
 
 void ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
                   const std::vector<const char *> &wanted,
-                  const std::string &path, uint64_t fingerprint) {
-    ensure_facts_impl_(mod, store, wanted, path, fingerprint);
+                  const std::string &path, uint64_t fingerprint,
+                  const char *stage) {
+    ensure_facts_impl_(mod, store, wanted, path, fingerprint, stage);
 }
 
 ///  M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
@@ -4183,7 +4185,7 @@ CompileResult compile_vx_project(
                            root_facts_key != 0
                                ? rutas_cache_(root_path, std::string()).hechos
                                : std::string(),
-                           root_facts_key);
+                           root_facts_key, analysis::asa::kStagePostOpt);
         /* Y sale con el resultado, para que quien compilo pueda consultarlo sin
          * volver a producirlo.  Se COPIA y no se mueve: el informe de abajo
          * todavia lo usa. */
@@ -4760,9 +4762,15 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
      * Si el hecho no aparece, se cae al calculo directo.  No es un respaldo
      * silencioso: `find` dice si habia hechos con ese codigo fuera de alcance,
      * y eso distingue "aun no se produce" de "se produce y no vale aqui". */
-    analysis::asa::produce(mod, facts, {"asa.layout"});
+    /* POST-optimizacion: aqui se habla del codigo que de verdad se va a
+     * emitir, que es lo que este informe tiene que juzgar. */
+    analysis::asa::produce(mod, facts, {"asa.layout"},
+                           analysis::asa::kStagePostOpt);
     analysis::asa::Scope here;
     here.backend = backend;
+    /* Y se pregunta por el mismo momento en el que se produjo: preguntar sin
+     * decirlo no es "cualquiera", es no casar con ninguno. */
+    here.stage = analysis::asa::kStagePostOpt;
     /* El bytecode es una ISA mas, y el hecho del cargador se sella por ella. */
     if (backend != nullptr &&
         (std::strcmp(backend, analysis::asa::kBackendVm) == 0 ||

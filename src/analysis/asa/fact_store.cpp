@@ -180,19 +180,23 @@ std::vector<const Fact *> FactStore::find_all(const char *code,
     return r;
 }
 
-bool FactStore::has_domain(const char *domain) const {
+bool FactStore::has_domain(const char *domain, const char *stage) const {
     if (domain == nullptr) return false;
     /* Por texto y no por puntero: quien pregunta suele tener el literal a mano,
      * no el mismo que guardo el registro, y comparar direcciones convertiria un
      * "ya esta hecho" en un "hazlo otra vez" sin que nadie lo note. */
-    for (const char *d : produced_)
-        if (d == domain || std::strcmp(d, domain) == 0) return true;
+    const char *s = stage != nullptr ? stage : "";
+    for (const ProducedDomain &d : produced_) {
+        if (d.domain != domain && std::strcmp(d.domain, domain) != 0) continue;
+        const char *ds = d.stage != nullptr ? d.stage : "";
+        if (ds == s || std::strcmp(ds, s) == 0) return true;
+    }
     return false;
 }
 
-void FactStore::mark_domain(const char *domain) {
-    if (domain == nullptr || has_domain(domain)) return;
-    produced_.push_back(domain);
+void FactStore::mark_domain(const char *domain, const char *stage) {
+    if (domain == nullptr || has_domain(domain, stage)) return;
+    produced_.push_back(ProducedDomain{domain, stage != nullptr ? stage : ""});
 }
 
 std::vector<FactId> FactStore::never_queried() const {
