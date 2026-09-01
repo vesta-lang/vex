@@ -820,7 +820,7 @@ static void test_optimizer_cse() {
 }
 
 // =========================================================================
-//  Test 11: raw_asm — codigo ensamblador incrustado verbatim
+//  Test 11: raw_asm -- codigo ensamblador incrustado verbatim
 // =========================================================================
 
 static void test_raw_asm() {

@@ -21,6 +21,9 @@
 #include "util/fs_utils.h"
 
 #include <cstdio>
+#include <thread>
+#include <functional>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <set>
@@ -54,10 +57,33 @@ vxdbg::StoredNode nodo(uint64_t id, size_t tam) {
 
 } // namespace
 
+/* Un directorio propio POR PROCESO.
+ *
+ * El mismo `.cpp` se construye con DOS nombres de objetivo -- la raiz declara
+ * algunos tests y `tests/CMakeLists.txt` los globa todos --, asi que el
+ * lanzador ejecuta el mismo binario dos veces A LA VEZ.  Con una ruta fija,
+ * cada copia borraba el almacen de la otra: aislado pasaba siempre y en tanda
+ * fallaba a ratos, que es la peor forma de fallar porque se le echa la culpa
+ * al azar.
+ *
+ * El identificador de proceso basta y no necesita nada del sistema: la
+ * direccion de una variable local ya es distinta entre procesos con ASLR, pero
+ * el reloj no lo seria en dos arranques simultaneos.  Se usa el que la
+ * biblioteca estandar da sin cabeceras de plataforma. */
+static std::string dir_unico(const char *nombre) {
+    const auto id =
+        std::hash<std::thread::id>{}(std::this_thread::get_id()) ^
+        static_cast<size_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+    return (std::filesystem::temp_directory_path() /
+            (std::string(nombre) + "_" + std::to_string(id)))
+        .string();
+}
+
 int main() {
     namespace stdfs = std::filesystem;
     const std::string raiz =
-        (stdfs::temp_directory_path() / "vesta_test_pack").string();
+        dir_unico("vesta_test_pack");
     std::error_code ec;
     stdfs::remove_all(raiz, ec);
 

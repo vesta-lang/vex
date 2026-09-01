@@ -183,7 +183,7 @@ template <class F> void por_cada_identificador(const std::string &t, F ver) {
 }
 
 /**
- * @brief La cara publica del modulo, ¿menciona un tipo que no es suyo?
+ * @brief La cara publica del modulo, menciona un tipo que no es suyo?
  *
  * Si la menciona, el tamano y la forma de ese tipo son parte de lo que ofrece:
  * quien llame a la funcion tiene que reservar y leer con ese layout.  Entonces

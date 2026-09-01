@@ -541,7 +541,16 @@ collect_comptime_unit(const ast::ModuleNode &mod, const std::string &source,
                 h *= util::kFnvPrime; // FNV-1a prime.
             }
         }
-        u.content_hash = h;
+        /* Un conjunto VACIO tiene huella CERO, no la base de FNV.
+         *
+         * `h` arranca en la base y sin nada que hashear se quedaba ahi, asi
+         * que todo modulo sin comptime salia con la MISMA huella no nula.  Y
+         * abajo, quien construye el artefacto pregunta `key != 0` para saber
+         * si hay algo -- una guarda que asi no se cumplia nunca --: el
+         * contrato "cero es que no hay nada" estaba escrito en un sitio y roto
+         * en el otro.  No hacia dano porque `empty()` corta antes, pero un
+         * guardia que no puede dispararse es un guardia que ya no protege. */
+        u.content_hash = u.empty() ? 0 : h;
     }
     return u;
 }

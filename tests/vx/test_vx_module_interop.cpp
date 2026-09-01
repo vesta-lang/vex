@@ -78,7 +78,17 @@ void test_typedef_roundtrip() {
     // 1. Compilar el modulo lib con un typedef new.
     auto lib = compile_to_typechecker("typedef u64 user_id new;\n"
                                       "typedef u32 port_num new;\n"
-                                      "i32 fn_lib(i32 x) { return x + 1; }\n",
+                                      /* `public` es lo que EXPORTA.
+                                       *
+                                       * Sin el, la funcion no salia al `.vxi`
+                                       * -- correcto -- y el test la pedia
+                                       * igual.  De propina, su comprobacion de
+                                       * "fn_lib exportada" pasaba por las 84
+                                       * funciones del preludio, no por esta:
+                                       * contaba cuantas hay, no si estaba la
+                                       * suya. */
+                                      "public i32 fn_lib(i32 x) { return x + "
+                                      "1; }\n",
                                       "lib.vx");
 
     CHECK(lib->tc != nullptr, "lib compila");
@@ -96,7 +106,16 @@ void test_typedef_roundtrip() {
         if (s.kind == vx::VxiSymbolKind::FUNCTION) ++fn_count;
     }
     CHECK(td_count == 2, "2 newtypes exportados (user_id, port_num)");
-    CHECK(fn_count >= 1, "fn_lib exportada");
+    /* Que este LA SUYA, no que haya alguna.
+     *
+     * Esto era `fn_count >= 1` y pasaba por las 84 funciones del preludio: con
+     * `fn_lib` sin exportar seguia en verde, y el fallo aparecia dos
+     * comprobaciones mas abajo sin decir por que. */
+    bool hay_fn_lib = false;
+    for (const auto &sy : vm.symbols)
+        if (sy.kind == vx::VxiSymbolKind::FUNCTION && sy.name == "fn_lib")
+            hay_fn_lib = true;
+    CHECK(hay_fn_lib, "fn_lib exportada");
 
     auto bytes = vx::vxi_emit(vm);
     auto parsed = vx::vxi_parse(bytes.data(), bytes.size());

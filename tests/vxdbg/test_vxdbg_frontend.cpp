@@ -28,6 +28,9 @@
 #include "vx/parser.h"
 
 #include <cstdio>
+#include <thread>
+#include <functional>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -114,13 +117,35 @@ static bool leer(const vxdbg::NodeStore &store, vxdbg::LanguageEntityId id,
     return vxdbg::load_node(store, id.hash, out);
 }
 
+/* Un directorio propio POR PROCESO.
+ *
+ * El mismo `.cpp` se construye con DOS nombres de objetivo -- la raiz declara
+ * algunos tests y `tests/CMakeLists.txt` los globa todos --, asi que el
+ * lanzador ejecuta el mismo binario dos veces A LA VEZ.  Con una ruta fija,
+ * cada copia borraba el almacen de la otra: aislado pasaba siempre y en tanda
+ * fallaba a ratos, que es la peor forma de fallar porque se le echa la culpa
+ * al azar.
+ *
+ * El identificador de proceso basta y no necesita nada del sistema: la
+ * direccion de una variable local ya es distinta entre procesos con ASLR, pero
+ * el reloj no lo seria en dos arranques simultaneos.  Se usa el que la
+ * biblioteca estandar da sin cabeceras de plataforma. */
+static std::string dir_unico(const char *nombre) {
+    const auto id =
+        std::hash<std::thread::id>{}(std::this_thread::get_id()) ^
+        static_cast<size_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+    return (std::filesystem::temp_directory_path() /
+            (std::string(nombre) + "_" + std::to_string(id)))
+        .string();
+}
+
 int main() {
     std::printf("=== vxdbg: del fuente Vesta al grafo semantico ===\n");
 
     // Carpeta propia para no mezclarse con el cache real del compilador.
     const std::string dir =
-        (std::filesystem::temp_directory_path() / "vxdbg_frontend_test")
-            .string();
+        dir_unico("vxdbg_frontend_test");
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
 
