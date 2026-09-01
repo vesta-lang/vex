@@ -530,17 +530,22 @@ recuperar_hechos_(const std::string &ruta, analysis::asa::FactStore &destino,
  * @param path        Fichero de hechos, o vacio para no tocar disco.
  * @param fingerprint Identidad del modulo: si no coincide, lo guardado no vale.
  */
-void ensure_facts_impl_(const ir::IrModule &mod,
-                        analysis::asa::FactStore &store,
-                        const std::vector<const char *> &wanted,
-                        const std::string &path, uint64_t fingerprint,
-                        const char *stage) {
+/// Pidio quien compila hechos en ese MOMENTO?  Vacio = ninguno, que es el
+/// defecto: producir conocimiento que nadie pide no es prevision.
+bool wants_stage_(const CompileOptions &opts, const char *stage) {
+    for (const char *w : opts.asa_stages)
+        if (w != nullptr && std::strcmp(w, stage) == 0) return true;
+    return false;
+}
+
+std::vector<analysis::asa::ProductionSummary>
+ensure_facts_impl_(const ir::IrModule &mod, analysis::asa::FactStore &store,
+                   const std::vector<const char *> &wanted,
+                   const std::string &path, uint64_t fingerprint,
+                   const char *stage) {
     /* Sin ruta no hay cache entre compilaciones: se produce y ya.  Pasa en los
      * caminos que no tienen un fichero al que atribuir el modulo. */
-    if (path.empty()) {
-        analysis::asa::produce(mod, store, wanted, stage);
-        return;
-    }
+    if (path.empty()) return analysis::asa::produce(mod, store, wanted, stage);
 
     /* Lo de antes, validado POR DOMINIO con lo que hoy depende cada uno.
      *
@@ -560,7 +565,8 @@ void ensure_facts_impl_(const ir::IrModule &mod,
      * marco, asi que esto es exactamente el trabajo que la cache no cubrio. */
     const std::vector<analysis::asa::ProductionSummary> summaries =
         analysis::asa::produce(mod, store, wanted, stage);
-    if (summaries.empty()) return; // todo vino de la cache: nada que guardar
+    // Todo vino de la cache: nada que guardar, y nada que contar tampoco.
+    if (summaries.empty()) return summaries;
 
     /* Se guarda lo que costo, para que el nivel de cache decida que merece ir a
      * disco.  Un dominio que se produce en 3 us no compensa escribirlo. */
@@ -578,6 +584,7 @@ void ensure_facts_impl_(const ir::IrModule &mod,
         costs.push_back(c);
     }
     guardar_hechos_(path, store, fingerprint, costs);
+    return summaries;
 }
 
 /// Idem para el cache de IR del dep (.vxir).  @c tgt_suffix separa el cache por
@@ -1203,11 +1210,11 @@ std::string vxfacts_path_for(const std::string &source_path,
     return rutas_cache_(source_path, tgt_suffix).hechos;
 }
 
-void ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
-                  const std::vector<const char *> &wanted,
-                  const std::string &path, uint64_t fingerprint,
-                  const char *stage) {
-    ensure_facts_impl_(mod, store, wanted, path, fingerprint, stage);
+std::vector<analysis::asa::ProductionSummary>
+ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
+             const std::vector<const char *> &wanted, const std::string &path,
+             uint64_t fingerprint, const char *stage) {
+    return ensure_facts_impl_(mod, store, wanted, path, fingerprint, stage);
 }
 
 ///  M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
@@ -4090,6 +4097,21 @@ CompileResult compile_vx_project(
             ir::ir_pass_sroa_stack_structs(fn);
         res.ir_module_cache_bytes_preopt =
             ir::emit_ir_module_cache(pre_snapshot);
+
+        /* Y los HECHOS de ese momento, si quien compila los pidio.  Por la
+         * MISMA puerta que los de despues: es el mismo conocimiento sobre otro
+         * codigo, no otro mecanismo.  Este camino solo miraba DESPUES, con lo
+         * que la decision de que el ASA mire antes solo llegaba al camino de
+         * fichero suelto -- y por aqui pasa todo lo que declara `namespace`,
+         * que es la mayoria. */
+        if (wants_stage_(opts, analysis::asa::kStagePreOpt) &&
+            !opts.asa_domains.empty()) {
+            ensure_facts_impl_(pre_snapshot, facts, opts.asa_domains,
+                               root_facts_key != 0
+                                   ? rutas_cache_(root_path, std::string()).hechos
+                                   : std::string(),
+                               root_facts_key, analysis::asa::kStagePreOpt);
+        }
     }
 
     // --vx-emit-ir: copia del IR PRE-opt (antes de optimizar) para el dump.
@@ -4195,10 +4217,17 @@ CompileResult compile_vx_project(
          * el modulo en memoria y su identidad conocida -- deja el trabajo hecho
          * y guardado, en vez de que cada consumidor lo rehaga despues y lo
          * tire al terminar. */
-        std::vector<const char *> quiere = {"asa.layout"};
-        for (const char *d : opts.asa_domains)
-            if (d != nullptr) quiere.push_back(d);
-        ensure_facts_impl_(merged, facts, quiere,
+        /* `asa.layout` SIEMPRE -- lo consume el informe de precondiciones de
+         * aqui abajo --, y ademas los dominios que haya pedido quien compila,
+         * pero solo si pidio ESTE momento: pedir hechos sin decir de que
+         * codigo dejaba al consumidor preguntando por un momento y al
+         * productor contestando por otro, con lo que no veia nada y ademas lo
+         * recalculaba. */
+        std::vector<const char *> wanted = {"asa.layout"};
+        if (wants_stage_(opts, analysis::asa::kStagePostOpt))
+            for (const char *d : opts.asa_domains)
+                if (d != nullptr) wanted.push_back(d);
+        ensure_facts_impl_(merged, facts, wanted,
                            root_facts_key != 0
                                ? rutas_cache_(root_path, std::string()).hechos
                                : std::string(),

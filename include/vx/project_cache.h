@@ -36,6 +36,7 @@
 
 #include "analysis/asa/fact.h"
 #include "analysis/asa/fact_store.h" // los hechos que se dejan al compilar
+#include "analysis/asa/producers.h"  // ProductionSummary: que corrio y cuanto
 #include "ir/ssa_ir.h"               // el modulo del que se sabe
 #include "vx/diagnostic.h"
 
@@ -283,11 +284,16 @@ uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;
  *                    que vale antes de optimizar no tiene por que valer
  *                    despues, y un hecho que nombra un valor por su id habla
  *                    de una numeracion que el optimizador cambia.
+ * @return El resumen de los dominios que de verdad CORRIERON (vacio si todo
+ *         vino de la cache).  Lo necesita quien ENSENA el conocimiento -- el
+ *         volcado y la vista del editor --, y sin devolverlo esos dos tenian
+ *         que producir por su cuenta, o sea saltarse la cache y la validacion
+ *         por huella para poder pintar una tabla.
  */
-void ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
-                  const std::vector<const char *> &wanted,
-                  const std::string &path, uint64_t fingerprint,
-                  const char *stage);
+std::vector<analysis::asa::ProductionSummary>
+ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
+             const std::vector<const char *> &wanted, const std::string &path,
+             uint64_t fingerprint, const char *stage);
 
 /// Path del fichero de hechos de @p source_path (`.vxfacts` en la cache).
 std::string vxfacts_path_for(const std::string &source_path,

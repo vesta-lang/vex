@@ -72,6 +72,27 @@ struct CompileOptions {
      * paga quien lo usa y solo la primera vez.
      */
     std::vector<const char *> asa_domains;
+
+    /**
+     * @brief EN QUE MOMENTOS se quieren esos dominios.  Vacio = ninguno.
+     *
+     * La otra mitad de la peticion, y sin ella el conocimiento no se podia
+     * usar: quien pide dominios puede decir QUE quiere saber pero no DE QUE
+     * CODIGO -- el que el programa dice, o el que va a ejecutarse --, y son
+     * cosas distintas.  Un hecho lleva su momento sellado, asi que si el
+     * compilador produce en uno y el consumidor pregunta por otro, no ve
+     * NADA: no falla, no dice nada, y encima lo recalcula.  Medido en el
+     * linter de un fichero suelto: dos bases de hechos, seis analisis cada
+     * una, para el mismo modulo.
+     *
+     * Varios a la vez porque los hay que quieren los dos -- `--asa` ensena
+     * las dos fotos y lo util es justamente la diferencia --, y porque asi
+     * los cinco consumidores piden por la MISMA puerta en vez de que cada uno
+     * decida por su cuenta cuando mirar.
+     *
+     * Los valores son @c analysis::asa::kStage*.
+     */
+    std::vector<const char *> asa_stages;
     bool emit_debug =
         false; ///< Emitir comentarios @line N en el .vel generado.
     /// Carpeta donde volcar la base de conocimiento de depuracion (@c vxdbg).

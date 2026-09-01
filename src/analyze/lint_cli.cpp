@@ -114,6 +114,12 @@ int run(int argc, char **argv) {
      * vez de rehacerlo.  Antes se producia aqui, despues, y moria con el
      * proceso. */
     copts.asa_domains = lint_required_domains(wanted);
+    /* Y EN QUE MOMENTO: el que se lintea es el codigo que de verdad se va a
+     * emitir, asi que POST-optimizacion.  Sin decirlo, el compilador producia
+     * en un momento y esto preguntaba por otro: no veia ni un hecho -- sin
+     * fallar, que es lo peor -- y encima los recalculaba.  Medido: dos bases
+     * de hechos, seis analisis cada una, para el mismo modulo. */
+    copts.asa_stages = {analysis::asa::kStagePostOpt};
     const bool as_project = vx::vx_source_has_imports(source) ||
                             vx::vx_source_declara_namespace(source);
     vx::CompileResult cr = as_project
@@ -143,23 +149,16 @@ int run(int argc, char **argv) {
      * estan, asi que esto no es un atajo: es el mismo camino con el trabajo ya
      * hecho. */
     analysis::asa::FactStore facts = std::move(cr.facts);
-    /* SOLO lo que las familias ENCENDIDAS vayan a consultar.  Producirlo todo
-     * se iba a ~544 us por modulo y el 80% eran los rangos, que aqui no los
-     * mira nadie.  Ademas la produccion es idempotente y se apoya en la cache
-     * en disco, asi que una segunda pasada sobre el mismo modulo no vuelve a
-     * calcularlo.
+    /* Y NO se produce nada aqui.  Lo que las familias consultan se pidio
+     * arriba -- dominios Y momento -- y lo dejo hecho la compilacion, que es
+     * donde el modulo ya esta en memoria, su identidad se conoce y el
+     * resultado se GUARDA para la proxima.  Producir aqui otra vez era el
+     * mismo trabajo por segunda vez y sin cache.
      *
-     * La lista la dicen las FAMILIAS, no esto.  Estaba escrita aqui a mano, y
-     * en cuanto entro una familia que consultaba otro dominio se quedo sin sus
-     * hechos -- y calladamente: una familia sin hechos no falla, no dice nada,
+     * La lista la dicen las FAMILIAS, no esto: estaba escrita a mano y en
+     * cuanto entro una familia que consultaba otro dominio se quedo sin sus
+     * hechos, calladamente -- una familia sin hechos no falla, no dice nada,
      * que es indistinguible de "aqui no hay nada que decir" --. */
-    /* POST-optimizacion: el modulo que se lintea es el que salio de la cache
-     * del IR, que se escribe despues de optimizar.  Decirlo importa porque el
-     * momento va sellado en cada hecho y quien pregunta tiene que preguntar
-     * por el suyo -- un hecho de antes de optimizar habla de un codigo que ya
-     * no es este. */
-    analysis::asa::produce(mod, facts, analyze::lint_required_domains(wanted),
-                           analysis::asa::kStagePostOpt);
 
     /* El alcance va vacio en isa/os/backend -- universal -- porque los
      * hallazgos de hoy salen de propiedades del codigo y no del objetivo.  El

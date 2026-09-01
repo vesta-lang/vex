@@ -1332,11 +1332,22 @@ CompileResult compile_vx_source(const std::string &source,
          * La identidad del modulo es el hash de sus TOKENS, no del texto: un
          * comentario o un espacio de mas no cambian lo que el compilador sabe,
          * y con el texto crudo cualquier retoque tiraba la cache entera. */
-        if (!filename.empty() && !opts.asa_domains.empty()) {
-            const uint64_t huella =
-                hash_de_tokens(source, /*con_lineas=*/false);
+        /* Quien pide hechos dice TAMBIEN en que momento los quiere, y aqui se
+         * atiende el de ANTES.  El de despues se atiende pasado el
+         * optimizador, unas lineas mas abajo: son el mismo conocimiento sobre
+         * dos codigos distintos, no dos mecanismos. */
+        const bool wants_facts =
+            !filename.empty() && !opts.asa_domains.empty();
+        const auto wants_stage = [&opts](const char *s) {
+            for (const char *w : opts.asa_stages)
+                if (w != nullptr && std::strcmp(w, s) == 0) return true;
+            return false;
+        };
+        const uint64_t fingerprint =
+            wants_facts ? hash_de_tokens(source, /*con_lineas=*/false) : 0;
+        if (wants_facts && wants_stage(analysis::asa::kStagePreOpt)) {
             ensure_facts(irmod_for_section, res.facts, opts.asa_domains,
-                         vxfacts_path_for(filename, std::string()), huella,
+                         vxfacts_path_for(filename, std::string()), fingerprint,
                          analysis::asa::kStagePreOpt);
         }
 
@@ -1346,6 +1357,16 @@ CompileResult compile_vx_source(const std::string &source,
             std::chrono::duration_cast<std::chrono::microseconds>(
                 RelojFase::now() - marca_opt)
                 .count());
+
+        /* Y el momento de DESPUES, si se pidio: lo que es cierto del codigo
+         * que de verdad se va a emitir.  Los dos van al mismo almacen, cada
+         * hecho con su momento sellado; no se contradicen, hablan de codigos
+         * distintos. */
+        if (wants_facts && wants_stage(analysis::asa::kStagePostOpt)) {
+            ensure_facts(irmod_for_section, res.facts, opts.asa_domains,
+                         vxfacts_path_for(filename, std::string()), fingerprint,
+                         analysis::asa::kStagePostOpt);
+        }
         /* Y aqui otra vez, si se pidio.  Es el sitio donde mas falta hace: el
          * optimizador opera SOBRE el grafo -- corta bloques, los une, mueve
          * instrucciones -- y una cirugia mal cerrada no se nota hasta que el
