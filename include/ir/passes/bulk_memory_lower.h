@@ -26,6 +26,12 @@
 #ifndef VESTA_IR_PASSES_BULK_MEMORY_LOWER_H
 #define VESTA_IR_PASSES_BULK_MEMORY_LOWER_H
 
+namespace analysis {
+namespace asa {
+class FactStore;
+} // namespace asa
+} // namespace analysis
+
 namespace ir {
 
 struct IrFunction;
@@ -40,7 +46,17 @@ struct IrFunction;
  * @param fn Funcion a transformar.
  * @return true si cambio algo.
  */
-bool ir_pass_bulk_memory_lower(IrFunction &fn);
+/**
+ * @param facts Almacen donde DECIR lo que se sabe antes de deshacerlo, o nulo.
+ *              Que un bucle sea una copia solo se sabe mientras el bucle
+ *              existe: en cuanto el pase lo reduce, lo que queda es una
+ *              instruccion de bloque y ya no hay nada que reconocer.  Ese
+ *              conocimiento se tiraba, y con el la unica forma de saber si el
+ *              pase no disparo porque no vio el bucle o porque decidio no
+ *              tocarlo.
+ */
+bool ir_pass_bulk_memory_lower(IrFunction &fn,
+                               analysis::asa::FactStore *facts = nullptr);
 
 } // namespace ir
 

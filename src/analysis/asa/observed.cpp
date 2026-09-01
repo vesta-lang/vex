@@ -53,5 +53,58 @@ bool loop_trip_fact(FactStore &store, const ir::IrFunction &fn,
     return true;
 }
 
+bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
+                      const BulkMemoryFact &b, const char *stage, Source source,
+                      Fact &out) {
+    if (b.st.header == ir::IR_NO_BLOCK) return false;
+
+    /* Cuantos elementos, SI se sabe.  La cota de un bucle suele ser un valor
+     * del programa; publicar su identificador como si fuera la cuenta es dar
+     * un numero equivocado, que es peor que no darlo. */
+    bool cuenta_conocida = false;
+    int64_t elementos = 0;
+    if (b.n_elems != ir::IR_NO_VALUE && b.n_elems < fn.values.size() &&
+        fn.values[b.n_elems].is_const) {
+        elementos = static_cast<int64_t>(fn.values[b.n_elems].const_val);
+        cuenta_conocida = true;
+    }
+
+    Fact f;
+    f.what.domain = kProducerBulkMemory;
+    /* Relleno y copia son hechos DISTINTOS, no el mismo con una bandera: quien
+     * los consuma emite instrucciones distintas, y el segundo ademas necesita
+     * saber que las dos regiones no se solapan.  Y cada uno en dos formas,
+     * segun se sepa la longitud o se dimensione al ejecutar: la clase de
+     * conocimiento no es la misma y quien decida especializar lo necesita. */
+    const bool relleno = b.clase == BulkMemoryFact::Clase::Relleno;
+    if (relleno)
+        f.what.code = cuenta_conocida ? "bulk.fill" : "bulk.fill_runtime";
+    else
+        f.what.code = cuenta_conocida ? "bulk.copy" : "bulk.copy_runtime";
+    /* Los numeros por SEPARADO, no ya multiplicados: quien lea el hecho no
+     * podria recuperar ninguno de los dos de su producto. */
+    f.what.a = cuenta_conocida ? elementos : b.ancho;
+    f.what.b = b.ancho;
+
+    f.about.kind = Subject::Kind::Block;
+    f.about.function = store.intern(fn.name);
+    f.about.id = b.st.header;
+
+    /* DEMOSTRADO: no es que lo parezca, es que se recorrio el bucle entero y
+     * todo lo que hace es recorrer y mover.  Cualquier duda salio por el otro
+     * camino, como una renuncia con su motivo. */
+    f.seal.certainty = Certainty::Proven;
+    f.seal.origin.source = source;
+    f.seal.origin.producer = kProducerBulkMemory;
+    f.seal.origin.function = f.about.function;
+    f.seal.support.add(kProducerLoops);
+    f.seal.support.add(kProducerMemory);
+
+    f.scope.stage = stage;
+    f.proof.rule = "loop-shape+induction+memory-effects";
+    out = std::move(f);
+    return true;
+}
+
 } // namespace asa
 } // namespace analysis

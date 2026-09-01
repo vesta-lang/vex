@@ -258,6 +258,17 @@ void register_value_shape_producer();
 void register_definite_store_producer();
 
 /**
+ * @brief Da de alta el dominio `asa.bulk_memory`.
+ *
+ * Que bucles son en realidad UNA operacion de bloque -- un relleno o una copia
+ * escritos largos --, y de los que no lo son, por que no.  Lo segundo es la
+ * mitad que faltaba: el reconocedor se rendia quince veces en silencio, asi
+ * que "aqui no hay ninguna copia" y "habia una y me falto un byte para verla"
+ * salian igual.
+ */
+void register_bulk_memory_producer();
+
+/**
  * @brief Da de alta el dominio `asa.memory_access`.
  *
  * Que TOCA cada instruccion -- que lee, que escribe y donde --, apoyado en la

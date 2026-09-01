@@ -1003,6 +1003,146 @@ es = "no se encontro una variable de induccion contada en la cabecera"
 en = "how many times it runs cannot be stated"
 es = "no se puede afirmar cuantas vueltas da"
 
+# --- asa.bulk_memory: un bucle que es en realidad UNA operacion de bloque ---
+# Lo positivo lleva los dos numeros por separado -- cuantos elementos y cuantos
+# bytes mide cada uno -- porque el primero suele ser un valor del programa y la
+# multiplicacion la emite quien transforme.
+["bulk.fill"]
+en = "this loop writes the same value over a contiguous run ({0} elements of {1} bytes): it is a block fill"
+es = "este bucle escribe el mismo valor en un tramo contiguo ({0} elementos de {1} bytes): es un relleno de bloque"
+
+["bulk.copy"]
+en = "this loop copies a contiguous run ({0} elements of {1} bytes): it is a block copy"
+es = "este bucle copia un tramo contiguo ({0} elementos de {1} bytes): es una copia de bloque"
+
+["bulk.fill_runtime"]
+en = "this loop writes the same value over a contiguous run of {1}-byte elements: it is a block fill, sized at run time"
+es = "este bucle escribe el mismo valor en un tramo contiguo de elementos de {1} bytes: es un relleno de bloque, dimensionado al ejecutar"
+
+["bulk.copy_runtime"]
+en = "this loop copies a contiguous run of {1}-byte elements: it is a block copy, sized at run time"
+es = "este bucle copia un tramo contiguo de elementos de {1} bytes: es una copia de bloque, dimensionada al ejecutar"
+
+["bulk.no_loops"]
+en = "it has no loops that could be a block operation"
+es = "no tiene bucles que pudieran ser una operacion de bloque"
+
+# Y las renuncias.  Cada una dice QUE hay que cambiar para que el bucle si sea
+# una operacion de bloque: eran quince abandonos mudos, y sin el motivo no hay
+# diferencia entre "aqui no hay ninguna copia" y "habia una y me falto un byte
+# para verla".
+["bulk.has_inner_loop"]
+en = "it contains another loop, so it does more than move memory"
+es = "contiene otro bucle, asi que hace mas que mover memoria"
+
+["bulk.shape_unsupported"]
+en = "its shape is not a simple counted loop"
+es = "su forma no es un bucle contado simple"
+
+["bulk.no_induction"]
+en = "no counted induction variable was found"
+es = "no se encontro una variable de induccion contada"
+
+["bulk.stride_not_one"]
+en = "the index advances by more than one, so the run it touches has gaps"
+es = "el indice avanza de mas de uno en uno, asi que el tramo que toca tiene huecos"
+
+["bulk.index_not_from_zero"]
+en = "the index does not start at zero, so the run is shifted from the base"
+es = "el indice no arranca en cero, asi que el tramo esta desplazado respecto a la base"
+
+["bulk.guard_has_offset"]
+en = "the guard compares the index plus an offset, not the index"
+es = "la guarda compara el indice mas un desplazamiento, no el indice"
+
+["bulk.no_bound"]
+en = "the guard has no recognizable limit"
+es = "la guarda no tiene un limite reconocible"
+
+["bulk.bound_varies"]
+en = "the limit changes inside the loop, so there is no fixed run"
+es = "el limite cambia dentro del bucle, asi que no hay un tramo fijo"
+
+["bulk.guard_not_strict"]
+en = "the guard is not strict (`<=`), so the run reaches one past the limit"
+es = "la guarda no es estricta (`<=`), asi que el tramo llega uno mas alla del limite"
+
+["bulk.opaque_access"]
+en = "it has a memory access that cannot be located"
+es = "tiene un acceso a memoria que no se puede localizar"
+
+["bulk.two_stores"]
+en = "it writes in more than one place"
+es = "escribe en mas de un sitio"
+
+["bulk.two_loads"]
+en = "it reads from more than one place"
+es = "lee de mas de un sitio"
+
+["bulk.other_memory_effect"]
+en = "it has a memory effect beyond the read and the write of the run"
+es = "tiene un efecto de memoria mas alla de la lectura y la escritura del tramo"
+
+["bulk.body_does_more"]
+en = "the body does something beyond walking the run and moving it"
+es = "el cuerpo hace algo mas que recorrer el tramo y moverlo"
+
+["bulk.no_store"]
+en = "it writes nothing, so it moves nothing"
+es = "no escribe nada, asi que no mueve nada"
+
+["bulk.malformed_store"]
+en = "the write does not have the expected shape"
+es = "la escritura no tiene la forma esperada"
+
+["bulk.unknown_width"]
+en = "how many bytes each access moves cannot be stated"
+es = "no se puede afirmar cuantos bytes mueve cada acceso"
+
+["bulk.dst_address_not_resolved"]
+en = "the written address could not be resolved to a base plus the index"
+es = "la direccion escrita no se pudo resolver como una base mas el indice"
+
+["bulk.dst_stride_not_width"]
+en = "the written address does not advance exactly the width of the access, so the writes leave gaps or overlap"
+es = "la direccion escrita no avanza exactamente el ancho del acceso, asi que las escrituras dejan huecos o se pisan"
+
+["bulk.dst_base_varies"]
+en = "the base of the written run changes inside the loop"
+es = "la base del tramo escrito cambia dentro del bucle"
+
+["bulk.fill_value_varies"]
+en = "the written value is computed inside the loop, so it is not the same in every turn"
+es = "el valor escrito se calcula dentro del bucle, asi que no es el mismo en cada vuelta"
+
+["bulk.fill_value_not_byte_repeatable"]
+en = "the written value does not fit in a repeated byte, and a block fill repeats a byte"
+es = "el valor escrito no cabe en un byte repetido, y un relleno de bloque repite un byte"
+
+["bulk.stored_value_not_loaded"]
+en = "what it writes is not what it just read"
+es = "lo que escribe no es lo que acaba de leer"
+
+["bulk.malformed_load"]
+en = "the read does not have the expected shape"
+es = "la lectura no tiene la forma esperada"
+
+["bulk.width_mismatch"]
+en = "the read and the write do not move the same number of bytes"
+es = "la lectura y la escritura no mueven el mismo numero de bytes"
+
+["bulk.src_address_not_resolved"]
+en = "the read address could not be resolved to a base plus the index"
+es = "la direccion leida no se pudo resolver como una base mas el indice"
+
+["bulk.src_stride_not_width"]
+en = "the read address does not advance exactly the width of the access"
+es = "la direccion leida no avanza exactamente el ancho del acceso"
+
+["bulk.src_base_varies"]
+en = "the base of the read run changes inside the loop"
+es = "la base del tramo leido cambia dentro del bucle"
+
 ["value_shape.none"]
 en = "it has no values with components"
 es = "no tiene valores con componentes"

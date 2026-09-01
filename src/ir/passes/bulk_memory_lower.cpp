@@ -13,6 +13,7 @@
 #include "util/env_flags.h"
 #include "ir/passes/bulk_memory_lower.h"
 
+#include "analysis/asa/observed.h" // decirlo ANTES de deshacerlo
 #include "analysis/facts/bulk_memory.h"
 #include "ir/ssa_ir.h"
 
@@ -21,7 +22,8 @@
 
 namespace ir {
 
-bool ir_pass_bulk_memory_lower(IrFunction &fn) {
+bool ir_pass_bulk_memory_lower(IrFunction &fn,
+                               analysis::asa::FactStore *facts) {
     if (fn.is_native || fn.blocks.empty()) return false;
     /* Quien IMPLEMENTA el movimiento de memoria no puede ver su bucle
      * reducido a un movimiento de memoria: seria una llamada a si mismo.  Es
@@ -35,6 +37,31 @@ bool ir_pass_bulk_memory_lower(IrFunction &fn) {
 
     const std::vector<analysis::BulkMemoryFact> hechos =
         analysis::detect_bulk_memory(fn);
+
+    /* Lo que se sabe, DICHO antes de tocarlo.
+     *
+     * Que este bucle es una copia solo se sabe mientras el bucle existe: dos
+     * lineas mas abajo queda una instruccion de bloque y no hay nada que
+     * reconocer.  Antes ese conocimiento moria con la transformacion que lo
+     * produjo, y con el la unica forma de distinguir "el pase no vio el
+     * bucle" de "lo vio y decidio no tocarlo".
+     *
+     * Se publica de TODOS los reconocidos, incluso de los que luego no se
+     * reduzcan: que falte el preheader no hace menos cierto que el bucle sea
+     * una copia. */
+    if (facts != nullptr) {
+        for (const analysis::BulkMemoryFact &f : hechos) {
+            /* El hecho lo arma el MISMO sitio que lo arma para el dominio.
+             * Lo que cambia entre los dos es el MOMENTO y la procedencia, no
+             * lo que el hecho dice. */
+            analysis::asa::Fact h;
+            if (analysis::asa::bulk_memory_fact(
+                    *facts, fn, f, analysis::asa::kStageDuringOpt,
+                    analysis::asa::Source::Static, h))
+                facts->add(std::move(h));
+        }
+    }
+
     if (hechos.empty()) return false;
 
     bool cambiado = false;

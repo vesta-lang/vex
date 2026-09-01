@@ -30,6 +30,7 @@
 #include "analysis/asa/fact.h"
 #include "analysis/asa/fact_base.h" // los NOMBRES de dominio, que son vocabulario
 #include "analysis/asa/fact_store.h"
+#include "analysis/facts/bulk_memory.h"
 #include "analysis/facts/loop_trip_count.h"
 #include "ir/ssa_ir.h"
 
@@ -67,6 +68,32 @@ namespace asa {
 bool loop_trip_fact(FactStore &store, const ir::IrFunction &fn,
                     ir::IrBlockId header, const LoopTripInfo &trip,
                     const char *stage, Source source, Fact &out);
+
+/**
+ * @brief El hecho "este bucle es en realidad una operacion de bloque".
+ *
+ * Lo afirman DOS sitios y por eso se arma aqui: el dominio, mirando el codigo,
+ * y el pase que lo reduce, que lo dice justo antes de que el bucle deje de
+ * existir -- despues no hay bucle que reconocer, y ese conocimiento se tiraba.
+ *
+ * CUANTOS elementos no siempre se sabe: la cota de un bucle suele ser un valor
+ * del programa.  Cuando lo es, sale el numero; cuando no, sale un codigo
+ * distinto que dice que el tramo se dimensiona al ejecutar.  Publicar el
+ * identificador del valor como si fuera la cuenta -- que es lo que pasaba --
+ * imprimia "1 elementos" para un tramo de longitud desconocida: no un error,
+ * un numero equivocado.
+ *
+ * @param store  Para internar el nombre de la funcion.
+ * @param fn     Funcion a la que pertenece el bucle.
+ * @param b      Lo que el analisis reconocio.
+ * @param stage  En que MOMENTO vale (@see kStage*).
+ * @param source De donde sale.
+ * @param out    Donde se deja el hecho.
+ * @return true siempre que @p b describa un bucle con cabecera valida.
+ */
+bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
+                      const BulkMemoryFact &b, const char *stage, Source source,
+                      Fact &out);
 
 } // namespace asa
 } // namespace analysis

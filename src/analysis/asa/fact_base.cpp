@@ -35,6 +35,7 @@ const char *const kProducerLayout = "asa.layout";
 const char *const kProducerAsmFlow = "asa.asm_flow";
 const char *const kProducerBoundary = "asa.boundary";
 const char *const kProducerLoops = "asa.loops";
+const char *const kProducerBulkMemory = "asa.bulk_memory";
 const char *const kModuleUnit = "<module>";
 
 void register_asa_canonical_names() {
@@ -52,6 +53,7 @@ void register_asa_canonical_names() {
         register_canonical_name(kProducerAsmFlow);
         register_canonical_name(kProducerBoundary);
         register_canonical_name(kProducerLoops);
+        register_canonical_name(kProducerBulkMemory);
         register_canonical_name(kModuleUnit);
         return true;
     }();

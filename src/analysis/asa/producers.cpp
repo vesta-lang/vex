@@ -841,6 +841,11 @@ void register_builtin_producers() {
      * analisis y conocimiento compartido. */
     register_memory_access_producer();
     register_use_def_producer();
+    /* Y el que dice que un bucle es en realidad una operacion de bloque.  Lo
+     * calculaba solo el pase que lo baja a `memcpy`, asi que si ese no
+     * disparaba no habia forma de saber si es que no lo vio o es que decidio
+     * no tocarlo -- y las quince razones para no verlo no las contaba nadie. */
+    register_bulk_memory_producer();
 }
 
 } // namespace

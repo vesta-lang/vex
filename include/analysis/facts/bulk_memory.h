@@ -18,9 +18,9 @@
  * Este fichero produce ese saber como un HECHO, no como un patron.  La
  * diferencia importa y no es de estilo:
  *
- *   - Un patron pregunta por la FORMA: "¿la cabecera tiene tres
- *     instrucciones?", "¿el incremento esta en el cuerpo o en su propio
- *     bloque?", "¿el indice empieza en cero?".  Cada respuesta depende de como
+ *   - Un patron pregunta por la FORMA: "la cabecera tiene tres
+ *     instrucciones?", "el incremento esta en el cuerpo o en su propio
+ *     bloque?", "el indice empieza en cero?".  Cada respuesta depende de como
  *     baje el frontend y de que pases hayan corrido antes, asi que deja de
  *     valer en cuanto algo cambia -- y no avisa: simplemente no reconoce nada.
  *     Se probo, y bastaba con que el desenrollador corriera antes para que no
@@ -89,6 +89,30 @@ struct BulkMemoryFact {
 };
 
 /**
+ * @brief Un bucle que se MIRO y no resulto ser un movimiento de bloque, con
+ *        el motivo.
+ *
+ * Sin esto el analisis se rendia quince veces en silencio, y un analisis que
+ * calla al renunciar parece que funciona: "no hay ningun memcpy en este
+ * programa" y "habia uno y me falto un byte para verlo" salian igual.  Es
+ * ademas lo que necesita un consumidor de cara al usuario -- "este bucle seria
+ * `std.memory.copy` si la base no cambiara dentro" es un consejo; "no se
+ * reconocio nada" no lo es.
+ */
+struct BulkMemoryDecline {
+    uint32_t loop_id = 0;
+    ir::IrBlockId header = ir::IR_NO_BLOCK;
+    /// Codigo estable del caso, del vocabulario de este dominio.
+    const char *code = "";
+};
+
+/// Lo que el analisis vio: lo que reconocio y lo que no, con su motivo.
+struct BulkMemoryReport {
+    std::vector<BulkMemoryFact> facts;
+    std::vector<BulkMemoryDecline> declines;
+};
+
+/**
  * @brief Descubre que bucles de @p fn son movimientos de memoria en bloque.
  *
  * Solo mira bucles MAS INTERNOS: uno que contiene a otro hace mas cosas que
@@ -97,9 +121,15 @@ struct BulkMemoryFact {
  * del acceso -- el bucle no produce hecho.  Es la unica direccion segura: de
  * menos se pierde una optimizacion, de mas se cambia lo que el programa hace.
  *
+ * Y esa duda se CUENTA, con su codigo: ver @c BulkMemoryReport::declines.
+ *
  * @param fn Funcion a examinar.
- * @return Un hecho por cada bucle que lo sea.
+ * @return Lo reconocido y lo descartado, cada cosa con lo suyo.
  */
+BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn);
+
+/// Solo lo reconocido, para quien va a TRANSFORMAR y no tiene nada que hacer
+/// con los motivos.
 std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn);
 
 } // namespace analysis

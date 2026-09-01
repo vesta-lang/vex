@@ -13966,7 +13966,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     if (level >= OptLevel::O1) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
-            if (ir_pass_bulk_memory_lower(fn)) {
+            if (ir_pass_bulk_memory_lower(fn, facts)) {
                 ir_pass_unreachable(fn);
                 util::CronoTramo crono__("  dce:limpieza-orquestada");
                 ir_pass_dce(fn);
