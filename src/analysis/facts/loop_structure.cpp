@@ -30,9 +30,35 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
                                     const analysis::LoopFacts &lf,
                                     uint32_t loop_id) {
     LoopStructure st;
+    /* Salir DICIENDO cual de las condiciones fallo.  Eran siete y todas
+     * contestaban lo mismo, asi que quien preguntaba no podia distinguir un
+     * bucle con dos salidas de uno cuya cabecera hace de mas -- y se arreglan
+     * de formas distintas: una es un hueco de este analisis y la otra del
+     * programa. */
+    auto bail = [&st](const char *code) -> LoopStructure {
+        st.why = code;
+        return st;
+    };
     const IrBlockId H = lf.header_block_of(loop_id);
-    if (H == (IrBlockId)IR_NO_BLOCK || H >= fn.blocks.size()) return st;
-    if (fn.blocks[H].no_unroll) return st;
+    if (H == (IrBlockId)IR_NO_BLOCK || H >= fn.blocks.size())
+        return bail("loop.no_header");
+    /* `no_unroll` NO se mira aqui.
+     *
+     * La marca dice "no desenrolles ESTE", y la pone el propio desenrollador
+     * en lo que genera para no volver a deshacerlo.  Este analisis la trataba
+     * como "esto no es un bucle", y con eso se quedaba ciego TODO el mundo
+     * despues de desenrollar: el dominio de bucles no podia decir nada del
+     * bucle resultante y el coste declaraba O(n^2) una funcion constante.
+     *
+     * Y no es que la marca no importe: importa MUCHO, pero a quien transforma.
+     * Desenrollar CAMBIA el bucle -- 64 vueltas por 8 se convierten en 8 de un
+     * cuerpo ocho veces mayor, mas un resto --, asi que lo que hay despues es
+     * otro bucle con otra cuenta.  Justamente por eso hay que poder MIRARLO:
+     * para medir la cuenta NUEVA, no para heredar la vieja.  El momento en que
+     * viaja cada hecho es lo que impide confundirlas.
+     *
+     * Quien no quiera desenrollar mira la marca el mismo; el desenrollador lo
+     * hace antes de elegir candidatos. */
     st.header = H;
 
     // Bloques del bucle (innermost == loop_id).  Cuerpo = todos salvo H.
@@ -44,18 +70,20 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
             if ((IrBlockId)bi != H) st.body.push_back((IrBlockId)bi);
         }
     }
-    if (st.body.empty()) return st; // self-loop degenerado.
+    if (st.body.empty()) return bail("loop.degenerate"); // self-loop
 
     // Header limpio: [PHIs...] + [instr que define cond] + [br_cond].  El
     // BR_COND debe tener exactamente un sucesor DENTRO y otro FUERA del bucle.
     const auto &hins = fn.blocks[H].instrs;
-    if (hins.size() < 2) return st;
+    if (hins.size() < 2) return bail("loop.header_too_small");
     const IrInstr &term = hins.back();
-    if (term.op != IrOp::BR_COND || term.operands.empty()) return st;
+    if (term.op != IrOp::BR_COND || term.operands.empty())
+        return bail("loop.header_not_conditional");
     const IrValueId cond = term.operands[0];
     const bool t_in = st.contains(term.target_block);
     const bool f_in = st.contains(term.false_block);
-    if (t_in == f_in) return st; // exactamente uno dentro, uno fuera.
+    // Exactamente uno dentro y uno fuera.
+    if (t_in == f_in) return bail("loop.header_branch_not_exit");
     st.body_entry = t_in ? term.target_block : term.false_block;
     st.exit = t_in ? term.false_block : term.target_block;
 
@@ -122,9 +150,10 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
             if (in.op == IrOp::PHI) continue;
             if (in.dst == cond) continue; // la que define la condicion
             if (in.dst == IR_NO_VALUE || !feeds_cond.count(in.dst))
-                return st; // no aporta a la guarda: el header hace mas cosas.
-            if (!pure_compute(in.op)) return st;
-            if (analysis::memory_access_kind(in.op).touches) return st;
+                return bail("loop.header_does_more"); // no aporta a la guarda
+            if (!pure_compute(in.op)) return bail("loop.header_impure");
+            if (analysis::memory_access_kind(in.op).touches)
+                return bail("loop.header_touches_memory");
         }
     }
 
@@ -134,24 +163,26 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
         if (bi.empty()) continue;
         const IrInstr &bt = bi.back();
         if (bt.op == IrOp::BR && bt.target_block == H) {
-            if (st.latch != IR_NO_BLOCK) return st; // >1 latch.
+            if (st.latch != IR_NO_BLOCK) return bail("loop.two_latches");
             st.latch = b;
         }
     }
-    if (st.latch == IR_NO_BLOCK) return st;
+    if (st.latch == IR_NO_BLOCK) return bail("loop.no_latch");
 
     // Salida UNICA: ningun bloque del cuerpo salta FUERA del bucle.
     for (IrBlockId b : st.body) {
         const auto &bi = fn.blocks[b].instrs;
-        if (bi.empty()) return st;
+        if (bi.empty()) return bail("loop.empty_body_block");
         const IrInstr &bt = bi.back();
         if (bt.op == IrOp::BR) {
-            if (!st.contains(bt.target_block)) return st;
+            if (!st.contains(bt.target_block))
+                return bail("loop.body_exits");
         } else if (bt.op == IrOp::BR_COND) {
             if (!st.contains(bt.target_block) || !st.contains(bt.false_block))
-                return st;
+                return bail("loop.body_exits");
         } else {
-            return st; // RET/THROW/etc. -> multi-salida.
+            // RET/THROW/etc. dentro del cuerpo: mas de una salida.
+            return bail("loop.body_terminates");
         }
     }
 
@@ -167,16 +198,17 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
                                (pt.op == IrOp::BR_COND &&
                                 (pt.target_block == H || pt.false_block == H));
         if (goes_to_H) {
-            if (st.preheader != IR_NO_BLOCK) return st; // >1 entrada.
+            if (st.preheader != IR_NO_BLOCK)
+                return bail("loop.two_entries"); // >1 entrada.
             st.preheader = (IrBlockId)p;
         }
     }
-    if (st.preheader == IR_NO_BLOCK) return st;
+    if (st.preheader == IR_NO_BLOCK) return bail("loop.no_preheader");
 
     // PHIs del header: cada una con {arg preheader, arg latch}.
     for (const IrInstr &in : hins) {
         if (in.op != IrOp::PHI) continue;
-        if (in.phi_args.size() != 2) return st;
+        if (in.phi_args.size() != 2) return bail("loop.phi_not_binary");
         HeaderPhi hp;
         hp.dst = in.dst;
         for (const auto &pa : in.phi_args) {
@@ -185,12 +217,13 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
             else if (pa.block == st.latch)
                 hp.back = pa.value;
             else
-                return st; // arg desde un bloque inesperado.
+                return bail("loop.phi_from_elsewhere");
         }
-        if (hp.init == IR_NO_VALUE || hp.back == IR_NO_VALUE) return st;
+        if (hp.init == IR_NO_VALUE || hp.back == IR_NO_VALUE)
+            return bail("loop.phi_incomplete");
         st.phis.push_back(hp);
     }
-    if (st.phis.empty()) return st;
+    if (st.phis.empty()) return bail("loop.header_without_phis");
 
     // Loop-closed SSA: ningun valor del CUERPO se usa fuera del bucle (los
     // live-out salen por las PHIs del header).  Sin esto el remainder podria
@@ -203,12 +236,12 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
         if (st.contains((IrBlockId)bi)) continue; // dentro del bucle: OK.
         for (const IrInstr &in : fn.blocks[bi].instrs) {
             for (IrValueId o : in.operands)
-                if (body_defs.count(o)) return st;
+                if (body_defs.count(o)) return bail("loop.value_escapes");
             for (const auto &pa : in.phi_args) {
                 if (st.contains(pa.block) && body_defs.count(pa.value))
-                    return st;
+                    return bail("loop.value_escapes");
                 if (body_defs.count(pa.value) && !st.contains(pa.block))
-                    return st;
+                    return bail("loop.value_escapes");
             }
         }
     }

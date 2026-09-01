@@ -39,6 +39,18 @@ struct HeaderPhi {
 /// Forma estructural de un bucle contado.  @c valid=false si no es elegible.
 struct LoopStructure {
     bool valid = false;
+    /**
+     * @brief CUAL de las condiciones rechazo el bucle.  Vacio si @c valid.
+     *
+     * Son siete y todas salian con el mismo "su forma no es un bucle contado
+     * simple", asi que quien preguntaba no podia distinguir un bucle con dos
+     * salidas de uno cuya cabecera hace de mas -- que se arreglan de formas
+     * distintas, y una es un hueco del analisis y la otra del programa --.
+     *
+     * Codigo estable del vocabulario del dominio: lo lee el catalogo
+     * multi-idioma, no se ensena tal cual.
+     */
+    const char *why = "";
     ir::IrBlockId header = ir::IR_NO_BLOCK;
     ir::IrBlockId preheader = ir::IR_NO_BLOCK; ///< unico pred del header fuera.
     ir::IrBlockId latch = ir::IR_NO_BLOCK;     ///< unico bloque con back-edge.

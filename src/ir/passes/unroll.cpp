@@ -369,6 +369,18 @@ bool ir_pass_unroll(IrFunction &fn, int factor,
     std::vector<LoopInfo> eligible;
     for (uint32_t L = 0; L < lf.loop_count; ++L) {
         if (has_child[L]) continue; // no innermost
+        /* La marca de "no desenrollar" se mira AQUI, que es de quien es.
+         *
+         * La ponemos nosotros en lo que generamos, para no deshacerlo otra
+         * vez.  Estaba dentro de `detect_loop_structure`, que es un HECHO
+         * sobre la forma del codigo y no la politica de este pase: alli dejaba
+         * ciego a todo el mundo despues de desenrollar -- el coste declaraba
+         * O(n^2) una funcion constante y el dominio de bucles no podia contar
+         * las vueltas --, porque "no lo desenrolles" se leia como "no es un
+         * bucle". */
+        const ir::IrBlockId h = lf.header_block_of(L);
+        if (h != IR_NO_BLOCK && h < fn.blocks.size() && fn.blocks[h].no_unroll)
+            continue;
         LoopInfo li;
         if (analyze_loop(fn, lf, def_block, L, li))
             eligible.push_back(std::move(li));

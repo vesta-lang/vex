@@ -99,6 +99,39 @@ bool add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
     return false;
 }
 
+/**
+ * @brief Suma TODA la cadena de `+constante` que separa @p v de @p base.
+ *
+ * `add_of` mira un solo escalon, y eso deja fuera la forma que el propio
+ * compilador genera al DESENROLLAR: el valor que vuelve por el latch no es
+ * `phi + 8`, son ocho `+1` encadenados, uno por copia del cuerpo.  Con un solo
+ * escalon el analisis no reconocia la induccion y contestaba "no se encontro
+ * una variable de induccion contada" sobre un bucle que el compilador acababa
+ * de fabricar -- y de ahi el coste heredaba O(n^2) para una funcion constante.
+ *
+ * Se recorre hacia atras sumando.  El tope es por si el IR llega roto, no por
+ * miedo a un ciclo: en SSA no puede haberlo.
+ *
+ * @param v     valor final de la cadena (el que vuelve por el latch).
+ * @param base  donde tiene que terminar (el PHI del header).
+ * @param total suma de las constantes, o sea el paso REAL de cada vuelta.
+ * @return true si @p v se alcanza desde @p base sumando constantes.
+ */
+bool chain_add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+                  IrValueId v, IrValueId base, int64_t &total) {
+    total = 0;
+    IrValueId cur = v;
+    for (int hops = 0; hops < 64; ++hops) {
+        if (cur == base) return hops > 0; // al menos un escalon
+        IrValueId next = IR_NO_VALUE;
+        int64_t c = 0;
+        if (!add_of(fn, def_block, cur, next, c)) return false;
+        total += c;
+        cur = skip_copies(fn, def_block, next);
+    }
+    return false;
+}
+
 } // namespace
 
 bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
@@ -149,8 +182,11 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
         /* Y el valor que vuelve por el latch, tambien a traves de las copias:
          * `%12 = add %11, 1` donde `%11 = mov %phi` es el mismo `phi + 1`. */
         back = skip_copies(fn, def_block, back);
-        if (add_of(fn, def_block, back, base, s) &&
-            skip_copies(fn, def_block, base) == in.dst && s > 0) {
+        /* La cadena ENTERA, no un escalon: al desenrollar, el valor que vuelve
+         * son U sumas de `+1` en vez de un `+U`, y mirando solo la primera el
+         * bucle dejaba de tener induccion. */
+        (void)base;
+        if (chain_add_of(fn, def_block, back, in.dst, s) && s > 0) {
             // 3) La cota: el cmp compara `iv` o `iv + c` con N (el otro lado).
             int64_t off = 0;
             IrValueId bound = IR_NO_VALUE;

@@ -709,11 +709,16 @@ void produce_loops(Production &p) {
 
             const LoopStructure ls = detect_loop_structure(fn, lf, L);
             if (!ls.valid) {
-                /* No es un bucle contado SIMPLE (varios latches, varias
-                 * salidas, header sucio...).  No es un error: es la forma la
-                 * que no deja afirmar, y hay que decirlo. */
+                /* No es un bucle contado SIMPLE, y se dice CUAL de las
+                 * condiciones fallo: son siete, se arreglan de formas
+                 * distintas -- unas son huecos de este analisis y otras del
+                 * programa -- y con un solo codigo para todas no habia forma
+                 * de saber cual mirar. */
                 p.say_unknown(about, UnknownReason::ShapeNotRecognized,
-                              "loop.shape_unsupported", kProducerLoops, "");
+                              (ls.why != nullptr && ls.why[0] != '\0')
+                                  ? ls.why
+                                  : "loop.shape_unsupported",
+                              kProducerLoops, "");
                 continue;
             }
             LoopIV iv;
