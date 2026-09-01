@@ -167,6 +167,41 @@ static void probar_anade_sobre_lo_existente() {
           "los apoyos se recolocan sobre el almacen destino");
 }
 
+/**
+ * @brief Leer DOS VECES sobre el mismo almacen no duplica nada.
+ *
+ * Es lo normal, no un caso raro: una compilacion abre la puerta una vez por
+ * MOMENTO -- lo de antes de optimizar y lo de despues -- y cada apertura lee
+ * el fichero entero, que trae los dos.  Sin esto, la segunda lectura volvia a
+ * meter lo que la primera acababa de cargar; y como despues se vuelve a
+ * escribir, el fichero crecia SOLO en cada compilacion.  Medido antes del
+ * arreglo, sobre el mismo programa: 102 hechos, 306, 714, sin tope.
+ *
+ * No fallaba, no decia nada, y el almacen acababa afirmando lo mismo tres
+ * veces -- que para un consumidor que CUENTA (cuantos accesos no se saben
+ * localizar, cuantas vueltas da un bucle) no es ruido: es otra respuesta.
+ */
+static void read_twice_does_not_duplicate() {
+    FactStore origen;
+    poblar(origen);
+    const std::vector<uint8_t> bytes =
+        serialize(origen, 7, CacheLevel::All, {});
+
+    FactStore destino;
+    const ReadResult r1 = read_facts(bytes.data(), bytes.size(), 7, destino);
+    CHECK(r1.ok && destino.size() == origen.size(),
+          "la primera lectura trae todo");
+    const size_t tras_una = destino.size();
+
+    const ReadResult r2 = read_facts(bytes.data(), bytes.size(), 7, destino);
+    CHECK(r2.ok, "la segunda lectura tampoco falla");
+    CHECK(destino.size() == tras_una,
+          "y NO anade nada: lo que ya esta no se vuelve a traer");
+    CHECK(r2.duplicates > 0,
+          "y se dice cuantos se saltaron, que no es lo mismo que no leerlos");
+    CHECK(r2.facts == 0, "no deposito ninguno");
+}
+
 // ===========================================================================
 // 4. Una huella que no cuadra no se lee
 // ===========================================================================
@@ -443,6 +478,7 @@ int main() {
     probar_ida_y_vuelta();
     probar_identidad_de_nombres();
     probar_anade_sobre_lo_existente();
+    read_twice_does_not_duplicate();
     probar_huella();
     probar_dominio_desconocido();
     probar_truncado();

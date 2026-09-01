@@ -4105,12 +4105,19 @@ CompileResult compile_vx_project(
          * fichero suelto -- y por aqui pasa todo lo que declara `namespace`,
          * que es la mayoria. */
         if (wants_stage_(opts, analysis::asa::kStagePreOpt) &&
-            !opts.asa_domains.empty()) {
-            ensure_facts_impl_(pre_snapshot, facts, opts.asa_domains,
-                               root_facts_key != 0
-                                   ? rutas_cache_(root_path, std::string()).hechos
-                                   : std::string(),
-                               root_facts_key, analysis::asa::kStagePreOpt);
+            (!opts.asa_domains.empty() || opts.asa_all_domains)) {
+            /* Vacio hacia la puerta = TODOS, que es lo que pide quien vuelca. */
+            const std::vector<const char *> asa_wanted =
+                opts.asa_all_domains ? std::vector<const char *>{}
+                                     : opts.asa_domains;
+            const auto s = ensure_facts_impl_(
+                pre_snapshot, facts, asa_wanted,
+                root_facts_key != 0
+                    ? rutas_cache_(root_path, std::string()).hechos
+                    : std::string(),
+                root_facts_key, analysis::asa::kStagePreOpt);
+            res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
+                                     s.end());
         }
     }
 
@@ -4224,14 +4231,20 @@ CompileResult compile_vx_project(
          * productor contestando por otro, con lo que no veia nada y ademas lo
          * recalculaba. */
         std::vector<const char *> wanted = {"asa.layout"};
-        if (wants_stage_(opts, analysis::asa::kStagePostOpt))
+        const bool all_domains =
+            opts.asa_all_domains &&
+            wants_stage_(opts, analysis::asa::kStagePostOpt);
+        if (all_domains)
+            wanted.clear(); // vacio hacia la puerta = TODOS
+        else if (wants_stage_(opts, analysis::asa::kStagePostOpt))
             for (const char *d : opts.asa_domains)
                 if (d != nullptr) wanted.push_back(d);
-        ensure_facts_impl_(merged, facts, wanted,
-                           root_facts_key != 0
-                               ? rutas_cache_(root_path, std::string()).hechos
-                               : std::string(),
-                           root_facts_key, analysis::asa::kStagePostOpt);
+        const auto s = ensure_facts_impl_(
+            merged, facts, wanted,
+            root_facts_key != 0 ? rutas_cache_(root_path, std::string()).hechos
+                                : std::string(),
+            root_facts_key, analysis::asa::kStagePostOpt);
+        res.asa_summaries.insert(res.asa_summaries.end(), s.begin(), s.end());
         /* Y sale con el resultado, para que quien compilo pueda consultarlo sin
          * volver a producirlo.  Se COPIA y no se mueve: el informe de abajo
          * todavia lo usa. */

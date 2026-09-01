@@ -2401,6 +2401,16 @@ int main(int argc, char *argv[]) {
          * se puede afirmar cuantas vueltas da" -- el conocimiento existia y se
          * habia destruido antes de que nadie lo publicara. */
         copts.emit_ir_preopt = true;
+        /* Y se le PIDE al compilador todo lo que se sabe, en los dos momentos.
+         *
+         * El volcado no produce nada por su cuenta: eso era saltarse la puerta
+         * -- sin cache entre compilaciones y sin validacion por huella -- para
+         * pintar una tabla.  Ahora los cinco consumidores piden por el mismo
+         * sitio, que es lo unico que impide que cada uno acabe con su propio
+         * criterio de cuando fiarse de lo guardado. */
+        copts.asa_all_domains = true;
+        copts.asa_stages = {analysis::asa::kStagePreOpt,
+                            analysis::asa::kStagePostOpt};
         const bool como_proyecto = vx::vx_source_has_imports(vx_source) ||
                                    vx::vx_source_declara_namespace(vx_source);
         vx::CompileResult cr =
@@ -2426,19 +2436,19 @@ int main(int argc, char *argv[]) {
          * que tampoco esta en el nucleo. */
         analyze::register_fingerprint_producer();
 
-        analysis::asa::FactStore almacen;
-        std::vector<analysis::asa::ProductionSummary> resumenes;
-
-        /* PRIMERO lo que el programa dice, y solo despues lo que va a
-         * ejecutarse.  El orden no es estetico: el ASA es donde vive lo que el
-         * compilador sabe, asi que mirar solo despues de optimizar deja que
-         * alguien opine sobre el programa antes que la capa que existe para no
-         * tener que opinar -- y peor, destruye lo que iba a publicarse.
+        /* Los hechos ya vienen HECHOS de la compilacion: se pidieron arriba,
+         * los dos momentos y todos los dominios, y salieron por la puerta con
+         * su cache y su validacion por huella.  Aqui solo se ensenan.
          *
-         * Los dos van al MISMO almacen, cada hecho sellado con su momento: no
-         * se contradicen, hablan de codigos distintos.  Ver la diferencia es
-         * justo lo util -- "esto lo escribiste asi y acaba siendo asa otra
-         * cosa" --, y colapsarlas obligaria a elegir una y a callar la otra. */
+         * Los dos momentos van al MISMO almacen, cada hecho sellado con el
+         * suyo: no se contradicen, hablan de codigos distintos.  Ver la
+         * diferencia es justo lo util -- "esto lo escribiste asi y acaba
+         * siendo otra cosa" --, y colapsarlos obligaria a elegir uno y a
+         * callar el otro.
+         *
+         * Un resumen VACIO no es un fallo: significa que todo vino de la
+         * cache y no hubo que calcular nada, que es exactamente lo que se
+         * queria conseguir. */
         /* Y con `--vx-emit-ir`, el IR QUE SE ESTA MIRANDO, uno por momento.
          *
          * Hacia falta y costo descubrirlo: cuando un dominio contesta "no
@@ -2450,8 +2460,8 @@ int main(int argc, char *argv[]) {
          *
          * Se reusa la opcion que ya existe en vez de inventar una: quien pide
          * ver el IR quiere ver ESTE cuando esta preguntando por los hechos. */
-        const bool ver_ir = result.count("vx-emit-ir") > 0;
-        auto mostrar_ir = [&](const ir::IrModule &m, const char *momento) {
+        const bool show_ir = result.count("vx-emit-ir") > 0;
+        auto print_asa_ir = [&](const ir::IrModule &m, const char *momento) {
             std::ostringstream o;
             o << "// ============================================\n"
               << "// SSA IR que MIRA el ASA -- momento: " << momento << "\n"
@@ -2460,21 +2470,15 @@ int main(int argc, char *argv[]) {
             std::fputs(o.str().c_str(), stdout);
         };
 
-        ir::IrModule asa_mod_pre;
-        if (!cr.ir_module_cache_bytes_preopt.empty() &&
-            ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt,
-                                      asa_mod_pre)) {
-            if (ver_ir)
-                mostrar_ir(asa_mod_pre, analysis::asa::kStagePreOpt);
-            const auto pre = analysis::asa::produce(
-                asa_mod_pre, almacen, {}, analysis::asa::kStagePreOpt);
-            resumenes.insert(resumenes.end(), pre.begin(), pre.end());
+        if (show_ir) {
+            ir::IrModule asa_mod_pre;
+            if (!cr.ir_module_cache_bytes_preopt.empty() &&
+                ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt,
+                                          asa_mod_pre))
+                print_asa_ir(asa_mod_pre, analysis::asa::kStagePreOpt);
+            print_asa_ir(asa_mod, analysis::asa::kStagePostOpt);
         }
-        if (ver_ir) mostrar_ir(asa_mod, analysis::asa::kStagePostOpt);
-        const auto post = analysis::asa::produce(asa_mod, almacen, {},
-                                                 analysis::asa::kStagePostOpt);
-        resumenes.insert(resumenes.end(), post.begin(), post.end());
-        analysis::asa::print_dump(almacen, resumenes, stdout);
+        analysis::asa::print_dump(cr.facts, cr.asa_summaries, stdout);
         return EXIT_SUCCESS;
     }
 

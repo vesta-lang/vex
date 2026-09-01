@@ -246,6 +246,15 @@ struct ReadResult {
     uint32_t skipped = 0;      ///< registros de dominios/versiones ajenas.
     uint32_t stale = 0;        ///< registros cuya huella ya no vale.
     uint32_t out_of_scope = 0; ///< hechos que valen en otro objetivo.
+    /**
+     * @brief Hechos que YA estaban en el almacen y no se volvieron a traer.
+     *
+     * Se cuenta porque no es lo mismo que no haberlos leido: dice que la
+     * puerta se abrio mas de una vez sobre el mismo almacen, que es lo normal
+     * cuando se piden varios MOMENTOS.  Que estuviera sin contar es lo que
+     * dejo pasar que el fichero se duplicara solo en cada compilacion.
+     */
+    uint32_t duplicates = 0;
     uint32_t corrupt = 0;      ///< registros cuya suma no cuadra.
     uint32_t lost_proofs = 0;  ///< apoyos en hechos que no se cargaron.
 };

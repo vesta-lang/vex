@@ -36,6 +36,7 @@
 #include "port/port_options.h"
 #include "analyze/fingerprint.h"     // FunctionContracts
 #include "analysis/asa/fact_store.h" // lo que se supo del modulo al compilarlo
+#include "analysis/asa/producers.h"  // ProductionSummary: que corrio y cuanto
 #include "vxdbg/ids.h"               // huella del mapa de simbolos
 
 /// El almacen de hechos del ASA viaja por referencia; no hace falta su
@@ -93,6 +94,22 @@ struct CompileOptions {
      * Los valores son @c analysis::asa::kStage*.
      */
     std::vector<const char *> asa_stages;
+
+    /**
+     * @brief TODOS los dominios, sin listarlos.  Solo lo pide quien VUELCA.
+     *
+     * `asa_domains` vacio significa NINGUNO -- y eso es la mitad del diseno,
+     * porque producir lo que nadie pide es tiempo tirado --, asi que "todos"
+     * no se podia expresar.  El volcado (`--asa`) y la vista del editor si lo
+     * necesitan: su trabajo es precisamente ensenar lo que se sabe, y una
+     * lista escrita a mano se quedaria corta en cuanto entrara un dominio
+     * nuevo, calladamente.
+     *
+     * Explicito y no un centinela sobre `asa_domains`: "vacio = ninguno" y
+     * "vacio = todos" en el mismo campo es la clase de ambiguedad que acaba
+     * produciendo 544 us por modulo sin que nadie sepa por que.
+     */
+    bool asa_all_domains = false;
     bool emit_debug =
         false; ///< Emitir comentarios @line N en el .vel generado.
     /// Carpeta donde volcar la base de conocimiento de depuracion (@c vxdbg).
@@ -396,6 +413,20 @@ struct CompileResult {
      * siguiente compilacion del mismo modulo.
      */
     analysis::asa::FactStore facts;
+
+    /**
+     * @brief Que dominios CORRIERON de verdad, y cuanto costo cada uno.
+     *
+     * Vacio si todo vino de la cache -- que es informacion, no ausencia de
+     * ella: dice que no hubo que calcular nada.
+     *
+     * Sale con el resultado porque quien ENSENA el conocimiento lo necesita
+     * (el volcado del ASA y la vista del editor pintan esta tabla), y sin
+     * tenerlo aqui esos dos tenian que producir por su cuenta para poder
+     * pintarla -- o sea saltarse la cache y la validacion por huella para
+     * conseguir un dato de contabilidad.
+     */
+    std::vector<analysis::asa::ProductionSummary> asa_summaries;
     /// Huella del mapa que liga los simbolos del artefacto con las entidades
     /// del grafo de depuracion.  Quien produzca el artefacto final la publica
     /// bajo su identificador de construccion: es lo que permite, desde una

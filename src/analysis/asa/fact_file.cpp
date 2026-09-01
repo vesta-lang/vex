@@ -511,6 +511,15 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
             return k < cadenas.size() ? cadenas[k] : "";
         };
 
+        /* Los MOMENTOS de los hechos de este dominio, para marcarlo en TODOS.
+         *
+         * No basta con el del primero: un dominio puede traer del disco lo de
+         * antes de optimizar Y lo de despues, y marcar solo uno deja el otro
+         * sin marca -- con lo que se vuelve a producir y el almacen acaba con
+         * los hechos por DUPLICADO, que es lo que se midio (27 -> 50 rangos en
+         * la segunda corrida).  Son dos o tres; un vector plano sobra. */
+        std::vector<const char *> domain_stages;
+
         /* Mismo criterio: un hecho no baja de @c kBytesMinimosHecho. */
         leidos.reserve(
             leidos.size() +
@@ -574,6 +583,31 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
                 ++r.out_of_scope;
                 continue;
             }
+            /* En que MOMENTO valen los que trae este dominio.  Se necesita
+             * abajo para marcarlo: "ya corrio" se pregunta por (dominio,
+             * momento), asi que marcar sin el dejaba la marca fuera de
+             * alcance y `producir` recalculaba todo lo que acababa de leer --
+             * la cache se escribia, se leia, y no ahorraba nada. */
+            const char *st = f.scope.stage != nullptr ? f.scope.stage : "";
+            /* Y lo que YA ESTA en el almacen no se vuelve a traer.
+             *
+             * Una compilacion abre esta puerta una vez POR MOMENTO, y cada
+             * apertura leia el fichero ENTERO -- que trae los dos --, asi que
+             * la segunda duplicaba lo que la primera acababa de cargar.  Y
+             * como despues se vuelve a escribir, el fichero crecia solo en
+             * cada compilacion: 102 hechos, 306, 714...  Sin fallar, sin
+             * decir nada, y con el almacen afirmando lo mismo tres veces. */
+            if (destino.has_domain(dominio, st)) {
+                ++r.duplicates;
+                continue;
+            }
+            bool seen = false;
+            for (const char *q : domain_stages)
+                if (q == st || std::strcmp(q, st) == 0) {
+                    seen = true;
+                    break;
+                }
+            if (!seen) domain_stages.push_back(st);
             remapeo[id_original] = base + static_cast<FactId>(leidos.size());
             leidos.push_back(std::move(f));
         }
@@ -587,7 +621,11 @@ ReadResult read_facts(const uint8_t *datos, size_t n, uint64_t huella,
          * ademas el almacen acabaria con los hechos por duplicado.  Leer y
          * producir son dos caminos hacia el mismo sitio, y el almacen tiene que
          * decir lo mismo se haya llegado por uno o por el otro. */
-        destino.mark_domain(dominio);
+        if (domain_stages.empty())
+            destino.mark_domain(dominio, "");
+        else
+            for (const char *st : domain_stages)
+                destino.mark_domain(dominio, st);
     }
 
     if (!L.ok()) {

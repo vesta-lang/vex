@@ -1337,7 +1337,15 @@ CompileResult compile_vx_source(const std::string &source,
          * optimizador, unas lineas mas abajo: son el mismo conocimiento sobre
          * dos codigos distintos, no dos mecanismos. */
         const bool wants_facts =
-            !filename.empty() && !opts.asa_domains.empty();
+            !filename.empty() &&
+            (!opts.asa_domains.empty() || opts.asa_all_domains);
+        /* Vacio en la peticion a la puerta significa TODOS; aqui arriba
+         * significaba NINGUNO.  Los dos sentidos son correctos en su sitio y
+         * juntarlos en un campo seria la ambiguedad que `asa_all_domains`
+         * viene a quitar. */
+        const std::vector<const char *> asa_wanted =
+            opts.asa_all_domains ? std::vector<const char *>{}
+                                 : opts.asa_domains;
         const auto wants_stage = [&opts](const char *s) {
             for (const char *w : opts.asa_stages)
                 if (w != nullptr && std::strcmp(w, s) == 0) return true;
@@ -1346,9 +1354,12 @@ CompileResult compile_vx_source(const std::string &source,
         const uint64_t fingerprint =
             wants_facts ? hash_de_tokens(source, /*con_lineas=*/false) : 0;
         if (wants_facts && wants_stage(analysis::asa::kStagePreOpt)) {
-            ensure_facts(irmod_for_section, res.facts, opts.asa_domains,
-                         vxfacts_path_for(filename, std::string()), fingerprint,
-                         analysis::asa::kStagePreOpt);
+            const auto s = ensure_facts(
+                irmod_for_section, res.facts, asa_wanted,
+                vxfacts_path_for(filename, std::string()), fingerprint,
+                analysis::asa::kStagePreOpt);
+            res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
+                                     s.end());
         }
 
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
@@ -1363,9 +1374,12 @@ CompileResult compile_vx_source(const std::string &source,
          * hecho con su momento sellado; no se contradicen, hablan de codigos
          * distintos. */
         if (wants_facts && wants_stage(analysis::asa::kStagePostOpt)) {
-            ensure_facts(irmod_for_section, res.facts, opts.asa_domains,
-                         vxfacts_path_for(filename, std::string()), fingerprint,
-                         analysis::asa::kStagePostOpt);
+            const auto s = ensure_facts(
+                irmod_for_section, res.facts, asa_wanted,
+                vxfacts_path_for(filename, std::string()), fingerprint,
+                analysis::asa::kStagePostOpt);
+            res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
+                                     s.end());
         }
         /* Y aqui otra vez, si se pidio.  Es el sitio donde mas falta hace: el
          * optimizador opera SOBRE el grafo -- corta bloques, los une, mueve
