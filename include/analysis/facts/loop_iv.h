@@ -23,14 +23,26 @@
 
 namespace analysis {
 
+/// Hacia donde avanza la variable.  @c stride es siempre POSITIVO: es el
+/// TAMANO del paso, y esto dice el sentido.  Guardar un paso negativo obligaria
+/// a cada consumidor a acordarse del signo, y olvidarse no da un error: da una
+/// direccion calculada al reves.
+enum class IvDir : uint8_t {
+    Up = 0, ///< `i += S`, guarda `<` o `<=`.
+    Down    ///< `i -= S`, guarda `>` o `>=`.
+};
+
 /**
  * @brief Descriptor de la variable de induccion CONTADA de un bucle.
  *
- * SOLO forma canonica CRECIENTE (stride > 0):  el header itera mientras
- * @c cmp_op(iv + cmp_offset, bound)  y en cada iteracion  iv += stride.  El
- * @c cmp_offset != 0 modela el lookahead del vectorizador (guarda
- * @c cmp(iv + W, N)).  Para bucles decrecientes (`for(i=n;i>0;--i)`) habra que
- * ampliar el descriptor con una direccion (Direction) mas adelante.
+ * El header itera mientras @c cmp_op(iv + cmp_offset, bound) y en cada vuelta
+ * @c iv avanza @c stride en el sentido de @c dir.  El @c cmp_offset != 0
+ * modela el lookahead del vectorizador (guarda @c cmp(iv + W, N)).
+ *
+ * OJO al pedirlo: @c detect_loop_iv devuelve SOLO los crecientes, y no por
+ * comodidad -- quien lo consume desenrolla, vectoriza o reconoce un recorrido
+ * de memoria, y todos dan por hecho que se sube --.  Los dos sentidos se piden
+ * con @c detect_counted_iv, que es lo que usa el camino de CONTAR VUELTAS.
  */
 struct LoopIV {
     ir::IrValueId phi = ir::IR_NO_VALUE; ///< PHI del header (el IV).
@@ -38,8 +50,11 @@ struct LoopIV {
                                          ///< header (para no re-localizarla).
     ir::IrValueId init =
         ir::IR_NO_VALUE;             ///< valor inicial (desde el preheader).
-    int64_t stride = 0;              ///< incremento por iteracion (> 0).
-    ir::IrOp cmp_op = ir::IrOp::NOP; ///< CMP_LT/LE/ULT/ULE de la guarda.
+    int64_t stride = 0;              ///< TAMANO del paso (> 0); el sentido en
+                                     ///< @c dir.
+    IvDir dir = IvDir::Up;           ///< hacia donde avanza.
+    ir::IrOp cmp_op = ir::IrOp::NOP; ///< la guarda: LT/LE/ULT/ULE si sube,
+                                     ///< GT/GE/UGT/UGE si baja.
     int64_t cmp_offset = 0;          ///< c de cmp(iv + c, bound) (0 = iv).
     ir::IrValueId bound = ir::IR_NO_VALUE; ///< cota N (invariante del bucle).
 };
@@ -63,6 +78,26 @@ struct LoopIV {
 bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
                     ir::IrBlockId header, ir::IrBlockId preheader,
                     ir::IrBlockId latch, LoopIV &out);
+
+/**
+ * @brief Igual, pero admitiendo TAMBIEN los que bajan.
+ *
+ * `for (i = 32; i > 0; i--)` esta tan contado como su version creciente, y
+ * hasta que esto existio no lo reconocia nadie: sin variable de induccion no
+ * se pueden contar sus vueltas, asi que un bucle de 32 vueltas FIJAS se
+ * declaraba O(n).  Es el mismo fallo que ya mordio con los bucles externos y
+ * con los que multiplican -- una forma que el analisis no cubre acaba siendo
+ * una respuesta equivocada, no una duda.
+ *
+ * Va SEPARADO de @c detect_loop_iv, que sigue devolviendo solo los crecientes,
+ * porque quien consume aquel calcula direcciones de memoria a partir del paso:
+ * darle uno que baja haria que tocara lo que el bucle no toca.  Quien solo
+ * quiere CONTAR pide este.
+ */
+bool detect_counted_iv(const ir::IrFunction &fn,
+                       const std::vector<int> &def_block, ir::IrBlockId header,
+                       ir::IrBlockId preheader, ir::IrBlockId latch,
+                       LoopIV &out);
 
 /**
  * @brief Variable de induccion GEOMETRICA: la que MULTIPLICA en vez de sumar.

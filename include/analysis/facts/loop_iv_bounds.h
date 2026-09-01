@@ -78,8 +78,11 @@ struct LoopIvBounds {
  *   `i` en `[I, max(I, N - C - 1 + S)]`   con `<`
  *   `i` en `[I, max(I, N - C + S)]`       con `<=`
  *
- * El extremo alto es el valor con el que se SALE, que es una vuelta mas alla
+ * El extremo lejano es el valor con el que se SALE, que es una vuelta mas alla
  * de la ultima que entro: la guarda se comprueba con el valor ya avanzado.
+ *
+ * Y su imagen especular para los que BAJAN (`i > N` / `i >= N`, con `i -= S`),
+ * que es la misma cuenta con el extremo al otro lado.
  *
  * Cualquier duda -- que la cuenta se salga del tipo, que el paso sea negativo,
  * que el limite no sea constante -- deja ese valor sin cota.  No acotar de

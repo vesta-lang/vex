@@ -30,6 +30,13 @@ bool is_lt_cmp(IrOp op) {
            op == IrOp::CMP_ULE;
 }
 
+// Y la decreciente: `iv > N` / `iv >= N`.  Un bucle que baja esta tan contado
+// como uno que sube; lo unico que cambia es hacia donde.
+bool is_gt_cmp(IrOp op) {
+    return op == IrOp::CMP_GT || op == IrOp::CMP_GE || op == IrOp::CMP_UGT ||
+           op == IrOp::CMP_UGE;
+}
+
 // Resuelve el valor CONSTANTE de @p v (la CONST que lo define en su bloque).
 bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
               IrValueId v, int64_t &out) {
@@ -132,26 +139,77 @@ bool chain_add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
     return false;
 }
 
+/// Descompone @p v = SUB(base, const).  El orden importa: `K - x` no es una
+/// induccion decreciente, es otra cosa -- se alterna en vez de bajar.
+bool sub_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+            IrValueId v, IrValueId &base, int64_t &c) {
+    const int db =
+        (v < def_block.size() && v != IR_NO_VALUE) ? def_block[v] : -1;
+    if (db < 0 || (size_t)db >= fn.blocks.size()) return false;
+    for (const IrInstr &in : fn.blocks[db].instrs) {
+        if (in.dst != v || in.op != IrOp::SUB || in.operands.size() != 2)
+            continue;
+        int64_t k;
+        if (const_of(fn, def_block, in.operands[1], k)) {
+            base = in.operands[0];
+            c = k;
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Igual que @c chain_add_of pero restando.  Tambien encadena, y por el mismo
+/// motivo: al desenrollar, lo que vuelve por el latch son U restas de `-1`.
+bool chain_sub_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+                  IrValueId v, IrValueId base, int64_t &total) {
+    total = 0;
+    IrValueId cur = v;
+    for (int hops = 0; hops < 64; ++hops) {
+        if (cur == base) return hops > 0;
+        IrValueId next = IR_NO_VALUE;
+        int64_t c = 0;
+        if (!sub_of(fn, def_block, cur, next, c)) return false;
+        total += c;
+        cur = skip_copies(fn, def_block, next);
+    }
+    return false;
+}
+
 } // namespace
 
-bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
-                    IrBlockId header, IrBlockId preheader, IrBlockId latch,
-                    LoopIV &out) {
+/**
+ * @brief El cuerpo comun de los dos sentidos.
+ *
+ * Un solo recorrido con un parametro, y no dos funciones parecidas: la parte
+ * dificil -- seguir las copias, encadenar los pasos que deja el desenrollado,
+ * saltarse los acumuladores -- es identica, y duplicarla es como se acaba con
+ * una mitad arreglada y la otra no.
+ */
+static bool detect_iv_impl(const ir::IrFunction &fn,
+                           const std::vector<int> &def_block, IrBlockId header,
+                           IrBlockId preheader, IrBlockId latch, bool admite_baja,
+                           LoopIV &out) {
     out.phi_index = -1;
     if (header == (IrBlockId)IR_NO_BLOCK || header >= fn.blocks.size())
         return false;
     const auto &hins = fn.blocks[header].instrs;
     if (hins.empty()) return false;
 
-    // 1) La guarda: el cmp (creciente) que define la condicion del BR_COND.
+    // 1) La guarda: el cmp que define la condicion del BR_COND.
     const IrInstr &term = hins.back();
     if (term.op != IrOp::BR_COND || term.operands.empty()) return false;
     const IrValueId cond = term.operands[0];
     IrOp cmp_op = IrOp::NOP;
+    IvDir dir = IvDir::Up;
     IrValueId cmp_a = IR_NO_VALUE, cmp_b = IR_NO_VALUE;
     for (const IrInstr &in : hins) {
-        if (in.dst == cond && is_lt_cmp(in.op) && in.operands.size() == 2) {
+        if (in.dst != cond || in.operands.size() != 2) continue;
+        const bool sube = is_lt_cmp(in.op);
+        const bool baja = admite_baja && is_gt_cmp(in.op);
+        if (sube || baja) {
             cmp_op = in.op;
+            dir = sube ? IvDir::Up : IvDir::Down;
             /* A traves de las copias: lo que se compara es el VALOR, y un
              * `mov` no cambia el valor.  Sin esto, la copia que la
              * construccion de SSA deja en la cabecera hacia que el IV no se
@@ -163,8 +221,13 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
     }
     if (cmp_op == IrOp::NOP) return false;
 
-    // 2) El IV: PHI del header cuyo valor de retorno (arg desde el latch) es
-    //    `phi + S` con S constante > 0.  init = arg desde el preheader.
+    /* 2) El IV: PHI del header cuyo valor de retorno (el que llega por el
+     *    latch) avanza una constante en el sentido que dice la guarda.  El
+     *    `init` es el que llega por el preheader.
+     *
+     * El paso se guarda siempre POSITIVO -- es el tamano --, y el sentido va
+     * en `dir`.  Con un paso negativo, cada consumidor tendria que acordarse
+     * del signo, y olvidarse no da un error: da una direccion al reves. */
     int phi_index = -1;
     for (const IrInstr &in : hins) {
         if (in.op != IrOp::PHI) continue;
@@ -186,7 +249,10 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
          * son U sumas de `+1` en vez de un `+U`, y mirando solo la primera el
          * bucle dejaba de tener induccion. */
         (void)base;
-        if (chain_add_of(fn, def_block, back, in.dst, s) && s > 0) {
+        const bool avanza = dir == IvDir::Up
+                                ? chain_add_of(fn, def_block, back, in.dst, s)
+                                : chain_sub_of(fn, def_block, back, in.dst, s);
+        if (avanza && s > 0) {
             // 3) La cota: el cmp compara `iv` o `iv + c` con N (el otro lado).
             int64_t off = 0;
             IrValueId bound = IR_NO_VALUE;
@@ -219,6 +285,7 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
             out.phi_index = phi_index;
             out.init = init;
             out.stride = s;
+            out.dir = dir;
             out.cmp_op = cmp_op;
             out.cmp_offset = off;
             out.bound = bound;
@@ -226,6 +293,24 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
         }
     }
     return false;
+}
+
+bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
+                    IrBlockId header, IrBlockId preheader, IrBlockId latch,
+                    LoopIV &out) {
+    /* SOLO los que suben, y eso no es comodidad: quien pide esto desenrolla,
+     * vectoriza o reconoce un recorrido de memoria, y calcula direcciones a
+     * partir del paso.  Devolverle uno que baja haria que tocara lo que el
+     * bucle no toca. */
+    return detect_iv_impl(fn, def_block, header, preheader, latch,
+                          /*admite_baja=*/false, out);
+}
+
+bool detect_counted_iv(const ir::IrFunction &fn,
+                       const std::vector<int> &def_block, IrBlockId header,
+                       IrBlockId preheader, IrBlockId latch, LoopIV &out) {
+    return detect_iv_impl(fn, def_block, header, preheader, latch,
+                          /*admite_baja=*/true, out);
 }
 
 bool detect_geometric_iv(const ir::IrFunction &fn,

@@ -60,9 +60,9 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
             ++out.not_counted;
             continue;
         }
-        LoopIV iv;
-        if (!detect_loop_iv(fn, facts.def_block, ls.header, ls.preheader,
-                            ls.latch, iv)) {
+        LoopIV iv; // los dos sentidos: acotar no es clonar
+        if (!detect_counted_iv(fn, facts.def_block, ls.header, ls.preheader,
+                               ls.latch, iv)) {
             ++out.no_shape;
             continue;
         }
@@ -87,22 +87,43 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
          * numeros que salen del programa, y un desbordamiento con signo no da
          * un numero grande, da uno CUALQUIERA -- que aqui se publicaria como
          * cota y estrecharia un rango con un valor inventado. */
-        int64_t alto = 0;
-        if (__builtin_sub_overflow(bound, iv.cmp_offset, &alto)) continue;
-        if (iv.cmp_op == IrOp::CMP_LT || iv.cmp_op == IrOp::CMP_ULT) {
-            if (__builtin_sub_overflow(alto, (int64_t)1, &alto)) continue;
-        } else if (iv.cmp_op != IrOp::CMP_LE && iv.cmp_op != IrOp::CMP_ULE) {
-            ++out.no_shape; // guarda que este despeje no cubre
-            continue;
+        int64_t extremo = 0;
+        if (__builtin_sub_overflow(bound, iv.cmp_offset, &extremo)) continue;
+        const bool baja = iv.dir == IvDir::Down;
+        if (baja) {
+            /* Bajando es la imagen especular: `i + C > N` deja entrar hasta
+             * `i = N - C + 1`, y esa vuelta baja a `i = N - C + 1 - S`.  Con
+             * `>=`, hasta `i = N - C`, que sale en `N - C - S`. */
+            if (iv.cmp_op == IrOp::CMP_GT || iv.cmp_op == IrOp::CMP_UGT) {
+                if (__builtin_add_overflow(extremo, (int64_t)1, &extremo))
+                    continue;
+            } else if (iv.cmp_op != IrOp::CMP_GE &&
+                       iv.cmp_op != IrOp::CMP_UGE) {
+                ++out.no_shape; // guarda que este despeje no cubre
+                continue;
+            }
+            if (__builtin_sub_overflow(extremo, iv.stride, &extremo)) continue;
+            /* Un bucle que no entra nunca deja la variable en su valor
+             * inicial: la cota no puede pasarse del inicio. */
+            if (extremo > init) extremo = init;
+        } else {
+            if (iv.cmp_op == IrOp::CMP_LT || iv.cmp_op == IrOp::CMP_ULT) {
+                if (__builtin_sub_overflow(extremo, (int64_t)1, &extremo))
+                    continue;
+            } else if (iv.cmp_op != IrOp::CMP_LE &&
+                       iv.cmp_op != IrOp::CMP_ULE) {
+                ++out.no_shape; // guarda que este despeje no cubre
+                continue;
+            }
+            if (__builtin_add_overflow(extremo, iv.stride, &extremo)) continue;
+            if (extremo < init) extremo = init;
         }
-        if (__builtin_add_overflow(alto, iv.stride, &alto)) continue;
-        /* Un bucle que no entra nunca deja la variable en su valor inicial: la
-         * cota no puede quedar por debajo del inicio. */
-        if (alto < init) alto = init;
 
         const ValueRange piso = rango_del_tipo(fn.values[iv.phi].type);
         if (!piso.acotada()) continue; // el tipo no es un entero acotable
-        const ValueRange cota = ValueRange::de_enteros(piso.t, init, alto);
+        const ValueRange cota =
+            baja ? ValueRange::de_enteros(piso.t, extremo, init)
+                 : ValueRange::de_enteros(piso.t, init, extremo);
         if (!cota.acotada()) continue; // no cabe en el tipo de la variable
         out.bounds.push_back(IvBound{iv.phi, piso.cortar(cota)});
     }

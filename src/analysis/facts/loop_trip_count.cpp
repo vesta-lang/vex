@@ -50,6 +50,25 @@ bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
  */
 static int64_t trips_between(int64_t init, int64_t bound, int64_t cmp_offset,
                              int64_t stride, ir::IrOp cmp_op) {
+    /* Un bucle que BAJA es el mismo problema con los extremos cambiados de
+     * sitio: `for (i = I; i > N; i -= S)` recorre el mismo tramo que
+     * `for (i = N; i < I; i += S)`.  Se le da la vuelta y se sigue por el
+     * mismo camino, en vez de escribir la formula otra vez -- dos copias de
+     * una cuenta con extremos cruzados es como se acaba con una bien y la
+     * otra desviada en uno. */
+    if (cmp_op == ir::IrOp::CMP_GT || cmp_op == ir::IrOp::CMP_UGT) {
+        cmp_op = ir::IrOp::CMP_LT;
+        const int64_t tmp = init;
+        init = bound;
+        bound = tmp;
+        cmp_offset = -cmp_offset;
+    } else if (cmp_op == ir::IrOp::CMP_GE || cmp_op == ir::IrOp::CMP_UGE) {
+        cmp_op = ir::IrOp::CMP_LE;
+        const int64_t tmp = init;
+        init = bound;
+        bound = tmp;
+        cmp_offset = -cmp_offset;
+    }
     /* La resta primero, y COMPROBADA.  Con extremos grandes -- que es
      * justo lo que llega cuando la cota sale de un rango -- desbordaba, y un
      * desbordamiento con signo no da un numero grande: da uno cualquiera, y
@@ -110,9 +129,10 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
      * una guarda; una forma que este analisis no cubre, no -- ahi lo que hay
      * que hacer es ampliar el analisis, y por eso se distinguen. */
     if (iv.stride <= 0) {
-        /* Decreciente o sin avance: la formula de abajo da por hecho que se
-         * sube.  El bucle puede estar perfectamente acotado; es el analisis el
-         * que no llega, y decirlo asi es lo honesto. */
+        /* Sin avance no hay nada que contar: el bucle no termina por esta
+         * variable.  El sentido ya no es un problema -- los dos se cuentan --,
+         * pero un paso de cero o negativo sigue sin modelarse: `stride` es el
+         * TAMANO del paso y tiene que ser positivo. */
         info.reason = asa::UnknownReason::ShapeNotRecognized;
         info.code = "loop.non_increasing_iv";
         return info;
@@ -150,7 +170,15 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
                                    ? (bound_lo = bound_hi = bound_v, true)
                                    : range_of(iv.bound, bound_lo, bound_hi);
     if (init_bounded && bound_bounded) {
-        const int64_t t = trips_between(init_lo, bound_hi, iv.cmp_offset,
+        /* Los extremos que dan MAS vueltas, que si el bucle baja son los
+         * contrarios: subiendo se dan mas cuanto antes se empieza y mas lejos
+         * se llega; bajando, cuanto MAS ALTO se empieza y mas abajo esta el
+         * limite.  Coger siempre los mismos daria una "cota" por debajo de la
+         * realidad, que es lo peor que puede pasar aqui. */
+        const bool baja = iv.dir == IvDir::Down;
+        const int64_t desde = baja ? init_hi : init_lo;
+        const int64_t hasta = baja ? bound_lo : bound_hi;
+        const int64_t t = trips_between(desde, hasta, iv.cmp_offset,
                                         iv.stride, iv.cmp_op);
         if (t >= 0) {
             info.trip_max = t;

@@ -737,9 +737,12 @@ void produce_loops(Production &p) {
                               kProducerLoops, "");
                 continue;
             }
+            /* Los DOS sentidos: aqui solo se CUENTA, y un bucle que baja
+             * esta tan contado como uno que sube.  El que pide solo los que
+             * suben es quien va a clonar o a calcular direcciones. */
             LoopIV iv;
-            if (!detect_loop_iv(fn, st.def_block, ls.header, ls.preheader,
-                                ls.latch, iv)) {
+            if (!detect_counted_iv(fn, st.def_block, ls.header, ls.preheader,
+                                   ls.latch, iv)) {
                 /* Antes de rendirse: puede que la induccion MULTIPLIQUE.
                  *
                  * `for (i = 1; i < n; i *= 2)` no da `n` vueltas sino del

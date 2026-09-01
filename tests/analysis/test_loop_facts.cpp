@@ -862,6 +862,157 @@ static void a_multiplying_loop_is_logarithmic() {
           "con el hecho, LOGARITMICO -- otra clase, no otra constante");
 }
 
+/**
+ * @brief Un bucle que BAJA esta tan contado como uno que sube.
+ *
+ * `for (i = 32; i > 0; i--)` da 32 vueltas FIJAS.  El descriptor de induccion
+ * solo modelaba el sentido creciente -- lo decia su propia documentacion, como
+ * pendiente --, asi que este bucle no tenia variable de induccion, no se le
+ * podian contar las vueltas y el coste contestaba O(n) sobre algo constante.
+ * Es el mismo fallo que ya mordio con los bucles externos y con los que
+ * multiplican: una forma que el analisis no cubre acaba siendo una respuesta
+ * equivocada, no una duda.
+ *
+ * Y se comprueba lo OTRO, que es lo que hace seguro el cambio: quien pide el
+ * IV para desenrollar o para calcular direcciones sigue sin ver este bucle.
+ */
+static void a_counting_down_loop_is_counted_too() {
+    std::printf("\n[un bucle que baja tambien esta contado]\n");
+
+    /* `for (i = I; i CMP 0; i -= S)`.
+     * Valores: 0=cte I (init) | 1=phi i | 2=cte 0 (limite) | 3=cmp | 4=i-S |
+     * 5=cte S */
+    auto construir = [](IrOp cmp_op, int64_t I, uint64_t S) {
+        ir::IrFunction fn;
+        fn.name = "cuenta_atras";
+        for (int i = 0; i < 6; ++i) fn.values.push_back({});
+
+        auto val = [](IrOp o, ir::IrValueId dst, IrType t) {
+            IrInstr in;
+            in.op = o;
+            in.dst = dst;
+            in.type = t;
+            return in;
+        };
+        auto cte = [&](ir::IrValueId dst, uint64_t v) {
+            IrInstr c = val(IrOp::CONST, dst, IrType::I64);
+            c.imm = v;
+            return c;
+        };
+
+        IrBlock entry;
+        entry.id = 0;
+        entry.name = "entry";
+        entry.instrs.push_back(cte(0, (uint64_t)I));
+        entry.instrs.push_back(cte(5, S));
+        entry.instrs.push_back(br(1));
+
+        IrBlock header;
+        header.id = 1;
+        header.name = "header";
+        {
+            IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+            phi.phi_args.push_back({/*value=*/0, /*block=*/0});
+            phi.phi_args.push_back({/*value=*/4, /*block=*/2});
+            header.instrs.push_back(phi);
+            header.instrs.push_back(cte(2, 0));
+            IrInstr cmp = val(cmp_op, 3, IrType::BOOL);
+            cmp.operands.push_back(1);
+            cmp.operands.push_back(2);
+            header.instrs.push_back(cmp);
+            IrInstr t = brcond(2, 3);
+            t.operands[0] = 3;
+            header.instrs.push_back(t);
+        }
+
+        IrBlock body;
+        body.id = 2;
+        body.name = "body";
+        {
+            IrInstr sub = val(IrOp::SUB, 4, IrType::I64);
+            sub.operands.push_back(1);
+            sub.operands.push_back(5);
+            body.instrs.push_back(sub);
+            body.instrs.push_back(br(1));
+        }
+
+        fn.blocks = {entry, header, body, block(3, "exit", ret())};
+        fn.blocks[0].succs = {1};
+        fn.blocks[1].succs = {2, 3};
+        fn.blocks[2].succs = {1};
+        fn.blocks[1].preds = {0, 2};
+        fn.blocks[2].preds = {1};
+        fn.blocks[3].preds = {1};
+        return fn;
+    };
+
+    /* Tres formas y sus vueltas: `i > 0` de uno en uno son I; de dos en dos,
+     * la mitad; y `i >= 0` da UNA MAS, que es el desvio de uno que un segundo
+     * juego de formulas escrito aparte habria acabado teniendo. */
+    struct Caso {
+        IrOp cmp;
+        int64_t init;
+        uint64_t paso;
+        int64_t vueltas;
+        const char *que;
+    };
+    const Caso casos[3] = {
+        {IrOp::CMP_GT, 32, 1, 32, "de 32 a 0 de uno en uno son 32 vueltas"},
+        {IrOp::CMP_GT, 64, 2, 32, "de 64 a 0 de dos en dos son 32"},
+        {IrOp::CMP_GE, 16, 1, 17, "y con `>=` entra tambien el 0: una mas"},
+    };
+
+    for (const Caso &c : casos) {
+        const ir::IrFunction fn = construir(c.cmp, c.init, c.paso);
+        const LoopFacts lf = compute_loop_facts(fn);
+        const IrFacts hechos = build_ir_facts(fn);
+        const LoopStructure st = detect_loop_structure(fn, lf, 0);
+        CHECK(st.valid, "la forma es la de un bucle contado");
+
+        /* Quien va a CLONAR o a calcular direcciones sigue sin verlo, y eso es
+         * lo correcto: da por hecho que se sube, y darle uno que baja le haria
+         * tocar lo que el bucle no toca. */
+        LoopIV solo_sube;
+        CHECK(!detect_loop_iv(fn, hechos.def_block, st.header, st.preheader,
+                              st.latch, solo_sube),
+              "el que solo admite crecientes NO lo devuelve");
+
+        LoopIV iv;
+        CHECK(detect_counted_iv(fn, hechos.def_block, st.header, st.preheader,
+                                st.latch, iv),
+              "pero el que cuenta si");
+        CHECK(iv.dir == IvDir::Down, "y dice que baja");
+        CHECK(iv.stride > 0,
+              "con el paso POSITIVO: es el tamano, el sentido va aparte");
+
+        const LoopTripInfo trip = compute_trip_count(fn, hechos.def_block, iv);
+        CHECK(trip.trip == c.vueltas, c.que);
+
+        /* Y la variable queda acotada por el otro lado: de donde SALE hasta
+         * donde empieza. */
+        const LoopIvBounds cotas = compute_loop_iv_bounds(fn, hechos, lf);
+        CHECK(cotas.bounds.size() == 1, "la variable queda acotada");
+        if (!cotas.bounds.empty()) {
+            int64_t lo = 0, hi = 0;
+            CHECK(cotas.bounds[0].range.vista_con_signo(lo, hi) &&
+                      hi == c.init && lo <= 0,
+                  "el alto es el inicio y el bajo llega hasta la salida");
+        }
+
+        // Y el coste deja de contarlo: 32 vueltas fijas son 32, no `n`.
+        analysis::asa::FactStore store;
+        analysis::asa::Fact f;
+        CHECK(analysis::asa::loop_trip_fact(store, fn, st.header, trip,
+                                            analysis::asa::kStagePreOpt,
+                                            analysis::asa::Source::Static, f),
+              "hay hecho que publicar");
+        store.add(std::move(f));
+        const analyze::CostResult r = analyze::analyze_function(
+            fn, &store, analysis::asa::kStagePreOpt);
+        CHECK(r.max_loop_depth == 0, "y el coste es constante, no lineal");
+    }
+}
+
 int main() {
     std::printf("=== test_loop_facts (Fase 0.25: LoopFacts) ===\n");
 
@@ -948,6 +1099,7 @@ int main() {
     an_outer_loop_is_recognized_too();
     a_constant_outer_loop_does_not_square_the_cost();
     a_multiplying_loop_is_logarithmic();
+    a_counting_down_loop_is_counted_too();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
