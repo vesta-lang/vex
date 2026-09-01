@@ -56,7 +56,8 @@ bool loop_trip_fact(FactStore &store, const ir::IrFunction &fn,
 bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
                       const BulkMemoryFact &b, const char *stage, Source source,
                       Fact &out) {
-    if (b.st.header == ir::IR_NO_BLOCK) return false;
+    if (b.st.header == ir::IR_NO_BLOCK || b.st.header >= fn.blocks.size())
+        return false;
 
     /* Cuantos elementos, SI se sabe.  La cota de un bucle suele ser un valor
      * del programa; publicar su identificador como si fuera la cuenta es dar
@@ -89,6 +90,20 @@ bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
     f.about.kind = Subject::Kind::Block;
     f.about.function = store.intern(fn.name);
     f.about.id = b.st.header;
+
+    /* Y la LINEA de fuente del bucle, apuntada AQUI, que es donde el numero de
+     * bloque todavia significa algo.
+     *
+     * Un identificador de bloque solo vale dentro de su momento: el optimizador
+     * los renumera, asi que quien lea este hecho mas tarde y lo use para mirar
+     * el codigo de despues no encuentra un bloque parecido, encuentra OTRO.
+     * Con la linea dentro, el consumidor no necesita el bloque -- y una linea
+     * de fuente no la renumera nadie. */
+    for (const ir::IrInstr &in : fn.blocks[b.st.header].instrs)
+        if (in.source_line > 0) {
+            f.seal.origin.site = in.source_line;
+            break;
+        }
 
     /* DEMOSTRADO: no es que lo parezca, es que se recorrio el bucle entero y
      * todo lo que hace es recorrer y mover.  Cualquier duda salio por el otro

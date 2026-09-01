@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <set>
 #include <map>
 #include <sstream>
 
@@ -381,6 +382,89 @@ void family_dead_loop(const LintInput &in, vx::Diagnostics &diags) {
     }
 }
 
+/**
+ * @brief Un bucle que es EXACTAMENTE una operacion de bloque escrita larga.
+ *
+ * El compilador ya lo reduce a `memcpy`/`memset`, asi que esto no es un aviso
+ * de rendimiento: es de INTENCION.  `std.memory.fill(p, 0, n)` dice en una
+ * linea lo que el bucle dice en cinco, y sobre todo se lo dice a quien lo lea
+ * despues -- y a los analisis, que no tienen que redescubrirlo cada vez.  Por
+ * eso es una NOTA y no una advertencia: el codigo no esta mal.
+ *
+ * Solo sobre lo DEMOSTRADO, y no se avisa de los que CASI lo son.  Es
+ * tentador -- "esto seria una copia si la base no cambiara dentro" es un
+ * consejo util --, pero elegir cuales de los veinticinco motivos son "casi"
+ * pide una lista escrita a mano, y ya se vio lo que pasa con esas: el coste
+ * llevaba una de dos codigos, el dominio paso a dar veinticuatro, y desde
+ * entonces creia entender lo que no entendia.  El motivo ESTA publicado en el
+ * almacen para quien lo quiera; lo que no se hace es tapiar aqui una eleccion
+ * que envejece sola.
+ */
+void family_bulk_by_hand(const LintInput &in, vx::Diagnostics &diags) {
+    /* Las cuatro formas, que son dos hechos por dos maneras de saber la
+     * longitud.  Que la longitud se sepa al compilar o al ejecutar no cambia
+     * el consejo: lo que cambia es lo que el compilador puede hacer con el. */
+    struct Forma {
+        const char *code;
+        const char *diag;
+    };
+    static const Forma kFormas[] = {
+        {"bulk.fill", "VXW918"},
+        {"bulk.fill_runtime", "VXW918"},
+        {"bulk.copy", "VXW919"},
+        {"bulk.copy_runtime", "VXW919"},
+    };
+    /* Se pregunta por el momento de EN MEDIO, y no es un capricho.
+     *
+     * Que un bucle sea una copia solo se sabe MIENTRAS EL BUCLE EXISTE: el
+     * dominio, mirando el codigo ya optimizado, encuentra una instruccion de
+     * bloque y ningun bucle que reconocer.  Quien lo afirma es el pase, justo
+     * antes de deshacerlo.
+     *
+     * El consejo, en cambio, no es de una etapa: es sobre lo que el usuario
+     * ESCRIBIo.  Que el compilador ya lo reduzca no quita que decirlo en una
+     * linea se lo diga tambien a quien lo lea despues. */
+    analysis::asa::Scope mientras = in.here;
+    mientras.stage = analysis::asa::kStageDuringOpt;
+
+    /* Una vez por LINEA de fuente, no por sitio donde aparezca el bucle.
+     *
+     * El inline copia el cuerpo de una funcion dentro de sus llamantes, asi
+     * que un unico `for` escrito una vez sale reconocido en dos o tres
+     * funciones distintas.  El usuario solo puede arreglarlo donde lo
+     * escribio; avisarle en `main` de un bucle que el no puso ahi es ruido
+     * -- y ruido que crece con lo agresivo que sea el inline, o sea que
+     * empeora justo cuando el compilador mejora. */
+    std::set<uint32_t> ya_dicho;
+    for (const ir::IrFunction &fn : in.mod.functions) {
+        if (fn.is_native || fn.blocks.empty()) continue;
+        for (const Forma &f : kFormas) {
+            for (const analysis::asa::Fact *h :
+                 in.facts.find_all(f.code, fn.name.c_str(), mientras)) {
+                /* Solo lo demostrado.  Aqui no hay inferencia que valga: se
+                 * recorrio el bucle entero y todo lo que hace es mover. */
+                if (h->seal.certainty != analysis::asa::Certainty::Proven)
+                    continue;
+                /* La linea viene DENTRO del hecho, no se busca por el numero
+                 * de bloque.
+                 *
+                 * Un identificador de bloque solo vale dentro de su momento:
+                 * este hecho es de mitad de la optimizacion y aqui se tiene el
+                 * codigo de despues, ya renumerado.  Mirarlo daba posiciones
+                 * de otros sitios -- el aviso apuntaba a lineas donde no hay
+                 * ningun bucle --, que es peor que no dar posicion. */
+                vx::SourceLoc loc = where_is(in, fn.name);
+                if (h->seal.origin.site > 0) loc.line = h->seal.origin.site;
+                if (loc.line > 0 && !ya_dicho.insert(loc.line).second) continue;
+                /* Sin el nombre de la funcion, por lo mismo que la dedup: tras
+                 * el inline, el bucle esta en varias y decir en cual es decir
+                 * una al azar.  La posicion no miente. */
+                diags.diag(loc, vx::DiagLevel::NOTE, f.diag, {});
+            }
+        }
+    }
+}
+
 /* Lo que consulta cada familia.  Listas nombradas y no literales sueltos para
  * que se lean al lado de su familia y no haya que buscarlas. */
 const char *const kNeedsFingerprint[] = {"asa.fingerprint", nullptr};
@@ -394,6 +478,10 @@ const char *const kNeedsLoops[] = {"asa.loops", nullptr};
  * pedirla produce los dos y no hay forma de que se quede sin la mitad. */
 const char *const kNeedsUseDef[] = {"asa.use_def", "asa.asm", nullptr};
 const char *const kNeedsMemoryAccess[] = {"asa.memory_access", nullptr};
+/* `memory.bulk_by_hand` consulta el dominio que reconoce las operaciones de
+ * bloque.  Uno solo: ese productor ya pide por su cuenta la forma del bucle y
+ * los efectos de memoria al armar su hecho. */
+const char *const kNeedsBulkMemory[] = {"asa.bulk_memory", nullptr};
 
 void register_builtin_families() {
     /* El NOMBRE es vocabulario estable: es lo que se escribe en `vx.toml` para
@@ -417,6 +505,12 @@ void register_builtin_families() {
      * nuevo, que es exactamente lo que el ASA promete. */
     register_lint_family("loops.dead", "VXW914", &family_dead_loop,
                          kNeedsLoops);
+    /* Y la del dominio que reconoce las operaciones de bloque, que hasta ahora
+     * no llegaba al almacen: lo sabia solo el pase que las reduce, asi que ni
+     * se veia ni se podia preguntar.  Registrar el dominio ha bastado para que
+     * esta familia sea seis lineas. */
+    register_lint_family("memory.bulk_by_hand", "VXW918",
+                         &family_bulk_by_hand, kNeedsBulkMemory);
 }
 
 /* NO hay familia "contrato que nadie comprueba", y no es un olvido: eso lo dice

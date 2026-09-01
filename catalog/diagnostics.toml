@@ -1530,6 +1530,23 @@ es = "el cuerpo de un bucle de '{0}' no se ejecuta nunca: sus vueltas estan demo
 en = "a loop in '{0}' runs exactly once, so it does not loop: it reads as if it repeated and it does not"
 es = "un bucle de '{0}' da exactamente una vuelta, asi que no es un bucle: se lee como si repitiera y no repite"
 
+# `memory.bulk_by_hand`.  Solo sobre lo DEMOSTRADO: el bucle es exactamente un
+# relleno o una copia de un tramo contiguo.  No se avisa de los que casi lo son
+# -- ahi la lista de "casi" seria una lista escrita a mano, y esas se quedan
+# viejas en silencio.
+# NO llevan el nombre de la funcion, y no es un olvido: el inline copia el
+# cuerpo en sus llamantes, asi que un bucle escrito una vez queda reconocido en
+# dos o tres funciones y decir en cual es decir una de ellas al azar.  La
+# POSICION no miente: apunta a la linea del bucle, que es donde el usuario
+# puede arreglarlo.
+[VXW918]
+en = "this loop fills a contiguous run with the same value: 'std.memory.fill' says it in one line, and says it to whoever reads it next"
+es = "este bucle rellena un tramo contiguo con el mismo valor: 'std.memory.fill' lo dice en una linea, y se lo dice a quien lo lea despues"
+
+[VXW919]
+en = "this loop copies a contiguous run: 'std.memory.copy' says it in one line, and says it to whoever reads it next"
+es = "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea, y se lo dice a quien lo lea despues"
+
 [VXW008]
 en = "cannot tell whether the parameters of '{0}' are read: it has values bound to an asm block, which take them through a register rather than through a use the count can see. The bindings say which register carries which slot; joining that to a parameter needs the store between them, which is another domain's knowledge"
 es = "no se puede decir si los parametros de '{0}' se leen: tiene valores atados a un bloque asm, que los toma por un registro y no por un uso que la cuenta vea.  Las ataduras dicen que registro lleva que hueco; unir eso con un parametro necesita el almacen que hay en medio, que es conocimiento de otro dominio"
