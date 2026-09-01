@@ -1003,6 +1003,34 @@ es = "no se encontro una variable de induccion contada en la cabecera"
 en = "the guard compares with '!=' and the step never lands exactly on the limit, so the loop does not end by its guard"
 es = "la guarda compara con '!=' y el paso no cae justo en el limite, asi que el bucle no termina por su guarda"
 
+# Por que el desenrollado NO disparo en un bucle concreto.  Existia como un
+# total a stderr detras de un flag -- "3 rechazados por llamadas" --, que no
+# dice CUAL.  Los dos numeros son con los que la politica decide: instrucciones
+# del cuerpo y bloques.
+["unroll.trivial"]
+en = "it was not unrolled: the body is empty or it never runs ({0} instructions in {1} blocks)"
+es = "no se desenrollo: el cuerpo esta vacio o no da ninguna vuelta ({0} instrucciones en {1} bloques)"
+
+["unroll.calls"]
+en = "it was not unrolled: the body calls, and copying it neither exposes work to overlap nor removes the call from the remainder ({0} instructions in {1} blocks)"
+es = "no se desenrollo: el cuerpo llama, y copiarlo ni expone trabajo que solapar ni quita la llamada del resto ({0} instrucciones en {1} bloques)"
+
+["unroll.register_pressure"]
+en = "it was not unrolled: the body already keeps too many values alive, and copying it would spill them ({0} instructions in {1} blocks)"
+es = "no se desenrollo: el cuerpo ya mantiene demasiados valores vivos, y copiarlo los mandaria a memoria ({0} instrucciones en {1} bloques)"
+
+["unroll.code_growth"]
+en = "it was not unrolled: the copies do not fit in the code growth budget ({0} instructions in {1} blocks)"
+es = "no se desenrollo: las copias no caben en el presupuesto de crecimiento de codigo ({0} instrucciones en {1} bloques)"
+
+["unroll.cost_too_high"]
+en = "it was not unrolled: the body is too expensive for copying it to expose useful work ({0} instructions in {1} blocks)"
+es = "no se desenrollo: el cuerpo es demasiado caro para que copiarlo exponga trabajo util ({0} instrucciones en {1} bloques)"
+
+["unroll.cold"]
+en = "it was not unrolled: it does not run often enough to be worth growing the code ({0} instructions in {1} blocks)"
+es = "no se desenrollo: no se ejecuta lo bastante como para que compense crecer el codigo ({0} instrucciones en {1} bloques)"
+
 ["loop.self_loop"]
 en = "the loop is a single block that jumps to itself, so there is no body to copy without copying the guard too"
 es = "el bucle es un solo bloque que salta a si mismo, asi que no hay cuerpo que copiar sin copiar tambien la guarda"

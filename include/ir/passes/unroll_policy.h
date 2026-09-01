@@ -94,6 +94,19 @@ enum class UnrollReject {
     Cold              ///< peso de ejecucion insuficiente (PGO).
 };
 
+/**
+ * @brief El codigo ESTABLE de un rechazo, para el catalogo y para el almacen.
+ *
+ * Los motivos existian desde el principio y solo salian como un TOTAL a
+ * stderr detras de un flag: "3 rechazados por llamadas" no dice CUAL, y el
+ * usuario que se pregunta por que su bucle no se desenrollo se queda igual.
+ * Con el codigo, la decision es un hecho por bucle y se puede preguntar.
+ *
+ * En ingles y estable, como el resto del vocabulario: viaja al fichero de
+ * hechos y al volcado.  La frase la pone el catalogo multi-idioma.
+ */
+const char *unroll_reject_code(UnrollReject r);
+
 /// Decision de la politica.
 struct UnrollDecision {
     UnrollMode mode = UnrollMode::None;

@@ -357,13 +357,19 @@ const CatEntry kEntries[] = {
     {"memory_access.rw", {"reads and writes {2}", "lee y escribe {2}"}},
     {"memory_access.write", {"writes {2}", "escribe {2}"}},
     {"range.unreachable", {"this point is never executed", "este punto no se ejecuta"}},
+    {"unroll.calls", {"it was not unrolled: the body calls, and copying it neither exposes work to overlap nor removes the call from the remainder ({0} instructions in {1} blocks)", "no se desenrollo: el cuerpo llama, y copiarlo ni expone trabajo que solapar ni quita la llamada del resto ({0} instrucciones en {1} bloques)"}},
+    {"unroll.code_growth", {"it was not unrolled: the copies do not fit in the code growth budget ({0} instructions in {1} blocks)", "no se desenrollo: las copias no caben en el presupuesto de crecimiento de codigo ({0} instrucciones en {1} bloques)"}},
+    {"unroll.cold", {"it was not unrolled: it does not run often enough to be worth growing the code ({0} instructions in {1} blocks)", "no se desenrollo: no se ejecuta lo bastante como para que compense crecer el codigo ({0} instrucciones en {1} bloques)"}},
+    {"unroll.cost_too_high", {"it was not unrolled: the body is too expensive for copying it to expose useful work ({0} instructions in {1} blocks)", "no se desenrollo: el cuerpo es demasiado caro para que copiarlo exponga trabajo util ({0} instrucciones en {1} bloques)"}},
+    {"unroll.register_pressure", {"it was not unrolled: the body already keeps too many values alive, and copying it would spill them ({0} instructions in {1} blocks)", "no se desenrollo: el cuerpo ya mantiene demasiados valores vivos, y copiarlo los mandaria a memoria ({0} instrucciones en {1} bloques)"}},
+    {"unroll.trivial", {"it was not unrolled: the body is empty or it never runs ({0} instructions in {1} blocks)", "no se desenrollo: el cuerpo esta vacio o no da ninguna vuelta ({0} instrucciones en {1} bloques)"}},
     {"use_def.multi_use", {"'{2}' is used {0} times, the last at position {1}", "'{2}' se usa {0} veces, la ultima en la posicion {1}"}},
     {"use_def.no_values", {"it has no SSA values", "no tiene ningun valor SSA"}},
     {"use_def.single_use", {"'{2}' is used once, at position {1}", "'{2}' se usa una vez, en la posicion {1}"}},
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 342;
+const int kEntryCount = 348;
 
 } // namespace
 

@@ -79,6 +79,18 @@ UnrollDecision reject(UnrollReject why) {
 
 } // namespace
 
+const char *unroll_reject_code(UnrollReject r) {
+    switch (r) {
+    case UnrollReject::Trivial: return "unroll.trivial";
+    case UnrollReject::Calls: return "unroll.calls";
+    case UnrollReject::RegisterPressure: return "unroll.register_pressure";
+    case UnrollReject::CodeGrowth: return "unroll.code_growth";
+    case UnrollReject::CostTooHigh: return "unroll.cost_too_high";
+    case UnrollReject::Cold: return "unroll.cold";
+    default: return "unroll.none";
+    }
+}
+
 UnrollDecision choose_unroll_factor(const analysis::LoopMetrics &m,
                                     int64_t trip_count,
                                     const UnrollTargetInfo &target) {

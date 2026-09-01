@@ -25,6 +25,7 @@
 #include "analysis/facts/loop_structure.h"
 #include "analysis/facts/loop_trip_count.h"
 #include "ir/passes/unroll_policy.h"
+#include "analysis/asa/fact_base.h" // el nombre del dominio de bucles
 #include "ir/ssa_ir.h"
 
 #include <cstdint>
@@ -446,6 +447,45 @@ bool ir_pass_unroll(IrFunction &fn, int factor,
                 analysis::compute_loop_metrics(fn, li.st.body);
             UnrollDecision d = choose_unroll_factor(m, li.trip.trip, target);
             if (want_stats) g_stats.account(d);
+            /* La decision, DICHA.  Existia y solo salia como un total a
+             * stderr detras de un flag: "3 rechazados por llamadas" no dice
+             * cual, y quien se pregunta por que SU bucle no se desenrollo se
+             * queda igual.
+             *
+             * Se publica el rechazo -- que es lo invisible -- con su motivo y
+             * con la linea del bucle, apuntada aqui, que es donde el numero de
+             * bloque todavia significa algo: el optimizador los renumera. */
+            if (facts != nullptr && !d.allow()) {
+                analysis::asa::Subject about;
+                about.kind = analysis::asa::Subject::Kind::Block;
+                about.function = facts->intern(fn.name);
+                about.id = li.st.header;
+                analysis::asa::Fact h;
+                h.what.domain = analysis::asa::kProducerLoops;
+                h.what.code = unroll_reject_code(d.reject);
+                /* El coste del cuerpo y cuantos bloques tiene: son los dos
+                 * numeros con los que la politica decide, asi que sin ellos el
+                 * motivo se lee pero no se puede rebatir. */
+                h.what.a = m.instructions;
+                h.what.b = m.basic_blocks;
+                h.about = about;
+                /* No es un hueco del analisis ni del programa: es una DECISION
+                 * del optimizador, tomada con lo que sabia.  Por eso va como
+                 * hecho demostrado y no como un "no se". */
+                h.seal.certainty = analysis::asa::Certainty::Proven;
+                h.seal.origin.source = analysis::asa::Source::Static;
+                h.seal.origin.producer = analysis::asa::kProducerLoops;
+                h.seal.origin.function = about.function;
+                if (li.st.header < fn.blocks.size())
+                    for (const IrInstr &i : fn.blocks[li.st.header].instrs)
+                        if (i.source_line > 0) {
+                            h.seal.origin.site = i.source_line;
+                            break;
+                        }
+                h.scope.stage = analysis::asa::kStageDuringOpt;
+                h.proof.rule = "unroll-policy";
+                facts->add(std::move(h));
+            }
             if (!d.allow()) continue;
             U = d.factor;
         }
