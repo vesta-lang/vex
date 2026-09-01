@@ -119,13 +119,20 @@ int run(int argc, char **argv) {
      * en un momento y esto preguntaba por otro: no veia ni un hecho -- sin
      * fallar, que es lo peor -- y encima los recalculaba.  Medido: dos bases
      * de hechos, seis analisis cada una, para el mismo modulo. */
-    /* Y TAMBIEN el de en medio, porque hay conocimiento que solo existe ahi.
+    /* Y el de ANTES de optimizar, porque hay familias que hablan de lo que el
+     * usuario ESCRIBIo.  "Este bucle da una sola vuelta" mirado DESPUES de
+     * optimizar acusaba al usuario de lo que habia hecho el desenrollador: un
+     * `for (i = 0; i < 5; i++)` desenrollado deja una cabecera que da una
+     * vuelta, y el aviso salia sobre codigo perfectamente escrito.
+     *
+     * Y TAMBIEN el de en medio, porque hay conocimiento que solo existe ahi.
      * Que un bucle sea una copia solo se sabe MIENTRAS EL BUCLE EXISTE: quien
      * mire el codigo ya optimizado encuentra una instruccion de bloque y
      * ningun bucle que reconocer.  Sin pedirlo, la familia que lo consulta no
      * veia ni un hecho -- y sin fallar, que es lo peor. */
     copts.asa_stages = {analysis::asa::kStagePostOpt,
-                        analysis::asa::kStageDuringOpt};
+                        analysis::asa::kStageDuringOpt,
+                        analysis::asa::kStagePreOpt};
     const bool as_project = vx::vx_source_has_imports(source) ||
                             vx::vx_source_declara_namespace(source);
     vx::CompileResult cr = as_project

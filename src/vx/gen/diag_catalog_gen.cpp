@@ -295,10 +295,11 @@ const CatEntry kEntries[] = {
     {"VXW913", {"how much memory a function touches without the compiler knowing where", "cuanta memoria toca una funcion sin que se sepa donde"}},
     {"VXW914", {"a loop whose body never runs", "un bucle cuyo cuerpo no se ejecuta nunca"}},
     {"VXW915", {"a loop that runs exactly once", "un bucle que da exactamente una vuelta"}},
-    {"VXW916", {"the body of a loop in '{0}' never runs: its count is proven to be zero -- usually a limit that fell below the start, or a '<' where '<=' was meant", "el cuerpo de un bucle de '{0}' no se ejecuta nunca: sus vueltas estan demostradas y son cero -- suele ser un limite que quedo por debajo del inicio, o un '<' donde iba '<='"}},
-    {"VXW917", {"a loop in '{0}' runs exactly once, so it does not loop: it reads as if it repeated and it does not", "un bucle de '{0}' da exactamente una vuelta, asi que no es un bucle: se lee como si repitiera y no repite"}},
+    {"VXW916", {"the body of this loop never runs: its count is proven to be zero -- usually a limit that fell below the start, or a '<' where '<=' was meant", "el cuerpo de este bucle no se ejecuta nunca: sus vueltas estan demostradas y son cero -- suele ser un limite que quedo por debajo del inicio, o un '<' donde iba '<='"}},
+    {"VXW917", {"this loop runs exactly once, so it does not loop: it reads as if it repeated and it does not", "este bucle da exactamente una vuelta, asi que no es un bucle: se lee como si repitiera y no repite"}},
     {"VXW918", {"this loop fills a contiguous run with the same value: 'std.memory.fill' says it in one line, and says it to whoever reads it next", "este bucle rellena un tramo contiguo con el mismo valor: 'std.memory.fill' lo dice en una linea, y se lo dice a quien lo lea despues"}},
     {"VXW919", {"this loop copies a contiguous run: 'std.memory.copy' says it in one line, and says it to whoever reads it next", "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea, y se lo dice a quien lo lea despues"}},
+    {"VXW920", {"this loop advances past its limit without ever equalling it, so its '!=' guard never stops it: it either does not end, or ends only after wrapping around the whole type", "este bucle se pasa de su limite sin llegar a igualarlo nunca, asi que su guarda '!=' no lo para: o no termina, o solo termina tras dar la vuelta al tipo entero"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"bulk.body_does_more", {"the body does something beyond walking the run and moving it", "el cuerpo hace algo mas que recorrer el tramo y moverlo"}},
     {"bulk.bound_varies", {"the limit changes inside the loop, so there is no fixed run", "el limite cambia dentro del bucle, asi que no hay un tramo fijo"}},
@@ -369,7 +370,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 348;
+const int kEntryCount = 349;
 
 } // namespace
 

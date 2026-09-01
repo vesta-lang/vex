@@ -4079,6 +4079,22 @@ CompileResult compile_vx_project(
                 if (ir::ir_pass_unreachable(fn)) changed = true;
             }
         }
+    }
+
+    /* La INSTANTANEA de antes de optimizar, y quien la pide.
+     *
+     * Iba dentro del bloque de arriba, o sea atada a un flag de VOLCADO: quien
+     * queria los HECHOS del momento anterior no los tenia si no pedia ademas
+     * el dump del intermedio.  Son dos cosas distintas -- una mira, la otra
+     * imprime -- y atarlas dejaba al linter sin poder preguntar por lo que el
+     * usuario ESCRIBIo.
+     *
+     * Lo que NO se mueve es la mutacion de `merged` de ahi arriba: de ese
+     * modulo sale el codigo que se emite, y tocarlo por haber pedido analisis
+     * haria que el compilador generase codigo distinto SEGUN SI LE PREGUNTAS.
+     */
+    if (opts.emit_ir_preopt ||
+        wants_stage_(opts, analysis::asa::kStagePreOpt)) {
         /* Los locales a REGISTRO, sobre una COPIA.
          *
          * Es construccion de SSA, no optimizacion: no quita un bucle ni cambia

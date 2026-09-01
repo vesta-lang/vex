@@ -1566,13 +1566,17 @@ es = "'{1}' toca memoria en {0} sitio(s) donde no se puede saber DoNDE -- no es 
 # acusar de codigo muerto a partir de una inferencia que pudo pararse por
 # presupuesto seria acusar sin prueba.
 
+# Los tres van SIN el nombre de la funcion, y no es un olvido: el inline copia
+# el cuerpo en sus llamantes, asi que un bucle escrito UNA vez se reconoce en
+# varias funciones y decir en cual es decir una al azar.  La POSICION apunta a
+# la linea del bucle, que es donde el usuario puede arreglarlo, y no miente.
 [VXW916]
-en = "the body of a loop in '{0}' never runs: its count is proven to be zero -- usually a limit that fell below the start, or a '<' where '<=' was meant"
-es = "el cuerpo de un bucle de '{0}' no se ejecuta nunca: sus vueltas estan demostradas y son cero -- suele ser un limite que quedo por debajo del inicio, o un '<' donde iba '<='"
+en = "the body of this loop never runs: its count is proven to be zero -- usually a limit that fell below the start, or a '<' where '<=' was meant"
+es = "el cuerpo de este bucle no se ejecuta nunca: sus vueltas estan demostradas y son cero -- suele ser un limite que quedo por debajo del inicio, o un '<' donde iba '<='"
 
 [VXW917]
-en = "a loop in '{0}' runs exactly once, so it does not loop: it reads as if it repeated and it does not"
-es = "un bucle de '{0}' da exactamente una vuelta, asi que no es un bucle: se lee como si repitiera y no repite"
+en = "this loop runs exactly once, so it does not loop: it reads as if it repeated and it does not"
+es = "este bucle da exactamente una vuelta, asi que no es un bucle: se lee como si repitiera y no repite"
 
 # `memory.bulk_by_hand`.  Solo sobre lo DEMOSTRADO: el bucle es exactamente un
 # relleno o una copia de un tramo contiguo.  No se avisa de los que casi lo son
@@ -1583,6 +1587,14 @@ es = "un bucle de '{0}' da exactamente una vuelta, asi que no es un bucle: se le
 # dos o tres funciones y decir en cual es decir una de ellas al azar.  La
 # POSICION no miente: apunta a la linea del bucle, que es donde el usuario
 # puede arreglarlo.
+# El bucle cuya guarda `!=` no cae nunca en el limite.  El mensaje es PRECISO
+# a proposito: con un paso impar el bucle si termina, despues de recorrer el
+# tipo entero.  Decir "no termina" a secas seria mas comodo y falso, y quien
+# lo comprobara dejaria de fiarse del resto.
+[VXW920]
+en = "this loop advances past its limit without ever equalling it, so its '!=' guard never stops it: it either does not end, or ends only after wrapping around the whole type"
+es = "este bucle se pasa de su limite sin llegar a igualarlo nunca, asi que su guarda '!=' no lo para: o no termina, o solo termina tras dar la vuelta al tipo entero"
+
 [VXW918]
 en = "this loop fills a contiguous run with the same value: 'std.memory.fill' says it in one line, and says it to whoever reads it next"
 es = "este bucle rellena un tramo contiguo con el mismo valor: 'std.memory.fill' lo dice en una linea, y se lo dice a quien lo lea despues"

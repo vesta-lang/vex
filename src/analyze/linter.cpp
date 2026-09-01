@@ -367,17 +367,56 @@ void family_opaque_memory(const LintInput &in, vx::Diagnostics &diags) {
  * que pudo pararse por presupuesto seria acusar sin prueba.
  */
 void family_dead_loop(const LintInput &in, vx::Diagnostics &diags) {
+    /* Se pregunta por ANTES de optimizar, que es lo que el usuario escribio.
+     *
+     * Mirado despues, el desenrollado convierte `for (i = 0; i < 5; i++)` en
+     * una cabecera que da UNA vuelta mas el cuerpo replicado -- cierto del
+     * codigo final, y una acusacion falsa contra el codigo fuente --.  El
+     * aviso es sobre lo que se escribio; el momento tiene que ser ese. */
+    analysis::asa::Scope escrito = in.here;
+    escrito.stage = analysis::asa::kStagePreOpt;
+
+    /* Una vez por LINEA.  El inline copia el cuerpo en sus llamantes, asi que
+     * un bucle escrito UNA vez se reconoce en dos o tres funciones: avisar por
+     * funcion lo repite, y ademas lo senala en `main`, donde el usuario no
+     * puso ese bucle y no puede arreglarlo.  La linea viene dentro del hecho. */
+    std::set<uint32_t> ya_dicho;
+    auto donde = [&](const ir::IrFunction &fn, const analysis::asa::Fact *f) {
+        vx::SourceLoc loc = where_is(in, fn.name);
+        if (f->seal.origin.site > 0) loc.line = f->seal.origin.site;
+        return loc;
+    };
     for (const ir::IrFunction &fn : in.mod.functions) {
         if (fn.is_native || fn.blocks.empty()) continue;
         for (const analysis::asa::Fact *f :
-             in.facts.find_all("loop.trip_count", fn.name.c_str(), in.here)) {
+             in.facts.find_all("loop.trip_count", fn.name.c_str(), escrito)) {
             if (f->seal.certainty != analysis::asa::Certainty::Proven) continue;
+            if (f->what.a != 0 && f->what.a != 1) continue;
+            const vx::SourceLoc loc = donde(fn, f);
+            if (loc.line > 0 && !ya_dicho.insert(loc.line).second) continue;
             if (f->what.a == 0)
-                diags.diag(where_is(in, fn.name), vx::DiagLevel::WARN, "VXW916",
-                           {readable(fn.name)});
-            else if (f->what.a == 1)
-                diags.diag(where_is(in, fn.name), vx::DiagLevel::NOTE, "VXW917",
-                           {readable(fn.name)});
+                diags.diag(loc, vx::DiagLevel::WARN, "VXW916", {});
+            else
+                diags.diag(loc, vx::DiagLevel::NOTE, "VXW917", {});
+        }
+        /* Y el bucle cuya guarda `!=` NO CAE nunca en el limite.
+         *
+         * `for (i = 0; i != 10; i += 3)` pasa por 0, 3, 6, 9, 12... y nunca
+         * vale 10.  El dominio de bucles lo sabe con su propio codigo -- no lo
+         * mete en el saco de "forma que no se cubre" justamente para que se
+         * pueda avisar --, asi que aqui solo hay que preguntarlo.
+         *
+         * Cero falsos positivos por construccion: es una forma DEMOSTRADA, no
+         * una sospecha.  Lo unico que hay que cuidar es el mensaje, y por eso
+         * dice "o no termina, o solo termina tras dar la vuelta al tipo": con
+         * un paso impar acaba pasando por el limite despues de 2^64 vueltas.
+         * Decir "no termina" a secas seria mas comodo y falso, y quien lo
+         * comprobara dejaria de fiarse del resto de los avisos. */
+        for (const analysis::asa::Fact *f : in.facts.find_all(
+                 "loop.ne_guard_never_lands", fn.name.c_str(), escrito)) {
+            const vx::SourceLoc loc = donde(fn, f);
+            if (loc.line > 0 && !ya_dicho.insert(loc.line).second) continue;
+            diags.diag(loc, vx::DiagLevel::WARN, "VXW920", {});
         }
     }
 }

@@ -69,7 +69,7 @@ FactId Production::assert_fact(Fact f) {
 
 void Production::say_unknown(Subject about, UnknownReason reason,
                              const char *code, const char *domain,
-                             const char *detail) {
+                             const char *detail, uint32_t site) {
     ++summary.looked_at;
     ++summary.silent;
     /* El motivo SIEMPRE, aunque no se pidan los hechos uno a uno: un dominio
@@ -97,6 +97,7 @@ void Production::say_unknown(Subject about, UnknownReason reason,
     f.seal.unknown_reason = reason;
     f.seal.origin.producer = domain;
     f.seal.origin.function = about.function;
+    f.seal.origin.site = site;
     /* Tambien el no-saber lleva momento: no saber cuantas vueltas da un bucle
      * ANTES de optimizar y no saberlo DESPUES son dos huecos distintos, y solo
      * el primero se arregla mirando lo que el usuario escribio. */
@@ -722,6 +723,19 @@ void produce_loops(Production &p) {
             about.kind = Subject::Kind::Block;
             about.function = p.store.intern(fn.name);
             about.id = lf.header_block_of(L);
+            /* La LINEA del bucle, para todo lo que se diga de el.
+             *
+             * Sin ella, un consumidor solo puede senalar la funcion -- y tras
+             * el inline el mismo bucle esta en varias, asi que el aviso sale
+             * repetido y en sitios donde el usuario no escribio nada.  El
+             * numero de bloque no sirve: el optimizador los renumera. */
+            uint32_t linea = 0;
+            if (about.id < fn.blocks.size())
+                for (const ir::IrInstr &i : fn.blocks[about.id].instrs)
+                    if (i.source_line > 0) {
+                        linea = i.source_line;
+                        break;
+                    }
 
             const LoopStructure ls = detect_loop_structure(fn, lf, L);
             /* CONTABLE basta, que es mas debil que elegible para transformar.
@@ -743,7 +757,7 @@ void produce_loops(Production &p) {
                               (ls.why != nullptr && ls.why[0] != '\0')
                                   ? ls.why
                                   : "loop.shape_unsupported",
-                              kProducerLoops, "");
+                              kProducerLoops, "", linea);
                 continue;
             }
             /* Los DOS sentidos: aqui solo se CUENTA, y un bucle que baja
@@ -781,7 +795,7 @@ void produce_loops(Production &p) {
                     continue;
                 }
                 p.say_unknown(about, UnknownReason::ShapeNotRecognized,
-                              "loop.no_induction", kProducerLoops, "");
+                              "loop.no_induction", kProducerLoops, "", linea);
                 continue;
             }
             /* Con los RANGOS: son una segunda fuente para lo mismo.  Un
@@ -814,7 +828,7 @@ void produce_loops(Production &p) {
                               (tc.code != nullptr && tc.code[0] != '\0')
                                   ? tc.code
                                   : "loop.trip_unknown",
-                              kProducerLoops, "");
+                              kProducerLoops, "", linea);
                 continue;
             }
             /* El hecho lo arma UN solo sitio (@c loop_trip_fact), el mismo que
@@ -828,6 +842,7 @@ void produce_loops(Production &p) {
             /* El apoyo CONCRETO -- no solo el nombre del productor -- para que
              * la derivacion se pueda recorrer.  Eso solo lo sabe quien produce
              * el dominio, que es quien tiene el hecho de estructura a mano. */
+            f.seal.origin.site = linea;
             support_with_structure(p, fn, f, f.proof.rule);
             p.assert_fact(std::move(f));
         }

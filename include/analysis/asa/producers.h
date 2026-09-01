@@ -193,8 +193,18 @@ struct Production {
      * @param domain  Quien lo dice.
      * @param detail  Texto para una persona (lo mismo, en cristiano).
      */
+    /**
+     * @param site Linea de fuente a la que atribuirlo, o 0 si no se sabe.
+     *
+     * Va aqui y no la busca quien consume porque un identificador de BLOQUE
+     * solo vale dentro de su momento -- el optimizador los renumera --, y
+     * porque tras el inline el mismo bucle aparece en varias funciones: sin la
+     * linea, un aviso sale tantas veces como copias haya, y en funciones donde
+     * el usuario no escribio nada.  Una linea de fuente no la renumera nadie.
+     */
     void say_unknown(Subject about, UnknownReason reason, const char *code,
-                     const char *domain, const char *detail);
+                     const char *domain, const char *detail,
+                     uint32_t site = 0);
 };
 
 /// Un dominio que sabe convertir su analisis en hechos.
