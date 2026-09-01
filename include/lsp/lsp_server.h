@@ -251,8 +251,17 @@ class LspServer {
     std::vector<std::string> capture_names_;
     bool capture_names_listos_ = false;
     bool initialized_ = false; ///< true tras un initialize correcto.
-    /// true tras @c shutdown (espera @c exit).  Atomico porque lo escribe el
-    /// hilo que despacha y lo lee el que lee la entrada.
+    /**
+     * @brief true en cuanto el editor PIDE @c shutdown (espera @c exit).
+     *
+     * Lo marca quien LEE la entrada, no quien contesta, y la diferencia
+     * importa: decide el codigo de salida, y el `exit` puede llegar con el
+     * `shutdown` todavia en la cola.  Mirando solo lo contestado, el servidor
+     * salia con 1 -- "exit sin shutdown" -- cuando el editor si lo habia
+     * pedido.  Lo que cuenta es que lo pidio.
+     *
+     * Atomico porque lo escribe el hilo lector y lo lee el que despacha.
+     */
     std::atomic<bool> shutdown_requested_{false};
 };
 

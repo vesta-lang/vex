@@ -34,8 +34,15 @@ def run_lsp(lsp_bin, msgs, timeout=120):
     """Envia @p msgs (lista de dicts) enmarcados por stdin; devuelve stdout (str)."""
     data = b"".join(frame(m) for m in msgs)
     try:
+        # El IDIOMA se fija aqui, no se hereda.  El servidor toma el suyo del
+        # entorno (VESTA_LANG > LC_ALL > LANG), asi que un test que afirma
+        # sobre el TEXTO -- "funcion", "complejidad" -- pasa o falla segun la
+        # maquina en la que corra.  Fijarlo es lo que lo hace una prueba y no
+        # una casualidad.
+        env = dict(os.environ)
+        env["VESTA_LANG"] = "es"
         p = subprocess.run([lsp_bin], input=data, capture_output=True,
-                           timeout=timeout)
+                           timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         sys.stderr.write("FALLO: el servidor LSP no termino (timeout)\n")
         return ""

@@ -132,10 +132,19 @@ def main():
     if len(sys.argv) < 2 or not os.path.exists(sys.argv[1]):
         sys.stderr.write("uso: python smoke_inspector.py <vesta_lsp[.exe]>\n")
         return 2
-    lsp = sys.argv[1]
+    # ABSOLUTA: `CreateProcess` de Windows no resuelve una ruta relativa igual
+    # que el shell, asi que `cmake-build-release/vesta_lsp.exe` -- lo que uno
+    # escribe -- daba "no se encuentra el archivo" y el test ni arrancaba.  Los
+    # demas smoke lo hacen en `check_bin()` del banco; este se lo habia
+    # saltado.
+    lsp = os.path.abspath(sys.argv[1])
     try:
+        # El idioma, fijado como en el banco: el servidor lo toma del entorno,
+        # asi que sin esto un test sobre el TEXTO pasa o falla segun la maquina.
+        env = dict(os.environ)
+        env["VESTA_LANG"] = "es"
         p = subprocess.run([lsp], input=build_input(), capture_output=True,
-                           timeout=120)
+                           timeout=120, env=env)
     except subprocess.TimeoutExpired:
         sys.stderr.write("FALLO: el servidor LSP no termino (timeout)\n")
         return 1

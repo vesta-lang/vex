@@ -671,6 +671,18 @@ void WorkspaceIndex::index_path(const std::string &fs_path) {
 }
 
 void WorkspaceIndex::ensure_built() {
+    /* Bajo cerrojo: quien llegue segundo ESPERA a que el indice este entero.
+     *
+     * La marca se pone antes de construir -- para que un fallo no reintente en
+     * bucle -- asi que sin esperar, el segundo la veia puesta y consultaba un
+     * indice a medio hacer.  Y no daba error: contestaba "no lo encuentro",
+     * que se lee igual que "no existe".  Se vio con `definition` y
+     * `references` pedidos a la vez, que es lo normal en cuanto el editor
+     * reparte las consultas entre hilos.
+     *
+     * Solo cuesta la PRIMERA vez: despues sale por la marca sin pelearse por
+     * nada. */
+    std::lock_guard<std::mutex> guard(build_mutex_);
     if (built_) return;
     built_ = true; // marcar antes para que un fallo no reintente en bucle.
     std::vector<std::string> files;

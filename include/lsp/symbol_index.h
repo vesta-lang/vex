@@ -45,6 +45,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -173,7 +174,16 @@ struct WorkspaceLocation {
  * evitan que el indexado cuelgue el servidor.  Un fichero que falle al
  * leerse/lexar se salta.
  *
- * No es thread-safe (el servidor procesa peticiones secuencialmente).
+ * La CONSTRUCCION si es segura entre hilos: el servidor reparte las consultas
+ * entre un grupo, y `definition` y `references` la piden las dos.  Lo demas
+ * sigue sin serlo -- las escrituras (`update_file`, `set_roots`) las hace el
+ * hilo que atiende las mutaciones, en orden.
+ *
+ * El comentario que habia aqui decia lo contrario ("el servidor procesa
+ * peticiones secuencialmente") y dejo de ser cierto al repartirlas: entonces
+ * dos hilos entraban a construir, el segundo veia la marca ya puesta y
+ * consultaba un indice a MEDIO construir.  No fallaba -- contestaba "no lo
+ * encuentro" --, que es indistinguible de que el simbolo no exista.
  */
 class WorkspaceIndex {
   public:
@@ -260,7 +270,18 @@ class WorkspaceIndex {
     void erase_uri_entries(const std::string &uri);
 
     std::vector<std::string> roots_; ///< Raices del workspace (fs paths).
-    bool built_ = false;             ///< true tras la primera construccion.
+    bool built_ = false; ///< true tras la primera construccion.
+    /**
+     * @brief Protege la construccion del indice, que ahora piden VARIOS hilos.
+     *
+     * `definition` y `references` lo necesitan los dos, y el servidor reparte
+     * las consultas entre un grupo de hilos: sin esto, el segundo veia la
+     * marca ya puesta -- se ponia ANTES de construir, para que un fallo no
+     * reintentara en bucle -- y consultaba un indice a MEDIO construir.  No
+     * fallaba: devolvia "no lo encuentro", que es indistinguible de que el
+     * simbolo no exista.
+     */
+    mutable std::mutex build_mutex_;
 
     /// nombre -> definiciones (de todos los ficheros indexados).
     std::unordered_map<std::string, std::vector<WorkspaceLocation>> defs_;

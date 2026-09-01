@@ -2558,18 +2558,44 @@ int LspServer::run() {
     std::condition_variable cv;
     std::deque<nlohmann::json> cola;
 
+    /* Que la entrada se acabo, y con que codigo hay que salir.
+     *
+     * No se sale desde el lector: cuando llega el `exit` -- o cuando el editor
+     * cierra la tuberia -- puede haber mensajes YA LEIDOS y sin atender, y
+     * matar el proceso ahi los tira.  Se vio con el banco de pruebas, que
+     * manda los cuatro mensajes de golpe: el lector se comia los cuatro,
+     * llegaba al `exit` y terminaba antes de que nadie respondiera al
+     * `initialize`.  El servidor salia con 1 y sin escribir un byte.
+     *
+     * Esperar tampoco puede ser lo de antes: lo que NO funcionaba era que el
+     * `exit` se quedara sin leer detras de una compilacion larga.  Eso ya no
+     * pasa -- leer es de otro hilo --, asi que aqui solo se espera a vaciar lo
+     * que ya estaba encolado, que es un trabajo acotado. */
+    std::atomic<bool> input_finished{false};
+    std::atomic<int> exit_code{0};
+
     std::thread lector([&] {
         nlohmann::json msg;
         while (transport_.read_message(msg)) {
             const std::string metodo = metodo_de(msg);
+            /* Que el editor lo PIDIO se sabe aqui, al leerlo, y no cuando se
+             * le conteste: el `exit` puede venir pegado detras y entonces el
+             * `shutdown` sigue en la cola.  Quien contesta lo vuelve a marcar,
+             * que es idempotente. */
+            if (metodo == "shutdown") shutdown_requested_.store(true);
             if (metodo == "exit") {
-                /* Se termina AQUI, sin esperar a que el hilo principal salga de
-                 * donde este.  Es lo que el editor ha pedido, y esperar es
-                 * justo lo que no funcionaba.  `_Exit` no corre destructores:
-                 * hacerlo mientras el otro hilo esta dentro del compilador
-                 * seria peor que no hacerlo.  Lo ya respondido esta fuera --
-                 * cada escritura hace flush --. */
-                std::_Exit(shutdown_requested_.load() ? 0 : 1);
+                /* Se deja DICHO que se acabo, y quien atiende sale cuando no
+                 * le queda nada.  Terminar aqui mismo tiraba lo que ya estaba
+                 * leido y sin atender.
+                 *
+                 * El codigo lo manda el protocolo: cero si hubo `shutdown`
+                 * antes, uno si no.  Se mira aqui y no al salir porque el
+                 * `shutdown` puede estar todavia en la cola -- lo importante
+                 * es que el editor lo PIDIO, no que ya se le haya contestado. */
+                exit_code.store(shutdown_requested_.load() ? 0 : 1);
+                input_finished.store(true);
+                cv.notify_all();
+                return;
             }
             {
                 std::lock_guard<std::mutex> guard(m);
@@ -2620,20 +2646,25 @@ int LspServer::run() {
             }
             cv.notify_one();
         }
-        /* El editor cerro la tuberia: no hay a quien responder.
+        /* El editor cerro la tuberia.  Se deja dicho, igual que con el `exit`:
+         * cerrar la entrada no significa que lo ya leido no haya que
+         * atenderlo, y terminar aqui lo tiraba.
          *
          * Sin vaciar nada a proposito: `fflush(NULL)` pide el cerrojo de CADA
          * flujo, y el de la salida puede tenerlo el otro hilo escribiendo en
          * una tuberia que ya nadie lee.  Ahi el cierre se quedaba esperando
          * para siempre -- justo lo contrario de lo que se busca --.  Cada
          * respuesta se vacia al escribirse, asi que no hay nada pendiente. */
-        std::_Exit(0);
+        exit_code.store(0);
+        input_finished.store(true);
+        cv.notify_all();
     });
     lector.detach(); // vive lo que el proceso; su final es el del proceso.
 
-    /* No hay salida por aqui: quien lee es quien sabe que la conversacion se
-     * acabo -- por `exit` o porque la tuberia se cerro -- y termina el proceso
-     * en ese momento.  Este hilo solo atiende. */
+    /* La salida es de ESTE hilo, abajo: quien lee sabe que la conversacion se
+     * acabo, pero no si queda algo por atender.  Terminar alli tiraba lo ya
+     * leido -- y con el banco de pruebas, que manda los cuatro mensajes de
+     * golpe, tiraba TODO: el servidor salia con 1 y sin escribir un byte. */
 
     /* Atender un mensaje.  Lo hace este hilo o uno del grupo, segun el mensaje;
      * la diferencia esta abajo. */
@@ -2675,6 +2706,10 @@ int LspServer::run() {
     std::mutex m_trabajo;
     std::condition_variable cv_trabajo;
     std::deque<nlohmann::json> trabajo;
+    /// Consultas SACADAS de la cola y aun sin contestar.  Sin esto, "no queda
+    /// nada" se leia solo de la cola, y una consulta a medio atender no
+    /// contaba: el servidor salia y el editor se quedaba sin respuesta.
+    size_t in_flight = 0;
     std::vector<std::thread> grupo;
     grupo.reserve(cuantos);
     for (unsigned i = 0; i < cuantos; ++i) {
@@ -2686,8 +2721,21 @@ int LspServer::run() {
                     cv_trabajo.wait(guard, [&] { return !trabajo.empty(); });
                     tarea = std::move(trabajo.front());
                     trabajo.pop_front();
+                    /* Se cuenta AQUI, bajo el mismo cerrojo que la saca de la
+                     * cola: entre sacarla y marcarla no puede haber un hueco
+                     * en el que parezca que no queda nada -- ahi es donde el
+                     * hilo principal decidiria salir y se perderia la
+                     * respuesta. */
+                    ++in_flight;
                 }
                 atender(tarea);
+                {
+                    std::lock_guard<std::mutex> guard(m_trabajo);
+                    --in_flight;
+                }
+                /* Puede ser la ultima que quedaba: si el principal esta
+                 * esperando para salir, que se entere. */
+                cv.notify_all();
             }
         });
     }
@@ -2698,7 +2746,28 @@ int LspServer::run() {
         nlohmann::json msg;
         {
             std::unique_lock<std::mutex> guard(m);
-            cv.wait(guard, [&] { return !cola.empty(); });
+            /* Queda algo por hacer en el grupo?  Se mira bajo SU cerrojo. */
+            const auto pool_busy = [&] {
+                std::lock_guard<std::mutex> g(m_trabajo);
+                return !trabajo.empty() || in_flight != 0;
+            };
+            cv.wait(guard, [&] {
+                return !cola.empty() ||
+                       (input_finished.load() && !pool_busy());
+            });
+            /* Se acabo la entrada Y no queda nada por atender: AHORA se sale.
+             *
+             * Este es el unico sitio del que se sale, y a proposito: el hilo
+             * que lee sabe que la conversacion termino, pero no si queda
+             * trabajo -- y salir con la cola llena es perder respuestas que el
+             * editor esta esperando.  `_Exit` no corre destructores: hacerlo
+             * con un hilo del grupo dentro del compilador seria peor que no
+             * hacerlo, y lo ya respondido esta fuera porque cada escritura
+             * hace flush. */
+            if (cola.empty()) {
+                guard.unlock();
+                std::_Exit(exit_code.load());
+            }
             msg = std::move(cola.front());
             cola.pop_front();
         }
