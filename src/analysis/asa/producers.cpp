@@ -740,6 +740,34 @@ void produce_loops(Production &p) {
             LoopIV iv;
             if (!detect_loop_iv(fn, st.def_block, ls.header, ls.preheader,
                                 ls.latch, iv)) {
+                /* Antes de rendirse: puede que la induccion MULTIPLIQUE.
+                 *
+                 * `for (i = 1; i < n; i *= 2)` no da `n` vueltas sino del
+                 * orden de `log n`, y eso no es una constante distinta: es
+                 * otra CLASE.  Sin decirlo, el coste contestaba O(n) donde la
+                 * respuesta es O(log n), y O(n^2) donde es O(n log n) -- la
+                 * diferencia entre una busqueda y un barrido.
+                 *
+                 * Se publica como hecho propio y no como un trip count: no se
+                 * sabe cuantas vueltas da (depende de `n`), se sabe COMO
+                 * crece, que es justo lo que el coste necesita. */
+                GeoIV g;
+                if (detect_geometric_iv(fn, st.def_block, ls.header,
+                                        ls.preheader, ls.latch, g)) {
+                    Fact f;
+                    f.what.domain = kProducerLoops;
+                    f.what.code = "loop.geometric";
+                    f.what.a = g.ratio;
+                    f.about = about;
+                    f.seal.certainty = Certainty::Proven;
+                    f.seal.origin.source = Source::Static;
+                    f.seal.origin.producer = kProducerLoops;
+                    f.seal.origin.function = about.function;
+                    f.scope.stage = p.stage;
+                    support_with_structure(p, fn, f, "geometric-induction");
+                    p.assert_fact(std::move(f));
+                    continue;
+                }
                 p.say_unknown(about, UnknownReason::ShapeNotRecognized,
                               "loop.no_induction", kProducerLoops, "");
                 continue;

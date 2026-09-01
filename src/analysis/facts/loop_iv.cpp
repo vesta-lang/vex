@@ -228,4 +228,87 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
     return false;
 }
 
+bool detect_geometric_iv(const ir::IrFunction &fn,
+                         const std::vector<int> &def_block, IrBlockId header,
+                         IrBlockId preheader, IrBlockId latch, GeoIV &out) {
+    if (header == (IrBlockId)IR_NO_BLOCK || header >= fn.blocks.size())
+        return false;
+    const auto &hins = fn.blocks[header].instrs;
+    if (hins.empty()) return false;
+
+    // 1) La guarda, igual que en la aritmetica: el cmp creciente del BR_COND.
+    const IrInstr &term = hins.back();
+    if (term.op != IrOp::BR_COND || term.operands.empty()) return false;
+    const IrValueId cond = term.operands[0];
+    IrOp cmp_op = IrOp::NOP;
+    IrValueId cmp_a = IR_NO_VALUE, cmp_b = IR_NO_VALUE;
+    for (const IrInstr &in : hins) {
+        if (in.dst == cond && is_lt_cmp(in.op) && in.operands.size() == 2) {
+            cmp_op = in.op;
+            cmp_a = skip_copies(fn, def_block, in.operands[0]);
+            cmp_b = skip_copies(fn, def_block, in.operands[1]);
+            break;
+        }
+    }
+    if (cmp_op == IrOp::NOP) return false;
+
+    /* 2) El PHI cuyo valor de retorno es `phi * K` o `phi << k`.
+     *
+     * El desplazamiento no es un extra: es en lo que el propio compilador
+     * convierte `* 2`.  Sin el, el mismo bucle seria logaritmico antes de
+     * optimizar y lineal despues, que es la clase de incoherencia que este
+     * analisis existe para no tener. */
+    for (const IrInstr &in : hins) {
+        if (in.op != IrOp::PHI) continue;
+        IrValueId init = IR_NO_VALUE, back = IR_NO_VALUE;
+        for (const auto &pa : in.phi_args) {
+            if (pa.block == preheader)
+                init = pa.value;
+            else if (pa.block == latch)
+                back = pa.value;
+        }
+        if (init == IR_NO_VALUE || back == IR_NO_VALUE) continue;
+        back = skip_copies(fn, def_block, back);
+        const int db = (back < def_block.size() && back != IR_NO_VALUE)
+                           ? def_block[back]
+                           : -1;
+        if (db < 0 || (size_t)db >= fn.blocks.size()) continue;
+
+        int64_t ratio = 0;
+        for (const IrInstr &d : fn.blocks[db].instrs) {
+            if (d.dst != back || d.operands.size() != 2) continue;
+            int64_t k = 0;
+            if (d.op == IrOp::MUL) {
+                // `phi * K` en cualquier orden.
+                if (skip_copies(fn, def_block, d.operands[0]) == in.dst &&
+                    const_of(fn, def_block, d.operands[1], k))
+                    ratio = k;
+                else if (skip_copies(fn, def_block, d.operands[1]) == in.dst &&
+                         const_of(fn, def_block, d.operands[0], k))
+                    ratio = k;
+            } else if (d.op == IrOp::SHL) {
+                // `phi << k` solo en ese orden: el desplazado es el primero.
+                if (skip_copies(fn, def_block, d.operands[0]) == in.dst &&
+                    const_of(fn, def_block, d.operands[1], k) && k > 0 &&
+                    k < 62)
+                    ratio = (int64_t)1 << k;
+            }
+            if (ratio != 0) break;
+        }
+        /* Con factor 1 el valor no avanza y el bucle no termina; con 0 o
+         * negativo esto no lo modela.  Ni una cosa ni la otra es "casi
+         * geometrico": no se afirma. */
+        if (ratio < 2) continue;
+        // 3) Y que la guarda compare ESE valor contra algo.
+        if (cmp_a != in.dst) continue;
+        out.phi = in.dst;
+        out.init = init;
+        out.ratio = ratio;
+        out.cmp_op = cmp_op;
+        out.bound = cmp_b;
+        return true;
+    }
+    return false;
+}
+
 } // namespace analysis

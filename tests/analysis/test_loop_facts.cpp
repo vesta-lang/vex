@@ -723,6 +723,145 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
           "el de fuera no cuenta y el de dentro si: LINEAL, no cuadratico");
 }
 
+/**
+ * @brief Un bucle que MULTIPLICA es logaritmico, no lineal.
+ *
+ * `for (i = 1; i < n; i = i * 2)` da del orden de `log n` vueltas.  El
+ * descriptor de induccion solo modelaba `phi + S`, asi que este bucle no tenia
+ * variable de induccion, contaba como uno cualquiera y el coste contestaba
+ * O(n).  No es imprecision: es otra CLASE -- y anidado dentro de uno lineal,
+ * la diferencia entre O(n log n) y O(n^2), que es la que separa un algoritmo
+ * de ordenacion de uno malo.
+ *
+ * Se prueban las DOS formas, `* 2` y `<< 1`, porque son la misma cosa: el
+ * propio compilador convierte una en la otra, y reconocer solo una haria que
+ * el mismo bucle fuera logaritmico antes de optimizar y lineal despues.
+ */
+static void a_multiplying_loop_is_logarithmic() {
+    std::printf("\n[un bucle que multiplica es logaritmico]\n");
+
+    /* `for (i = 1; i < n; i = i OP k)` con `n` PARAMETRO -- si fuera constante
+     * el bucle estaria contado y no se veria lo que se quiere ver.
+     * Valores: 0=cte 1 (init) | 1=phi i | 2=PARAM n | 3=cmp | 4=i OP k |
+     * 5=cte k */
+    auto construir = [](IrOp op, uint64_t k) {
+        ir::IrFunction fn;
+        fn.name = "geo";
+        for (int i = 0; i < 6; ++i) fn.values.push_back({});
+        fn.params.push_back(2);
+
+        auto val = [](IrOp o, ir::IrValueId dst, IrType t) {
+            IrInstr in;
+            in.op = o;
+            in.dst = dst;
+            in.type = t;
+            return in;
+        };
+        auto cte = [&](ir::IrValueId dst, uint64_t v) {
+            IrInstr c = val(IrOp::CONST, dst, IrType::I64);
+            c.imm = v;
+            return c;
+        };
+
+        IrBlock entry;
+        entry.id = 0;
+        entry.name = "entry";
+        entry.instrs.push_back(cte(0, 1));
+        entry.instrs.push_back(cte(5, k));
+        entry.instrs.push_back(br(1));
+
+        IrBlock header;
+        header.id = 1;
+        header.name = "header";
+        {
+            IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+            phi.phi_args.push_back({/*value=*/0, /*block=*/0});
+            phi.phi_args.push_back({/*value=*/4, /*block=*/2});
+            header.instrs.push_back(phi);
+            IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
+            cmp.operands.push_back(1);
+            cmp.operands.push_back(2);
+            header.instrs.push_back(cmp);
+            IrInstr t = brcond(2, 3);
+            t.operands[0] = 3;
+            header.instrs.push_back(t);
+        }
+
+        IrBlock body;
+        body.id = 2;
+        body.name = "body";
+        {
+            IrInstr adv = val(op, 4, IrType::I64);
+            adv.operands.push_back(1);
+            adv.operands.push_back(5);
+            body.instrs.push_back(adv);
+            body.instrs.push_back(br(1));
+        }
+
+        fn.blocks = {entry, header, body, block(3, "exit", ret())};
+        fn.blocks[0].succs = {1};
+        fn.blocks[1].succs = {2, 3};
+        fn.blocks[2].succs = {1};
+        fn.blocks[1].preds = {0, 2};
+        fn.blocks[2].preds = {1};
+        fn.blocks[3].preds = {1};
+        return fn;
+    };
+
+    /* `i * 2` y `i << 1` son la MISMA progresion.  El segundo es en lo que el
+     * compilador convierte el primero, asi que los dos tienen que dar igual. */
+    const ir::IrFunction por_mul = construir(IrOp::MUL, 2);
+    const ir::IrFunction por_shl = construir(IrOp::SHL, 1);
+
+    for (const ir::IrFunction *fnp : {&por_mul, &por_shl}) {
+        const ir::IrFunction &fn = *fnp;
+        const LoopFacts lf = compute_loop_facts(fn);
+        const IrFacts hechos = build_ir_facts(fn);
+        const LoopStructure st = detect_loop_structure(fn, lf, 0);
+        CHECK(st.valid, "la forma es la de un bucle contado");
+
+        /* La induccion ARITMETICA no esta, y eso es correcto: quien
+         * desenrolla o vectoriza da por hecho un paso fijo, y aqui no lo hay.
+         * Confundirlas haria calcular direcciones que el bucle no toca. */
+        LoopIV iv;
+        CHECK(!detect_loop_iv(fn, hechos.def_block, st.header, st.preheader,
+                              st.latch, iv),
+              "no hay induccion aritmetica -- y no debe haberla");
+
+        GeoIV g;
+        CHECK(detect_geometric_iv(fn, hechos.def_block, st.header, st.preheader,
+                                  st.latch, g),
+              "pero si geometrica");
+        CHECK(g.ratio == 2, "y el factor es 2, venga de `* 2` o de `<< 1`");
+        CHECK(g.phi == 1 && g.bound == 2,
+              "sobre la variable del bucle, contra el limite");
+    }
+
+    /* Y con eso el coste deja de decir O(n).  Se publica el hecho a mano: lo
+     * que se prueba aqui es que el CONSUMIDOR cambia de clase, no el camino
+     * del productor -- ese lo cubre la e2e. */
+    const LoopFacts lf = compute_loop_facts(por_mul);
+    analysis::asa::FactStore store;
+    analysis::asa::Fact f;
+    f.what.domain = analysis::asa::kProducerLoops;
+    f.what.code = "loop.geometric";
+    f.what.a = 2;
+    f.about.kind = analysis::asa::Subject::Kind::Block;
+    f.about.function = store.intern(por_mul.name);
+    f.about.id = lf.header_block_of(0);
+    f.seal.certainty = analysis::asa::Certainty::Proven;
+    f.scope.stage = analysis::asa::kStagePreOpt;
+    store.add(std::move(f));
+
+    const analyze::CostResult sin_hechos = analyze::analyze_function(por_mul);
+    CHECK(sin_hechos.big_o == analyze::CostClass::O_N,
+          "sin el hecho, un bucle es un bucle: lineal");
+    const analyze::CostResult con_hechos = analyze::analyze_function(
+        por_mul, &store, analysis::asa::kStagePreOpt);
+    CHECK(con_hechos.big_o == analyze::CostClass::O_LOGN,
+          "con el hecho, LOGARITMICO -- otra clase, no otra constante");
+}
+
 int main() {
     std::printf("=== test_loop_facts (Fase 0.25: LoopFacts) ===\n");
 
@@ -808,6 +947,7 @@ int main() {
     an_accumulator_does_not_hide_the_iv();
     an_outer_loop_is_recognized_too();
     a_constant_outer_loop_does_not_square_the_cost();
+    a_multiplying_loop_is_logarithmic();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

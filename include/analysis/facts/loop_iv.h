@@ -64,6 +64,47 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
                     ir::IrBlockId header, ir::IrBlockId preheader,
                     ir::IrBlockId latch, LoopIV &out);
 
+/**
+ * @brief Variable de induccion GEOMETRICA: la que MULTIPLICA en vez de sumar.
+ *
+ * `for (i = 1; i < n; i = i * 2)` no da `n` vueltas: da del orden de `log n`.
+ * Es una CLASE distinta, no una constante distinta, y sin reconocerla el coste
+ * contestaba O(n) donde la respuesta es O(log n) -- y O(n^2) donde es
+ * O(n log n), que es la diferencia entre una busqueda y un barrido.
+ *
+ * Va aparte de @c LoopIV a proposito.  Quien consume el IV lo hace para
+ * DESENROLLAR, VECTORIZAR o reconocer un recorrido de memoria, y todos esos
+ * dan por hecho el paso constante que dice @c LoopIV::stride; meter aqui un
+ * paso multiplicativo haria que trataran como lineal algo que no lo es --
+ * calcularian direcciones que el bucle no toca.  Se pregunta cuando la
+ * aritmetica NO encaja, no en su lugar.
+ */
+struct GeoIV {
+    ir::IrValueId phi = ir::IR_NO_VALUE;   ///< PHI del header.
+    ir::IrValueId init = ir::IR_NO_VALUE;  ///< valor inicial (del preheader).
+    int64_t ratio = 0;                     ///< por cuanto se multiplica (>= 2).
+    ir::IrOp cmp_op = ir::IrOp::NOP;       ///< guarda del header.
+    ir::IrValueId bound = ir::IR_NO_VALUE; ///< la cota con la que compara.
+};
+
+/**
+ * @brief Descubre una induccion geometrica creciente del @p header.
+ *
+ * Reconoce que el valor que vuelve por el latch es `phi * K` o `phi << k`, con
+ * el factor CONSTANTE y >= 2 -- con 1 no avanza y el bucle no termina, y con 0
+ * o negativo esto no lo modela.  El desplazamiento cuenta porque es en lo que
+ * el propio compilador convierte una multiplicacion por potencia de dos: no
+ * reconocerlo haria que el mismo bucle fuera logaritmico antes de optimizar y
+ * lineal despues.
+ *
+ * @return true si la hay.  No se comprueba que la guarda compare ESE valor:
+ *         eso lo mira quien lo use, igual que con @c detect_loop_iv.
+ */
+bool detect_geometric_iv(const ir::IrFunction &fn,
+                         const std::vector<int> &def_block,
+                         ir::IrBlockId header, ir::IrBlockId preheader,
+                         ir::IrBlockId latch, GeoIV &out);
+
 } // namespace analysis
 
 #endif // ANALYSIS_FACTS_LOOP_IV_H

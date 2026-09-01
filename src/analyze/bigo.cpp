@@ -153,9 +153,28 @@ struct BoundedLoops {
      * misma seguridad seria afirmar de mas.
      */
     uint32_t only_bounded = 0;
+    /**
+     * @brief Cabeceras cuya variable MULTIPLICA en vez de sumar.
+     *
+     * `for (i = 1; i < n; i *= 2)` da del orden de `log n` vueltas, no `n`.
+     * Aporta al coste -- no es constante --, pero aporta un LOGARITMO, y eso
+     * es otra clase: sin distinguirlo el coste decia O(n) donde la respuesta
+     * es O(log n), y O(n^2) donde es O(n log n).
+     */
+    std::unordered_set<ir::IrBlockId> geometric;
     bool is_constant(ir::IrBlockId header) const {
         return constant.count(header) != 0;
     }
+    bool is_geometric(ir::IrBlockId header) const {
+        return geometric.count(header) != 0;
+    }
+};
+
+/// Cuantos bucles aporta un sitio, separados por COMO crecen.
+struct Depth {
+    uint32_t linear = 0; ///< cada uno multiplica por `n`.
+    uint32_t log = 0;    ///< cada uno multiplica por `log n`.
+    uint32_t total() const { return linear + log; }
 };
 
 /**
@@ -177,14 +196,20 @@ struct BoundedLoops {
  * El tope de saltos es por si el arbol llegara con un ciclo: un analisis no
  * debe colgar el compilador ni cuando le mienten.
  */
-static uint32_t effective_depth(const analysis::LoopFacts &lf,
-                                const BoundedLoops &bounded,
-                                ir::IrBlockId b) {
+static Depth effective_depth(const analysis::LoopFacts &lf,
+                             const BoundedLoops &bounded, ir::IrBlockId b) {
     uint32_t loop = lf.innermost(b);
-    uint32_t d = 0;
+    Depth d;
     for (int hops = 0; hops < 64 && loop != analysis::LoopFacts::NO_LOOP;
          ++hops) {
-        if (!bounded.is_constant(lf.header_block_of(loop))) ++d;
+        const ir::IrBlockId h =
+            static_cast<ir::IrBlockId>(lf.header_block_of(loop));
+        if (!bounded.is_constant(h)) {
+            if (bounded.is_geometric(h))
+                ++d.log;
+            else
+                ++d.linear;
+        }
         loop = lf.parent_of(loop);
     }
     return d;
@@ -284,6 +309,29 @@ static CostClass class_from_depth(uint32_t depth) {
     }
 }
 
+/**
+ * @brief La clase de una profundidad SEPARADA por como crece cada bucle.
+ *
+ * Un bucle que suma multiplica el trabajo por `n`; uno que multiplica, por
+ * `log n`.  El vocabulario de clases no tiene `n log^2 n` ni `log^2 n`, asi
+ * que a partir de dos logaritmos se da el mismo nombre y se avisa con la
+ * confianza: decir una clase que no se tiene seria afirmar de mas, y callarse
+ * seria perder la unica parte que si se sabe.
+ *
+ * @param exacta sale en false cuando la clase se queda corta por lo de arriba.
+ */
+static CostClass class_from_depth(const Depth &d, bool &exacta) {
+    exacta = true;
+    if (d.log == 0) return class_from_depth(d.linear);
+    if (d.log > 1) exacta = false; // log^2 y mas arriba no tienen nombre
+    if (d.linear == 0) return CostClass::O_LOGN;
+    if (d.linear == 1) return CostClass::O_NLOGN;
+    /* Con dos o mas lineales el logaritmo se absorbe: `n^2 log n` tampoco
+     * tiene nombre, y `n^2` es la parte que manda. */
+    exacta = false;
+    return class_from_depth(d.linear);
+}
+
 /* ===================================================================== */
 /*  Deteccion de recursion + divide-y-venceras                            */
 /* ===================================================================== */
@@ -366,6 +414,15 @@ static BoundedLoops ask_bounded_loops(const ir::IrFunction &fn,
         const ir::IrBlockId h = static_cast<ir::IrBlockId>(f->about.id);
         if (b.constant.insert(h).second) ++b.only_bounded;
     }
+    /* Y los que MULTIPLICAN.  No son constantes -- dependen de `n` --, pero lo
+     * que aportan es un logaritmo: `for (i = 1; i < n; i *= 2)` da del orden
+     * de `log n` vueltas.  Sin este hecho el coste decia O(n) donde la
+     * respuesta es O(log n), que no es una imprecision: es otra clase. */
+    for (const analysis::asa::Fact *f :
+         facts->find_all("loop.geometric", fn.name.c_str(), here)) {
+        if (f->about.kind != analysis::asa::Subject::Kind::Block) continue;
+        b.geometric.insert(static_cast<ir::IrBlockId>(f->about.id));
+    }
     /* Y los que NO se entendieron, que es otra cosa: aqui no entra el bucle
      * cuyo limite depende de la ejecucion -- ese se entiende y es O(n) --,
      * sino el que ni se reconocio como bucle contado.  El dominio lo dice con
@@ -403,10 +460,21 @@ CostResult analyze_function(const ir::IrFunction &fn,
             static_cast<ir::IrBlockId>(lf.header_block_of(L)));
     const BoundedLoops bounded = ask_bounded_loops(fn, facts, stage);
 
-    uint32_t max_depth = 0;
+    /* La profundidad que manda es la del bucle mas caro, y "mas caro" no es
+     * "mas anidado": dos bucles lineales pesan mas que uno lineal y dos
+     * logaritmicos.  Se compara por la clase que produce cada uno. */
+    Depth max_depth;
+    bool max_exacta = true;
     for (ir::IrBlockId h : headers) {
-        const uint32_t depth = effective_depth(lf, bounded, h);
-        if (depth > max_depth) max_depth = depth;
+        const Depth depth = effective_depth(lf, bounded, h);
+        bool ex = true;
+        const CostClass c = class_from_depth(depth, ex);
+        bool ex_max = true;
+        const CostClass c_max = class_from_depth(max_depth, ex_max);
+        if (static_cast<int>(c) > static_cast<int>(c_max)) {
+            max_depth = depth;
+            max_exacta = ex;
+        }
         // Linea fuente aproximada del header (primera instr con source_line).
         uint32_t line = 0;
         if (h < fn.blocks.size())
@@ -415,7 +483,7 @@ CostResult analyze_function(const ir::IrFunction &fn,
                     line = ins.source_line;
                     break;
                 }
-        r.loops.push_back({h, depth, line});
+        r.loops.push_back({h, depth.total(), line});
     }
     /* Cuantos de los bucles QUE ESTE ANALISIS CUENTA no se entendieron.
      *
@@ -428,7 +496,7 @@ CostResult analyze_function(const ir::IrFunction &fn,
     for (ir::IrBlockId h : headers)
         if (bounded.not_understood.count(h) != 0) ++not_understood_here;
     r.loops_not_understood = not_understood_here;
-    r.max_loop_depth = max_depth;
+    r.max_loop_depth = max_depth.total();
 
     // 1.b. Recolectar los call sites (CALL/TAILCALL a una funcion con nombre)
     //      anotando la profundidad de loop del bloque donde ocurren.  Estos
@@ -437,7 +505,11 @@ CostResult analyze_function(const ir::IrFunction &fn,
     //      las self-calls (ya las modela la deteccion de recursion) y las
     //      llamadas sin func_name (indirectas: closures/virtuales).
     for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
-        uint32_t depth = effective_depth(lf, bounded, bi);
+        /* Para componer con el callee cuenta el TOTAL: un bucle logaritmico
+         * repite la llamada menos veces, pero la repite -- afinar eso pide un
+         * modelo de composicion que no es este, y suponer que no multiplica
+         * seria suponer a favor. */
+        const uint32_t depth = effective_depth(lf, bounded, bi).total();
         for (const auto &ins : fn.blocks[bi].instrs) {
             if ((ins.op == ir::IrOp::CALL || ins.op == ir::IrOp::TAILCALL) &&
                 !ins.func_name.empty() && ins.func_name != fn.name) {
@@ -460,7 +532,7 @@ CostResult analyze_function(const ir::IrFunction &fn,
     uint32_t asm_depth_total = 0;
     bool asm_forma_segura = true;
     for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
-        const uint32_t depth_ir = effective_depth(lf, bounded, bi);
+        const uint32_t depth_ir = effective_depth(lf, bounded, bi).total();
         for (const auto &ins : fn.blocks[bi].instrs) {
             /* El cuerpo NO esta siempre en el mismo sitio: un `asm` con
              * operandos ligados lo lleva en @c func_name, y uno opaco (sin
@@ -498,13 +570,21 @@ CostResult analyze_function(const ir::IrFunction &fn,
             if (total > asm_depth_total) asm_depth_total = total;
         }
     }
-    if (asm_depth_total > max_depth) max_depth = asm_depth_total;
+    /* Un bucle escrito a mano dentro de un `asm` se cuenta como LINEAL: el
+     * grafo del bloque dice cuantos hay y si estan anidados, pero no como
+     * avanza su contador -- eso sale de una comparacion entre registros que
+     * este analisis no sigue --, y suponer que crece despacio seria suponer a
+     * favor. */
+    if (asm_depth_total > max_depth.total()) {
+        max_depth.linear = asm_depth_total;
+        max_depth.log = 0;
+    }
     /* Y se vuelve a apuntar.  Se habia fijado ANTES de mirar dentro de los
      * bloques `asm`, asi que el COSTE contaba esos bucles pero el numero que se
      * informa se quedaba en el del IR: una funcion cuyo cuerpo entero es un
      * bucle escrito a mano salia como "O(n)" y "0 bucles" a la vez, dos cifras
      * que se contradicen en la misma linea. */
-    r.max_loop_depth = max_depth;
+    r.max_loop_depth = max_depth.total();
 
     // 2. Recursion + divide-y-venceras.
     uint32_t self_calls = 0;
@@ -515,8 +595,13 @@ CostResult analyze_function(const ir::IrFunction &fn,
 
     // 3. Combinar: el coste es el MAYOR entre el aporte de los loops y el
     //    de la recursion.
-    CostClass loop_class = class_from_depth(max_depth);
-    Confidence loop_conf = Confidence::EXACT;
+    bool clase_exacta = max_exacta;
+    CostClass loop_class = class_from_depth(max_depth, clase_exacta);
+    /* Con mas de un logaritmo -- o con logaritmos bajo dos lineales -- la
+     * clase que se puede nombrar se queda corta: se dice la que hay y se
+     * rebaja la confianza, en vez de callarse la parte que si se sabe. */
+    Confidence loop_conf =
+        clase_exacta ? Confidence::EXACT : Confidence::HEURISTIC;
 
     CostClass rec_class = CostClass::O_1;
     Confidence rec_conf = Confidence::EXACT;
@@ -539,7 +624,8 @@ CostResult analyze_function(const ir::IrFunction &fn,
     }
     // Si hay loops Y recursion, baja la confianza (la composicion exacta no
     // esta modelada) pero mantenemos la cota dominante.
-    if (max_depth > 0 && r.is_recursive) r.confidence = Confidence::HEURISTIC;
+    if (max_depth.total() > 0 && r.is_recursive)
+        r.confidence = Confidence::HEURISTIC;
 
     /* Si la forma del asm no se pudo seguir entera, lo que se cuenta es una
      * cota INFERIOR: puede haber vueltas que el grafo no ve.  Y cuando ademas
@@ -582,12 +668,19 @@ CostResult analyze_function(const ir::IrFunction &fn,
         det << asm_depth_total
             << " bucle(s) dentro de un asm (el numero de vueltas no se acota "
                "aqui; declaralo con @complexity si lo sabes)";
-    } else if (max_depth == 0 && !r.is_recursive) {
+    } else if (max_depth.total() == 0 && !r.is_recursive) {
         det << "sin loops ni recursion";
     } else {
         bool first = true;
-        if (max_depth > 0) {
-            det << headers.size() << " loop(s), anidamiento max " << max_depth;
+        if (max_depth.total() > 0) {
+            det << headers.size() << " loop(s), anidamiento max "
+                << max_depth.total();
+            /* Que parte del anidamiento crece despacio.  Sin decirlo, dos
+             * cifras de la misma linea se contradicen: "O(n log n)" con
+             * "anidamiento max 2" parece un error de cuenta. */
+            if (max_depth.log > 0)
+                det << " (" << max_depth.log << " de ellos multiplicativo"
+                    << (max_depth.log == 1 ? "" : "s") << ": log n)";
             first = false;
         }
         if (r.is_recursive) {
