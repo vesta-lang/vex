@@ -54,7 +54,30 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
      * creciendo el vector bucle a bucle. */
     out.bounds.reserve(loops.loop_count);
 
-    for (uint32_t L = 0; L < loops.loop_count; ++L) {
+    /* DE FUERA HACIA DENTRO, y no es un detalle de orden: el limite de un
+     * bucle anidado suele ser la variable del que lo contiene
+     * (`for (j = 0; j < i; j++)`), asi que mirando primero el de fuera se
+     * puede acotar el de dentro.  Al reves no se puede.
+     *
+     * Y esto NO es preguntar a los rangos -- seguirian mordiendose la cola --:
+     * es apoyarse en lo que este mismo analisis acaba de establecer. */
+    std::vector<uint32_t> orden(loops.loop_count);
+    for (uint32_t L = 0; L < loops.loop_count; ++L) orden[L] = L;
+    std::sort(orden.begin(), orden.end(), [&](uint32_t a, uint32_t b) {
+        return loops.depth_of(
+                   static_cast<ir::IrBlockId>(loops.header_block_of(a))) <
+               loops.depth_of(
+                   static_cast<ir::IrBlockId>(loops.header_block_of(b)));
+    });
+
+    /// Lo ya establecido para @p v en esta misma pasada, si lo hay.
+    auto ya_acotado = [&](ir::IrValueId v, int64_t &lo, int64_t &hi) -> bool {
+        for (const IvBound &c : out.bounds)
+            if (c.value == v) return c.range.vista_con_signo(lo, hi);
+        return false;
+    };
+
+    for (uint32_t L : orden) {
         const LoopStructure ls = detect_loop_structure(fn, loops, L);
         /* CONTABLE basta: la cota de la variable sale de la guarda y del paso,
          * y una salida anticipada no la sube -- solo hace que se llegue menos
@@ -70,13 +93,25 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
             continue;
         }
         int64_t init = 0, bound = 0;
-        if (iv.stride <= 0 || !const_of(fn, facts.def_block, iv.init, init) ||
-            !const_of(fn, facts.def_block, iv.bound, bound)) {
-            /* Sin las dos constantes ESCRITAS no se despeja.  Es de proposito
-             * que no se pregunte a los rangos: son ellos los que van a recibir
-             * esto, y consultarlos aqui cerraria el circulo. */
+        if (iv.stride <= 0 || !const_of(fn, facts.def_block, iv.init, init)) {
+            /* Sin el arranque ESCRITO no se despeja.  Es de proposito que no se
+             * pregunte a los rangos: son ellos los que van a recibir esto, y
+             * consultarlos aqui cerraria el circulo. */
             ++out.no_shape;
             continue;
+        }
+        if (!const_of(fn, facts.def_block, iv.bound, bound)) {
+            /* El limite tambien vale si es una variable que este mismo
+             * analisis ya acoto -- tipicamente la del bucle de fuera, que es
+             * como se escribe un recorrido triangular.  Se coge el extremo que
+             * da MAS vueltas: subiendo, lo mas alto que puede llegar el
+             * limite; bajando, lo mas bajo. */
+            int64_t blo = 0, bhi = 0;
+            if (!ya_acotado(iv.bound, blo, bhi)) {
+                ++out.no_shape;
+                continue;
+            }
+            bound = iv.dir == IvDir::Down ? blo : bhi;
         }
         if (iv.phi == IR_NO_VALUE || iv.phi >= fn.values.size()) continue;
 

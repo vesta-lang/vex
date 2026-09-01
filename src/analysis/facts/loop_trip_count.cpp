@@ -157,8 +157,15 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
     const bool has_bound = exact_value_of(iv.bound, bound_v);
 
     if (has_init && has_bound) {
-        const int64_t t = trips_between(init_v, bound_v, iv.cmp_offset,
-                                        iv.stride, iv.cmp_op);
+        int64_t t = trips_between(init_v, bound_v, iv.cmp_offset, iv.stride,
+                                  iv.cmp_op);
+        /* La vuelta de MAS del bucle rotado: el cuerpo se ejecuta antes de la
+         * primera comprobacion, asi que da una vuelta mas que veces se cumple
+         * la guarda.  Es el error clasico de esta forma, y por eso se hace
+         * aqui y no en cada consumidor. */
+        if (t >= 0 && iv.guard_at_latch) {
+            if (__builtin_add_overflow(t, (int64_t)1, &t)) t = -1;
+        }
         if (t >= 0) {
             info.trip = t;
             return info;
@@ -203,8 +210,11 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
         const bool baja = iv.dir == IvDir::Down;
         const int64_t desde = baja ? init_hi : init_lo;
         const int64_t hasta = baja ? bound_lo : bound_hi;
-        const int64_t t = trips_between(desde, hasta, iv.cmp_offset,
-                                        iv.stride, iv.cmp_op);
+        int64_t t = trips_between(desde, hasta, iv.cmp_offset, iv.stride,
+                                  iv.cmp_op);
+        if (t >= 0 && iv.guard_at_latch) { // la vuelta de mas, ver arriba
+            if (__builtin_add_overflow(t, (int64_t)1, &t)) t = -1;
+        }
         if (t >= 0) {
             info.trip_max = t;
             /* Sale de un punto fijo sobre un reticulo, no de lo que el

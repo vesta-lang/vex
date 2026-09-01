@@ -105,6 +105,28 @@ struct LoopStructure {
      * necesitan mirarlo.
      */
     uint32_t inner_loops = 0;
+    /**
+     * @brief La guarda vive en el LATCH, no en la cabecera.
+     *
+     * Es la forma de un `do { } while (...)`: el cuerpo va primero y la
+     * comprobacion al final, asi que se entra siempre al menos una vez.  Sin
+     * reconocerla, el reconocedor se rendia con "la cabecera no es
+     * condicional" y el coste declaraba O(n) un bucle de vueltas fijas.
+     *
+     * Importa a quien CUENTE -- da una vuelta mas que veces se cumple la
+     * guarda -- y descarta a quien TRANSFORME, que da por hecho lo contrario.
+     */
+    bool rotated = false;
+    /**
+     * @brief El bucle es UN SOLO BLOQUE que salta a si mismo.
+     *
+     * Las PHIs, el cuerpo y la guarda viven todos en la cabecera.  Es en lo
+     * que el optimizador convierte un `do { } while (...)` pequeno, asi que
+     * rechazarlo dejaba sin contar DESPUES de optimizar lo que si se contaba
+     * antes.  Se cuenta; lo que no se puede es clonar, porque el latch es la
+     * propia cabecera.
+     */
+    bool self_loop = false;
     std::vector<HeaderPhi> phis; ///< PHIs del header, en orden.
 
     bool contains(ir::IrBlockId b) const { return loop_blocks.count(b) != 0; }

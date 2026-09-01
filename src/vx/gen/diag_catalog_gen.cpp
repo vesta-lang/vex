@@ -344,6 +344,8 @@ const CatEntry kEntries[] = {
     {"loop.ne_guard_never_lands", {"the guard compares with '!=' and the step never lands exactly on the limit, so the loop does not end by its guard", "la guarda compara con '!=' y el paso no cae justo en el limite, asi que el bucle no termina por su guarda"}},
     {"loop.no_induction", {"no counted induction variable was found in the header", "no se encontro una variable de induccion contada en la cabecera"}},
     {"loop.none", {"it has no loops", "no tiene bucles"}},
+    {"loop.rotated", {"the guard is at the end of the body, not at the top: the loop always runs at least once, so it cannot be cloned as if it might not", "la guarda esta al final del cuerpo y no arriba: el bucle da siempre al menos una vuelta, asi que no se puede clonar como si pudiera no darla"}},
+    {"loop.self_loop", {"the loop is a single block that jumps to itself, so there is no body to copy without copying the guard too", "el bucle es un solo bloque que salta a si mismo, asi que no hay cuerpo que copiar sin copiar tambien la guarda"}},
     {"loop.shape_unsupported", {"its shape is not a simple counted loop (several latches, several exits, or a header that does more than test)", "su forma no es un bucle contado simple (varios latches, varias salidas, o una cabecera que hace mas que comprobar)"}},
     {"loop.trip_at_most", {"the loop runs at most {0} times (bound taken from the range of its limit, not from a written constant)", "el bucle da como mucho {0} vueltas (la cota sale del rango de su limite, no de una constante escrita)"}},
     {"loop.trip_bounded", {"the exact count cannot be stated, but its limit is bounded, so the loop is bounded", "no se puede afirmar el numero exacto, pero su limite esta acotado, asi que el bucle lo esta"}},
@@ -361,7 +363,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 340;
+const int kEntryCount = 342;
 
 } // namespace
 

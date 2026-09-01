@@ -208,15 +208,31 @@ static bool detect_iv_impl(const ir::IrFunction &fn,
     const auto &hins = fn.blocks[header].instrs;
     if (hins.empty()) return false;
 
-    // 1) La guarda: el cmp que define la condicion del BR_COND.
-    const IrInstr &term = hins.back();
+    /* 1) La guarda: el cmp que define la condicion del BR_COND.
+     *
+     * Y NO siempre esta en la cabecera.  En un bucle rotado -- la forma de un
+     * `do { } while (...)` -- la cabecera termina en un salto incondicional y
+     * quien decide si se sigue es el latch.  Las PHIs siguen arriba; lo que
+     * cambia es donde mirar la condicion. */
+    /* Y un bucle de UN SOLO BLOQUE es el mismo caso aunque su terminador si
+     * sea condicional: la guarda esta al final de ese bloque, o sea DESPUES
+     * del cuerpo.  El cuerpo corre una vez mas que veces se cumple la
+     * guarda -- se entra sin preguntar --, y eso vale mire lo que mire la
+     * comparacion. */
+    const bool rotado =
+        hins.back().op != IrOp::BR_COND || latch == header;
+    const IrBlockId G = (rotado && latch != header) ? latch : header;
+    if (G == (IrBlockId)IR_NO_BLOCK || G >= fn.blocks.size()) return false;
+    const auto &gins = fn.blocks[G].instrs;
+    if (gins.empty()) return false;
+    const IrInstr &term = gins.back();
     if (term.op != IrOp::BR_COND || term.operands.empty()) return false;
     const IrValueId cond = term.operands[0];
     IrOp cmp_op = IrOp::NOP;
     IvDir dir = IvDir::Up;
     IrValueId cmp_a = IR_NO_VALUE, cmp_b = IR_NO_VALUE;
     bool direccion_por_el_paso = false;
-    for (const IrInstr &in : hins) {
+    for (const IrInstr &in : gins) {
         if (in.dst != cond || in.operands.size() != 2) continue;
         const bool sube = is_lt_cmp(in.op);
         const bool baja = admite_baja && is_gt_cmp(in.op);
@@ -322,6 +338,7 @@ static bool detect_iv_impl(const ir::IrFunction &fn,
             out.cmp_op = cmp_op;
             out.cmp_offset = off;
             out.bound = bound;
+            out.guard_at_latch = rotado;
             return true;
         }
     }

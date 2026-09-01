@@ -57,6 +57,15 @@ struct LoopIV {
                                      ///< GT/GE/UGT/UGE si baja.
     int64_t cmp_offset = 0;          ///< c de cmp(iv + c, bound) (0 = iv).
     ir::IrValueId bound = ir::IR_NO_VALUE; ///< cota N (invariante del bucle).
+    /**
+     * @brief La guarda estaba en el LATCH, no en la cabecera.
+     *
+     * Es la forma de un `do { } while (...)`.  Importa al CONTAR y no es un
+     * matiz: el cuerpo se ejecuta antes de la primera comprobacion, asi que da
+     * una vuelta MAS que veces se cumple la guarda.  Quien lo ignore se deja
+     * una vuelta, que es el error clasico de esta forma.
+     */
+    bool guard_at_latch = false;
 };
 
 /**

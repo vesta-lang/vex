@@ -373,6 +373,27 @@ class LectorResumenes {
 };
 
 struct Contexto {
+    /**
+     * @brief Estamos en el DESCENSO?  Decide si se despeja hacia atras.
+     *
+     * Las dos fases tienen papeles opuestos y eso NO es un detalle: el ascenso
+     * solo puede crecer -- es lo unico que garantiza que termine -- y el
+     * descenso solo puede estrechar.  Un refinamiento que ESTRECHA metido en
+     * el ascenso rompe la monotonia de la que depende la terminacion.
+     *
+     * Y no rompia dando un resultado peor: daba NINGUNO.  Se vio con un
+     * `for (i<16) { for (j<i) }` ya desenrollado: un valor subia su extremo
+     * bajo DE UNO EN UNO desde cerca del minimo del tipo, o sea del orden de
+     * 10^18 vueltas.  El motor agotaba el presupuesto, y sin punto fijo tira
+     * TODOS los rangos de la funcion -- veintiseis bloques sin un solo rango,
+     * y el coste declarando O(n) algo constante.
+     *
+     * Aqui el despeje sigue valiendo lo mismo y ademas esta acotado por el
+     * presupuesto del descenso, donde pararse antes cuesta precision y jamas
+     * correccion.
+     */
+    bool fase_de_estrechar = false;
+
     const ir::IrFunction &fn;
     const IrFacts &facts;
     mutable LectorResumenes sum{nullptr};
@@ -701,7 +722,24 @@ struct Motor : Contexto {
             const bool hay = (j < viejo.ref.size() && viejo.ref[j].id == p.id);
             if (g_medir_coste) ++g_coste.busquedas;
             const ValueRange base = hay ? viejo.ref[j].range() : suelo[p.id];
-            const ValueRange w = base.ensanchar(p.range());
+            /* Ensanchar SIN pasarse del suelo.
+             *
+             * El ensanchamiento suelta el extremo que crece hasta el borde del
+             * TIPO, y hasta ahora eso no se notaba porque el suelo era el
+             * tipo.  En cuanto el suelo viene de otro sitio -- las cotas de
+             * induccion de un bucle, o lo que un resumen dice de un parametro
+             * --, la sucesion deja de ser monotona: el ensanche sube por
+             * encima del suelo, el corte al suelo lo baja al recalcular, el
+             * bloque vuelve a la cola, y asi para siempre.
+             *
+             * Y no daba un resultado peor: daba NINGUNO.  Sin punto fijo, el
+             * motor tira todos los rangos de la funcion, asi que una funcion
+             * de veintiseis bloques se quedaba sin un solo rango por esto.
+             *
+             * Cortar aqui es ademas lo correcto por si solo: el ensanchamiento
+             * no puede afirmar mas de lo que ya se sabia del valor. */
+            ValueRange w = base.ensanchar(p.range());
+            if (p.id < suelo.size()) w = encajar_en(w, suelo[p.id]);
             if (!w.es_top()) {
                 out.ref.push_back(RangeEntry::make(p.id, w));
                 if (g_medir_coste) ++g_coste.unidos;
@@ -914,7 +952,7 @@ struct Motor : Contexto {
             /* Y de aqui hacia atras: lo que se acaba de afirmar sobre el
              * operando del `cmp` casi nunca es lo interesante -- lo
              * interesante es la variable de la que ese operando se calcula. */
-            estrechar_hacia_atras(e, v);
+            if (fase_de_estrechar) estrechar_hacia_atras(e, v);
         };
 
         switch (o) {
@@ -1245,6 +1283,9 @@ struct Motor : Contexto {
      * agotado aqui cuesta precision, jamas correccion.
      */
     bool resolver_descenso(int presupuesto) {
+        /* Desde aqui si se despeja hacia atras: esta fase solo estrecha, que
+         * es justo lo que ese refinamiento hace. */
+        fase_de_estrechar = true;
         std::deque<ir::IrBlockId> cola;
         queued_.assign(fn.blocks.size(), 0);
         for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi)

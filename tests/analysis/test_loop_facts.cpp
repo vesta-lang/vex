@@ -1290,6 +1290,205 @@ static void an_early_exit_still_leaves_the_loop_bounded() {
     CHECK(r.max_loop_depth == 0, "el coste es constante, no lineal");
 }
 
+/**
+ * @brief Un `do { } while (...)` tambien se cuenta -- y da UNA VUELTA MAS.
+ *
+ * La guarda vive al final del cuerpo, no arriba, asi que el cuerpo se ejecuta
+ * antes de la primera comprobacion.  El reconocedor entraba siempre por el
+ * terminador de la cabecera y se rendia con "la cabecera no es condicional",
+ * asi que el coste declaraba O(n) veinticuatro vueltas fijas.
+ *
+ * Lo que este test EXIGE es la vuelta de mas: la guarda `i + 1 < 24` se cumple
+ * 23 veces y el cuerpo corre 24.  Dejarse esa vuelta es el error clasico de
+ * esta forma, y sale bien de casualidad en un `for` normal.
+ */
+static void a_do_while_is_counted_with_one_more_turn() {
+    std::printf("\n[un do-while se cuenta, y da una vuelta mas]\n");
+
+    /* `i = 0; do { t += i; i++; } while (i < 24);`
+     * Valores: 0=cte 0 (init) | 1=phi i | 2=cte 1 | 3=i+1 | 4=cte 24 |
+     * 5=cmp i+1<24 */
+    ir::IrFunction fn;
+    fn.name = "cuenta_atras_no";
+    for (int i = 0; i < 6; ++i) fn.values.push_back({});
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+    auto cte = [&](ir::IrValueId dst, uint64_t v) {
+        fn.values[dst].is_const = true;
+        fn.values[dst].const_val = v;
+        IrInstr c = val(IrOp::CONST, dst, IrType::I64);
+        c.imm = v;
+        return c;
+    };
+
+    IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    entry.instrs.push_back(cte(0, 0));
+    entry.instrs.push_back(cte(2, 1));
+    entry.instrs.push_back(cte(4, 24));
+    entry.instrs.push_back(br(1));
+
+    // b1 es la CABECERA -- tiene las PHIs -- y termina en salto incondicional.
+    IrBlock body;
+    body.id = 1;
+    body.name = "dowhile_body";
+    {
+        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
+        phi.phi_args.push_back({/*value=*/3, /*block=*/2});
+        body.instrs.push_back(phi);
+        IrInstr add = val(IrOp::ADD, 3, IrType::I64);
+        add.operands.push_back(1);
+        add.operands.push_back(2);
+        body.instrs.push_back(add);
+        body.instrs.push_back(br(2));
+    }
+
+    // b2 es el LATCH, y ahi esta la guarda.
+    IrBlock latch;
+    latch.id = 2;
+    latch.name = "dowhile_header";
+    {
+        IrInstr cmp = val(IrOp::CMP_LT, 5, IrType::BOOL);
+        cmp.operands.push_back(3); // i + 1
+        cmp.operands.push_back(4); // 24
+        latch.instrs.push_back(cmp);
+        IrInstr t = brcond(1, 3);
+        t.operands[0] = 5;
+        latch.instrs.push_back(t);
+    }
+
+    fn.blocks = {entry, body, latch, block(3, "exit", ret())};
+    fn.blocks[0].succs = {1};
+    fn.blocks[1].succs = {2};
+    fn.blocks[2].succs = {1, 3};
+    fn.blocks[1].preds = {0, 2};
+    fn.blocks[2].preds = {1};
+    fn.blocks[3].preds = {2};
+
+    const LoopFacts lf = compute_loop_facts(fn);
+    const IrFacts hechos = build_ir_facts(fn);
+    const LoopStructure st = detect_loop_structure(fn, lf, 0);
+
+    CHECK(st.rotated, "se reconoce que la guarda esta al final");
+    CHECK(st.countable, "y que se puede contar");
+    CHECK(!st.valid, "pero NO transformar: se entra siempre al menos una vez, "
+                     "y quien clona da por hecho lo contrario");
+
+    LoopIV iv;
+    CHECK(detect_counted_iv(fn, hechos.def_block, st.header, st.preheader,
+                            st.latch, iv),
+          "la variable de induccion se encuentra, con la guarda donde este");
+    CHECK(iv.guard_at_latch, "y el descriptor lo dice");
+    CHECK(iv.cmp_offset == 1, "la guarda compara i+1, que el descriptor ya "
+                              "sabia modelar");
+
+    const LoopTripInfo trip = compute_trip_count(fn, hechos.def_block, iv);
+    CHECK(trip.trip == 24,
+          "24 vueltas: la guarda se cumple 23 veces y el cuerpo corre una mas");
+}
+
+/**
+ * @brief Un bucle de UN SOLO BLOQUE que salta a si mismo tambien se cuenta.
+ *
+ * Es en lo que el optimizador convierte un `do { } while` pequeno: cabecera,
+ * cuerpo y guarda en el mismo bloque.  Se rechazaba dos veces -- "degenerado"
+ * por no tener cuerpo, y "la cabecera hace de mas" por llevar el acumulador
+ * dentro --, asi que lo que SI se contaba antes de optimizar dejaba de
+ * contarse despues, y el informe acusaba al optimizador de haber empeorado el
+ * coste de una funcion constante.
+ */
+static void a_self_loop_is_counted_too() {
+    std::printf("\n[un bucle de un solo bloque tambien se cuenta]\n");
+
+    /* Valores: 0=cte 0 | 1=phi i | 2=phi t | 3=cte 1 | 4=i+1 | 5=t+i |
+     * 6=cte 24 | 7=cmp */
+    ir::IrFunction fn;
+    fn.name = "un_bloque";
+    for (int i = 0; i < 8; ++i) fn.values.push_back({});
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+    auto cte = [&](ir::IrValueId dst, uint64_t v) {
+        fn.values[dst].is_const = true;
+        fn.values[dst].const_val = v;
+        IrInstr c = val(IrOp::CONST, dst, IrType::I64);
+        c.imm = v;
+        return c;
+    };
+
+    IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    entry.instrs.push_back(cte(0, 0));
+    entry.instrs.push_back(cte(3, 1));
+    entry.instrs.push_back(cte(6, 24));
+    entry.instrs.push_back(br(1));
+
+    IrBlock solo;
+    solo.id = 1;
+    solo.name = "dowhile_body";
+    {
+        IrInstr phi_i = val(IrOp::PHI, 1, IrType::I64);
+        phi_i.phi_args.push_back({/*value=*/0, /*block=*/0});
+        phi_i.phi_args.push_back({/*value=*/4, /*block=*/1});
+        solo.instrs.push_back(phi_i);
+        IrInstr phi_t = val(IrOp::PHI, 2, IrType::I64);
+        phi_t.phi_args.push_back({/*value=*/0, /*block=*/0});
+        phi_t.phi_args.push_back({/*value=*/5, /*block=*/1});
+        solo.instrs.push_back(phi_t);
+        IrInstr inc = val(IrOp::ADD, 4, IrType::I64);
+        inc.operands.push_back(1);
+        inc.operands.push_back(3);
+        solo.instrs.push_back(inc);
+        // El ACUMULADOR, que es lo que hacia decir "la cabecera hace de mas".
+        IrInstr acc = val(IrOp::ADD, 5, IrType::I64);
+        acc.operands.push_back(2);
+        acc.operands.push_back(1);
+        solo.instrs.push_back(acc);
+        IrInstr cmp = val(IrOp::CMP_LT, 7, IrType::BOOL);
+        cmp.operands.push_back(4);
+        cmp.operands.push_back(6);
+        solo.instrs.push_back(cmp);
+        IrInstr t = brcond(1, 2); // a si mismo, o fuera
+        t.operands[0] = 7;
+        solo.instrs.push_back(t);
+    }
+
+    fn.blocks = {entry, solo, block(2, "exit", ret())};
+    fn.blocks[0].succs = {1};
+    fn.blocks[1].succs = {1, 2};
+    fn.blocks[1].preds = {0, 1};
+    fn.blocks[2].preds = {1};
+
+    const LoopFacts lf = compute_loop_facts(fn);
+    const IrFacts hechos = build_ir_facts(fn);
+    const LoopStructure st = detect_loop_structure(fn, lf, 0);
+
+    CHECK(st.self_loop, "se reconoce el bucle de un solo bloque");
+    CHECK(st.countable, "y se puede contar");
+    CHECK(!st.valid, "pero no clonar: el latch es la propia cabecera");
+
+    LoopIV iv;
+    CHECK(detect_counted_iv(fn, hechos.def_block, st.header, st.preheader,
+                            st.latch, iv),
+          "la induccion se encuentra pese al acumulador al lado");
+    const LoopTripInfo trip = compute_trip_count(fn, hechos.def_block, iv);
+    CHECK(trip.trip == 24, "y da 24 vueltas");
+}
+
 int main() {
     std::printf("=== test_loop_facts (Fase 0.25: LoopFacts) ===\n");
 
@@ -1379,6 +1578,8 @@ int main() {
     a_counting_down_loop_is_counted_too();
     the_cost_asks_for_the_reason_not_the_code();
     an_early_exit_still_leaves_the_loop_bounded();
+    a_do_while_is_counted_with_one_more_turn();
+    a_self_loop_is_counted_too();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
