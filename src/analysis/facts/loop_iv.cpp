@@ -37,6 +37,18 @@ bool is_gt_cmp(IrOp op) {
            op == IrOp::CMP_UGE;
 }
 
+/* Y `iv != N`, que es la que no dice hacia donde.
+ *
+ * `for (i = 0; i != 32; i++)` esta tan contado como su version con `<`, y se
+ * escribe a menudo.  La direccion no sale del operador -- la dice el PASO --,
+ * asi que con esta guarda se prueban las dos y manda la que encaje.
+ *
+ * Lo que hay que comprobar aparte, y lo hace quien cuenta, es que el paso CAIGA
+ * JUSTO en el limite: `i != 32` avanzando de tres en tres no para nunca (o
+ * para dando la vuelta al tipo, que es peor).  Reconocer la forma no es
+ * afirmar que termine. */
+bool is_ne_cmp(IrOp op) { return op == IrOp::CMP_NE; }
+
 // Resuelve el valor CONSTANTE de @p v (la CONST que lo define en su bloque).
 bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
               IrValueId v, int64_t &out) {
@@ -203,13 +215,20 @@ static bool detect_iv_impl(const ir::IrFunction &fn,
     IrOp cmp_op = IrOp::NOP;
     IvDir dir = IvDir::Up;
     IrValueId cmp_a = IR_NO_VALUE, cmp_b = IR_NO_VALUE;
+    bool direccion_por_el_paso = false;
     for (const IrInstr &in : hins) {
         if (in.dst != cond || in.operands.size() != 2) continue;
         const bool sube = is_lt_cmp(in.op);
         const bool baja = admite_baja && is_gt_cmp(in.op);
-        if (sube || baja) {
+        /* `!=` no dice hacia donde, asi que lo decide el paso.  Solo se
+         * admite donde se admiten los dos sentidos: quien pide unicamente los
+         * crecientes lo hace para clonar o para calcular direcciones, y darle
+         * uno cuyo sentido depende del cuerpo seria darle una sorpresa. */
+        const bool igualdad = admite_baja && is_ne_cmp(in.op);
+        if (sube || baja || igualdad) {
             cmp_op = in.op;
-            dir = sube ? IvDir::Up : IvDir::Down;
+            dir = baja ? IvDir::Down : IvDir::Up;
+            direccion_por_el_paso = igualdad;
             /* A traves de las copias: lo que se compara es el VALOR, y un
              * `mov` no cambia el valor.  Sin esto, la copia que la
              * construccion de SSA deja en la cabecera hacia que el IV no se
@@ -249,9 +268,23 @@ static bool detect_iv_impl(const ir::IrFunction &fn,
          * son U sumas de `+1` en vez de un `+U`, y mirando solo la primera el
          * bucle dejaba de tener induccion. */
         (void)base;
-        const bool avanza = dir == IvDir::Up
-                                ? chain_add_of(fn, def_block, back, in.dst, s)
-                                : chain_sub_of(fn, def_block, back, in.dst, s);
+        /* Con `!=` se prueban los dos sentidos y manda el que encaje: la
+         * guarda no lo dice, lo dice el paso. */
+        IvDir dir_phi = dir;
+        bool avanza = false;
+        if (direccion_por_el_paso) {
+            if (chain_add_of(fn, def_block, back, in.dst, s)) {
+                dir_phi = IvDir::Up;
+                avanza = true;
+            } else if (chain_sub_of(fn, def_block, back, in.dst, s)) {
+                dir_phi = IvDir::Down;
+                avanza = true;
+            }
+        } else {
+            avanza = dir_phi == IvDir::Up
+                         ? chain_add_of(fn, def_block, back, in.dst, s)
+                         : chain_sub_of(fn, def_block, back, in.dst, s);
+        }
         if (avanza && s > 0) {
             // 3) La cota: el cmp compara `iv` o `iv + c` con N (el otro lado).
             int64_t off = 0;
@@ -285,7 +318,7 @@ static bool detect_iv_impl(const ir::IrFunction &fn,
             out.phi_index = phi_index;
             out.init = init;
             out.stride = s;
-            out.dir = dir;
+            out.dir = dir_phi;
             out.cmp_op = cmp_op;
             out.cmp_offset = off;
             out.bound = bound;

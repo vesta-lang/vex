@@ -38,7 +38,32 @@ struct HeaderPhi {
 
 /// Forma estructural de un bucle contado.  @c valid=false si no es elegible.
 struct LoopStructure {
+    /**
+     * @brief Elegible para TRANSFORMARLO: salida unica, sin valores que
+     *        escapen, cuerpo clonable.
+     *
+     * Es lo que necesita quien va a desenrollar o a reducir el bucle a una
+     * operacion de bloque, y no ha cambiado de significado.
+     */
     bool valid = false;
+    /**
+     * @brief Elegible para CONTARLO, que es una propiedad mas DEBIL.
+     *
+     * La cabecera es una guarda contada y hay un solo latch, asi que el numero
+     * de vueltas esta acotado por la cuenta.  Lo que sobra respecto a
+     * @c valid -- salidas de mas y valores del cuerpo usados fuera -- no
+     * afecta a esa cota: **una salida anticipada solo puede hacer que de MENOS
+     * vueltas.**
+     *
+     * Sin esta distincion, un `for (i = 0; i < 32; i++)` con un `break` o un
+     * `return` dentro no se contaba en absoluto, y el coste declaraba O(n) una
+     * funcion que da como mucho 32 vueltas -- que es de las formas mas
+     * corrientes que hay.
+     *
+     * OJO al consumirlo: lo que sale de un bucle asi es una COTA, nunca el
+     * numero exacto.  Quien vaya a quitar una comprobacion necesita @c valid.
+     */
+    bool countable = false;
     /**
      * @brief CUAL de las condiciones rechazo el bucle.  Vacio si @c valid.
      *
@@ -85,6 +110,9 @@ struct LoopStructure {
     bool contains(ir::IrBlockId b) const { return loop_blocks.count(b) != 0; }
     /// Cuerpo PLANO: sin bucles dentro.  Lo que necesita quien clona.
     bool flat() const { return inner_loops == 0; }
+    /// Se sale SOLO por la guarda.  Lo que necesita quien afirma un numero
+    /// EXACTO de vueltas -- con mas salidas, lo que hay es una cota.
+    bool single_exit() const { return valid; }
 };
 
 /**

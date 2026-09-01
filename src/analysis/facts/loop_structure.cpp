@@ -193,30 +193,6 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     }
     if (st.latch == IR_NO_BLOCK) return bail("loop.no_latch");
 
-    /* Salida UNICA: nada de lo que hay dentro salta FUERA del bucle.
-     *
-     * Se recorre `loop_blocks` y no `body`: con un bucle anidado dentro, el
-     * cuerpo es solo el nivel de este y un `break` escrito en el bucle de
-     * DENTRO se saltaria la comprobacion -- el bucle tendria dos salidas y
-     * este analisis afirmaria que tiene una.  Contar sus vueltas con eso seria
-     * dar un numero equivocado, que es peor que no darlo. */
-    for (IrBlockId b : st.loop_blocks) {
-        if (b == H) continue; // el header sale a proposito: es la guarda
-        const auto &bi = fn.blocks[b].instrs;
-        if (bi.empty()) return bail("loop.empty_body_block");
-        const IrInstr &bt = bi.back();
-        if (bt.op == IrOp::BR) {
-            if (!st.contains(bt.target_block))
-                return bail("loop.body_exits");
-        } else if (bt.op == IrOp::BR_COND) {
-            if (!st.contains(bt.target_block) || !st.contains(bt.false_block))
-                return bail("loop.body_exits");
-        } else {
-            // RET/THROW/etc. dentro del cuerpo: mas de una salida.
-            return bail("loop.body_terminates");
-        }
-    }
-
     // Preheader: unico pred del header FUERA del bucle.  Se calcula LOCALMENTE
     // desde los terminadores (no desde fn.blocks[].preds, que un pase previo
     // pudo dejar obsoletos) para no depender de mutar el CFG de la funcion.
@@ -256,6 +232,16 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     }
     if (st.phis.empty()) return bail("loop.header_without_phis");
 
+    /* Hasta aqui, la propiedad DEBIL: cabecera con guarda contada, un solo
+     * latch, un solo preheader y PHIs completas.  Con eso el numero de vueltas
+     * esta ACOTADO por la cuenta, y eso ya es conocimiento util.
+     *
+     * Lo que queda por comprobar -- que ningun valor del cuerpo se use fuera y
+     * que no haya mas salidas -- hace falta para TRANSFORMAR el bucle, no para
+     * contarlo: una salida anticipada solo puede hacer que de menos vueltas, y
+     * un valor que escapa no cambia cuantas da. */
+    st.countable = true;
+
     // Loop-closed SSA: ningun valor del CUERPO se usa fuera del bucle (los
     // live-out salen por las PHIs del header).  Sin esto el remainder podria
     // dejar un valor indefinido en el exit.
@@ -274,6 +260,30 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
                 if (body_defs.count(pa.value) && !st.contains(pa.block))
                     return bail("loop.value_escapes");
             }
+        }
+    }
+
+    /* Salida UNICA: nada de lo que hay dentro salta FUERA del bucle.
+     *
+     * Se recorre `loop_blocks` y no `body`: con un bucle anidado dentro, el
+     * cuerpo es solo el nivel de este, y un `break` escrito en el bucle de
+     * DENTRO se saltaria la comprobacion.  Quien clona necesita que no lo
+     * haya; quien cuenta se queda con una cota, que es lo que dice
+     * `countable`. */
+    for (IrBlockId b : st.loop_blocks) {
+        if (b == H) continue; // el header sale a proposito: es la guarda
+        const auto &bi = fn.blocks[b].instrs;
+        if (bi.empty()) return bail("loop.empty_body_block");
+        const IrInstr &bt = bi.back();
+        if (bt.op == IrOp::BR) {
+            if (!st.contains(bt.target_block))
+                return bail("loop.body_exits");
+        } else if (bt.op == IrOp::BR_COND) {
+            if (!st.contains(bt.target_block) || !st.contains(bt.false_block))
+                return bail("loop.body_exits");
+        } else {
+            // RET/THROW/etc. dentro del cuerpo: mas de una salida.
+            return bail("loop.body_terminates");
         }
     }
 

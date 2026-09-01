@@ -724,12 +724,21 @@ void produce_loops(Production &p) {
             about.id = lf.header_block_of(L);
 
             const LoopStructure ls = detect_loop_structure(fn, lf, L);
-            if (!ls.valid) {
-                /* No es un bucle contado SIMPLE, y se dice CUAL de las
-                 * condiciones fallo: son siete, se arreglan de formas
-                 * distintas -- unas son huecos de este analisis y otras del
-                 * programa -- y con un solo codigo para todas no habia forma
-                 * de saber cual mirar. */
+            /* CONTABLE basta, que es mas debil que elegible para transformar.
+             *
+             * Un `for (i = 0; i < 32; i++)` con un `break` o un `return`
+             * dentro no se contaba en absoluto -- se rechazaba entero por
+             * tener mas de una salida --, y el coste declaraba O(n) una
+             * funcion que da como mucho 32 vueltas.  Y esas dos formas son de
+             * las mas corrientes que hay.
+             *
+             * Lo que sale de ahi es una COTA, no el numero: se degrada mas
+             * abajo, donde ya se ha contado. */
+            if (!ls.countable) {
+                /* No es un bucle contado, y se dice CUAL de las condiciones
+                 * fallo: son varias, se arreglan de formas distintas -- unas
+                 * son huecos de este analisis y otras del programa -- y con un
+                 * solo codigo para todas no habia forma de saber cual mirar. */
                 p.say_unknown(about, UnknownReason::ShapeNotRecognized,
                               (ls.why != nullptr && ls.why[0] != '\0')
                                   ? ls.why
@@ -779,8 +788,16 @@ void produce_loops(Production &p) {
              * limite que no es una constante escrita puede seguir estando
              * acotado, y eso es un bucle acotado.  La base ya los tiene
              * cacheados, asi que preguntarlos no cuesta un analisis mas. */
-            const LoopTripInfo tc =
+            LoopTripInfo tc =
                 compute_trip_count(fn, st.def_block, iv, &p.base.ranges(fn));
+            /* Y si se puede salir antes, lo que se sabe es una COTA.
+             *
+             * La guarda dice que no pasa de N; un `break` puede cortarlo
+             * antes, asi que N no es cuantas vueltas da sino cuantas da como
+             * mucho.  Publicarlo como exacto seria dar un numero que el
+             * programa puede no cumplir -- y hay quien lo usaria para quitar
+             * una comprobacion. */
+            if (!ls.single_exit()) tc.demote_to_bound("loop.early_exit");
             if (!tc.bounded()) {
                 /* La razon Y EL CASO los da el ANALISIS, no quien pregunta: el
                  * ya sabe en cual de sus pasos se quedo, y lo dejo escrito.

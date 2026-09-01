@@ -339,7 +339,9 @@ const CatEntry kEntries[] = {
     {"definite_store.no_pointer_params", {"none of its parameters points at anything", "ninguno de sus parametros apunta a nada"}},
     {"layout.no_static_data", {"the module has no static data in .data, so there is no section whose alignment to state", "el modulo no tiene datos estaticos en .data; no hay ninguna seccion cuya alineacion afirmar"}},
     {"layout.placement_is_configurable", {"in native builds the linker script places the section; without seeing it, its alignment cannot be stated", "en el nativo la seccion la coloca el guion de enlazado; sin verlo no se puede afirmar su alineacion"}},
+    {"loop.early_exit", {"the guard does not let it run more times, but a break or a return can cut it short, so that is a bound and not the count", "la guarda no le deja dar mas vueltas, pero un break o un return pueden cortarlo antes, asi que eso es una cota y no el numero"}},
     {"loop.header", {"loop header, depth {0}", "cabecera de bucle, profundidad {0}"}},
+    {"loop.ne_guard_never_lands", {"the guard compares with '!=' and the step never lands exactly on the limit, so the loop does not end by its guard", "la guarda compara con '!=' y el paso no cae justo en el limite, asi que el bucle no termina por su guarda"}},
     {"loop.no_induction", {"no counted induction variable was found in the header", "no se encontro una variable de induccion contada en la cabecera"}},
     {"loop.none", {"it has no loops", "no tiene bucles"}},
     {"loop.shape_unsupported", {"its shape is not a simple counted loop (several latches, several exits, or a header that does more than test)", "su forma no es un bucle contado simple (varios latches, varias salidas, o una cabecera que hace mas que comprobar)"}},
@@ -359,7 +361,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 338;
+const int kEntryCount = 340;
 
 } // namespace
 

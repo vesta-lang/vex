@@ -56,7 +56,10 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
 
     for (uint32_t L = 0; L < loops.loop_count; ++L) {
         const LoopStructure ls = detect_loop_structure(fn, loops, L);
-        if (!ls.valid) {
+        /* CONTABLE basta: la cota de la variable sale de la guarda y del paso,
+         * y una salida anticipada no la sube -- solo hace que se llegue menos
+         * lejos. */
+        if (!ls.countable) {
             ++out.not_counted;
             continue;
         }

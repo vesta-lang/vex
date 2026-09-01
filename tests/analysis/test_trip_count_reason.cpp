@@ -166,7 +166,12 @@ static void decreasing_loop_is_a_shape_we_dont_cover() {
 }
 
 /**
- * @brief Guarda que no es `<` ni `<=`: otra forma no cubierta.
+ * @brief Guarda que no es de las que se cuentan: otra forma no cubierta.
+ *
+ * `i == N` como guarda de bucle no se modela -- el bucle correria MIENTRAS
+ * son iguales, que es una forma que este analisis no cubre --.  Es un hueco
+ * del analisis, no del programa, y por eso sale como forma y no como algo
+ * que dependa de la ejecucion.
  */
 static void unsupported_guard_is_a_shape_too() {
     std::printf("-- una guarda no soportada tambien es forma, no ejecucion\n");
@@ -174,12 +179,58 @@ static void unsupported_guard_is_a_shape_too() {
     h.constant(1, 0);
     h.constant(2, 10);
     analysis::LoopIV iv = rising_iv();
-    iv.cmp_op = ir::IrOp::CMP_NE; // `!=`, que este analisis no sabe leer
+    iv.cmp_op = ir::IrOp::CMP_EQ;
     const analysis::LoopTripInfo t =
         analysis::compute_trip_count(h.fn, h.def_block, iv);
     CHECK(!t.known(), "no se cuenta");
     CHECK(t.reason == UnknownReason::ShapeNotRecognized, "es una forma");
     CHECK(std::string(t.code) == "loop.unsupported_guard", "con su codigo");
+}
+
+/**
+ * @brief `!=` SI se cuenta -- cuando el paso cae justo en el limite.
+ *
+ * `for (i = 0; i != 10; i++)` esta tan contado como su version con `<`, y se
+ * escribe a menudo.  Antes era el ejemplo de "guarda que no se sabe leer" en
+ * este mismo fichero: el analisis se rendia y el coste declaraba O(n) sobre
+ * diez vueltas fijas.
+ */
+static void a_not_equal_guard_that_lands_is_counted() {
+    std::printf("-- `!=` que cae justo se cuenta\n");
+    Harness h;
+    h.constant(1, 0);
+    h.constant(2, 10);
+    analysis::LoopIV iv = rising_iv();
+    iv.cmp_op = ir::IrOp::CMP_NE;
+    const analysis::LoopTripInfo t =
+        analysis::compute_trip_count(h.fn, h.def_block, iv);
+    CHECK(t.known(), "se cuenta");
+    CHECK(t.trip == 10, "y son diez vueltas, ni una mas");
+}
+
+/**
+ * @brief Y cuando NO cae justo, se dice que el bucle no termina por su guarda.
+ *
+ * `for (i = 0; i != 10; i += 3)` pasa por 0, 3, 6, 9, 12... y nunca vale 10:
+ * no para, o para dando la vuelta al tipo, que es peor.  Eso NO es un hueco
+ * del analisis -- es un error del programa --, y por eso lleva su propio
+ * codigo en vez del generico: con el se puede AVISAR, y con el generico solo
+ * callarse.
+ */
+static void a_not_equal_guard_that_never_lands_says_so() {
+    std::printf("-- `!=` que no cae justo NO termina, y se dice\n");
+    Harness h;
+    h.constant(1, 0);
+    h.constant(2, 10);
+    analysis::LoopIV iv = rising_iv();
+    iv.cmp_op = ir::IrOp::CMP_NE;
+    iv.stride = 3; // 0, 3, 6, 9, 12...: nunca es 10
+    const analysis::LoopTripInfo t =
+        analysis::compute_trip_count(h.fn, h.def_block, iv);
+    CHECK(!t.known(), "no se afirma un numero que no existe");
+    CHECK(t.reason == UnknownReason::ShapeNotRecognized, "es una forma");
+    CHECK(std::string(t.code) == "loop.ne_guard_never_lands",
+          "y con SU codigo, no el generico: con este se puede avisar");
 }
 
 /**
@@ -380,6 +431,8 @@ int main() {
     runtime_init_has_its_own_code();
     decreasing_loop_is_a_shape_we_dont_cover();
     unsupported_guard_is_a_shape_too();
+    a_not_equal_guard_that_lands_is_counted();
+    a_not_equal_guard_that_never_lands_says_so();
     the_two_classes_stay_apart();
     a_single_point_range_is_a_value();
     a_bounded_limit_bounds_the_loop();

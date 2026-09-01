@@ -87,6 +87,28 @@ struct LoopTripInfo {
     /// clase de arriba dice de que tipo es -- que es lo unico que puede leer
     /// quien no conoce este analisis --; esto dice cual de ellos fue.
     const char *code = "";
+
+    /**
+     * @brief Convierte un numero EXACTO en una COTA, con su motivo.
+     *
+     * Lo pide el bucle que se puede salir antes de tiempo: la guarda dice que
+     * no pasa de N, pero un `break` o un `return` pueden cortarlo, asi que N
+     * deja de ser cuantas vueltas da y pasa a ser cuantas da COMO MUCHO.
+     *
+     * Va aqui y no en cada consumidor porque los dos campos tienen que quedar
+     * coherentes -- con `trip` puesto, `known()` es cierto y quien pregunte se
+     * creera un numero que no lo es --, y eso es facil de olvidar en un sitio
+     * de los cinco.
+     */
+    void demote_to_bound(const char *why) {
+        if (trip < 0) return; // no habia numero que degradar
+        trip_max = trip;
+        trip = -1;
+        /* Se sabe con la misma solidez de antes: la guarda es la que era.  Lo
+         * que cambia no es la certeza, es QUE se afirma. */
+        reason = asa::UnknownReason::RuntimeDependent;
+        code = why;
+    }
 };
 
 /**

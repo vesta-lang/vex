@@ -1148,6 +1148,148 @@ static void the_cost_asks_for_the_reason_not_the_code() {
           "y la clase se puede afirmar: es O(n) y consta que lo es");
 }
 
+/**
+ * @brief Un bucle del que se puede salir antes SIGUE estando acotado.
+ *
+ * `for (i = 0; i < 32; i++) { if (...) break; }` da como mucho 32 vueltas.  El
+ * reconocedor lo rechazaba ENTERO por tener mas de una salida -- que es lo que
+ * necesita quien va a clonarlo, no quien va a contarlo --, asi que el coste
+ * declaraba O(n) una funcion de 32 vueltas.  Y un `break` o un `return` dentro
+ * de un `for` acotado son de las formas mas corrientes que hay.
+ *
+ * La idea es una linea: **una salida anticipada solo puede hacer que de MENOS
+ * vueltas.**  Lo que sale de ahi es una COTA, y el test exige las dos mitades:
+ * que se cuente, y que NO se afirme como exacto.
+ */
+static void an_early_exit_still_leaves_the_loop_bounded() {
+    std::printf("\n[con break, el bucle sigue acotado]\n");
+
+    /* `for (i = 0; i < 32; i++) { if (i == 7) goto fuera; }`
+     * Valores: 0=cte 0 | 1=phi i | 2=cte 32 | 3=cmp | 4=i+1 | 5=cte 1 |
+     * 6=cte 7 | 7=cmp de la salida */
+    ir::IrFunction fn;
+    fn.name = "con_salida";
+    for (int i = 0; i < 8; ++i) fn.values.push_back({});
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+    auto cte = [&](ir::IrValueId dst, uint64_t v) {
+        fn.values[dst].is_const = true;
+        fn.values[dst].const_val = v;
+        IrInstr c = val(IrOp::CONST, dst, IrType::I64);
+        c.imm = v;
+        return c;
+    };
+
+    IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    entry.instrs.push_back(cte(0, 0));
+    entry.instrs.push_back(cte(5, 1));
+    entry.instrs.push_back(cte(6, 7));
+    entry.instrs.push_back(br(1));
+
+    IrBlock header;
+    header.id = 1;
+    header.name = "header";
+    {
+        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
+        phi.phi_args.push_back({/*value=*/4, /*block=*/3});
+        header.instrs.push_back(phi);
+        header.instrs.push_back(cte(2, 32));
+        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
+        cmp.operands.push_back(1);
+        cmp.operands.push_back(2);
+        header.instrs.push_back(cmp);
+        IrInstr t = brcond(2, 4);
+        t.operands[0] = 3;
+        header.instrs.push_back(t);
+    }
+
+    // b2: la SEGUNDA salida.  Es lo que el reconocedor rechazaba.
+    IrBlock body;
+    body.id = 2;
+    body.name = "body";
+    {
+        IrInstr cmp = val(IrOp::CMP_EQ, 7, IrType::BOOL);
+        cmp.operands.push_back(1);
+        cmp.operands.push_back(6);
+        body.instrs.push_back(cmp);
+        IrInstr t = brcond(4, 3); // si i == 7, fuera
+        t.operands[0] = 7;
+        body.instrs.push_back(t);
+    }
+
+    IrBlock step;
+    step.id = 3;
+    step.name = "step";
+    {
+        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
+        add.operands.push_back(1);
+        add.operands.push_back(5);
+        step.instrs.push_back(add);
+        step.instrs.push_back(br(1));
+    }
+
+    fn.blocks = {entry, header, body, step, block(4, "exit", ret())};
+    fn.blocks[0].succs = {1};
+    fn.blocks[1].succs = {2, 4};
+    fn.blocks[2].succs = {4, 3};
+    fn.blocks[3].succs = {1};
+    fn.blocks[1].preds = {0, 3};
+    fn.blocks[2].preds = {1};
+    fn.blocks[3].preds = {2};
+    fn.blocks[4].preds = {1, 2};
+
+    const LoopFacts lf = compute_loop_facts(fn);
+    const IrFacts hechos = build_ir_facts(fn);
+    const LoopStructure st = detect_loop_structure(fn, lf, 0);
+
+    /* Las DOS propiedades, y que NO son la misma.  Si alguien vuelve a
+     * colapsarlas, este par de comprobaciones es lo que lo dice. */
+    CHECK(!st.valid,
+          "para TRANSFORMARLO no vale: tiene dos salidas y quien clone se lo "
+          "tiene que encontrar dicho");
+    CHECK(st.countable, "pero para CONTARLO si: la guarda sigue siendo la que "
+                        "es y una salida de mas solo quita vueltas");
+    CHECK(!st.single_exit(), "y se puede preguntar cual de las dos falta");
+
+    LoopIV iv;
+    CHECK(detect_counted_iv(fn, hechos.def_block, st.header, st.preheader,
+                            st.latch, iv),
+          "la variable de induccion se encuentra igual");
+    LoopTripInfo trip = compute_trip_count(fn, hechos.def_block, iv);
+    CHECK(trip.trip == 32, "y la guarda no le deja pasar de 32");
+
+    /* Y ahora la otra mitad, que es la que impide afirmar de mas: con dos
+     * salidas, 32 no es cuantas vueltas da, es cuantas da COMO MUCHO. */
+    trip.demote_to_bound("loop.early_exit");
+    CHECK(!trip.known(), "ya no se afirma un numero exacto");
+    CHECK(trip.bounded() && trip.trip_max == 32, "pero sigue acotado en 32");
+    CHECK(std::string(trip.code) == "loop.early_exit", "y se dice por que");
+
+    /* El coste lo trata como constante, que es lo correcto: un tope fijo es
+     * O(1) sea cual sea el tope. */
+    analysis::asa::FactStore store;
+    analysis::asa::Fact f;
+    CHECK(analysis::asa::loop_trip_fact(store, fn, st.header, trip,
+                                        analysis::asa::kStagePreOpt,
+                                        analysis::asa::Source::Static, f),
+          "hay hecho que publicar");
+    CHECK(std::string(f.what.code) == "loop.trip_at_most",
+          "y sale como COTA, no como cuenta");
+    store.add(std::move(f));
+    const analyze::CostResult r =
+        analyze::analyze_function(fn, &store, analysis::asa::kStagePreOpt);
+    CHECK(r.max_loop_depth == 0, "el coste es constante, no lineal");
+}
+
 int main() {
     std::printf("=== test_loop_facts (Fase 0.25: LoopFacts) ===\n");
 
@@ -1236,6 +1378,7 @@ int main() {
     a_multiplying_loop_is_logarithmic();
     a_counting_down_loop_is_counted_too();
     the_cost_asks_for_the_reason_not_the_code();
+    an_early_exit_still_leaves_the_loop_bounded();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

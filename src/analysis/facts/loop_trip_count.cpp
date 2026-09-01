@@ -68,6 +68,13 @@ static int64_t trips_between(int64_t init, int64_t bound, int64_t cmp_offset,
         init = bound;
         bound = tmp;
         cmp_offset = -cmp_offset;
+    } else if (cmp_op == ir::IrOp::CMP_NE && bound < init) {
+        /* `!=` no dice hacia donde va: lo dicen los VALORES.  Bajando, el
+         * tramo va del limite al inicio, igual que con `>`. */
+        const int64_t tmp = init;
+        init = bound;
+        bound = tmp;
+        cmp_offset = -cmp_offset;
     }
     /* La resta primero, y COMPROBADA.  Con extremos grandes -- que es
      * justo lo que llega cuando la cota sale de un rango -- desbordaba, y un
@@ -87,6 +94,15 @@ static int64_t trips_between(int64_t init, int64_t bound, int64_t cmp_offset,
         int64_t t = 0; // floor + 1
         if (__builtin_add_overflow(room / stride, (int64_t)1, &t)) return -1;
         return t;
+    }
+    /* `iv != N` da la vuelta exacta SOLO si el paso cae justo en el limite.
+     *
+     * `for (i = 0; i != 32; i += 3)` no para nunca -- o para dando la vuelta al
+     * tipo, que es peor --, asi que aqui no cabe redondear como con `<`: o
+     * divide, o no se afirma nada.  Cuando divide, el numero es EXACTO. */
+    if (cmp_op == IrOp::CMP_NE) {
+        if (room % stride != 0) return -1;
+        return room / stride;
     }
     return -1; // guarda que este analisis no cubre.
 }
@@ -147,9 +163,18 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
             info.trip = t;
             return info;
         }
-        /* La guarda no es `<` ni `<=`.  Otra FORMA que no se cubre, y no un
-         * limite que dependa de la ejecucion: el bucle puede ser perfectamente
-         * contado con `!=` y este analisis no sabe leerlo. */
+        /* Con `!=`, que el paso no caiga justo en el limite NO es un hueco
+         * del analisis: es que el bucle no termina por su guarda -- o termina
+         * dando la vuelta al tipo, que casi siempre es un error de quien lo
+         * escribio.  Decirlo con su codigo es lo que permite avisar de ello en
+         * vez de callarse. */
+        if (iv.cmp_op == ir::IrOp::CMP_NE) {
+            info.reason = asa::UnknownReason::ShapeNotRecognized;
+            info.code = "loop.ne_guard_never_lands";
+            return info;
+        }
+        /* La guarda no es de las que se cuentan.  Otra FORMA que no se cubre,
+         * y no un limite que dependa de la ejecucion. */
         info.reason = asa::UnknownReason::ShapeNotRecognized;
         info.code = "loop.unsupported_guard";
         return info;
