@@ -114,10 +114,21 @@ static void probar_reparto() {
     jit::JitFactBase base;
     const ir::IrFunction fn = hacer_con_cota("reparto");
 
+    /* Cuantos analisis arrastra pedir los rangos.  Se escribe la CADENA y no
+     * un numero suelto: el dia que cambie, quien lo lea tiene que enterarse de
+     * QUE cambio y no limitarse a subir la constante hasta que pase.
+     *
+     *   rangos -> estructura        (def-use, para leer las definiciones)
+     *          -> cotas de induccion -> bucles
+     *
+     * Las cotas entran porque un bucle contado dice hasta donde llega su
+     * variable, y eso los rangos no lo pueden sacar solos. */
+    const size_t kCadenaDeRangos = 4;
+
     const analysis::RangeFacts &r1 = base.ranges(fn);
     const size_t tras_la_primera = base.computations();
-    CHECK(tras_la_primera == 2, "la primera consulta ejecuta los rangos y la "
-                                "estructura de la que dependen");
+    CHECK(tras_la_primera == kCadenaDeRangos,
+          "la primera consulta ejecuta los rangos y todo lo que necesitan");
 
     const analysis::RangeFacts &r2 = base.ranges(fn);
     CHECK(&r1 == &r2,
@@ -135,7 +146,7 @@ static void probar_reparto() {
     // Otra funcion es otro conocimiento: la cache no las confunde.
     const ir::IrFunction otra = hacer_sin_cota("otra");
     base.ranges(otra);
-    CHECK(base.computations() == tras_la_primera + 2,
+    CHECK(base.computations() == tras_la_primera + kCadenaDeRangos,
           "otra funcion se analiza aparte -- la cache va por funcion");
 }
 
@@ -151,8 +162,8 @@ static void probar_caducidad() {
 
     base.invalidate(fn);
     base.ranges(fn);
-    CHECK(base.computations() == antes + 2,
-          "tras invalidar se recalculan los rangos Y la estructura (cascada)");
+    CHECK(base.computations() == antes + 4,
+          "tras invalidar se recalcula la CADENA entera, no solo los rangos");
 
     /* Y el hecho nuevo refleja el IR nuevo: la llamada pasa a recibir un valor
      * del que no se sabe nada, asi que la respuesta cambia. */
@@ -190,13 +201,30 @@ static void probar_sello_y_volcado() {
           "sin preguntar no hay hecho, y eso se dice: desconocida");
 
     const std::vector<jit::RecordedFact> v = base.dump();
-    CHECK(v.size() == 2,
-          "el volcado saca los dos hechos vivos: los rangos y su estructura");
-    CHECK(v[0].function == "sellada" && v[1].function == "sellada",
-          "y solo los de la funcion consultada");
-    CHECK(std::string(v[0].domain) == jit::kProducerStructure &&
-              std::string(v[1].domain) == jit::kProducerRanges,
-          "en orden estable, para que dos volcados se puedan comparar");
+    /* El volcado saca los hechos VIVOS, que son los que pedir los rangos
+     * arrastro: la estructura, los bucles -- de donde salen las cotas de
+     * induccion -- y los rangos mismos.  Se comprueba que estan esos y no un
+     * numero: si manana la cadena crece, lo que hay que revisar es si el hecho
+     * nuevo debe salir en el volcado, no subir un contador. */
+    bool hay_estructura = false, hay_bucles = false, hay_rangos = false;
+    bool todos_de_la_funcion = !v.empty();
+    for (const jit::RecordedFact &f : v) {
+        if (f.function != "sellada") todos_de_la_funcion = false;
+        const std::string d(f.domain);
+        if (d == jit::kProducerStructure) hay_estructura = true;
+        if (d == analysis::asa::kProducerLoops) hay_bucles = true;
+        if (d == jit::kProducerRanges) hay_rangos = true;
+    }
+    CHECK(hay_estructura && hay_bucles && hay_rangos,
+          "el volcado saca los hechos vivos: los rangos y aquello de lo que "
+          "dependen");
+    CHECK(todos_de_la_funcion, "y solo los de la funcion consultada");
+    bool ordenado = true;
+    for (size_t i = 1; i < v.size(); ++i)
+        if (std::string(v[i - 1].domain) > std::string(v[i].domain))
+            ordenado = false;
+    CHECK(ordenado, "en orden estable -- por funcion y dominio -- para que dos "
+                    "volcados se puedan comparar");
 
     base.invalidate(fn);
     CHECK(

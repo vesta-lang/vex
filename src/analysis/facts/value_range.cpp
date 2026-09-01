@@ -22,6 +22,7 @@
  */
 #include "util/env_flags.h"
 #include "analysis/facts/value_range.h"
+#include "analysis/facts/loop_iv_bounds.h"
 
 #include "analysis/facts/loop_facts.h"
 #include "analysis/facts/range_summary.h"
@@ -751,6 +752,103 @@ struct Motor : Contexto {
 
     // --- guardas ------------------------------------------------------------
     /**
+     * @brief Lleva hacia ATRAS lo que la guarda acaba de afirmar sobre @p v0.
+     *
+     * Una guarda estrecha los dos operandos DEL `cmp` y ahi se paraba.  Pero
+     * lo que se compara casi nunca es la variable: es una CUENTA sobre ella.
+     * `i + 7 < 64` -- que es literalmente lo que escribe el desenrollado en la
+     * cabecera del bucle principal -- dice que `i < 57`, y eso no llegaba a
+     * `i`: se quedaba en el temporal, que no lo mira nadie.
+     *
+     * El precio de no hacerlo se veia entero: la variable del bucle
+     * desenrollado valia TODO SU TIPO, asi que el bucle de resto entraba con
+     * un inicio sin acotar, no se le podian contar las vueltas, y una funcion
+     * que da 64 vueltas fijas se declaraba O(n) DESPUES de optimizar -- por
+     * culpa del bucle que el optimizador acababa de fabricar.
+     *
+     * Cada regla es un DESPEJE exacto, tambien con envoltura (`v = x + y`
+     * equivale a `x = v - y` en aritmetica modular), y el intervalo se calcula
+     * con la MISMA aritmetica del dominio, que ya contesta "todo" cuando el
+     * resultado no cabe.  Por eso esto solo puede ESTRECHAR: lo despejado se
+     * corta contra lo que ya se sabia, y si no aporta, no se guarda.
+     *
+     * NO se despeja lo que no tiene inverso exacto: un `TRUNC` tira bits altos
+     * y un `*`/`<<` solo se invierte cuando divide justo y no envuelve.  Ahi
+     * el despeje seria una suposicion, y una suposicion que estrecha un rango
+     * no da un error: da otro numero.
+     */
+    void estrechar_hacia_atras(Estado &e, ir::IrValueId v0) const {
+        /* Se estrecha y se dice si mejoro: si el despeje no aporta, la cadena
+         * para ahi.  Sin esto, un `+0` daria vueltas hasta agotar el tope. */
+        auto refinar = [&](ir::IrValueId v, const ValueRange &despejado) {
+            if (v == ir::IR_NO_VALUE || v >= suelo.size()) return false;
+            if (!despejado.acotada()) return false;
+            const ValueRange antes = valor(e, v);
+            const ValueRange ahora = antes.cortar(despejado);
+            if (ahora.es_bottom()) {
+                /* Por aqui no se pasa.  Es una respuesta, no una duda: la
+                 * guarda contradice lo que ya se sabia del valor. */
+                e.inalcanzable();
+                return false;
+            }
+            if (ahora.es_top() || ahora == antes) return false;
+            e.poner(v, ahora);
+            return true;
+        };
+
+        /* En cadena y con tope.  El desenrollado encadena un despeje solo,
+         * pero `(i + 1) + 7` ya son dos y una expresion escrita a mano puede
+         * traer mas; el tope es para que un IR roto no cuelgue el compilador,
+         * no por miedo a un ciclo -- en SSA no puede haberlo. */
+        ir::IrValueId v = v0;
+        for (int saltos = 0; saltos < 4 && e.alcanzable; ++saltos) {
+            const ir::IrInstr *d = facts.def(v);
+            if (d == nullptr || d->operands.empty()) return;
+            const ValueRange rv = valor(e, v);
+            if (!rv.acotada()) return;
+            const ir::IrValueId a = d->operands[0];
+            const ir::IrValueId b =
+                d->operands.size() > 1 ? d->operands[1] : ir::IR_NO_VALUE;
+            /* Los dos operandos se leen ANTES de tocar ninguno: despejar uno
+             * usando el otro ya estrechado haria que el resultado dependiera
+             * del orden en que se miran. */
+            const ValueRange ra = valor(e, a);
+            const ValueRange rb = valor(e, b);
+            ir::IrValueId sigue = ir::IR_NO_VALUE;
+            switch (d->op) {
+            case IrOp::MOV: // v = a  =>  a = v
+                if (refinar(a, rv)) sigue = a;
+                break;
+            case IrOp::ADD: { // v = a + b  =>  a = v - b,  b = v - a
+                const bool ca = refinar(a, rv.restar(rb));
+                const bool cb = refinar(b, rv.restar(ra));
+                sigue = ca ? a : (cb ? b : ir::IR_NO_VALUE);
+                break;
+            }
+            case IrOp::SUB: { // v = a - b  =>  a = v + b,  b = a - v
+                const bool ca = refinar(a, rv.sumar(rb));
+                const bool cb = refinar(b, ra.restar(rv));
+                sigue = ca ? a : (cb ? b : ir::IR_NO_VALUE);
+                break;
+            }
+            case IrOp::NEG: // v = -a  =>  a = -v
+                if (refinar(a, rv.negar())) sigue = a;
+                break;
+            case IrOp::SEXT:
+            case IrOp::ZEXT:
+                /* Ensanchar conserva el valor, asi que estrechar lo devuelve
+                 * tal cual.  Al reves NO vale, y por eso `TRUNC` no esta. */
+                if (a < suelo.size() && refinar(a, rv.truncar(suelo[a].t)))
+                    sigue = a;
+                break;
+            default: return; // sin inverso exacto: no se inventa
+            }
+            if (sigue == ir::IR_NO_VALUE) return;
+            v = sigue;
+        }
+    }
+
+    /**
      * @brief Lo que una guarda AFIRMA sobre una arista, en las DOS ramas.
      *
      * Saber que algo no se cumple informa tanto como saber que si.  Y si lo
@@ -811,7 +909,12 @@ struct Motor : Contexto {
                 e.inalcanzable();
                 return;
             }
-            if (!nuevo.es_top()) e.poner(v, nuevo);
+            if (nuevo.es_top()) return;
+            e.poner(v, nuevo);
+            /* Y de aqui hacia atras: lo que se acaba de afirmar sobre el
+             * operando del `cmp` casi nunca es lo interesante -- lo
+             * interesante es la variable de la que ese operando se calcula. */
+            estrechar_hacia_atras(e, v);
         };
 
         switch (o) {
@@ -1358,7 +1461,8 @@ uint64_t huella_de_resumen(const FnRangeSummary *s) {
 }
 
 bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
-                           const RangeOptions &op, const RangeSummaries *sum) {
+                           const RangeOptions &op, const RangeSummaries *sum,
+                           const LoopIvBounds *ivb) {
     // Sin registro no se afirma nada: se recalcula.  Es la misma regla que rige
     // el resto del analisis -- no haber mirado no es haber comprobado.
     if (!d.registrada) return false;
@@ -1370,6 +1474,12 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
      * su lista vacia pasa el bucle sin mirar nada.  Es el guardia lo que
      * cambia, no lo que se leyo detras de el. */
     if (d.had_summaries != (sum != nullptr)) return false;
+    /* Y lo mismo con las cotas de induccion.  QUE dicen no hace falta releerlo
+     * -- salen de la funcion, y la huella de arriba ya cubre la funcion --,
+     * pero HABERLAS MIRADO si: un resultado calculado a ciegas es mas flojo, y
+     * servirlo a quien si las trae es dar el peor de los dos en silencio.  Es
+     * el mismo fallo que ya mordio con los resumenes, y la misma guarda. */
+    if (d.had_iv_bounds != (ivb != nullptr && !ivb->empty())) return false;
     // Se RELEE cada resumen que se consulto, contra el estado de ahora.
     for (const auto &leida : d.resumenes) {
         const FnRangeSummary *s = sum ? sum->buscar(leida.first) : nullptr;
@@ -1387,13 +1497,15 @@ static std::atomic<long long> g_n_motor{0};
 static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                                        const IrFacts &facts,
                                        const RangeOptions &op,
-                                       const RangeSummaries *sum);
+                                       const RangeSummaries *sum,
+                                       const LoopIvBounds *ivb);
 
 static RangeFacts calcular_rangos(const ir::IrFunction &fn,
                                   const IrFacts &facts, const RangeOptions &op,
-                                  const RangeSummaries *sum) {
+                                  const RangeSummaries *sum,
+                                  const LoopIvBounds *ivb) {
     const uint64_t t = util::reloj::ahora();
-    RangeFacts r = calcular_rangos_impl(fn, facts, op, sum);
+    RangeFacts r = calcular_rangos_impl(fn, facts, op, sum, ivb);
     g_ns_motor += util::reloj::a_ns(util::reloj::ahora() - t);
     if (g_medir_coste && (++g_n_motor % 100) == 0)
         std::fprintf(stderr, "[motor-rangos] %lld analisis | %lld ms\n",
@@ -1404,7 +1516,8 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
 static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                                        const IrFacts &facts,
                                        const RangeOptions &op,
-                                       const RangeSummaries *sum) {
+                                       const RangeSummaries *sum,
+                                       const LoopIvBounds *ivb) {
     /* --------------------------------------------------------------- reuso
      *
      * Siete sitios distintos piden rangos de la misma funcion, y medido sobre
@@ -1423,6 +1536,22 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
     RangeFacts out;
     g_coste = CosteEstado{}; // el coste que se mide es el de ESTA funcion
     Motor m(fn, facts, op, sum);
+    /* Las cotas de induccion entran como SUELO, igual que lo que dicen los
+     * resumenes de un parametro: no son una fase mas del motor, son lo que ya
+     * se sabia del valor antes de empezar a iterar.
+     *
+     * Tienen que entrar por aqui y no por una guarda porque de una guarda no
+     * salen: la del bucle desenrollado compara `i + 7`, y despejar la `i` de
+     * ahi es INCORRECTO con aritmetica que envuelve.  Lo que hace legitimo el
+     * despeje es saber que la cuenta no envuelve, y eso lo sabe el bucle -- que
+     * empieza en un sitio y avanza un paso fijo --, no el reticulo. */
+    if (ivb != nullptr) {
+        for (const IvBound &c : ivb->bounds) {
+            if (c.value >= m.suelo.size() || !c.range.acotada()) continue;
+            ValueRange &piso = m.suelo[c.value];
+            piso = piso.acotada() ? piso.cortar(c.range) : c.range;
+        }
+    }
     if (fn.blocks.empty()) {
         out.r = m.suelo;
         return out;
@@ -1469,6 +1598,7 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
      * de lecturas no puede contar: sin resumenes no se consulta ninguno, y una
      * lista vacia valdria para cualquier peticion futura. */
     out.deps.had_summaries = sum != nullptr;
+    out.deps.had_iv_bounds = ivb != nullptr && !ivb->empty();
     out.deps.registrada = true;
 
     // Densidad: cuantos de los valores de la funcion acaban teniendo rango en
@@ -1597,7 +1727,8 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
 static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
                                                    const IrFacts &facts,
                                                    const RangeOptions &op,
-                                                   const RangeSummaries *sum) {
+                                                   const RangeSummaries *sum,
+                                                   const LoopIvBounds *ivb) {
     struct EntradaCache {
         DependenciasRango deps;
         std::shared_ptr<const RangeFacts> hechos;
@@ -1607,7 +1738,7 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
 
     if (g_no_range_cache)
         return std::make_shared<const RangeFacts>(
-            calcular_rangos(fn, facts, op, sum));
+            calcular_rangos(fn, facts, op, sum, ivb));
 
     /* El indice va por la parte de la clave que se puede calcular SIN correr el
      * analisis (funcion + opciones); lo que solo se sabe despues -- que
@@ -1621,11 +1752,13 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
         auto it = cache.find(clave);
         if (it != cache.end())
             for (const EntradaCache &e : it->second)
-                if (dependencias_vigentes(e.deps, fn, op, sum)) return e.hechos;
+                if (dependencias_vigentes(e.deps, fn, op, sum, ivb))
+                    return e.hechos;
     }
 
     auto nuevos =
-        std::make_shared<const RangeFacts>(calcular_rangos(fn, facts, op, sum));
+        std::make_shared<const RangeFacts>(
+            calcular_rangos(fn, facts, op, sum, ivb));
     {
         std::lock_guard<std::mutex> g(mx_cache);
         std::vector<EntradaCache> &cajon = cache[clave];
@@ -1639,15 +1772,17 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
 
 std::shared_ptr<const RangeFacts>
 compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
-                   const RangeOptions &op, const RangeSummaries *sum) {
-    return rangos_de(fn, facts, op, sum);
+                   const RangeOptions &op, const RangeSummaries *sum,
+                   const LoopIvBounds *ivb) {
+    return rangos_de(fn, facts, op, sum, ivb);
 }
 
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
-                          const RangeOptions &op, const RangeSummaries *sum) {
+                          const RangeOptions &op, const RangeSummaries *sum,
+                          const LoopIvBounds *ivb) {
     // Quien solo va a LEERLOS deberia usar `compute_ranges_ptr` y ahorrarse
     // esta copia; esta forma se mantiene para quien necesite los suyos propios.
-    return *rangos_de(fn, facts, op, sum);
+    return *rangos_de(fn, facts, op, sum, ivb);
 }
 
 // ===========================================================================

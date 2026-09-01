@@ -57,11 +57,34 @@ struct LoopStructure {
     ir::IrBlockId body_entry = ir::IR_NO_BLOCK; ///< sucesor del header DENTRO.
     ir::IrBlockId exit = ir::IR_NO_BLOCK;       ///< sucesor del header FUERA.
     std::vector<ir::IrBlockId> body;            ///< bloques del bucle salvo H.
-    std::unordered_set<ir::IrBlockId>
-        loop_blocks;             ///< header + body (membresia).
+    /**
+     * @brief TODO lo que esta dentro, bucles anidados INCLUIDOS.
+     *
+     * Es la membresia de verdad -- un bloque del bucle de dentro esta dentro
+     * del de fuera --, y no coincide con @c body: ahi solo van los del NIVEL
+     * de este bucle.  Antes eran lo mismo, y por eso ningun bucle externo
+     * podia reconocerse jamas: el bloque que entra al de dentro saltaba a algo
+     * que no estaba en el conjunto, asi que el analisis lo declaraba "sale del
+     * cuerpo" y se rendia.  Un `for` dentro de otro `for` no tenia forma
+     * reconocible, y de ahi que el coste no supiera descontar el de fuera
+     * cuando sus vueltas eran fijas.
+     */
+    std::unordered_set<ir::IrBlockId> loop_blocks;
+    /**
+     * @brief Bucles anidados DENTRO de este.  0 = cuerpo plano.
+     *
+     * Quien vaya a CLONAR el cuerpo tiene que mirarlo: @c body trae solo el
+     * nivel de este bucle, asi que con anidados dentro no es el cuerpo entero
+     * y clonarlo dejaria el bucle de dentro compartido entre las copias.  Los
+     * que solo LEEN -- contar vueltas, acotar la induccion, el coste -- no
+     * necesitan mirarlo.
+     */
+    uint32_t inner_loops = 0;
     std::vector<HeaderPhi> phis; ///< PHIs del header, en orden.
 
     bool contains(ir::IrBlockId b) const { return loop_blocks.count(b) != 0; }
+    /// Cuerpo PLANO: sin bucles dentro.  Lo que necesita quien clona.
+    bool flat() const { return inner_loops == 0; }
 };
 
 /**

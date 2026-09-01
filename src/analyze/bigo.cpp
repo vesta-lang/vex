@@ -42,6 +42,7 @@
 #include "analyze/bigo.h"
 
 #include "analysis/asa/fact_store.h" // el coste PREGUNTA cuantas vueltas da
+#include "analysis/facts/loop_facts.h" // ...y CUALES son los bucles, y su anidamiento
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_analyze.h" // un `asm` puede llevar un bucle dentro
 #include "vx/asm/asm_cfg.h" // ...y su grafo de flujo dice cuantos y anidados
@@ -141,10 +142,53 @@ struct BoundedLoops {
      * que no habia medido.
      */
     std::unordered_set<ir::IrBlockId> not_understood;
+    /**
+     * @brief De cuantas de las de arriba la cota es una COTA, no el numero.
+     *
+     * "Da 64 vueltas" y "da como mucho 64" acotan igual -- un tope fijo es
+     * O(1), sea cual sea --, pero no se saben igual de bien: el primero sale
+     * de lo que el programa escribe y el segundo de un punto fijo que puede
+     * pararse por presupuesto.  Cuenta para bajar la confianza del resultado,
+     * no para cambiar la clase: la clase seria la misma y anunciarla con la
+     * misma seguridad seria afirmar de mas.
+     */
+    uint32_t only_bounded = 0;
     bool is_constant(ir::IrBlockId header) const {
         return constant.count(header) != 0;
     }
 };
+
+/**
+ * @brief Cuantos bucles que APORTAN contienen al bloque @p b.
+ *
+ * Es la profundidad que le importa al coste, y no es la del anidamiento: un
+ * bucle de vueltas acotadas multiplica por una constante, no por `n`.  Con
+ * `for (i < 64) { for (j < n) }` el anidamiento es dos y el coste es LINEAL.
+ *
+ * Sube por el arbol de bucles del dominio -- dominadores y aristas de
+ * retroceso -- descontando los acotados.  Antes se deducia por contencion de
+ * INDICES de bloque, apoyandose en que el frontend numera el bucle de dentro
+ * despues del de fuera: cierto en el codigo recien generado, FALSO en cuanto
+ * el optimizador toca.  El desenrollado anade sus bloques al final, con lo que
+ * el bucle de resto -- que va DETRAS, en secuencia -- quedaba con un indice
+ * por debajo del principal y parecia contenerlo: dos bucles en fila se
+ * contaban como anidados y un `for` lineal salia CUADRATICO al optimizar.
+ *
+ * El tope de saltos es por si el arbol llegara con un ciclo: un analisis no
+ * debe colgar el compilador ni cuando le mienten.
+ */
+static uint32_t effective_depth(const analysis::LoopFacts &lf,
+                                const BoundedLoops &bounded,
+                                ir::IrBlockId b) {
+    uint32_t loop = lf.innermost(b);
+    uint32_t d = 0;
+    for (int hops = 0; hops < 64 && loop != analysis::LoopFacts::NO_LOOP;
+         ++hops) {
+        if (!bounded.is_constant(lf.header_block_of(loop))) ++d;
+        loop = lf.parent_of(loop);
+    }
+    return d;
+}
 
 /// @brief Mapea una profundidad de loop a la clase polinomica que aporta.
 /**
@@ -241,165 +285,6 @@ static CostClass class_from_depth(uint32_t depth) {
 }
 
 /* ===================================================================== */
-/*  Deteccion de loops via back-edges + profundidad de anidamiento        */
-/* ===================================================================== */
-
-/**
- * @brief Determina si @c from puede alcanzar @c to en el CFG (DFS).
- *
- * Usado para confirmar back-edges: un sucesor @c h del bloque @c u con
- * @c h.id <= u.id es back-edge si @c h alcanza a @c u (ciclo real), no una
- * simple arista hacia un bloque anterior de una rama if/else ya cerrada.
- */
-static bool reaches(const ir::IrFunction &fn, ir::IrBlockId from,
-                    ir::IrBlockId to, std::vector<char> &visited) {
-    if (from == to) return true;
-    if (from >= fn.blocks.size()) return false;
-    if (visited[from]) return false;
-    visited[from] = 1;
-    for (ir::IrBlockId s : fn.blocks[from].succs) {
-        if (s < fn.blocks.size() && reaches(fn, s, to, visited)) return true;
-    }
-    return false;
-}
-
-/**
- * @brief Recolecta los headers de loop (destinos de back-edge) de la fn.
- *
- * Un back-edge es @c (u -> h) con @c h.id <= u.id y @c h alcanzable desde
- * @c u (ciclo).  El header @c h se anota como cabecera de loop.
- */
-static std::vector<ir::IrBlockId>
-collect_loop_headers(const ir::IrFunction &fn) {
-    std::vector<ir::IrBlockId> headers;
-    for (ir::IrBlockId u = 0; u < fn.blocks.size(); ++u) {
-        for (ir::IrBlockId h : fn.blocks[u].succs) {
-            if (h >= fn.blocks.size()) continue;
-            if (h <= u) {
-                // Candidato a back-edge: confirmar que h alcanza a u
-                // (ciclo real) explorando desde los sucesores de h.
-                std::vector<char> visited(fn.blocks.size(), 0);
-                bool cyclic = false;
-                for (ir::IrBlockId s : fn.blocks[h].succs) {
-                    if (s < fn.blocks.size() && reaches(fn, s, u, visited)) {
-                        cyclic = true;
-                        break;
-                    }
-                    // resetear visited entre exploraciones de sucesores.
-                    std::fill(visited.begin(), visited.end(), 0);
-                }
-                // El caso h==u (self-loop de un bloque) tambien es ciclo.
-                if (h == u) cyclic = true;
-                if (cyclic) {
-                    if (std::find(headers.begin(), headers.end(), h) ==
-                        headers.end())
-                        headers.push_back(h);
-                }
-            }
-        }
-    }
-    return headers;
-}
-
-/**
- * @brief Rango de bloques [h, last] que abarca un loop con header @c h.
- *
- * @c last es el id del bloque mas lejano con un back-edge a @c h.  Un bloque
- * @c b esta DENTRO del loop si @c h <= b <= last.  La profundidad de @c b es
- * el numero de rangos que lo contienen.
- */
-struct LoopRange {
-    ir::IrBlockId h;
-    ir::IrBlockId last;
-};
-
-/// @brief Calcula los rangos [h, last] de cada header de loop.
-static std::vector<LoopRange>
-compute_loop_ranges(const ir::IrFunction &fn,
-                    const std::vector<ir::IrBlockId> &headers) {
-    std::vector<LoopRange> ranges;
-    ranges.reserve(headers.size());
-    for (ir::IrBlockId h : headers) {
-        ir::IrBlockId last = h;
-        for (ir::IrBlockId u = 0; u < fn.blocks.size(); ++u) {
-            for (ir::IrBlockId s : fn.blocks[u].succs) {
-                if (s == h && u >= h) last = std::max(last, u);
-            }
-        }
-        ranges.push_back({h, last});
-    }
-    return ranges;
-}
-
-/// @brief Profundidad de loop de un bloque = numero de rangos que lo abarcan.
-static uint32_t block_loop_depth(ir::IrBlockId b,
-                                 const std::vector<LoopRange> &ranges) {
-    uint32_t depth = 0;
-    for (const LoopRange &r : ranges) {
-        if (b >= r.h && b <= r.last) ++depth;
-    }
-    return depth;
-}
-
-/**
- * @brief Calcula la profundidad de anidamiento de cada header de loop.
- *
- * Aproximacion estructural por contencion de rango de bloques: el frontend
- * Vesta emite el CFG de modo que un loop interno tiene su header CON id mayor
- * que el del externo y su back-edge tambien dentro del rango del externo.
- * El loop A anida dentro de B si el rango de A esta contenido estrictamente
- * en el de B.  Recibe los rangos ya calculados por @c compute_loop_ranges.
- */
-static uint32_t compute_loop_depths(const ir::IrFunction &fn,
-                                    const std::vector<LoopRange> &ranges,
-                                    std::vector<LoopCost> &out_loops,
-                                    const BoundedLoops &bounded) {
-    using Range = LoopRange;
-    uint32_t max_depth = 0;
-    for (const Range &r : ranges) {
-        /* Un bucle con las vueltas DEMOSTRADAS constantes no aporta a la
-         * profundidad: da 64 vueltas den lo que den las entradas, asi que
-         * multiplica por una constante y no por `n`.
-         *
-         * Contarlo era decir que `for (i = 0; i < 64; i++)` es lineal, y con
-         * el remainder que deja el desenrollador, CUADRATICO -- el informe
-         * llegaba a acusar al optimizador de haber empeorado el coste de una
-         * funcion cuyo coste es constante --.  No era un error: era una
-         * respuesta equivocada, que es peor.
-         *
-         * Solo las DEMOSTRADAS.  Una cota inferida por rangos acota el bucle
-         * pero no dice que sea constante para toda entrada, y descontarla
-         * seria afirmar de mas. */
-        if (bounded.is_constant(r.h)) continue;
-
-        // Profundidad = 1 + numero de loops que contienen estrictamente a r.
-        uint32_t depth = 1;
-        for (const Range &o : ranges) {
-            if (o.h == r.h && o.last == r.last) continue;
-            if (bounded.is_constant(o.h)) continue; // idem para los de fuera
-            // o contiene estrictamente a r.
-            if (o.h <= r.h && o.last >= r.last &&
-                !(o.h == r.h && o.last == r.last))
-                ++depth;
-        }
-        max_depth = std::max(max_depth, depth);
-
-        // Linea fuente aproximada del header (primera instr con source_line).
-        uint32_t line = 0;
-        if (r.h < fn.blocks.size()) {
-            for (const auto &ins : fn.blocks[r.h].instrs) {
-                if (ins.source_line != 0) {
-                    line = ins.source_line;
-                    break;
-                }
-            }
-        }
-        out_loops.push_back({r.h, depth, line});
-    }
-    return max_depth;
-}
-
-/* ===================================================================== */
 /*  Deteccion de recursion + divide-y-venceras                            */
 /* ===================================================================== */
 
@@ -461,6 +346,26 @@ static BoundedLoops ask_bounded_loops(const ir::IrFunction &fn,
         if (f->about.kind != analysis::asa::Subject::Kind::Block) continue;
         b.constant.insert(static_cast<ir::IrBlockId>(f->about.id));
     }
+    /* Y los que solo tienen COTA.  Para el coste acotan igual: un bucle que no
+     * puede dar mas de N vueltas, con N fijo, aporta una constante -- da igual
+     * si se sabe el numero exacto o solo el tope.
+     *
+     * Es el caso del bucle de RESTO que fabrica el desenrollado, y sin esto se
+     * pagaba caro: el resto no lleva la cuenta escrita en ningun sitio (la
+     * hereda de donde dejo el bucle principal), asi que nunca tenia trip
+     * exacto, y una funcion de vueltas fijas se declaraba O(n) DESPUES de
+     * optimizar por culpa del bucle que el optimizador acababa de crear.
+     *
+     * No cuela un bucle de verdad variable: la cota sale de los rangos, y el
+     * rango ENTERO del tipo -- que es como el analisis dice "cualquier valor"
+     * -- esta rechazado en origen.  Un `for (i = 0; i < n; i++)` con `n` sin
+     * acotar no produce este hecho. */
+    for (const analysis::asa::Fact *f :
+         facts->find_all("loop.trip_at_most", fn.name.c_str(), here)) {
+        if (f->about.kind != analysis::asa::Subject::Kind::Block) continue;
+        const ir::IrBlockId h = static_cast<ir::IrBlockId>(f->about.id);
+        if (b.constant.insert(h).second) ++b.only_bounded;
+    }
     /* Y los que NO se entendieron, que es otra cosa: aqui no entra el bucle
      * cuyo limite depende de la ejecucion -- ese se entiende y es O(n) --,
      * sino el que ni se reconocio como bucle contado.  El dominio lo dice con
@@ -481,18 +386,44 @@ CostResult analyze_function(const ir::IrFunction &fn,
     CostResult r;
     r.function = fn.name;
 
-    // 1. Loops + profundidad de anidamiento.
-    std::vector<ir::IrBlockId> headers = collect_loop_headers(fn);
-    std::vector<LoopRange> ranges = compute_loop_ranges(fn, headers);
+    /* 1. Bucles y anidamiento, DEL PRODUCTOR, no deducidos aqui.
+     *
+     * Este analisis tenia su propio detector: cabecera = destino de una arista
+     * hacia un indice menor, cuerpo = intervalo de indices, anidamiento =
+     * contencion de esos intervalos.  Todo eso da por hecho como numera el
+     * frontend, y deja de valer en cuanto el optimizador reordena -- que es
+     * justo el codigo del que se informa en POST-opt.
+     *
+     * El dominio lo saca de los dominadores, que no dependen del orden. */
+    const analysis::LoopFacts lf = analysis::compute_loop_facts(fn);
+    std::vector<ir::IrBlockId> headers;
+    headers.reserve(lf.loop_count);
+    for (uint32_t L = 0; L < lf.loop_count; ++L)
+        headers.push_back(
+            static_cast<ir::IrBlockId>(lf.header_block_of(L)));
     const BoundedLoops bounded = ask_bounded_loops(fn, facts, stage);
-    uint32_t max_depth = compute_loop_depths(fn, ranges, r.loops, bounded);
+
+    uint32_t max_depth = 0;
+    for (ir::IrBlockId h : headers) {
+        const uint32_t depth = effective_depth(lf, bounded, h);
+        if (depth > max_depth) max_depth = depth;
+        // Linea fuente aproximada del header (primera instr con source_line).
+        uint32_t line = 0;
+        if (h < fn.blocks.size())
+            for (const auto &ins : fn.blocks[h].instrs)
+                if (ins.source_line != 0) {
+                    line = ins.source_line;
+                    break;
+                }
+        r.loops.push_back({h, depth, line});
+    }
     /* Cuantos de los bucles QUE ESTE ANALISIS CUENTA no se entendieron.
      *
-     * Se cruza con `headers` y no se coge el tamano del conjunto: los dos
-     * lados detectan bucles por su cuenta y no ven los mismos -- el dominio
-     * del ASA ve tambien los que el andamiaje de excepciones mete --, asi que
-     * comparar sus cuentas a pelo daba "no se entendio ninguno" en funciones
-     * con un `for` perfectamente reconocido, y las tiraba a O(?). */
+     * Se cruza con `headers` y no se coge el tamano del conjunto: el dominio
+     * habla tambien de bucles que aqui no se cuentan -- los que mete el
+     * andamiaje de excepciones --, asi que comparar las cuentas a pelo daba
+     * "no se entendio ninguno" en funciones con un `for` perfectamente
+     * reconocido, y las tiraba a O(?). */
     uint32_t not_understood_here = 0;
     for (ir::IrBlockId h : headers)
         if (bounded.not_understood.count(h) != 0) ++not_understood_here;
@@ -506,7 +437,7 @@ CostResult analyze_function(const ir::IrFunction &fn,
     //      las self-calls (ya las modela la deteccion de recursion) y las
     //      llamadas sin func_name (indirectas: closures/virtuales).
     for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
-        uint32_t depth = block_loop_depth(bi, ranges);
+        uint32_t depth = effective_depth(lf, bounded, bi);
         for (const auto &ins : fn.blocks[bi].instrs) {
             if ((ins.op == ir::IrOp::CALL || ins.op == ir::IrOp::TAILCALL) &&
                 !ins.func_name.empty() && ins.func_name != fn.name) {
@@ -529,7 +460,7 @@ CostResult analyze_function(const ir::IrFunction &fn,
     uint32_t asm_depth_total = 0;
     bool asm_forma_segura = true;
     for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
-        const uint32_t depth_ir = block_loop_depth(bi, ranges);
+        const uint32_t depth_ir = effective_depth(lf, bounded, bi);
         for (const auto &ins : fn.blocks[bi].instrs) {
             /* El cuerpo NO esta siempre en el mismo sitio: un `asm` con
              * operandos ligados lo lleva en @c func_name, y uno opaco (sin
@@ -631,6 +562,13 @@ CostResult analyze_function(const ir::IrFunction &fn,
      * nada mas.  Lo que si cambia es que quien COMPARA dos clases mire esto
      * antes de afirmar que una empeoro. */
     if (r.loops_not_understood > 0 && !headers.empty())
+        r.confidence = Confidence::HEURISTIC;
+
+    /* Y si algun bucle se descarto por una COTA y no por el numero exacto, la
+     * clase es la misma pero no se sabe igual de bien: un tope que sale de un
+     * punto fijo admite que ese punto fijo se parara por presupuesto.  Baja la
+     * confianza; no cambia la cota, porque un tope fijo es un tope fijo. */
+    if (bounded.only_bounded > 0 && r.confidence == Confidence::EXACT)
         r.confidence = Confidence::HEURISTIC;
 
     // 4. Construir la explicacion legible.

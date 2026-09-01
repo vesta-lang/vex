@@ -114,6 +114,18 @@ bool analyze_loop(const IrFunction &fn, const analysis::LoopFacts &lf,
     // LCSSA.
     out.st = analysis::detect_loop_structure(fn, lf, L);
     if (!out.st.valid) return false;
+    /* Y con el cuerpo PLANO, que es lo que aqui se clona.
+     *
+     * `body` trae solo los bloques del NIVEL de este bucle, asi que con uno
+     * anidado dentro no es el cuerpo entero: cada copia acabaria saltando al
+     * MISMO bucle interior en vez de a una copia suya.  Antes esto no hacia
+     * falta porque un bucle con otro dentro ni llegaba a ser valido -- el
+     * analisis lo rechazaba por "sale del cuerpo" --, y eso era un fallo del
+     * analisis que tapaba esta condicion.  Ahora se dice donde toca.
+     *
+     * Desenrollar el de fuera se puede hacer, y clonando bien el de dentro; es
+     * trabajo para el desenrollador, no un limite del reconocedor. */
+    if (!out.st.flat()) return false;
 
     // 2) Variable de induccion contada (creciente, stride constante > 0).
     if (!analysis::detect_loop_iv(fn, def_block, out.st.header,

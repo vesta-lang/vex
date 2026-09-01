@@ -67,11 +67,15 @@ struct MemoryAnalysis {
 struct LoopsAnalysis {
     static char ID;
 };
+struct IvBoundsAnalysis {
+    static char ID;
+};
 struct BoundaryAnalysis {
     static char ID;
 };
 char MemoryAnalysis::ID = 0;
 char LoopsAnalysis::ID = 0;
+char IvBoundsAnalysis::ID = 0;
 char BoundaryAnalysis::ID = 0;
 } // namespace
 
@@ -145,7 +149,13 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {
         *manager_.get_or_compute<RangeAnalysis,
                                  std::shared_ptr<const RangeFacts>>(
             key, [this, &fn]() {
-                return compute_ranges_ptr(fn, structure(fn));
+                /* Con las cotas de induccion.  Es conocimiento que el
+                 * compilador YA tiene y que los rangos no pueden sacar solos:
+                 * la guarda de un bucle desenrollado compara `i + 7`, y
+                 * despejar la `i` con aritmetica que envuelve es incorrecto.
+                 * Sin esto, la variable del bucle valia todo su tipo. */
+                return compute_ranges_ptr(fn, structure(fn), RangeOptions{},
+                                          nullptr, &iv_bounds(fn));
             });
     if (fresh) {
         /* La certeza sale del propio analisis, no de quien pregunta: llegar a
@@ -183,6 +193,23 @@ const LoopFacts &FactBase::loops(const ir::IrFunction &fn) {
     }
     return manager_.get_or_compute<LoopsAnalysis, LoopFacts>(
         key, [&fn]() { return compute_loop_facts(fn); });
+}
+
+const LoopIvBounds &FactBase::iv_bounds(const ir::IrFunction &fn) {
+    ++queries_;
+    const std::string key = key_of(fn);
+    if (!manager_.cached<IvBoundsAnalysis>(key)) {
+        ++computations_;
+        /* Demostrado: sale de la FORMA del bucle y de constantes escritas, sin
+         * punto fijo que pueda pararse por presupuesto ni aproximacion que
+         * pueda quedarse corta.  Por eso puede alimentar a los rangos y no al
+         * reves -- si preguntara, se morderian la cola. */
+        mark(kProducerLoops, key, Certainty::Proven, kProducerStructure);
+    }
+    return manager_.get_or_compute<IvBoundsAnalysis, LoopIvBounds>(
+        key, [this, &fn]() {
+            return compute_loop_iv_bounds(fn, structure(fn), loops(fn));
+        });
 }
 
 const RangeSummaries &FactBase::boundary(const ir::IrModule &mod) {

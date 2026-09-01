@@ -17,6 +17,7 @@
 #include "analysis/facts/loop_facts.h"
 #include "analyze/bigo.h" // el CONSUMIDOR: deja de contar por anidamiento
 #include "analysis/facts/loop_iv.h"
+#include "analysis/facts/loop_iv_bounds.h"
 #include "analysis/facts/loop_structure.h"
 #include "analysis/facts/loop_trip_count.h"
 #include "ir/ssa_ir.h"
@@ -400,6 +401,328 @@ static void an_accumulator_does_not_hide_the_iv() {
     CHECK(tc.known() && tc.trip == 64, "y salen las 64 vueltas");
 }
 
+/**
+ * @brief Un bucle DENTRO de otro tambien se reconoce, y el de fuera se
+ *        descuenta si sus vueltas estan acotadas.
+ *
+ * `for (i = 0; i < 32; i++) { for (j = 0; j < 16; j++) {} }` recorre 512
+ * veces: es CONSTANTE.  Salia O(n), y por dos fallos encadenados que no se
+ * veian por separado:
+ *
+ *   1. la membresia de un bucle se calculaba como "los bloques cuyo bucle MAS
+ *      INTERNO es este", asi que el bloque que entra al de dentro parecia
+ *      saltar fuera y el de fuera se rechazaba con "sale del cuerpo".  Ningun
+ *      bucle externo podia ser reconocido JAMAS;
+ *   2. el coste deducia el anidamiento por contencion de INDICES de bloque,
+ *      que es una suposicion sobre como numera el frontend y deja de valer en
+ *      cuanto el optimizador reordena.
+ *
+ * El test los separa: primero que la FORMA se reconozca (1), despues que el
+ * coste descuente (2).
+ */
+static void an_outer_loop_is_recognized_too() {
+    std::printf("\n[un bucle externo tambien se reconoce, y se descuenta]\n");
+
+    /* Valores: 0=cte 0 (init i) | 1=phi i | 2=cte 32 | 3=cmp i<32 | 4=i+1
+     * 5=cte 1 | 6=cte 0 (init j) | 7=phi j | 8=cte 16 | 9=cmp j<16 | 10=j+1 */
+    ir::IrFunction fn;
+    fn.name = "anidado";
+    for (int i = 0; i < 11; ++i) fn.values.push_back({});
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+    auto cte = [&](ir::IrValueId dst, uint64_t v) {
+        IrInstr c = val(IrOp::CONST, dst, IrType::I64);
+        c.imm = v;
+        return c;
+    };
+
+    IrBlock entry; // b0
+    entry.id = 0;
+    entry.name = "entry";
+    entry.instrs.push_back(cte(0, 0));
+    /* El arranque de `j` y el paso viven en el preheader del de fuera, que es
+     * donde los deja el frontend. */
+    entry.instrs.push_back(cte(6, 0));
+    entry.instrs.push_back(cte(5, 1));
+    entry.instrs.push_back(br(1));
+
+    IrBlock outer; // b1: for (i = 0; i < 32; i++)
+    outer.id = 1;
+    outer.name = "outer";
+    {
+        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
+        phi.phi_args.push_back({/*value=*/4, /*block=*/4});
+        outer.instrs.push_back(phi);
+        outer.instrs.push_back(cte(2, 32));
+        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
+        cmp.operands.push_back(1);
+        cmp.operands.push_back(2);
+        outer.instrs.push_back(cmp);
+        IrInstr t = brcond(2, 5);
+        t.operands[0] = 3;
+        outer.instrs.push_back(t);
+    }
+
+    IrBlock inner; // b2: for (j = 0; j < 16; j++)
+    inner.id = 2;
+    inner.name = "inner";
+    {
+        IrInstr phi = val(IrOp::PHI, 7, IrType::I64);
+        phi.phi_args.push_back({/*value=*/6, /*block=*/1});
+        phi.phi_args.push_back({/*value=*/10, /*block=*/3});
+        inner.instrs.push_back(phi);
+        inner.instrs.push_back(cte(8, 16));
+        IrInstr cmp = val(IrOp::CMP_LT, 9, IrType::BOOL);
+        cmp.operands.push_back(7);
+        cmp.operands.push_back(8);
+        inner.instrs.push_back(cmp);
+        IrInstr t = brcond(3, 4);
+        t.operands[0] = 9;
+        inner.instrs.push_back(t);
+    }
+
+    IrBlock inner_body; // b3: j++
+    inner_body.id = 3;
+    inner_body.name = "inner_body";
+    {
+        IrInstr add = val(IrOp::ADD, 10, IrType::I64);
+        add.operands.push_back(7);
+        add.operands.push_back(5);
+        inner_body.instrs.push_back(add);
+        inner_body.instrs.push_back(br(2));
+    }
+
+    IrBlock outer_latch; // b4: i++
+    outer_latch.id = 4;
+    outer_latch.name = "outer_latch";
+    {
+        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
+        add.operands.push_back(1);
+        add.operands.push_back(5);
+        outer_latch.instrs.push_back(add);
+        outer_latch.instrs.push_back(br(1));
+    }
+
+    fn.blocks = {entry, outer, inner, inner_body, outer_latch,
+                 block(5, "exit", ret())};
+    fn.blocks[0].succs = {1};
+    fn.blocks[1].succs = {2, 5};
+    fn.blocks[2].succs = {3, 4};
+    fn.blocks[3].succs = {2};
+    fn.blocks[4].succs = {1};
+    fn.blocks[1].preds = {0, 4};
+    fn.blocks[2].preds = {1, 3};
+    fn.blocks[3].preds = {2};
+    fn.blocks[4].preds = {2};
+    fn.blocks[5].preds = {1};
+
+    const LoopFacts lf = compute_loop_facts(fn);
+    CHECK(lf.loop_count == 2, "hay dos bucles");
+
+    const uint32_t outer_id = lf.innermost(1);
+    const uint32_t inner_id = lf.innermost(2);
+    CHECK(lf.parent_of(inner_id) == outer_id,
+          "el de dentro cuelga del de fuera");
+
+    // (1) La FORMA del bucle EXTERNO se reconoce.
+    const LoopStructure so = detect_loop_structure(fn, lf, outer_id);
+    CHECK(so.valid, "el bucle externo tiene forma de bucle contado");
+    CHECK(so.inner_loops == 1 && !so.flat(),
+          "y se dice que lleva otro dentro: quien clone tiene que mirarlo");
+    CHECK(so.contains(3),
+          "un bloque del bucle de DENTRO esta dentro del de fuera");
+
+    const LoopStructure si = detect_loop_structure(fn, lf, inner_id);
+    CHECK(si.valid && si.flat(), "el de dentro sigue siendo plano");
+
+    // Y sus vueltas se cuentan: 32 el de fuera, 16 el de dentro.
+    const IrFacts hechos = build_ir_facts(fn);
+    LoopIV ivo, ivi;
+    CHECK(detect_loop_iv(fn, hechos.def_block, so.header, so.preheader,
+                         so.latch, ivo),
+          "el externo tiene variable de induccion");
+    CHECK(compute_trip_count(fn, hechos.def_block, ivo).trip == 32,
+          "y da 32 vueltas");
+    CHECK(detect_loop_iv(fn, hechos.def_block, si.header, si.preheader,
+                         si.latch, ivi),
+          "el interno tambien");
+    CHECK(compute_trip_count(fn, hechos.def_block, ivi).trip == 16, "y da 16");
+
+    // Y sus variables quedan acotadas SIN preguntar a los rangos.
+    const LoopIvBounds cotas = compute_loop_iv_bounds(fn, hechos, lf);
+    CHECK(cotas.bounds.size() == 2, "las dos variables quedan acotadas");
+    int64_t lo = 0, hi = 0;
+    bool vista = false;
+    for (const IvBound &c : cotas.bounds)
+        if (c.value == ivo.phi) vista = c.range.vista_con_signo(lo, hi);
+    CHECK(vista && lo == 0 && hi == 32,
+          "la del externo va de 0 a 32 -- el 32 es el valor con el que SALE");
+
+    // (2) El coste: con las vueltas demostradas, ninguno cuenta.
+    const analyze::CostResult sin_hechos = analyze::analyze_function(fn);
+    CHECK(sin_hechos.max_loop_depth == 2,
+          "sin hechos, dos bucles anidados son profundidad dos");
+
+    analysis::asa::FactStore store;
+    const ir::IrBlockId cabeceras[2] = {so.header, si.header};
+    const int64_t vueltas[2] = {32, 16};
+    for (int k = 0; k < 2; ++k) {
+        analysis::LoopTripInfo trip;
+        trip.trip = vueltas[k];
+        analysis::asa::Fact f;
+        CHECK(analysis::asa::loop_trip_fact(store, fn, cabeceras[k], trip,
+                                            analysis::asa::kStagePreOpt,
+                                            analysis::asa::Source::Static, f),
+              "hay hecho que publicar");
+        store.add(std::move(f));
+    }
+    const analyze::CostResult con_hechos =
+        analyze::analyze_function(fn, &store, analysis::asa::kStagePreOpt);
+    CHECK(con_hechos.max_loop_depth == 0,
+          "con las dos cuentas demostradas, el coste es constante");
+}
+
+/**
+ * @brief Un bucle de vueltas fijas POR FUERA de uno variable no lo hace
+ *        cuadratico.
+ *
+ * `for (i = 0; i < 64; i++) { for (j = 0; j < n; j++) {} }` recorre 64*n, que
+ * es LINEAL.  El coste sumaba el anidamiento a secas y decia O(n^2): la clase
+ * equivocada, que es peor que una duda.
+ */
+static void a_constant_outer_loop_does_not_square_the_cost() {
+    std::printf("\n[un bucle fijo por fuera no eleva el grado]\n");
+
+    /* Igual que el de arriba pero el limite de dentro es un PARAMETRO, asi que
+     * ese bucle no se puede contar.  Valores: 0=cte 0 | 1=phi i | 2=cte 64 |
+     * 3=cmp | 4=i+1 | 5=cte 1 | 6=cte 0 | 7=phi j | 8=PARAM n | 9=cmp |
+     * 10=j+1 */
+    ir::IrFunction fn;
+    fn.name = "mixto";
+    for (int i = 0; i < 11; ++i) fn.values.push_back({});
+    fn.params.push_back(8);
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+    auto cte = [&](ir::IrValueId dst, uint64_t v) {
+        IrInstr c = val(IrOp::CONST, dst, IrType::I64);
+        c.imm = v;
+        return c;
+    };
+
+    IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    entry.instrs.push_back(cte(0, 0));
+    entry.instrs.push_back(cte(6, 0));
+    entry.instrs.push_back(cte(5, 1));
+    entry.instrs.push_back(br(1));
+
+    IrBlock outer;
+    outer.id = 1;
+    outer.name = "outer";
+    {
+        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+        phi.phi_args.push_back({0, 0});
+        phi.phi_args.push_back({4, 4});
+        outer.instrs.push_back(phi);
+        outer.instrs.push_back(cte(2, 64));
+        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
+        cmp.operands.push_back(1);
+        cmp.operands.push_back(2);
+        outer.instrs.push_back(cmp);
+        IrInstr t = brcond(2, 5);
+        t.operands[0] = 3;
+        outer.instrs.push_back(t);
+    }
+
+    IrBlock inner;
+    inner.id = 2;
+    inner.name = "inner";
+    {
+        IrInstr phi = val(IrOp::PHI, 7, IrType::I64);
+        phi.phi_args.push_back({6, 1});
+        phi.phi_args.push_back({10, 3});
+        inner.instrs.push_back(phi);
+        IrInstr cmp = val(IrOp::CMP_LT, 9, IrType::BOOL);
+        cmp.operands.push_back(7);
+        cmp.operands.push_back(8); // el PARAMETRO: no se sabe cuanto vale
+        inner.instrs.push_back(cmp);
+        IrInstr t = brcond(3, 4);
+        t.operands[0] = 9;
+        inner.instrs.push_back(t);
+    }
+
+    IrBlock inner_body;
+    inner_body.id = 3;
+    inner_body.name = "inner_body";
+    {
+        IrInstr add = val(IrOp::ADD, 10, IrType::I64);
+        add.operands.push_back(7);
+        add.operands.push_back(5);
+        inner_body.instrs.push_back(add);
+        inner_body.instrs.push_back(br(2));
+    }
+
+    IrBlock outer_latch;
+    outer_latch.id = 4;
+    outer_latch.name = "outer_latch";
+    {
+        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
+        add.operands.push_back(1);
+        add.operands.push_back(5);
+        outer_latch.instrs.push_back(add);
+        outer_latch.instrs.push_back(br(1));
+    }
+
+    fn.blocks = {entry, outer, inner, inner_body, outer_latch,
+                 block(5, "exit", ret())};
+    fn.blocks[0].succs = {1};
+    fn.blocks[1].succs = {2, 5};
+    fn.blocks[2].succs = {3, 4};
+    fn.blocks[3].succs = {2};
+    fn.blocks[4].succs = {1};
+    fn.blocks[1].preds = {0, 4};
+    fn.blocks[2].preds = {1, 3};
+    fn.blocks[3].preds = {2};
+    fn.blocks[4].preds = {2};
+    fn.blocks[5].preds = {1};
+
+    const LoopFacts lf = compute_loop_facts(fn);
+    const analyze::CostResult sin_hechos = analyze::analyze_function(fn);
+    CHECK(sin_hechos.max_loop_depth == 2, "sin hechos, el anidamiento manda");
+
+    /* Solo el de FUERA esta contado.  El de dentro depende de `n` y sigue
+     * aportando: la respuesta es lineal, ni constante ni cuadratica. */
+    analysis::asa::FactStore store;
+    analysis::LoopTripInfo trip;
+    trip.trip = 64;
+    analysis::asa::Fact f;
+    CHECK(analysis::asa::loop_trip_fact(
+              store, fn, (ir::IrBlockId)lf.header_block_of(lf.innermost(1)),
+              trip, analysis::asa::kStagePreOpt, analysis::asa::Source::Static,
+              f),
+          "hay hecho que publicar");
+    store.add(std::move(f));
+
+    const analyze::CostResult con_hechos =
+        analyze::analyze_function(fn, &store, analysis::asa::kStagePreOpt);
+    CHECK(con_hechos.max_loop_depth == 1,
+          "el de fuera no cuenta y el de dentro si: LINEAL, no cuadratico");
+}
+
 int main() {
     std::printf("=== test_loop_facts (Fase 0.25: LoopFacts) ===\n");
 
@@ -483,6 +806,8 @@ int main() {
     counted_loop_before_optimizing();
     constant_trip_loop_is_not_linear();
     an_accumulator_does_not_hide_the_iv();
+    an_outer_loop_is_recognized_too();
+    a_constant_outer_loop_does_not_square_the_cost();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

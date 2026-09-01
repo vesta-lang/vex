@@ -568,6 +568,9 @@ struct RangeBlockState {
 // reves): aqui basta con nombrarlos.
 struct FnRangeSummary;
 struct RangeSummaries;
+/* Igual con las cotas de induccion (loop_iv_bounds.h incluye a este): aqui
+ * basta con nombrarlas.  Entran como SUELO, no como una fase mas del motor. */
+struct LoopIvBounds;
 
 /**
  * @brief Lo que el analisis LEYO ademas de la funcion, y como estaba entonces.
@@ -612,6 +615,16 @@ struct DependenciasRango {
      * no solo a lo que hay detras: no haber mirado no es haber comprobado.
      */
     bool had_summaries = false;
+    /**
+     * @brief Si HABIA cotas de variables de induccion cuando se calculo esto.
+     *
+     * Mismo guardia y por el mismo motivo que @c had_summaries: las cotas se
+     * derivan de la funcion -- asi que @c huella_ir ya las cubre CUANDO se
+     * miran --, pero un resultado calculado SIN ellas no vale para una
+     * peticion que si las trae.  Sin este bit, un modulo compilado por un
+     * camino que no las pasa serviria sus rangos, mas flojos, al que si.
+     */
+    bool had_iv_bounds = false;
     /// @c false si no se llego a registrar nada (analisis sin dependencias
     /// conocidas): entonces no se afirma que valga, se recalcula.
     bool registrada = false;
@@ -632,7 +645,8 @@ uint64_t huella_de_resumen(const FnRangeSummary *s);
  * que es lo que hace que preguntar salga mas barato que recalcular.
  */
 bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
-                           const RangeOptions &op, const RangeSummaries *sum);
+                           const RangeOptions &op, const RangeSummaries *sum,
+                           const LoopIvBounds *ivb = nullptr);
 
 /// Rango de cada valor SSA, indexado por value-id.
 struct RangeFacts;
@@ -648,7 +662,8 @@ struct RangeFacts;
 std::shared_ptr<const RangeFacts>
 compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
                    const RangeOptions &op = RangeOptions{},
-                   const RangeSummaries *sum = nullptr);
+                   const RangeSummaries *sum = nullptr,
+                   const LoopIvBounds *ivb = nullptr);
 
 struct RangeFacts {
     std::vector<ValueRange> r;
@@ -708,7 +723,8 @@ struct RangeFacts {
  */
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op = RangeOptions{},
-                          const struct RangeSummaries *sum = nullptr);
+                          const struct RangeSummaries *sum = nullptr,
+                          const LoopIvBounds *ivb = nullptr);
 
 /**
  * @brief Recorre un bloque entregando el rango de un valor EN CADA PUNTO.

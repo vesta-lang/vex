@@ -673,6 +673,22 @@ void produce_loops(Production &p) {
             f.what.domain = kProducerLoops;
             f.what.code = "loop.header";
             f.what.a = lf.depth_of(b);
+            /* Y CUAL lo contiene, que no es lo mismo que a que profundidad
+             * esta.  Con la profundidad sola, quien la consume no puede
+             * descontar los bucles de fuera que resulten constantes -- y ese
+             * descuento es lo que separa `for(64) { for(n) }`, que es lineal,
+             * de uno cuadratico de verdad.
+             *
+             * El dominio ya tiene el arbol de anidamiento; lo que faltaba era
+             * publicarlo.  Sin el, el consumidor se lo inventaba por indices
+             * de bloque, que es una suposicion sobre como numera el frontend y
+             * deja de valer en cuanto el optimizador reordena. */
+            const uint32_t li = lf.innermost(b);
+            const uint32_t padre =
+                li == LoopFacts::NO_LOOP ? LoopFacts::NO_LOOP : lf.parent_of(li);
+            f.what.b = padre == LoopFacts::NO_LOOP
+                           ? -1
+                           : static_cast<int64_t>(lf.header_block_of(padre));
             /* El detalle lleva DATOS, no una frase: el texto sale del catalogo
              * multi-idioma como el de cualquier otro diagnostico.  Aqui habia
              * espanol escrito a mano, que es justo lo que un usuario en otro
@@ -735,9 +751,21 @@ void produce_loops(Production &p) {
             const LoopTripInfo tc =
                 compute_trip_count(fn, st.def_block, iv, &p.base.ranges(fn));
             if (!tc.bounded()) {
-                /* La razon la da el ANALISIS, no quien pregunta: el ya sabe
-                 * en cual de sus pasos se quedo. */
-                p.say_unknown(about, tc.reason, "loop.trip_unknown",
+                /* La razon Y EL CASO los da el ANALISIS, no quien pregunta: el
+                 * ya sabe en cual de sus pasos se quedo, y lo dejo escrito.
+                 *
+                 * Publicar `loop.trip_unknown` para los cuatro tiraba justo lo
+                 * que se acababa de calcular.  La CLASE (`ShapeNotRecognized`
+                 * vs `RuntimeDependent`) es lo que puede leer quien no conoce
+                 * este analisis; el codigo es cual de ellos fue, que es lo que
+                 * dice DONDE mirar -- un inicio que no es constante y una
+                 * guarda que no se cubre no se arreglan en el mismo sitio ni
+                 * por la misma persona.  Justo encima, el rechazo de forma ya
+                 * publica su `ls.why`; este se habia quedado atras. */
+                p.say_unknown(about, tc.reason,
+                              (tc.code != nullptr && tc.code[0] != '\0')
+                                  ? tc.code
+                                  : "loop.trip_unknown",
                               kProducerLoops, "");
                 continue;
             }

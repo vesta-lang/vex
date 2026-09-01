@@ -45,6 +45,7 @@
 #include "analysis/asa/fact.h"
 #include "analysis/facts/ir_facts.h"
 #include "analysis/facts/loop_facts.h"
+#include "analysis/facts/loop_iv_bounds.h"
 #include "analysis/facts/range_summary.h"
 #include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
@@ -165,6 +166,19 @@ class FactBase {
      * @return Los hechos de bucle, cacheados mientras viva la base.
      */
     const LoopFacts &loops(const ir::IrFunction &fn);
+
+    /**
+     * @brief Hasta donde llega la variable de cada bucle CONTADO de @p fn.
+     *
+     * Se pide ANTES que los rangos y va DENTRO de ellos, como suelo.  El orden
+     * no es casual: esto no consulta rangos -- solo la forma del bucle y las
+     * constantes escritas --, asi que puede alimentarlos sin que se muerdan la
+     * cola.  Al reves seria imposible.
+     *
+     * @param fn Funcion IR a consultar.
+     * @return Las cotas por valor SSA, cacheadas mientras viva la base.
+     */
+    const LoopIvBounds &iv_bounds(const ir::IrFunction &fn);
 
     /**
      * @brief Lo que cruza la frontera de cada funcion del modulo.

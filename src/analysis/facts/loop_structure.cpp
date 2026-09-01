@@ -61,15 +61,39 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
      * hace antes de elegir candidatos. */
     st.header = H;
 
-    // Bloques del bucle (innermost == loop_id).  Cuerpo = todos salvo H.
+    /* Membresia y CUERPO son dos cosas, y confundirlas era lo que impedia
+     * reconocer un bucle externo.
+     *
+     *   - dentro del bucle esta todo lo que cuelga de el, bucles anidados
+     *     incluidos: se sube por el arbol de anidamiento hasta encontrarlo;
+     *   - el CUERPO es solo su nivel, que es lo que clona el desenrollado.
+     *
+     * Con las dos cosas mezcladas, el bloque que entra al bucle de dentro
+     * saltaba a algo "de fuera" y el analisis se rendia con `body_exits`. */
     const size_t Nb = fn.blocks.size();
     st.loop_blocks.insert(H);
     for (size_t bi = 0; bi < Nb; ++bi) {
-        if (lf.innermost((IrBlockId)bi) == loop_id) {
+        const uint32_t mio = lf.innermost((IrBlockId)bi);
+        if (mio == LoopFacts::NO_LOOP) continue;
+        if (mio == loop_id) {
             st.loop_blocks.insert((IrBlockId)bi);
             if ((IrBlockId)bi != H) st.body.push_back((IrBlockId)bi);
+            continue;
+        }
+        /* De un bucle de dentro?  Se sube por los padres.  El tope es por si
+         * el arbol llegara con un ciclo: un analisis no debe colgar el
+         * compilador ni cuando le mienten. */
+        uint32_t p = lf.parent_of(mio);
+        for (int saltos = 0; saltos < 64 && p != LoopFacts::NO_LOOP; ++saltos) {
+            if (p == loop_id) {
+                st.loop_blocks.insert((IrBlockId)bi);
+                break;
+            }
+            p = lf.parent_of(p);
         }
     }
+    for (uint32_t L = 0; L < lf.loop_count; ++L)
+        if (lf.parent_of(L) == loop_id) ++st.inner_loops;
     if (st.body.empty()) return bail("loop.degenerate"); // self-loop
 
     // Header limpio: [PHIs...] + [instr que define cond] + [br_cond].  El
@@ -169,8 +193,15 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     }
     if (st.latch == IR_NO_BLOCK) return bail("loop.no_latch");
 
-    // Salida UNICA: ningun bloque del cuerpo salta FUERA del bucle.
-    for (IrBlockId b : st.body) {
+    /* Salida UNICA: nada de lo que hay dentro salta FUERA del bucle.
+     *
+     * Se recorre `loop_blocks` y no `body`: con un bucle anidado dentro, el
+     * cuerpo es solo el nivel de este y un `break` escrito en el bucle de
+     * DENTRO se saltaria la comprobacion -- el bucle tendria dos salidas y
+     * este analisis afirmaria que tiene una.  Contar sus vueltas con eso seria
+     * dar un numero equivocado, que es peor que no darlo. */
+    for (IrBlockId b : st.loop_blocks) {
+        if (b == H) continue; // el header sale a proposito: es la guarda
         const auto &bi = fn.blocks[b].instrs;
         if (bi.empty()) return bail("loop.empty_body_block");
         const IrInstr &bt = bi.back();
