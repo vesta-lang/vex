@@ -131,6 +131,16 @@ CostClass parse_cost_class(const std::string &expr) {
  */
 struct BoundedLoops {
     std::unordered_set<ir::IrBlockId> constant;
+    /**
+     * @brief Cabeceras que el dominio de bucles no llego a entender.
+     *
+     * Se pregunta aparte de las contadas porque son cosas distintas: un bucle
+     * acotado por un valor de EJECUCION se entiende y es O(n); estos ni se
+     * reconocieron como bucle contado, y de ellos no se sabe si son O(n) o
+     * O(1).  Confundirlos es lo que hacia que el informe afirmara una clase
+     * que no habia medido.
+     */
+    std::unordered_set<ir::IrBlockId> not_understood;
     bool is_constant(ir::IrBlockId header) const {
         return constant.count(header) != 0;
     }
@@ -451,6 +461,17 @@ static BoundedLoops ask_bounded_loops(const ir::IrFunction &fn,
         if (f->about.kind != analysis::asa::Subject::Kind::Block) continue;
         b.constant.insert(static_cast<ir::IrBlockId>(f->about.id));
     }
+    /* Y los que NO se entendieron, que es otra cosa: aqui no entra el bucle
+     * cuyo limite depende de la ejecucion -- ese se entiende y es O(n) --,
+     * sino el que ni se reconocio como bucle contado.  El dominio lo dice con
+     * codigos propios y con su motivo; el coste solo los cuenta. */
+    for (const char *code : {"loop.shape_unsupported", "loop.no_induction"}) {
+        for (const analysis::asa::Fact *f :
+             facts->find_all(code, fn.name.c_str(), here)) {
+            if (f->about.kind != analysis::asa::Subject::Kind::Block) continue;
+            b.not_understood.insert(static_cast<ir::IrBlockId>(f->about.id));
+        }
+    }
     return b;
 }
 
@@ -465,6 +486,17 @@ CostResult analyze_function(const ir::IrFunction &fn,
     std::vector<LoopRange> ranges = compute_loop_ranges(fn, headers);
     const BoundedLoops bounded = ask_bounded_loops(fn, facts, stage);
     uint32_t max_depth = compute_loop_depths(fn, ranges, r.loops, bounded);
+    /* Cuantos de los bucles QUE ESTE ANALISIS CUENTA no se entendieron.
+     *
+     * Se cruza con `headers` y no se coge el tamano del conjunto: los dos
+     * lados detectan bucles por su cuenta y no ven los mismos -- el dominio
+     * del ASA ve tambien los que el andamiaje de excepciones mete --, asi que
+     * comparar sus cuentas a pelo daba "no se entendio ninguno" en funciones
+     * con un `for` perfectamente reconocido, y las tiraba a O(?). */
+    uint32_t not_understood_here = 0;
+    for (ir::IrBlockId h : headers)
+        if (bounded.not_understood.count(h) != 0) ++not_understood_here;
+    r.loops_not_understood = not_understood_here;
     r.max_loop_depth = max_depth;
 
     // 1.b. Recolectar los call sites (CALL/TAILCALL a una funcion con nombre)
@@ -586,6 +618,20 @@ CostResult analyze_function(const ir::IrFunction &fn,
         r.confidence = Confidence::HEURISTIC;
         if (r.big_o == CostClass::O_1) r.big_o = CostClass::O_UNKNOWN;
     }
+
+    /* Con bucles que no se llegaron a entender, la clase sigue siendo la que
+     * la ESTRUCTURA dice -- este analisis funciona por su cuenta y los hechos
+     * solo lo afinan --, pero baja la confianza: lo contado es una cota
+     * INFERIOR, porque un bucle que no se reconoce puede dar mas vueltas de
+     * las que se ven.
+     *
+     * NO se degrada a desconocida.  Se probo y estaba mal: convertia una
+     * herramienta que siempre responde en una que se calla en cuanto el ASA no
+     * llega, y el analisis estructural es justamente lo que hay cuando no hay
+     * nada mas.  Lo que si cambia es que quien COMPARA dos clases mire esto
+     * antes de afirmar que una empeoro. */
+    if (r.loops_not_understood > 0 && !headers.empty())
+        r.confidence = Confidence::HEURISTIC;
 
     // 4. Construir la explicacion legible.
     std::ostringstream det;

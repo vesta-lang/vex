@@ -152,7 +152,22 @@ struct CostResult {
     CostClass big_o = CostClass::O_1; ///< clase PARCIAL (cuerpo, calls=O(1)).
     Confidence confidence =
         Confidence::EXACT;          ///< confianza en la cota parcial.
-    uint32_t max_loop_depth = 0;    ///< maxima profundidad de loop.
+    uint32_t max_loop_depth = 0; ///< maxima profundidad de loop.
+    /**
+     * @brief Bucles que el analisis NO llego a entender.
+     *
+     * No es lo mismo que "da n vueltas".  Un bucle acotado por un valor de
+     * ejecucion se entiende perfectamente y es O(n); estos son los que ni
+     * siquiera se reconocieron como bucle contado -- forma no cubierta, o sin
+     * variable de induccion --, y de esos no se sabe si son O(n) o O(1).
+     *
+     * Con uno solo, la clase de esta funcion es lo que se pudo ver, no lo que
+     * la funcion cuesta: sirve para orientar, NO para acusar.  Es lo que
+     * distingue "es peor" de "se sabe menos", y sin esa distincion el informe
+     * llegaba a decir que el optimizador habia empeorado el coste de una
+     * funcion cuyo coste es constante.
+     */
+    uint32_t loops_not_understood = 0;
     bool is_recursive = false;      ///< la fn se llama a si misma.
     bool is_divide_conquer = false; ///< patron divide-y-venceras.
     std::vector<LoopCost> loops;    ///< coste por loop (diagramas).

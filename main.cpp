@@ -2948,13 +2948,36 @@ int main(int argc, char *argv[]) {
                       << analyze::cost_class_str(rp.total_class) << "   ["
                       << rp.detail << "]\n";
 
-            // Resaltar cuando PRE difiere de POST (el optimizer simplifico).
+            /* PRE distinto de POST: el optimizador cambio el coste.
+             *
+             * Pero SOLO se dice cuando las dos clases son comparables.  Si
+             * despues de optimizar quedan bucles que el analisis no llego a
+             * entender, la clase de POST es lo que se pudo ver y no lo que la
+             * funcion cuesta: compararla con la de PRE era acusar al
+             * optimizador de un empeoramiento que nadie ha medido -- y llego a
+             * decirlo de una funcion cuyo coste es CONSTANTE, porque
+             * desenrollar un bucle de 64 vueltas deja dos bucles que ya no se
+             * reconocen --.
+             *
+             * Es la regla que el propio proyecto tiene escrita para validar
+             * `@complexity`: si no se puede determinar la cota, NO se avisa.
+             *
+             * Y no se calla: se dice que no se puede comparar y por que, que
+             * es distinto de no decir nada. */
             if (pre && pre->total_class != rp.total_class) {
-                std::cout << "      >> el optimizer cambio el coste TOTAL: "
-                          << analyze::cost_class_str(pre->total_class)
-                          << " (fuente) -> "
-                          << analyze::cost_class_str(rp.total_class)
-                          << " (efectivo)\n";
+                if (rp.loops_not_understood > 0) {
+                    std::cout << "      >> sin comparar con el fuente: "
+                              << rp.loops_not_understood
+                              << " bucle(s) no se reconocen tras optimizar, "
+                                 "asi que el coste efectivo no esta medido -- "
+                                 "decir que empeoro seria acusar sin prueba\n";
+                } else {
+                    std::cout << "      >> el optimizer cambio el coste TOTAL: "
+                              << analyze::cost_class_str(pre->total_class)
+                              << " (fuente) -> "
+                              << analyze::cost_class_str(rp.total_class)
+                              << " (efectivo)\n";
+                }
             }
             // Resaltar cuando PARCIAL difiere de TOTAL (callees elevan).
             if (rp.big_o != rp.total_class) {

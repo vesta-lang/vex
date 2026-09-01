@@ -165,7 +165,18 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
                     off = c;
                     bound = cmp_b;
                 } else {
-                    return false; // cmp_b == iv seria N < iv (decreciente).
+                    /* Este PHI avanza como un IV pero NO es el que compara la
+                     * guarda: se prueba el SIGUIENTE, no se abandona.
+                     *
+                     * Rendirse aqui hacia que un bucle normal no tuviera
+                     * variable de induccion en cuanto llevara un ACUMULADOR
+                     * (`t = t + 1`), que es lo mas corriente que hay: `t`
+                     * tambien es `phi + constante`, se probaba primero, fallaba
+                     * la guarda -- que compara `i` -- y el analisis contestaba
+                     * "no se encontro una variable de induccion" sobre un
+                     * `for` de manual.  El coste lo heredaba y declaraba O(?)
+                     * una funcion que es O(n). */
+                    continue;
                 }
             }
             out.phi = in.dst;

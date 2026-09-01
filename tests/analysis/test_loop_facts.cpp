@@ -299,6 +299,107 @@ static void constant_trip_loop_is_not_linear() {
           "un hecho de otro momento no se aplica a este codigo");
 }
 
+/**
+ * @brief Un ACUMULADOR en el bucle no esconde la variable de induccion.
+ *
+ * `for (i = 0; i < 64; i++) { t = t + 1; }` tiene DOS phis que avanzan igual:
+ * el contador y el acumulador.  El detector probaba el primero, veia que la
+ * guarda no lo compara, y se RENDIA -- devolvia "no se encontro una variable
+ * de induccion" sobre un `for` de manual --.
+ *
+ * No daba error: hacia que el analisis de coste declarara O(?) una funcion que
+ * es O(n), y que el desenrollador dejara pasar bucles perfectamente contados.
+ * Y un acumulador es lo mas corriente que hay en un bucle.
+ */
+static void an_accumulator_does_not_hide_the_iv() {
+    std::printf("\n[un acumulador no esconde la variable de induccion]\n");
+
+    ir::IrFunction fn;
+    fn.name = "with_acc";
+    for (int i = 0; i < 10; ++i) fn.values.push_back({});
+
+    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
+        IrInstr in;
+        in.op = op;
+        in.dst = dst;
+        in.type = t;
+        return in;
+    };
+    IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    {
+        IrInstr c0 = val(IrOp::CONST, 0, IrType::I64); // i = 0
+        c0.imm = 0;
+        entry.instrs.push_back(c0);
+        IrInstr c1 = val(IrOp::CONST, 7, IrType::I64); // t = 0
+        c1.imm = 0;
+        entry.instrs.push_back(c1);
+    }
+    entry.instrs.push_back(br(1));
+
+    IrBlock header;
+    header.id = 1;
+    header.name = "header";
+    {
+        /* El ACUMULADOR va PRIMERO, que es lo que destapaba el fallo: se
+         * probaba antes que el contador. */
+        IrInstr acc = val(IrOp::PHI, 8, IrType::I64);
+        acc.phi_args.push_back({/*value=*/7, /*block=*/0});
+        acc.phi_args.push_back({/*value=*/9, /*block=*/2});
+        header.instrs.push_back(acc);
+        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
+        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
+        phi.phi_args.push_back({/*value=*/5, /*block=*/2});
+        header.instrs.push_back(phi);
+        IrInstr lim = val(IrOp::CONST, 3, IrType::I64);
+        lim.imm = 64;
+        header.instrs.push_back(lim);
+        IrInstr cmp = val(IrOp::CMP_LT, 4, IrType::BOOL);
+        cmp.operands.push_back(1); // compara el CONTADOR, no el acumulador
+        cmp.operands.push_back(3);
+        header.instrs.push_back(cmp);
+        IrInstr t = brcond(2, 3);
+        t.operands[0] = 4;
+        header.instrs.push_back(t);
+    }
+    IrBlock body;
+    body.id = 2;
+    body.name = "body";
+    {
+        IrInstr one = val(IrOp::CONST, 6, IrType::I64);
+        one.imm = 1;
+        body.instrs.push_back(one);
+        IrInstr inc = val(IrOp::ADD, 5, IrType::I64); // i + 1
+        inc.operands.push_back(1);
+        inc.operands.push_back(6);
+        body.instrs.push_back(inc);
+        IrInstr acc_add = val(IrOp::ADD, 9, IrType::I64); // t + 1
+        acc_add.operands.push_back(8);
+        acc_add.operands.push_back(6);
+        body.instrs.push_back(acc_add);
+        body.instrs.push_back(br(1));
+    }
+    fn.blocks = {entry, header, body, block(3, "exit", ret())};
+
+    const analysis::IrFacts facts = analysis::build_ir_facts(fn);
+    const LoopFacts lf = compute_loop_facts(fn);
+    const analysis::LoopStructure st = analysis::detect_loop_structure(fn, lf, 0);
+    CHECK(st.valid, "la forma se reconoce con dos phis");
+    if (!st.valid) return;
+
+    analysis::LoopIV iv;
+    const bool hay = analysis::detect_loop_iv(fn, facts.def_block, st.header,
+                                              st.preheader, st.latch, iv);
+    CHECK(hay, "y la induccion se encuentra aunque el acumulador vaya primero");
+    if (!hay) return;
+    CHECK(iv.phi == 1, "el IV es el CONTADOR, no el acumulador");
+
+    const analysis::LoopTripInfo tc =
+        analysis::compute_trip_count(fn, facts.def_block, iv);
+    CHECK(tc.known() && tc.trip == 64, "y salen las 64 vueltas");
+}
+
 int main() {
     std::printf("=== test_loop_facts (Fase 0.25: LoopFacts) ===\n");
 
@@ -381,6 +482,7 @@ int main() {
 
     counted_loop_before_optimizing();
     constant_trip_loop_is_not_linear();
+    an_accumulator_does_not_hide_the_iv();
 
     std::printf("\n=== %d checks, %d fallos ===\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

@@ -13,6 +13,10 @@
 
 #include "analysis/facts/loop_structure.h"
 
+#include "analysis/memory/memory_access.h" // "toca memoria?", en UN solo sitio
+
+#include <unordered_set>
+
 namespace analysis {
 
 using ir::IR_NO_BLOCK;
@@ -55,28 +59,73 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
     st.body_entry = t_in ? term.target_block : term.false_block;
     st.exit = t_in ? term.false_block : term.target_block;
 
-    /* Ningun instr del header salvo PHIs, COPIAS PURAS y el que define cond.
+    /* En el header solo PHIs y el CALCULO DE LA GUARDA.
      *
-     * El criterio es el que dice el parrafo de arriba -- efectos laterales que
-     * el clonado no pueda replicar --, y ni una constante ni un `mov` tienen
-     * ninguno: se copian solos.  Rechazarlos no protegia de nada, y costaba
-     * que la forma solo se reconociera DESPUES de optimizar:
+     * El criterio lo dice el parrafo de arriba -- efectos laterales que el
+     * clonado no pueda replicar --, asi que se comprueba eso y no una lista de
+     * opcodes: la instruccion no puede tocar memoria ni ser una llamada, y su
+     * resultado tiene que acabar alimentando la condicion.  Lo primero se
+     * pregunta al vocabulario compartido (@c memory_access_kind, @c
+     * ir_op_is_call); escribir aqui otra lista era como se acaba con dos
+     * criterios que se separan.
      *
-     *   - el limite esta materializado DENTRO de la cabecera (`const.i64 64`)
-     *     hasta que el optimizador lo saca;
-     *   - y la construccion de SSA deja una copia del PHI (`mov %m2rphi14`)
-     *     hasta que la propagacion de copias la borra.
+     * Antes solo pasaban PHI, CONST, MOV y la que define `cond`, y esa lista
+     * dejaba fuera formas perfectamente contadas:
      *
-     * O sea que la foto de ANTES -- la de lo que el programa dice -- contestaba
-     * `shape_unsupported` a todo, no porque el bucle tuviera nada raro, sino
-     * porque le faltaban dos pasadas de limpieza.  Un analisis que renuncia por
-     * eso esta midiendo al optimizador, no al programa. */
-    for (size_t i = 0; i + 1 < hins.size(); ++i) { // sin el terminador.
-        const IrInstr &in = hins[i];
-        if (in.op == IrOp::PHI) continue;
-        if (in.op == IrOp::CONST || in.op == IrOp::MOV) continue;
-        if (in.dst != cond)
-            return st; // instr extra en el header -> no elegible.
+     *   - ANTES de optimizar, el limite esta materializado dentro del header
+     *     (`const.i64 64`) y la construccion de SSA deja una copia del PHI;
+     *   - DESPUES, el desenrollador emite la guarda como `iv + (U-1) < N`, o
+     *     sea un `add` en el header -- que este mismo fichero sabe leer, en
+     *     `cmp_offset` -- y aun asi lo rechazaba por la puerta de entrada.
+     *
+     * El resultado era que el mismo bucle no se reconocia ni antes ni despues,
+     * y el analisis de coste heredaba el hueco: declaraba O(?) una funcion
+     * cuyo coste sabia perfectamente.  Un analisis que renuncia por esto esta
+     * midiendo al optimizador, no al programa. */
+    {
+        /* Que valores del header alimentan la condicion.  Se recorre al reves
+         * porque en SSA un valor se define antes de usarse: una sola pasada
+         * basta para cerrar la dependencia. */
+        std::unordered_set<IrValueId> feeds_cond;
+        feeds_cond.insert(cond);
+        for (size_t i = hins.size(); i-- > 0;) {
+            const IrInstr &in = hins[i];
+            if (in.dst == IR_NO_VALUE || !feeds_cond.count(in.dst)) continue;
+            for (IrValueId o : in.operands)
+                feeds_cond.insert(o);
+        }
+        /* Calculo PURO admitido en la guarda.
+         *
+         * Es una lista de PERMITIDOS y no de prohibidos, a proposito: lo que
+         * no se conoce se rechaza, asi que una op nueva del IR no se cuela
+         * sola en un sitio donde hay que poder CLONAR sin cambiar nada.  Crece
+         * cuando aparezca una guarda que la necesite, no antes.
+         *
+         * Lo de "no toca memoria" se pregunta al vocabulario compartido y no se
+         * repite aqui. */
+        auto pure_compute = [](IrOp op) {
+            switch (op) {
+            case IrOp::CONST:
+            case IrOp::MOV:
+            case IrOp::ADD:
+            case IrOp::SUB:
+            case IrOp::MUL:
+            case IrOp::SHL:
+            case IrOp::TRUNC:
+            case IrOp::ZEXT:
+            case IrOp::SEXT: return true;
+            default: return false;
+            }
+        };
+        for (size_t i = 0; i + 1 < hins.size(); ++i) { // sin el terminador.
+            const IrInstr &in = hins[i];
+            if (in.op == IrOp::PHI) continue;
+            if (in.dst == cond) continue; // la que define la condicion
+            if (in.dst == IR_NO_VALUE || !feeds_cond.count(in.dst))
+                return st; // no aporta a la guarda: el header hace mas cosas.
+            if (!pure_compute(in.op)) return st;
+            if (analysis::memory_access_kind(in.op).touches) return st;
+        }
     }
 
     // Latch: unico bloque del bucle cuyo terminador salta (BR) al header.
