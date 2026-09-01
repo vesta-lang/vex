@@ -2622,24 +2622,35 @@ nlohmann::json Inspector::asa(const std::string &uri) {
     if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const auto text_ref = docs_.text(uri);
     const std::string &text = *text_ref;
-    const auto an_ref = engine_.analyze_document(uri, text);
-    const DocAnalysis &an = *an_ref;
-    ir::IrModule mod;
-    if (!parse_post_opt_module(an.result, mod))
-        return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
-
     /* El asm es un dominio mas, pero su productor vive junto a la base de datos
      * de instrucciones: se da de alta desde aqui, que es quien la tiene, igual
-     * que hace la linea de ordenes.  El alta es idempotente. */
+     * que hace la linea de ordenes.  El alta es idempotente, y va ANTES de
+     * compilar: quien produce los hechos es la compilacion. */
     analyze::register_asm_producer();
 
-    analysis::asa::FactStore almacen;
-    const std::vector<analysis::asa::ProductionSummary> resumenes =
-        /* POST-optimizacion, y lo dice el propio `parse_post_opt_module` de
-         * arriba: esta vista ensena lo que se sabe del codigo que de verdad se
-         * va a emitir. */
-        analysis::asa::produce(mod, almacen, {},
-                               analysis::asa::kStagePostOpt);
+    /* Se RECOMPILA pidiendo los hechos, como hace la vista de valores
+     * comptime: es una vista bajo demanda y no se hace en el analisis por
+     * pulsacion -- producirlo todo en cada tecla llevaba la compilacion de
+     * 200 ms a 1,5 s --.
+     *
+     * Y se piden POR LA PUERTA en vez de producirlos aqui.  Producir por
+     * nuestra cuenta era saltarse la cache entre compilaciones y la validacion
+     * por huella para conseguir lo mismo: el editor rehacia en cada peticion
+     * un trabajo que el compilador ya sabe guardar. */
+    vx::CompileOptions opts;
+    opts.module_name = "main";
+    opts.asa_all_domains = true;
+    opts.asa_stages = {analysis::asa::kStagePreOpt,
+                       analysis::asa::kStagePostOpt};
+    vx::CompileResult res = compile_document(uri, text, opts);
+
+    ir::IrModule mod;
+    if (!parse_post_opt_module(res, mod))
+        return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
+
+    analysis::asa::FactStore &facts_store = res.facts;
+    const std::vector<analysis::asa::ProductionSummary> &summaries =
+        res.asa_summaries;
 
     /* La vista del subsistema escribe a un fichero abierto, no a una cadena, y
      * asi debe seguir: quien decide como se ensena el conocimiento es el, no
@@ -2659,7 +2670,7 @@ nlohmann::json Inspector::asa(const std::string &uri) {
         if (salida == nullptr)
             return {{"error", "no se pudo abrir un fichero temporal para el "
                               "volcado del ASA"}};
-        analysis::asa::print_dump(almacen, resumenes, salida);
+        analysis::asa::print_dump(facts_store, summaries, salida);
         std::fflush(salida);
         std::rewind(salida);
         char buf[8192];
@@ -3381,24 +3392,28 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
     if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const auto text_ref = docs_.text(uri);
     const std::string &text = *text_ref;
-    const auto an_ref = engine_.analyze_document(uri, text);
-    const DocAnalysis &an = *an_ref;
+    analyze::register_asm_producer();
+
+    /* Igual que la otra vista del ASA: se pide POR LA PUERTA, recompilando
+     * bajo demanda.  Ver la nota larga en @c Inspector::asa. */
+    vx::CompileOptions opts;
+    opts.module_name = "main";
+    opts.asa_all_domains = true;
+    opts.asa_stages = {analysis::asa::kStagePreOpt,
+                       analysis::asa::kStagePostOpt};
+    vx::CompileResult res = compile_document(uri, text, opts);
+
     ir::IrModule mod;
-    if (!parse_post_opt_module(an.result, mod))
+    if (!parse_post_opt_module(res, mod))
         return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
 
-    analyze::register_asm_producer();
-    analysis::asa::FactStore almacen;
-    const std::vector<analysis::asa::ProductionSummary> resumenes =
-        /* POST-optimizacion, y lo dice el propio `parse_post_opt_module` de
-         * arriba: esta vista ensena lo que se sabe del codigo que de verdad se
-         * va a emitir. */
-        analysis::asa::produce(mod, almacen, {},
-                               analysis::asa::kStagePostOpt);
+    analysis::asa::FactStore &facts_store = res.facts;
+    const std::vector<analysis::asa::ProductionSummary> &summaries =
+        res.asa_summaries;
 
     nlohmann::json hechos = nlohmann::json::array();
-    for (size_t i = 0; i < almacen.size(); ++i) {
-        const analysis::asa::Fact &f = almacen.at(i);
+    for (size_t i = 0; i < facts_store.size(); ++i) {
+        const analysis::asa::Fact &f = facts_store.at(i);
         nlohmann::json j;
         j["line"] = linea_del_sujeto(mod, f.about);
         j["function"] = f.about.function ? f.about.function : "";
@@ -3487,7 +3502,7 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
     };
 
     nlohmann::json dominios = nlohmann::json::array();
-    for (const auto &r : resumenes) {
+    for (const auto &r : summaries) {
         nlohmann::json j;
         j["domain"] = r.domain ? r.domain : "";
         j["purpose"] = proposito(r.domain ? r.domain : "");
