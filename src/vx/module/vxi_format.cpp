@@ -551,6 +551,21 @@ static void emit_payload_for_enum(std::vector<uint8_t> &payload,
     // veia size_bytes=0 y allocaba slots de 0 bytes -> corrupcion.
     write_u32(payload, sym.size_bytes);
     write_u32(payload, sym.align_bytes);
+    /* El TIPO BASE del enum (`enum Color : u8`).
+     *
+     * El lector lo lee aqui desde siempre -- su comprobacion de tamano minimo
+     * cuenta con el (4+4+8+4) -- y este lado no lo escribia NUNCA.  El
+     * resultado no era un campo vacio: el lector se comia ocho bytes que eran
+     * la cuenta de variantes y la etiqueta de la primera, y a partir de ahi
+     * leia el payload corrido.  Un `.vxi` con un enum dentro NO PARSEA.
+     *
+     * No se veia porque un interfaz que no parsea es un fallo de cache, y un
+     * fallo de cache se arregla solo recompilando desde el fuente: el programa
+     * sale bien y lo unico que se pierde es, en silencio, todo lo incremental
+     * de cualquier modulo que declare un enum. */
+    const uint32_t und_off = pool.intern(sym.underlying_type);
+    write_u32(payload, und_off);
+    write_u32(payload, static_cast<uint32_t>(sym.underlying_type.size()));
     write_u32(payload, static_cast<uint32_t>(sym.variants.size()));
     // VariantSlot: tag + name_off+len + payload_count + payload entries inline.
     for (const auto &v : sym.variants) {

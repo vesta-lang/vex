@@ -62,7 +62,13 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// el mapa: el grafo ya esta en su almacen y es el mismo, porque la clave es el
 /// contenido.  Y va en la cabecera, que ya se lee entera, para no anadir ni una
 /// apertura por modulo -- con seis mil modulos eso serian seis mil.
-inline constexpr uint16_t VXI_FORMAT_VERSION = 18; // v18: conjunto comptime
+inline constexpr uint16_t VXI_FORMAT_VERSION = 19; // v19: tipo base del enum
+/* v19: el payload de un ENUM lleva su tipo base.  El lector ya lo leia y el
+ * escritor no lo ponia, asi que ningun `.vxi` con un enum parseaba -- y eso
+ * no se ve, porque un interfaz que no parsea se recompila desde el fuente:
+ * el resultado sale bien y lo unico que se pierde, en silencio, es lo
+ * incremental.  Se sube la version para que lo escrito por la anterior se
+ * rechace limpiamente en vez de leerse corrido. */
 
 /// Nombre del SO del HOST de compilacion, en el mismo vocabulario que usan los
 /// atomos `os:` de @Target.  Es el valor por defecto del objetivo cuando no hay

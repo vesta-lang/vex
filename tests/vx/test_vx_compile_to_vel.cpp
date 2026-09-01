@@ -70,14 +70,23 @@ static void test_minimal_main_emits_vel() {
     }
     VX_ASSERT(r.ok, "compilacion ok");
     VX_ASSERT(!r.vel_text.empty(), ".vel no vacio");
-    // Anclajes minimos del formato .vel emitido por ir_emitter.
-    // El emisor usa etiquetas tipo "name:" + prologo "enter N" / epilogo
-    // "leave + hlt"; NO usa @Function (eso es del .vsh / parser de .vel).
+    /* Anclajes minimos del formato .vel emitido por ir_emitter: etiquetas
+     * tipo "name:"; NO usa @Function (eso es del .vsh / parser de .vel).
+     *
+     * NO se exige el prologo `enter` ni el epilogo `leave`, y antes si.  Solo
+     * se emiten cuando la funcion tiene derrames que alojar (`spill_count >
+     * 0`); una hoja sin marco no los necesita, y este `main` se reduce a
+     * `mov r0, 42`.  El test fijaba un DETALLE de la emision -- que el
+     * prologo saliera siempre -- en vez de lo que importa, asi que en cuanto
+     * el emisor dejo de gastarlo empezo a fallar sobre codigo mejor.
+     *
+     * Lo que si tiene que estar es que sea una funcion emitida ENTERA: su
+     * modulo, su etiqueta, el valor y un terminador. */
     VX_ASSERT(contains(r.vel_text, "@Module"), ".vel contiene @Module");
     VX_ASSERT(contains(r.vel_text, "main:"), ".vel contiene etiqueta main:");
-    VX_ASSERT(contains(r.vel_text, "enter"), ".vel contiene prologo 'enter'");
-    VX_ASSERT(contains(r.vel_text, "leave"), ".vel contiene epilogo 'leave'");
     VX_ASSERT(contains(r.vel_text, "42"), ".vel contiene literal 42");
+    VX_ASSERT(contains(r.vel_text, "hlt") || contains(r.vel_text, "ret"),
+              ".vel termina la funcion");
 }
 
 static void test_factorial_recursive_emits_vel() {

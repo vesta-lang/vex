@@ -550,8 +550,20 @@ static void test_emit_abs() {
     ir::EmitResult r = ir::ir_emit_module(mod, opts);
     check(r.ok, "emit abs: ok=true");
     check(contains(r.vel_text, "abs_val:"), "emit abs: etiqueta abs_val");
-    // Debe haber cmps por la comparacion CMP_LT signed
-    check(contains(r.vel_text, "cmps"), "emit abs: cmps para CMP_LT");
+    /* La comparacion CON SIGNO y el salto, en la forma que el emisor elija.
+     *
+     * Este test exigia un `cmps` suelto, y el emisor FUSIONA la comparacion
+     * con el salto en una sola instruccion (`cmpjmp.cc`) cuando entre las dos
+     * no hay copias de phi.  Fijar la forma separada era fijar un detalle de
+     * la emision, asi que en cuanto llego la fusion el test empezo a fallar
+     * sobre codigo MEJOR -- y ademas la comprobacion de abajo seguia pasando
+     * de casualidad, porque "cmpjmp.jge" contiene "jmp.jge".
+     *
+     * Se comprueba lo que importa: que compara con signo y que salta segun el
+     * resultado, venga en una instruccion o en dos. */
+    const bool fusionado = contains(r.vel_text, "cmpjmp.");
+    check(fusionado || contains(r.vel_text, "cmps"),
+          "emit abs: comparacion con signo para CMP_LT (fusionada o suelta)");
     // Debe haber una instruccion de salto condicional
     bool has_cond_jmp = contains(r.vel_text, "jmp.jge") ||
                         contains(r.vel_text, "jmp.jlt") ||

@@ -232,18 +232,27 @@ static void test_string_unterminated() {
     (void)toks;
 }
 
-static void test_string_interpolation_rejected_in_a1() {
+/* Interpolacion y triple comilla: ACEPTADAS.
+ *
+ * Estos dos tests exigian lo CONTRARIO -- que el lexer las rechazara "en
+ * A.1" --, y desde entonces las dos son parte del lenguaje: `"hola ${n}"` y
+ * `"""..."""` compilan y se ejecutan.  Un test que fija una limitacion
+ * levantada no protege nada; lo unico que hace es fallar hasta que alguien lo
+ * mira, y mientras tanto la capacidad de verdad no la comprueba nadie.
+ *
+ * Se invierten para que fijen lo que el lenguaje HACE. */
+static void test_string_interpolation_accepted() {
     Diagnostics diags;
     auto toks = tokenize_all("\"hola ${nombre}\"", diags);
-    VX_ASSERT(diags.has_errors(), "interpolacion rechazada en A.1");
-    (void)toks;
+    VX_ASSERT(!diags.has_errors(), "interpolacion aceptada");
+    VX_ASSERT(!toks.empty(), "y produce tokens");
 }
 
-static void test_triple_quoted_rejected_in_a1() {
+static void test_triple_quoted_accepted() {
     Diagnostics diags;
     auto toks = tokenize_all("\"\"\"abc\"\"\"", diags);
-    VX_ASSERT(diags.has_errors(), "triple-quoted rechazado en A.1");
-    (void)toks;
+    VX_ASSERT(!diags.has_errors(), "triple-quoted aceptado");
+    VX_ASSERT(!toks.empty(), "y produce tokens");
 }
 
 static void test_operators_compound() {
@@ -419,8 +428,8 @@ int main() {
     test_char_literals();
     test_string_literals();
     test_string_unterminated();
-    test_string_interpolation_rejected_in_a1();
-    test_triple_quoted_rejected_in_a1();
+    test_string_interpolation_accepted();
+    test_triple_quoted_accepted();
     test_operators_compound();
     test_position_tracking();
     test_peek_idempotent();
