@@ -9,6 +9,13 @@ firma de una funcion y siguio roto sin que nadie se enterara.
 Un test se considera PASS si termina con codigo 0.  Los que se cuelgan se matan
 al llegar al tiempo limite y cuentan como TIMEOUT, no como fallo silencioso.
 
+Y hay un tercer estado, HERRAMIENTA: en `tests/` conviven las comprobaciones
+que se ejecutan solas con utilidades que reciben un fichero por la linea de
+ordenes o abren un REPL.  Se invocaban sin argumentos, contestaban "uso: ..." y
+se contaban como FALLOS -- once de veintiseis --.  Con ese ruido delante el
+informe deja de leerse, y entonces un fallo de verdad tampoco se lee.  Se
+cuentan aparte y NUNCA como aprobadas.
+
 TOPE DE MEMORIA
 ---------------
 Cada test corre con un techo de memoria y se MATA al pasarlo (cuenta como
@@ -80,6 +87,25 @@ def _parece_sin_memoria(rc, salida):
         return True      # STATUS_NO_MEMORY, o el codigo del job
     marcas = ("bad_alloc", "out of memory", "Cannot allocate memory",
               "memoria agotada", "OUT_OF_MEMORY")
+    return any(m in salida for m in marcas)
+
+
+def _pide_argumentos(salida):
+    """Si el binario no es un TEST sino una herramienta que espera entrada.
+
+    En `tests/` conviven las dos cosas con el mismo prefijo: hay comprobaciones
+    que se ejecutan solas y hay utilidades que reciben un fichero por la linea
+    de ordenes o abren un REPL.  El lanzador las invocaba sin argumentos, ellas
+    contestaban "uso: ..." y salian con codigo distinto de cero, y el resumen
+    las contaba como FALLOS.
+
+    El precio no era la cifra: eran ONCE de veintiseis, y con ese ruido delante
+    el informe deja de leerse -- y entonces un fallo de verdad tampoco se lee.
+    Es el mismo criterio que la suite e2e aplica a los casos que necesitan WSL:
+    saltar se cuenta APARTE, y nunca como aprobado.
+    """
+    marcas = ("uso:", "usage:", "Uso:", "Usage:", "No se pudo abrir",
+              "vesta [VM]>")
     return any(m in salida for m in marcas)
 
 
@@ -174,8 +200,12 @@ def run_one(path, timeout, mem_mb):
         else:
             trabajo = _job_windows(mem_bytes)
     try:
+        # Sin ENTRADA.  Un binario interactivo -- los hay en `tests/` -- se
+        # quedaba esperando a que alguien escribiera y agotaba el tope de
+        # tiempo, asi que ademas de contarse mal costaba dos minutos.
         p = subprocess.Popen([path], stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, cwd=ROOT, **kw)
+                             stderr=subprocess.PIPE,
+                             stdin=subprocess.DEVNULL, cwd=ROOT, **kw)
         if trabajo:
             # Se mete en el job recien creado.  Hay una rendija entre arrancar y
             # asignar, pero un test no reserva gigabytes en ese hueco: primero
@@ -206,6 +236,10 @@ def run_one(path, timeout, mem_mb):
     salida = out + err
     if _parece_sin_memoria(p.returncode, salida):
         return (name, "MEMORIA", salida)
+    # No es un test que falla: es una herramienta a la que no se le dio lo que
+    # pide.  Se cuenta aparte y NUNCA como aprobada.
+    if _pide_argumentos(salida):
+        return (name, "HERRAMIENTA", salida)
     return (name, "FAIL", salida)
 
 
@@ -237,8 +271,17 @@ def main():
         results = list(pool.map(
             lambda t: run_one(t, args.timeout, args.mem_mb), tests))
 
-    bad = [r for r in results if r[1] != "PASS"]
-    for name, state, out in bad:
+    # Lo que FALLA y lo que solo NO SE PUDO CORRER son dos cosas.
+    #
+    # Se separan porque mezclarlas destruye el informe: once herramientas que
+    # piden argumentos, contadas como fallos, dejaban los fallos de verdad
+    # enterrados -- y un informe que grita siempre deja de leerse, que es
+    # exactamente como un test roto sobrevive meses.  Saltar se cuenta aparte y
+    # nunca como aprobado, igual que en la suite e2e con los casos de WSL.
+    fallos = [r for r in results if r[1] not in ("PASS", "HERRAMIENTA")]
+    saltados = [r for r in results if r[1] == "HERRAMIENTA"]
+
+    for name, state, out in fallos:
         say("== {} [{}]".format(name, state))
         # Las ultimas lineas son donde el test dice que fallo; el resto es ruido.
         tail = [l for l in out.splitlines() if l.strip()][-12:]
@@ -246,13 +289,17 @@ def main():
             say("   " + line[:160])
 
     print(
-        "\n=== tests unitarios: {} OK, {} fallidos de {}".format(
-            len(results) - len(bad), len(bad), len(results)
+        "\n=== tests unitarios: {} OK, {} fallidos, {} sin correr de {}".format(
+            len(results) - len(fallos) - len(saltados), len(fallos),
+            len(saltados), len(results)
         )
     )
-    if bad:
-        print("   " + ", ".join(n for n, _s, _o in bad))
-    return 1 if bad else 0
+    if fallos:
+        print("   fallan: " + ", ".join(n for n, _s, _o in fallos))
+    if saltados:
+        print("   sin correr (piden argumentos o entrada, NO son fallos): "
+              + ", ".join(n for n, _s, _o in saltados))
+    return 1 if fallos else 0
 
 
 if __name__ == "__main__":

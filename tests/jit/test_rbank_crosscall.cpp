@@ -51,6 +51,19 @@ static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
     v.req.cls = cls;
     v.req.width = w;
     v.req.crosses_call = crosses_call;
+    /* Y `needs_preserved`, que es el campo que de verdad DECIDE.
+     *
+     * Eran uno solo y se separaron: "cruza una llamada" y "necesita una lane
+     * preservada" valen lo mismo salvo en un caso -- el operando de un asm
+     * cuyo intervalo es un punto --, y el que mira `lane_admissible` es el
+     * segundo.  Este ayudante se quedo poniendo el primero, asi que sus
+     * valores decian cruzar una llamada y no pedian nada: siete
+     * comprobaciones de seguridad pasaban a no comprobar NADA, y en silencio.
+     *
+     * Se pone aqui la misma equivalencia que pone el puente de produccion
+     * (@c backend_bridge), que es lo que impide que se vuelvan a separar sin
+     * que nadie lo note. */
+    v.req.needs_preserved = crosses_call;
     v.req.fixed_reg = static_cast<int16_t>(fixed);
     // "debe-memoria": mecanismo unificado (GC root cross-call, force_spill,
     // addr-taken).
@@ -58,7 +71,7 @@ static AbstractValue mkval(uint32_t id, uint32_t start, uint32_t end,
     return v;
 }
 
-/** @brief ¿La lane fisica @p id es callee-saved (PRESERVED) para el ancho @p w?
+/** @brief La lane fisica @p id es callee-saved (PRESERVED) para el ancho @p w?
  */
 static bool is_callee_saved(const PhysicalRegisterBank &bank, int id,
                             ViewWidth w) {

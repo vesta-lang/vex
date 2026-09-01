@@ -42,6 +42,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/compiler.h"
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "vx/vxdbg_emit.h"  // grafo de conocimiento del programa
+#include "vxdbg/pack_store.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/roots.h"
 #include "analysis/facts/alignment.h"    // de cuanto es multiplo un valor
@@ -4528,8 +4529,15 @@ CompileResult compile_vx_project(
                                         pm.vxi.vxdbg_map_hi};
             if (!mm.empty()) map.modules.push_back(mm);
         }
-        vxdbg::FileNodeStore store(opts.vxdbg_dir.empty() ? default_vxdbg_dir()
-                                                          : opts.vxdbg_dir);
+        /* Empaquetado por delante, suelto detras: es como escribe la emision,
+         * y este mapa CITA nodos que ella guardo.  Con el suelto solo, el
+         * `contains` de aqui no veia lo que ya estaba en un paquete. */
+        const std::string vxdbg_dir =
+            opts.vxdbg_dir.empty() ? default_vxdbg_dir() : opts.vxdbg_dir;
+        vxdbg::PackNodeStore store(
+            vxdbg_dir,
+            std::unique_ptr<vxdbg::NodeStore>(
+                new vxdbg::FileNodeStore(vxdbg_dir)));
         vxdbg::ContentHash h;
         if (!map.symbols.empty() && vxdbg::store_node(store, map, h))
             res.vxdbg_artifact_map = h;

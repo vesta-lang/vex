@@ -24,6 +24,7 @@
 
 #include "vx/asm/instr_db.h" // que EXIGE una instruccion, preguntado a la base
 #include "vx/diag/diag_catalog.h"
+#include "vxdbg/pack_store.h"
 #include "vxdbg/codec.h"
 #include "vxdbg/roots.h"
 
@@ -276,7 +277,10 @@ entity_note_for_symbol(ProcessVM *vm, const std::string &symbol,
         bool hay = false;
         vxdbg::ArtifactMap map;
         vxdbg::SpanMap spans;
-        std::unique_ptr<vxdbg::FileNodeStore> store;
+        /* Por la INTERFAZ y no por una implementacion concreta: lo que se
+         * lee sale de un paquete o de un fichero suelto segun quien lo
+         * escribiera, y quien lee no tiene por que saber cual. */
+        std::unique_ptr<vxdbg::NodeStore> store;
     };
     static Grafo g;
     // El grafo se carga una vez y se comparte.  Hace falta candado porque el
@@ -302,7 +306,20 @@ entity_note_for_symbol(ProcessVM *vm, const std::string &symbol,
                                         std::istreambuf_iterator<char>());
                 if (!bytes.empty()) {
                     const std::string dir = vxdbg_cache_dir();
-                    g.store = std::make_unique<vxdbg::FileNodeStore>(dir);
+                    /* Con el almacen EMPAQUETADO por delante y el suelto
+                     * detras, que es como se escribio.
+                     *
+                     * La emision empaqueta desde que un fichero por nodo se
+                     * llevaba el 90% del tiempo de compilar en frio, pero esto
+                     * seguia leyendo solo ficheros sueltos.  El almacen real
+                     * tiene de los dos -- medido en el cache de la stdlib, 45
+                     * sueltos y 35 paquetes --, asi que la traza resolvia unos
+                     * nodos y otros no SEGuN QUE CAMINO los hubiera escrito, y
+                     * sin decir nada: los tramos son opcionales, asi que
+                     * faltaban en silencio. */
+                    g.store = std::make_unique<vxdbg::PackNodeStore>(
+                        dir, std::unique_ptr<vxdbg::NodeStore>(
+                                 new vxdbg::FileNodeStore(dir)));
                     const vxdbg::CacheRootRepository repo(dir, *g.store);
                     const vxdbg::BuildId build{
                         vxdbg::hash_bytes(bytes.data(), bytes.size())};

@@ -195,9 +195,28 @@ int main() {
         CHECK(sm.reads_mem, "sem: 'mov rax,[rbx]' lee memoria");
         AsmInsnSem sb = asm_insn_sem(Isa::X86, "mfence", (uint32_t)skl);
         CHECK(sb.barrier, "sem: mfence es barrera");
-        // instruccion con registro IMPLICITO (mul) -> conservador.
+        /* Instruccion con registros IMPLICITOS (`mul rbx` usa rax y escribe
+         * rax:rdx).  ANTES este test exigia lo contrario -- que no se modelara
+         * y se tratara conservadora --, y rendirse ahi dejaba sin modelar
+         * justo a las instrucciones que tocan registros QUE NADIE VE VENIR,
+         * que son las peligrosas: quien crea que `rdx` sigue valiendo lo de
+         * antes despues de una `mul` se equivoca.
+         *
+         * Ahora la forma dice cuales son y se anotan como si estuvieran
+         * escritos, que es mas seguro Y mas preciso.  El test comprueba lo que
+         * de verdad importa: que los implicitos ESTAN. */
         AsmInsnSem su = asm_insn_sem(Isa::X86, "mul rbx", (uint32_t)skl);
-        CHECK(!su.modeled, "sem: mul (rax/rdx implicitos) -> conservador");
+        auto menciona = [](const std::vector<std::string> &v,
+                           const char *r) {
+            for (const std::string &x : v)
+                if (x == r) return true;
+            return false;
+        };
+        CHECK(su.modeled, "sem: mul se modela, con sus implicitos dentro");
+        CHECK(menciona(su.reads, "rax") && menciona(su.reads, "rbx"),
+              "sem: mul lee rax (implicito) y rbx (escrito)");
+        CHECK(menciona(su.writes, "rax") && menciona(su.writes, "rdx"),
+              "sem: mul escribe rax:rdx, que es lo que nadie ve venir");
 
         // RAW: 'add' lee rax que escribe 'mov' -> orden conservado.
         AsmSchedule s1 = schedule_asm_block(

@@ -18,6 +18,7 @@
 #include "vx/type_checker.h"
 #include "vx/vxdbg_emit.h"
 #include "vxdbg/codec.h"
+#include "vxdbg/pack_store.h"
 #include "vxdbg/store.h"
 
 #include "vx/lexer.h"
@@ -28,6 +29,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <string>
 
 static int fallos = 0;
@@ -161,7 +163,19 @@ int main() {
               "se emite el grafo");
     comprobar(stats.entities > 0, "y no sale vacio");
 
-    vxdbg::FileNodeStore store(dir);
+    /* Se LEE con el mismo almacen con el que se ESCRIBIo.
+     *
+     * La emision EMPAQUETA -- un fichero por nodo se llevaba el 90% del tiempo
+     * de compilar en frio --, y este test seguia leyendo con el almacen de
+     * ficheros sueltos, que no sabe abrir un paquete.  Resultado: veinticuatro
+     * comprobaciones sobre los tipos del programa dejaron de comprobar nada, y
+     * en silencio: el grafo se emitia bien, solo que nadie miraba donde
+     * estaba.
+     *
+     * El suelto va DETRAS y no en su lugar: lo que quede de una emision
+     * anterior sin empaquetar se sigue leyendo igual. */
+    vxdbg::PackNodeStore store(
+        dir, std::unique_ptr<vxdbg::NodeStore>(new vxdbg::FileNodeStore(dir)));
 
     std::printf("Los tipos, con la especie que les corresponde\n");
     vxdbg::LanguageEntity e;

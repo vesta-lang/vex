@@ -156,7 +156,13 @@ int main(int argc, char **argv) {
         /* En el directorio de trabajo: el test se corre desde la raiz del
          * proyecto en los dos sistemas, y asi no depende de donde cada uno
          * ponga sus temporales. */
-        const std::string ruta = "asa_hechos_prueba.bin";
+        /* Un nombre PROPIO de este test.
+         *
+         * Lo compartia con el otro test del fichero de hechos, y el
+         * lanzador los corre EN PARALELO: uno pisaba el fichero del otro
+         * y los dos fallaban a ratos.  Aislados pasaban siempre, que es
+         * la peor forma de fallar -- se echa la culpa al azar. */
+        const std::string ruta = "asa_hechos_prueba_lnx.bin";
         CHECK(::fs::write_file_atomic(ruta, bytes), "se escribe en disco");
         FactStore dd;
         const ReadResult rd = read_facts_file(ruta, 0xABCDEF0123456789ull, dd,
