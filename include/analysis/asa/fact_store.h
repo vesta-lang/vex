@@ -73,6 +73,28 @@ const char *canonical_name(const std::string &s);
  */
 class FactStore {
   public:
+    FactStore() = default;
+
+    /**
+     * @brief Copiar un almacen COPIA TAMBIEN SUS CADENAS.
+     *
+     * Un hecho guarda `const char *` que apuntan al arena de SU almacen.  La
+     * copia por defecto duplicaba los hechos pero dejaba los punteros mirando
+     * al arena del ORIGINAL: en cuanto ese moria -- y muere, es una local de
+     * la compilacion --, el detalle de cada hecho era memoria ajena.  Se veia
+     * como texto basura en el volcado, y eso es lo BENIGNO: son punteros
+     * colgando.
+     *
+     * Se reinterna con el mismo criterio que la carga de disco: si el nombre
+     * es canonico se conserva el literal -- el ASA compara productores y
+     * dominios POR DIRECCION y una copia no se reconoceria a si misma --, y si
+     * no, se copia al arena propio.
+     */
+    FactStore(const FactStore &other);
+    FactStore &operator=(const FactStore &other);
+    FactStore(FactStore &&) = default;
+    FactStore &operator=(FactStore &&) = default;
+
     /// Deposita @p f y devuelve su identidad.
     FactId add(Fact f);
 

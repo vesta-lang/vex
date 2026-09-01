@@ -202,6 +202,52 @@ static void read_twice_does_not_duplicate() {
     CHECK(r2.facts == 0, "no deposito ninguno");
 }
 
+/**
+ * @brief Copiar un almacen copia TAMBIEN sus cadenas.
+ *
+ * Un hecho guarda `const char *` que apuntan al arena de SU almacen.  La copia
+ * por defecto duplicaba los hechos y dejaba los punteros mirando al arena del
+ * ORIGINAL: en cuanto ese moria -- y muere, es una local de la compilacion --
+ * el detalle de cada hecho era memoria ajena.  En el volcado salia como bytes
+ * sin sentido donde tenia que ir el intervalo, y eso es lo BENIGNO: son
+ * punteros colgando.
+ *
+ * Se comprueba con el original ya DESTRUIDO, que es la unica forma de que el
+ * fallo se manifieste: mientras vive, los punteros colgados siguen leyendo lo
+ * que habia y el test pasaria sin probar nada.
+ */
+static void copying_leaves_no_dangling_pointers() {
+    FactStore copia;
+    {
+        FactStore original;
+        Fact f;
+        f.what.domain = kProducerRanges;
+        f.what.code = "range.bounded";
+        f.what.detail = original.intern("[0,64] i64");
+        f.about.kind = Subject::Kind::Value;
+        f.about.function = original.intern("una_funcion_con_nombre_largo");
+        f.seal.origin.producer = kProducerRanges;
+        f.proof.rule = "data-flow";
+        original.add(std::move(f));
+        copia = original; // <- la copia que hacia el compilador
+    } // aqui muere el original, y con el su arena de cadenas
+
+    CHECK(copia.size() == 1, "el hecho sobrevive a la copia");
+    if (copia.size() != 1) return;
+    const Fact &f = copia.at(0);
+    CHECK(std::string(f.what.detail) == "[0,64] i64",
+          "y su detalle sigue siendo el suyo, no memoria ajena");
+    CHECK(std::string(f.about.function) == "una_funcion_con_nombre_largo",
+          "y el nombre de la funcion tambien");
+    /* Los nombres CANONICOS se conservan como literales: el ASA compara
+     * productores y dominios por DIRECCION, asi que una copia interna no se
+     * reconoceria a si misma. */
+    CHECK(f.what.domain == kProducerRanges,
+          "el dominio sigue siendo el literal canonico, no una copia");
+    CHECK(copia.of_domain(kProducerRanges).size() == 1,
+          "y por eso se sigue encontrando buscando por su dominio");
+}
+
 // ===========================================================================
 // 4. Una huella que no cuadra no se lee
 // ===========================================================================
@@ -479,6 +525,7 @@ int main() {
     probar_identidad_de_nombres();
     probar_anade_sobre_lo_existente();
     read_twice_does_not_duplicate();
+    copying_leaves_no_dangling_pointers();
     probar_huella();
     probar_dominio_desconocido();
     probar_truncado();

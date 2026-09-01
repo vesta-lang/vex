@@ -4251,12 +4251,17 @@ CompileResult compile_vx_project(
             root_facts_key, analysis::asa::kStagePostOpt);
         res.asa_summaries.insert(res.asa_summaries.end(), s.begin(), s.end());
         /* Y sale con el resultado, para que quien compilo pueda consultarlo sin
-         * volver a producirlo.  Se COPIA y no se mueve: el informe de abajo
-         * todavia lo usa. */
-        res.facts = facts;
+         * volver a producirlo.  Se MUEVE, y el informe de abajo lee ya de ahi.
+         *
+         * Copiarlo costaba dos veces: la memoria de un almacen entero -- que en
+         * un modulo grande son cientos de miles de hechos -- y, como cada hecho
+         * guarda punteros al arena de cadenas de SU almacen, una copia correcta
+         * obliga ademas a reinternar todas.  Moviendo no hay ninguna de las
+         * dos. */
+        res.facts = std::move(facts);
         vx_report_asm_preconditions(merged, res.diagnostics, root_path,
                                     hay_main, opts.emit_ir_preopt,
-                                    opts.native_poo ? "aot" : "vm", facts);
+                                    opts.native_poo ? "aot" : "vm", res.facts);
     }
 
     if (opts.dump_ir) {

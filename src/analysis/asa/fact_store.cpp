@@ -91,6 +91,68 @@ const char *canonical_name(const std::string &s) {
     return it == canonical_table().end() ? nullptr : it->second;
 }
 
+namespace {
+/// Una cadena de OTRO almacen, traida al propio: literal canonico si lo tiene
+/// -- el ASA compara por direccion --, y si no, copia en el arena.
+const char *adopt(FactStore &dest, const char *s) {
+    if (s == nullptr) return nullptr;
+    if (s[0] == '\0') return "";
+    if (const char *c = canonical_name(s)) return c;
+    return dest.intern(s);
+}
+
+/// Repunta TODAS las cadenas de @p f al arena de @p dest.  Si se anade un
+/// campo de texto a `Fact`, tiene que entrar aqui: lo que se olvide seguira
+/// apuntando al almacen de origen y no dara error hasta que ese muera.
+void adopt_strings(FactStore &dest, Fact &f) {
+    f.what.domain = adopt(dest, f.what.domain);
+    f.what.code = adopt(dest, f.what.code);
+    f.what.detail = adopt(dest, f.what.detail);
+    f.about.function = adopt(dest, f.about.function);
+    f.scope.isa = adopt(dest, f.scope.isa);
+    f.scope.os = adopt(dest, f.scope.os);
+    f.scope.backend = adopt(dest, f.scope.backend);
+    f.scope.stage = adopt(dest, f.scope.stage);
+    f.scope.why = adopt(dest, f.scope.why);
+    f.seal.origin.producer = adopt(dest, f.seal.origin.producer);
+    f.seal.origin.function = adopt(dest, f.seal.origin.function);
+    for (size_t i = 0; i < Support::kMax; ++i)
+        f.seal.support.on[i] = adopt(dest, f.seal.support.on[i]);
+    f.proof.rule = adopt(dest, f.proof.rule);
+}
+} // namespace
+
+FactStore::FactStore(const FactStore &other) {
+    *this = other;
+}
+
+FactStore &FactStore::operator=(const FactStore &other) {
+    if (this == &other) return *this;
+    facts_.clear();
+    names_.clear();
+    interned_.clear();
+    by_function_.clear();
+    by_domain_.clear();
+    queried_.clear();
+    produced_.clear();
+    /* Se re-DEPOSITAN uno a uno en vez de copiar los indices: asi las tablas
+     * por funcion y por dominio quedan indexadas por LOS PUNTEROS DE ESTE
+     * almacen, que es lo que despues se compara al consultarlas. */
+    facts_.reserve(other.facts_.size());
+    for (const Fact &src : other.facts_) {
+        Fact f = src;
+        adopt_strings(*this, f);
+        add(std::move(f));
+    }
+    /* Y lo que ya se miro, y que dominios corrieron: sin esto una copia decia
+     * que nadie ha consultado nada y que no ha corrido ningun dominio -- y lo
+     * segundo haria producirlos otra vez. */
+    queried_ = other.queried_;
+    for (const ProducedDomain &d : other.produced_)
+        mark_domain(adopt(*this, d.domain), adopt(*this, d.stage));
+    return *this;
+}
+
 const char *FactStore::intern(const std::string &s) {
     auto it = interned_.find(s);
     if (it != interned_.end()) return it->second;
