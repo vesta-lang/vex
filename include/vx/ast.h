@@ -708,6 +708,15 @@ struct BinaryExpr : Expr {
     BinOp op;
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
+    /**
+     * @brief El programador declaro que esta cuenta puede ENVOLVER.
+     *
+     * Lo pone un cast al mismo tipo -- `(i8)(a + b)` --, igual que se declara
+     * cualquier otra conversion que pierde informacion.  Sin el, una cuenta
+     * que se demuestra que no cabe en su tipo es un ERROR: envolver sin
+     * querer no da un fallo, da otro numero.
+     */
+    bool wrap_declared = false;
     /// Operator overloading via metodos dunder (C-1).  Cuando el type
     /// checker detecta que @c lhs es de tipo CLASS y declara el metodo
     /// dunder correspondiente al operador (@c __add__ para `+`,
@@ -2054,7 +2063,8 @@ struct ExternEffects {
     bool nondeterministic = false;
     bool may_block = false; ///< puede esperar: a otro, a un cerrojo, a la E/S
     bool may_trap = false;  ///< puede fallar en el PROCESADOR (div0, acceso)
-    /// De quien es lo que sale.  Refinan a los dos de arriba, no los sustituyen.
+    /// De quien es lo que sale.  Refinan a los dos de arriba, no los
+    /// sustituyen.
     ir::UnwindOrigin throw_origin = ir::UnwindOrigin::Any;
     ir::UnwindOrigin panic_origin = ir::UnwindOrigin::Any;
     /// Que fallos del procesador se acotaron.  Cero = ninguno: vale por todos.

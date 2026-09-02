@@ -56,6 +56,7 @@ const CatEntry kEntries[] = {
     {"VX2042", {"read", "lee"}},
     {"VX2043", {"argument {0} of {1}", "el argumento {0} de {1}"}},
     {"VX2044", {"argument {0}", "el argumento {0}"}},
+    {"VX2050", {"this integer operation does not fit in its type: the result {0} is outside {1} ({2} to {3}), so it comes out as a different number; write a cast to the type -- (i8)(a + b) -- if wrapping around is what you meant", "esta cuenta entera no cabe en su tipo: el resultado {0} se sale de {1} ({2} a {3}), asi que sale otro numero; escribe un cast al tipo -- (i8)(a + b) -- si envolver es lo que querias"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -305,8 +306,6 @@ const CatEntry kEntries[] = {
     {"VXW918", {"this loop fills a contiguous run with the same value: 'std.memory.fill' says it in one line, and says it to whoever reads it next", "este bucle rellena un tramo contiguo con el mismo valor: 'std.memory.fill' lo dice en una linea, y se lo dice a quien lo lea despues"}},
     {"VXW919", {"this loop copies a contiguous run: 'std.memory.copy' says it in one line, and says it to whoever reads it next", "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea, y se lo dice a quien lo lea despues"}},
     {"VXW920", {"this loop advances past its limit without ever equalling it, so its '!=' guard never stops it: it either does not end, or ends only after wrapping around the whole type", "este bucle se pasa de su limite sin llegar a igualarlo nunca, asi que su guarda '!=' no lo para: o no termina, o solo termina tras dar la vuelta al tipo entero"}},
-    {"VXW922", {"integer arithmetic that provably wraps around", "aritmetica entera que se demuestra que da la vuelta"}},
-    {"VXW923", {"this integer operation wraps around: the result {0} does not fit in {1} ({2} to {3}), so the value that comes out is a different one", "esta operacion entera da la vuelta: el resultado {0} no cabe en {1} ({2} a {3}), asi que el valor que sale es otro"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"bulk.body_does_more", {"the body does something beyond walking the run and moving it", "el cuerpo hace algo mas que recorrer el tramo y moverlo"}},
     {"bulk.bound_varies", {"the limit changes inside the loop, so there is no fixed run", "el limite cambia dentro del bucle, asi que no hay un tramo fijo"}},
@@ -377,7 +376,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 356;
+const int kEntryCount = 355;
 
 } // namespace
 

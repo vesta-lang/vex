@@ -1043,6 +1043,17 @@ struct IrInstr {
     /// del linear scan (ver lower_for / lower_while).
     bool preserve = false;
 
+    /**
+     * @brief El programador DIJO que esta cuenta puede envolver.
+     *
+     * Lo pone un cast explicito al mismo tipo -- `(i8)(a + b)` --, que es la
+     * forma con la que el lenguaje declara cualquier otra conversion que
+     * pierde informacion.  Sin el, una operacion que se demuestra que no cabe
+     * es un ERROR: envolver sin querer no da un fallo, da otro numero, y eso
+     * no se ve hasta mucho despues.
+     */
+    bool wrap_ok = false;
+
     /// @Naked: si true en un IrOp::RET, este RET es el SINTETICO de
     /// caida-al-final (fallthrough) que el lowering inserta cuando la funcion
     /// no termina en un `return` explicito -- NO proviene de un `return` del
@@ -1876,13 +1887,10 @@ struct IrNativeEffects {
                may_panic == o.may_panic && allocates == o.allocates &&
                may_block == o.may_block && may_trap == o.may_trap &&
                throw_origin == o.throw_origin &&
-               panic_origin == o.panic_origin &&
-               trap_kinds == o.trap_kinds &&
-               reads_world == o.reads_world &&
-               writes_world == o.writes_world &&
+               panic_origin == o.panic_origin && trap_kinds == o.trap_kinds &&
+               reads_world == o.reads_world && writes_world == o.writes_world &&
                returns_fresh == o.returns_fresh &&
-               frees_pointee == o.frees_pointee &&
-               comptime == o.comptime;
+               frees_pointee == o.frees_pointee && comptime == o.comptime;
     }
     bool operator!=(const IrNativeEffects &o) const noexcept {
         return !(*this == o);

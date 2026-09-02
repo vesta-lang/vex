@@ -32,6 +32,20 @@ namespace vx {
 ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     if (!e || !e->operand) return ir::IR_NO_VALUE;
 
+    /* Un cast al MISMO tipo sobre una cuenta entera es como el programador
+     * DICE que esa cuenta puede envolver: `(i8)(a + b)`.  No emite nada -- no
+     * hay conversion que hacer -- asi que sin marcarlo aqui se perderia, y el
+     * compilador rechazaria una vuelta que estaba declarada.
+     *
+     * Va antes que todo lo demas porque solo mira la FORMA de lo escrito; el
+     * bajado del operando sigue igual despues. */
+    if (e->target_type && e->operand->kind == ast::NodeKind::BinaryExpr) {
+        auto *b = static_cast<ast::BinaryExpr *>(e->operand.get());
+        if (b->op == ast::BinOp::Add || b->op == ast::BinOp::Sub ||
+            b->op == ast::BinOp::Mul)
+            b->wrap_declared = true;
+    }
+
     // Compound literal `(Struct){...}`: construir un struct anonimo inline.
     // Aloca + zero-fill + defaults + init-list, y devuelve su direccion (un
     // valor struct como cualquier otro).  Funciona en interp/JIT/AOT.
@@ -1098,6 +1112,9 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     ins.dst = dst;
     ins.operands = {l, r};
     ins.source_line = e->loc.line;
+    // Lo que el cast declaro viaja hasta la instruccion: es ahi donde se
+    // comprueba si la cuenta cabe.
+    ins.wrap_ok = e->wrap_declared;
     emit(current_block_, std::move(ins));
     return dst;
 }

@@ -380,6 +380,7 @@ add_library(vx_lib STATIC
     # El linter: el primer CONSUMIDOR del ASA.  No analiza -- pregunta a la
     # base de hechos y compara lo demostrado con lo declarado -- y por eso vive
     # al lado de los dominios que consulta, no dentro de ellos.
+    ${CMAKE_SOURCE_DIR}/src/analyze/int_wraparound.cpp
     ${CMAKE_SOURCE_DIR}/src/analyze/linter.cpp
     ${CMAKE_SOURCE_DIR}/src/analyze/lint_cli.cpp
     # "Compila este IR y damelo listo para ejecutar": la cadena emitir ->

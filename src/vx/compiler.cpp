@@ -23,6 +23,7 @@
 
 #include "analyze/bigo.h"
 #include "analyze/fingerprint.h" // verificacion de contratos de huella
+#include "analyze/int_wraparound.h" // la cuenta que se sale de su tipo
 #include "ir/ir_emitter.h"
 #include "analysis/asa/aggregate_facts.h"
 #include "analysis/asa/fact_store.h" // el almacen de hechos de la compilacion
@@ -1266,6 +1267,37 @@ CompileResult compile_vx_source(const std::string &source,
                 return res;
             }
         }
+        /* Una cuenta entera que se sale de su tipo, con los dos operandos
+         * sabidos.  Se mira el intermedio de ANTES de optimizar: es lo que el
+         * usuario escribio, y asi la regla no depende del nivel de
+         * optimizacion -- si dependiera, el mismo programa seria valido o no
+         * segun como se compile.
+         *
+         * Es un ERROR y no un aviso porque envolver sin querer no da un fallo,
+         * da otro numero, y eso no se ve hasta mucho despues.  Para que no lo
+         * sea se escribe un cast al tipo, `(i8)(a + b)`, igual que se declara
+         * cualquier otra conversion que pierde informacion. */
+        {
+            bool hubo_wrap = false;
+            for (const ir::IrFunction &f : irmod.functions) {
+                for (const analyze::IntWrap &w :
+                     analyze::find_int_wraparounds(f)) {
+                    vx::SourceLoc loc;
+                    loc.file = filename;
+                    loc.line = static_cast<int>(w.line);
+                    res.diagnostics.diag(
+                        loc, vx::DiagLevel::ERR, "VX2050",
+                        {std::to_string(w.exact), ir::ir_type_name(w.type),
+                         std::to_string(w.lo), std::to_string(w.hi)});
+                    hubo_wrap = true;
+                }
+            }
+            if (hubo_wrap) {
+                res.ok = false;
+                return res;
+            }
+        }
+
         ir::IrModule irmod_for_section = irmod;
         // En modo --analyze (emit_ir_preopt) se optimiza SIN inline: el coste
         // PARCIAL es propiedad del cuerpo escrito, no del optimizador.  El
@@ -1354,10 +1386,10 @@ CompileResult compile_vx_source(const std::string &source,
         const uint64_t fingerprint =
             wants_facts ? hash_de_tokens(source, /*con_lineas=*/false) : 0;
         if (wants_facts && wants_stage(analysis::asa::kStagePreOpt)) {
-            const auto s = ensure_facts(
-                irmod_for_section, res.facts, asa_wanted,
-                vxfacts_path_for(filename, std::string()), fingerprint,
-                analysis::asa::kStagePreOpt);
+            const auto s =
+                ensure_facts(irmod_for_section, res.facts, asa_wanted,
+                             vxfacts_path_for(filename, std::string()),
+                             fingerprint, analysis::asa::kStagePreOpt);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }
@@ -1368,9 +1400,8 @@ CompileResult compile_vx_source(const std::string &source,
          * ni antes ni despues, asi que si no se recoge aqui no se recoge. */
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt,
-                        wants_stage(analysis::asa::kStageDuringOpt)
-                            ? &res.facts
-                            : nullptr);
+                        wants_stage(analysis::asa::kStageDuringOpt) ? &res.facts
+                                                                    : nullptr);
         res.tiempos.optimizar_us += static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 RelojFase::now() - marca_opt)
@@ -1381,10 +1412,10 @@ CompileResult compile_vx_source(const std::string &source,
          * hecho con su momento sellado; no se contradicen, hablan de codigos
          * distintos. */
         if (wants_facts && wants_stage(analysis::asa::kStagePostOpt)) {
-            const auto s = ensure_facts(
-                irmod_for_section, res.facts, asa_wanted,
-                vxfacts_path_for(filename, std::string()), fingerprint,
-                analysis::asa::kStagePostOpt);
+            const auto s =
+                ensure_facts(irmod_for_section, res.facts, asa_wanted,
+                             vxfacts_path_for(filename, std::string()),
+                             fingerprint, analysis::asa::kStagePostOpt);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }

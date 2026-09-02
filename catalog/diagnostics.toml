@@ -1632,13 +1632,9 @@ es = "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea
 # pseudoaleatorios --, asi que es un AVISO y no un error: lo que no puede
 # quedarse callado es que el compilador tenga los dos operandos, sepa que no
 # cabe, y deje salir otro valor sin decirlo.
-[VXW922]
-en = "integer arithmetic that provably wraps around"
-es = "aritmetica entera que se demuestra que da la vuelta"
-
-[VXW923]
-en = "this integer operation wraps around: the result {0} does not fit in {1} ({2} to {3}), so the value that comes out is a different one"
-es = "esta operacion entera da la vuelta: el resultado {0} no cabe en {1} ({2} a {3}), asi que el valor que sale es otro"
+[VX2050]
+en = "this integer operation does not fit in its type: the result {0} is outside {1} ({2} to {3}), so it comes out as a different number; write a cast to the type -- (i8)(a + b) -- if wrapping around is what you meant"
+es = "esta cuenta entera no cabe en su tipo: el resultado {0} se sale de {1} ({2} a {3}), asi que sale otro numero; escribe un cast al tipo -- (i8)(a + b) -- si envolver es lo que querias"
 
 [VXW008]
 en = "cannot tell whether the parameters of '{0}' are read: it has values bound to an asm block, which take them through a register rather than through a use the count can see. The bindings say which register carries which slot; joining that to a parameter needs the store between them, which is another domain's knowledge"

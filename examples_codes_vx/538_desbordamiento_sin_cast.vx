@@ -1,0 +1,17 @@
+namespace ejemplos.desbordamiento_sin_cast;
+
+// NEGATIVO: esto NO tiene que compilar.
+//
+// La cuenta se sale de `i8` y no lo dice nadie.  Para que valga hay que
+// escribir el cast -- `(i8)(max + 1_i8)` --, que es como se declara cualquier
+// otra conversion que pierde informacion.  Ver `537_desbordamiento_entero.vx`
+// para la version que si compila.
+//
+// Se espera: error VX2050.
+
+i32 main() {
+	i8 max = 127_i8;
+	max = max + 1_i8;
+	println("${max}");
+	return 0_i32;
+}

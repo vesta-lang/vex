@@ -5237,18 +5237,27 @@ modes3_case("auto_literal_cadena",
             "`auto` sobre un literal de cadena deduce `string`, no un puntero",
             "536_auto_literal_cadena.vx", 42)
 
+
 modes3_case("desbordamiento_entero",
-            "aritmetica que da la vuelta: el programa hace lo de siempre",
+            "envolver se declara con un cast, y entonces vale",
             "537_desbordamiento_entero.vx", 42)
 
-# Y lo que de verdad cambia: que el compilador lo DIGA.  El hecho lo sella el
-# dominio de rangos al plegar -- despues, `127 + 1` ya es un `-128`
-# indistinguible de uno escrito -- y la familia `types.int_wraparound` lo lee.
-# Se exige tambien que NO diga nada de la mezcla de un hash ni de lo que cabe:
-# una familia que avisara de todo pasaria igual esta prueba, y seria ruido.
-lint_case("lint_int_wraparound",
-          "`vesta lint` dice que la cuenta se sale del tipo",
-          "537_desbordamiento_entero.vx", ["VXW923"])
+# Y sin el cast NO compila.  Sin este caso, la comprobacion se podria apagar
+# entera sin que nada fallara: el positivo solo dice que el cast no estorba.
+fails_case("desbordamiento_sin_cast",
+           "una cuenta que se sale del tipo, sin declararlo, es un ERROR",
+           "538_desbordamiento_sin_cast.vx", "VX2050")
+
+# El LINTER no tenia ni un caso en la suite, asi que apagar una familia entera
+# no habria hecho fallar nada.  Estas dos fijan las dos que consultan dominios
+# distintos del ASA: la de bucles y la de operaciones de bloque.
+lint_case("lint_loops_dead",
+          "`vesta lint` reconoce un bucle cuyo cuerpo no se ejecuta",
+          "201_vectorize_f32_scalar.vx", ["VXW916"])
+
+lint_case("lint_bulk_by_hand",
+          "`vesta lint` reconoce un relleno de bloque escrito a mano",
+          "279_overlay_assembler.vx", ["VXW918"])
 
 # Las OCHO formas de llamar bajan por caminos distintos, y cuatro de ellos no
 # tomaban la direccion: el metodo de un struct, una lambda en una variable, un
