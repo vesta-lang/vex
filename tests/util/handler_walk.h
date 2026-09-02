@@ -504,7 +504,24 @@ inline uint32_t read_dispatch_entries(const cs_x86_op &mem,
     const int k = gpr_slot(mem.mem.index);
     if (b < 0 || k < 0) return 0;
     const uint64_t base = st.base[b];
-    const int64_t mask = st.mask[k];
+    int64_t mask = st.mask[k];
+    /* Sin mascara explicita, la cota puede salir del ANCHO del valor.
+     *
+     * Un indice que se extrajo de N bits no puede pasar de 2^N - 1: eso no es
+     * una suposicion, es aritmetica.  Y es la forma habitual en este codigo,
+     * porque los campos de registro son nibbles:
+     *
+     *     movzx esi, byte ptr [rdx + 9]   ; un byte -> ancho 8
+     *     sar   esi, 4                    ; el nibble alto -> ancho 4
+     *     call  qword ptr [rax + rsi*8]   ; ...y ninguna mascara que lo acote
+     *
+     * Buscando solo un `and` explicito, estos se quedaban sin resolver y sus
+     * opcodes acababan declarados como "depende de la ejecucion" cuando la cota
+     * estaba delante.  El `and` sigue mandando cuando lo hay: es mas ajustado
+     * que el ancho. */
+    if (mask <= 0 && st.origin[k].valid && st.origin[k].width > 0 &&
+        st.origin[k].width < 16)
+        mask = (static_cast<int64_t>(1) << st.origin[k].width) - 1;
     // Sin base no hay donde mirar; sin cota no hay tamano demostrable.
     if (base == 0 || mask <= 0) return 0;
     const uint64_t count = static_cast<uint64_t>(mask) + 1;
@@ -1579,7 +1596,7 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                           (unsigned long long)insn->address, insn->mnemonic,
                           insn->op_str);
             previas.push_back(pb);
-            if (previas.size() > 5) previas.erase(previas.begin());
+            if (previas.size() > 14) previas.erase(previas.begin());
         }
 
         // Destino inmediato del salto o la llamada, si lo hay.  Un salto por

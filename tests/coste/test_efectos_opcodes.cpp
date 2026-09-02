@@ -716,9 +716,28 @@ int main(int argc, char **argv) {
      * y no lo destapo nadie hasta que se le pregunto a la base por codigo
      * compilado.  Cada linea de aqui es un hueco de la base, y se falla con la
      * lista para que sea trabajo concreto y no una sospecha. */
+    /* Los que la base NO PUEDE conocer desde aqui, con su motivo.
+     *
+     * Va como lista DECLARADA y no como silencio: uno nuevo sigue haciendo
+     * fallar, que es el punto, pero un hueco que no esta en nuestra mano cerrar
+     * no puede dejar el test rojo para siempre.  Es el mismo trato que
+     * `instr_effects_decl.json` le da a los efectos que el derivador no cierra:
+     * se declara, con el porque, y la lista se mira. */
+    static const struct {
+        const char *mnemonico, *motivo;
+    } kAusentes[] = {
+        {"int1", "opcode 0xF1 (trampa de depuracion): no esta en arch-data, "
+                 "que es de donde sale la base.  No lo emite nuestro codigo -- "
+                 "aparece como relleno entre funciones ajenas."},
+    };
     std::set<std::string> sin_forma;
     for (const OpcodeRow &f : rows)
-        for (const std::string &m : f.imp.unmodeled) sin_forma.insert(m);
+        for (const std::string &m : f.imp.unmodeled) {
+            bool declarado = false;
+            for (const auto &a : kAusentes)
+                if (m == a.mnemonico) declarado = true;
+            if (!declarado) sin_forma.insert(m);
+        }
     if (!sin_forma.empty()) {
         std::printf("\nLA BASE DE INSTRUCCIONES NO SABE MODELAR %d "
                     "MNEMONICOS DE NUESTRO PROPIO BINARIO:\n",

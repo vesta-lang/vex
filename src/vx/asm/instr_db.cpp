@@ -303,6 +303,12 @@ const DbIclassRange *find_iclass_escrito(const IsaData &t, Isa isa,
      * es `MOV`, y cual de sus formas es lo dicen los operandos. */
     if (up == "MOVABS") return find_iclass(t, "MOV");
 
+    /* `sal` y `shl` son LA MISMA instruccion: desplazar a la izquierda con
+     * signo y sin signo dan el mismo resultado, asi que x86 les da la misma
+     * codificacion y los ensambladores aceptan los dos nombres.  La base guarda
+     * uno. */
+    if (up == "SAL") return find_iclass(t, "SHL");
+
     /* Una misma grafia para dos instrucciones DISTINTAS: `movsd` es a la vez
      * mover una cadena de dobles-palabra y mover un escalar de doble precision
      * entre registros vectoriales.  La base las separa -- `MOVSD` y
