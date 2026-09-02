@@ -242,6 +242,29 @@ int main(int argc, char **argv) {
                                 f.imp.prueba_r[k].c_str());
             }
             if (!alguno) std::printf("  (ningun efecto implicito)\n");
+            /* La FORMA: que campos del operando lee y escribe.  Se imprime
+             * aparte de los efectos implicitos porque responde otra pregunta --
+             * "que registros usa" en vez de "que toca sin nombrarlo" --, y
+             * porque su forma de quedarse corta es distinta. */
+            {
+                static const char *kParts[6] = {"reg1",     "reg1.bajo",
+                                                "reg1.alto", "reg2",
+                                                "reg2.bajo", "reg2.alto"};
+                std::string lee, esc;
+                for (int b = 0; b < 6; ++b) {
+                    if (f.imp.form_read >> b & 1)
+                        lee += std::string(lee.empty() ? "" : " ") + kParts[b];
+                    if (f.imp.form_write >> b & 1)
+                        esc += std::string(esc.empty() ? "" : " ") + kParts[b];
+                }
+                if (!lee.empty() || !esc.empty())
+                    std::printf("  forma    lee=[%s] escribe=[%s]\n",
+                                lee.c_str(), esc.c_str());
+                if (f.imp.form_unknown != 0)
+                    std::printf("  forma    %u acceso(s) al banco SIN campo "
+                                "identificado\n           %s\n",
+                                f.imp.form_unknown, f.imp.form_why.c_str());
+            }
             if (!f.imp.completo) {
                 std::printf("  [COTA INFERIOR] el recorrido se quedo aqui:\n");
                 if (f.imp.sin_resolver.empty())

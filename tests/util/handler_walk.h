@@ -81,8 +81,46 @@ namespace tests {
  * decidir en ejecucion.
  *
  * Los idiomas viven mas abajo, en `namespace isa_x86`, y el alias `isa` elige
- * cual se usa.  Anadir ARM64 es escribir `namespace isa_arm64` con las mismas
- * funciones; la logica del recorrido no se toca.
+ * cual se usa.  Anadir ARM64 es escribir `namespace isa_arm64` con lo que dice
+ * el contrato de aqui abajo; la logica del recorrido no se toca.
+ *
+ * El CONTRATO: que tiene que proveer un idioma
+ * -------------------------------------------
+ * Se escribe porque sin el, anadir una arquitectura es descubrir la superficie
+ * a base de errores de compilacion, y cualquiera que amplie el recorredor la
+ * agranda sin enterarse.  Todo esto vive DENTRO del namespace de la ISA:
+ *
+ *   Constantes    `kArch`, `kMode`      -- que abrir en Capstone
+ *                 `kArgRegs`            -- cuantos argumentos van en registro
+ *
+ *   Tipos         `Origin`              -- que BITS de que campo lleva un
+ *                                          registro.  Rango de bits, nunca
+ *                                          "nibble": los campos son de la
+ *                                          codificacion de la VM, no de la ISA
+ *                 `AddrOrigin`          -- una direccion calculada y aun sin
+ *                                          desreferenciar (lo que da un `lea`)
+ *                 `TableState`          -- lo anterior por registro
+ *                 `CallSeed`            -- lo que el llamante deja en los
+ *                                          argumentos, para seguirlo al otro
+ *                                          lado de la llamada
+ *                 `MemAccess`           -- un acceso a memoria, con base,
+ *                                          indice, desplazamiento y direccion
+ *
+ *   Funciones     `gpr_slot`            -- registro de la ISA -> ranura 0..15
+ *                 `track_table_state`   -- que dice esta instruccion de los
+ *                                          registros (procedencia, cotas,
+ *                                          bases de tabla, direcciones)
+ *                 `resolve_dispatch_table`, `read_dispatch_entries`,
+ *                 `indirect_call_target` -- seguir un despacho indirecto
+ *                 `mem_access_count`, `mem_access` -- los accesos a memoria
+ *                 `seed_args`, `arg_slot`, `capture_call_seed`,
+ *                 `apply_call_seed`     -- la convencion de llamada
+ *                 `is_return`, `is_call`, `is_jump`, `is_tail_jump`,
+ *                 `branch_target`       -- el flujo de control
+ *
+ * Lo que NO va en un idioma: cualquier constante de NUESTRA codificacion --
+ * cuantos bits tiene un campo de registro, donde vive el banco, que campo es el
+ * primer operando --.  Eso lo interpreta quien conoce el formato de la VM.
  *
  * Antes esto aceptaba ARM64 y seguia adelante leyendo `in.detail->x86`, que en
  * un binario ARM64 es basura: compilaba, corria y respondia mal -- el peor modo
@@ -357,6 +395,27 @@ struct Origin {
     bool valid = false;
 };
 
+/**
+ * @brief Una DIRECCION que un registro lleva calculada, sin desreferenciar.
+ *
+ * Es lo que produce un `lea`: el registro no vale un dato, vale DONDE esta el
+ * dato.  Hace falta porque los manejadores casi nunca tocan el banco de
+ * registros ellos mismos -- calculan `&regs[campo]` y se lo pasan a un
+ * ayudante, que es quien lee o escribe --.  Sin seguir la direccion a traves de
+ * la llamada, lo unico que se ve es un `lea` sin destino, y la pregunta "que
+ * campos usa este opcode" no tiene respuesta derivable.
+ *
+ * El indice se guarda con su procedencia entera: es lo que luego identifica
+ * CUAL de los campos del operando indexa.
+ */
+struct AddrOrigin {
+    int base = -1;     ///< argumento del que sale la base; -1 = no se sabe
+    int64_t disp = 0;  ///< desplazamiento fijo dentro de el
+    Origin index;      ///< de donde sale el indice, si lleva alguno
+    uint8_t scale = 1; ///< escala del indice
+    bool valid = false;
+};
+
 /// Lo que se sabe de los registros en este punto del recorrido.  Plano y de
 /// tamano fijo: son 16 ranuras, no hace falta un mapa.
 struct TableState {
@@ -364,6 +423,8 @@ struct TableState {
     int64_t mask[16] = {};  ///< mascara aplicada al registro (0 = nada)
     /// De donde salio lo que lleva cada registro.  Ver `Origin`.
     Origin origin[16];
+    /// Direcciones calculadas y aun no desreferenciadas.  Ver `AddrOrigin`.
+    AddrOrigin addr[16];
     /// Registros que llevan un argumento de la funcion, sin transformar.  Se
     /// siembra al entrar (la convencion fija cual es cual) y se propaga por las
     /// copias.  -1 = ninguno.
@@ -519,6 +580,21 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
                 st.origin[d].width =
                     static_cast<uint8_t>(x.operands[1].size * 8);
                 st.origin[d].valid = true;
+                /* Y se sale AQUI.  Sin esto, un `movzx eax, byte ptr [rdx+8]`
+                 * -- la forma normal de leer un campo de un byte -- apuntaba su
+                 * procedencia y acto seguido caia en la invalidacion final, que
+                 * la borraba por ver que la instruccion escribe `eax`.  El
+                 * resultado era que la procedencia funcionaba para `mov` (que
+                 * sale antes por la rama de tablas) y NUNCA para `movzx`, que es
+                 * justo la que carga los campos de registro.
+                 *
+                 * Salir no se lleva por delante el despacho por tabla: esa rama
+                 * necesita un INDICE, y esta exige no tenerlo. */
+                st.base[d] = 0;
+                st.mask[d] = 0;
+                st.loaded[d].clear();
+                st.addr[d] = AddrOrigin{};
+                return;
             }
         }
     }
@@ -562,6 +638,47 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         const int d = gpr_slot(x.operands[0].reg);
         if (d >= 0) {
             st.base[d] = in.address + in.size + x.operands[1].mem.disp;
+            st.mask[d] = 0;
+            st.loaded[d].clear();
+        }
+        return;
+    }
+    /* `lea REG, [ARG + idx*escala + disp]`: una DIRECCION dentro de un
+     * argumento, calculada y todavia sin desreferenciar.
+     *
+     * Es el paso que faltaba para poder derivar la forma.  Un manejador no
+     * escribe `regs[campo]`: calcula su direccion y se la pasa a un ayudante.
+     * Apuntando aqui de donde sale la direccion -- y con que indice --, la
+     * semilla de la llamada la lleva al otro lado, y el acceso que el ayudante
+     * hace por ese puntero se puede atribuir al campo correcto. */
+    if (m == "lea" && x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
+        x.operands[1].type == X86_OP_MEM &&
+        x.operands[1].mem.base != X86_REG_RIP) {
+        const int d = gpr_slot(x.operands[0].reg);
+        const int b = gpr_slot(x.operands[1].mem.base);
+        if (d >= 0) {
+            AddrOrigin a;
+            if (b >= 0 && st.arg[b] >= 0) {
+                a.base = st.arg[b];
+                a.disp = x.operands[1].mem.disp;
+                a.scale = static_cast<uint8_t>(x.operands[1].mem.scale);
+                const int idx = gpr_slot(x.operands[1].mem.index);
+                if (idx >= 0) a.index = st.origin[idx];
+                a.valid = true;
+            } else if (b >= 0 && st.addr[b].valid &&
+                       x.operands[1].mem.index == X86_REG_INVALID) {
+                /* Sumar un desplazamiento a una direccion que ya se seguia:
+                 * sigue siendo la misma region, un poco mas alla.  Es como se
+                 * llega a un campo de la estructura que hay ahi. */
+                a = st.addr[b];
+                a.disp += x.operands[1].mem.disp;
+            }
+            st.addr[d] = a;
+            /* Un `lea` no lee memoria, asi que el registro no lleva ningun
+             * valor de ningun campo: solo una direccion. */
+            st.origin[d] = Origin{};
+            st.arg[d] = -1;
+            st.base[d] = 0;
             st.mask[d] = 0;
             st.loaded[d].clear();
         }
@@ -627,9 +744,10 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             st.base[d] = st.base[s];
             st.mask[d] = st.mask[s];
             st.loaded[d] = st.loaded[s];
-            // La procedencia y el argumento viajan con el valor.
+            // La procedencia, el argumento y la direccion viajan con el valor.
             st.origin[d] = st.origin[s];
             st.arg[d] = st.arg[s];
+            st.addr[d] = st.addr[s];
         }
         return;
     }
@@ -668,6 +786,7 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
              * atribuirlo a ninguno. */
             st.origin[d] = Origin{};
             st.arg[d] = -1;
+            st.addr[d] = AddrOrigin{};
         }
     }
 }
@@ -763,6 +882,19 @@ struct MemAccess {
     bool reads = false;
     bool writes = false;
     /**
+     * @brief No es un acceso: es solo el CALCULO de una direccion.
+     *
+     * `reads`/`writes` van los dos a cierto en este caso, porque para saber si
+     * un opcode toca una region es lo seguro: la direccion puede acabar en
+     * cualquier sitio y hacer cualquier cosa.
+     *
+     * Pero para saber QUE campo se lee y cual se escribe eso es veneno --
+     * atribuye las dos direcciones a la vez y sale que `add` lee y escribe el
+     * mismo operando --.  Calcular una direccion no dice nada de la direccion
+     * del acceso; eso lo dice quien la usa.  Por eso se distingue.
+     */
+    bool address_only = false;
+    /**
      * @brief El acceso va por la pila, el marco o el contador de programa.
      *
      * Quien busca un campo de una estructura del monton tiene que descartarlos:
@@ -818,8 +950,10 @@ inline MemAccess mem_access(const cs_insn &in, int k) {
         if (std::strcmp(mn, "lea") == 0) {
             /* `lea` no accede: calcula una direccion.  Pero si la de un campo se
              * pasa a otro sitio, ese sitio puede leerlo y escribirlo, y puede
-             * que no se llegue a recorrer.  Se marca lo peor de los dos. */
+             * que no se llegue a recorrer.  Se marca lo peor de los dos, y se
+             * deja dicho que era solo un calculo. */
             a.reads = a.writes = true;
+            a.address_only = true;
         } else if (i == 0 && std::strcmp(mn, "cmp") != 0 &&
                    std::strcmp(mn, "test") != 0 &&
                    std::strcmp(mn, "push") != 0 &&
@@ -858,6 +992,52 @@ inline void seed_args(TableState &st) {
     st.arg[2] = 2;  // rdx
     st.arg[1] = 3;  // rcx
 #endif
+}
+
+/// Cuantos argumentos viajan en registro.  Los que se derraman a la pila no se
+/// siguen: haria falta rastrear el marco, y ninguna forma los usa.
+constexpr int kArgRegs = 4;
+
+/// La ranura de registro donde viaja el argumento @p n, o -1.
+inline int arg_slot(int n) {
+#if defined(_WIN32)
+    static const int kSlots[kArgRegs] = {1, 2, 8, 9}; // rcx rdx r8 r9
+#else
+    static const int kSlots[kArgRegs] = {7, 6, 2, 1}; // rdi rsi rdx rcx
+#endif
+    return (n >= 0 && n < kArgRegs) ? kSlots[n] : -1;
+}
+
+/**
+ * @brief Lo que el llamante dejo en los argumentos, para seguirlo al otro lado.
+ *
+ * Solo lleva DIRECCIONES.  Un valor cualquiera no dice nada util al cruzar la
+ * llamada, pero un puntero a `regs[campo]` si: es lo que convierte el acceso
+ * que hace el ayudante en un acceso atribuible al campo del operando.
+ */
+struct CallSeed {
+    AddrOrigin arg[kArgRegs];
+    bool any = false; ///< hay algo que sembrar; si no, ni se mira
+};
+
+/// Apunta que direcciones lleva cada argumento en este punto.
+inline CallSeed capture_call_seed(const TableState &st) {
+    CallSeed s;
+    for (int n = 0; n < kArgRegs; ++n) {
+        const int slot = arg_slot(n);
+        if (slot < 0) continue;
+        s.arg[n] = st.addr[slot];
+        if (s.arg[n].valid) s.any = true;
+    }
+    return s;
+}
+
+/// Siembra en el callee lo que el llamante puso en los argumentos.
+inline void apply_call_seed(TableState &st, const CallSeed &s) {
+    for (int n = 0; n < kArgRegs; ++n) {
+        const int slot = arg_slot(n);
+        if (slot >= 0 && s.arg[n].valid) st.addr[slot] = s.arg[n];
+    }
 }
 
 /// Termina aqui la funcion?
@@ -905,6 +1085,12 @@ using TableState = isa::TableState;
 /// de BITS a proposito: que trozo corresponde a que campo lo decide quien conoce
 /// nuestra codificacion, no la ISA.
 using Origin = isa::Origin;
+
+/// Una direccion calculada y aun sin desreferenciar.  Ver `isa::AddrOrigin`.
+using AddrOrigin = isa::AddrOrigin;
+
+/// Lo que el llamante dejo en los argumentos.  Ver `isa::CallSeed`.
+using CallSeed = isa::CallSeed;
 
 /// Que se pudo ver del recorrido.
 struct WalkResult {
@@ -958,10 +1144,14 @@ using WalkVisitor = std::function<void(const cs_insn &, const TableState &)>;
  *                    contar dos veces lo compartido.
  * @param ver         Visitante.
  * @param res         Se acumula sobre el: se puede recorrer varias raices.
+ * @param seed        Que direcciones dejo el llamante en los argumentos.  Vacia
+ *                    en la raiz; llena al bajar por una llamada, que es lo que
+ *                    permite atribuir al campo correcto un acceso que el
+ *                    ayudante hace por un puntero que le pasaron.
  */
 inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                          std::set<uint64_t> &vistas, const WalkVisitor &ver,
-                         WalkResult &res) {
+                         WalkResult &res, const CallSeed &seed = CallSeed{}) {
     if (profundidad < 0 || dir == 0 || !vistas.insert(dir).second) return;
 
     const uint8_t *code = reinterpret_cast<const uint8_t *>(dir);
@@ -972,7 +1162,14 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
 
     const uint64_t lo = dir;
     uint64_t hi = dir;
-    std::vector<uint64_t> pendientes; // llamadas a seguir al terminar
+    /* Llamadas a seguir al terminar, cada una con lo que el llamante dejo en
+     * los argumentos.
+     *
+     * Limitacion conocida: `vistas` corta por direccion, asi que un ayudante
+     * alcanzado DOS veces con semillas distintas solo se recorre con la primera.
+     * Se pierde atribucion, nunca se inventa -- el segundo camino queda como
+     * "no se sabe", que es el lado seguro. */
+    std::vector<std::pair<uint64_t, CallSeed>> pendientes;
     std::vector<std::string> previas; // ultimas instrucciones, para el contexto
     /* Bases de tabla y cotas de indice vistas hasta aqui.  Es estado LINEAL:
      * no sabe de ramas, y por eso una base equivocada se descarta al comprobar
@@ -982,6 +1179,9 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
      * saber que un `[rdx+0x8]` es "un campo del SEGUNDO argumento" y no una
      * carga cualquiera. */
     isa::seed_args(table_state);
+    /* Y encima, lo que el llamante puso ahi.  Sin esto un ayudante ve "arg1 es
+     * un puntero" y nada mas; con esto ve "arg1 es &regs[el primer campo]". */
+    isa::apply_call_seed(table_state, seed);
 
     while (cs_disasm_iter(cs, &code, &restante, &addr, insn)) {
         res.instrs++;
@@ -1007,16 +1207,21 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
         if (isa::is_return(*insn)) break;
         if (isa::is_call(*insn)) {
             res.llamadas++;
+            /* Lo que va en los argumentos AHORA, antes de que la llamada
+             * machaque el estado.  Es la unica ventana: pasado el `call` ya no
+             * se sabe que llevaba ninguno. */
+            const CallSeed sub = isa::capture_call_seed(table_state);
+            std::vector<uint64_t> destinos;
             if (destino) {
-                pendientes.push_back(destino);
+                destinos.push_back(destino);
             } else if (const uint64_t ext = isa::indirect_call_target(*insn)) {
                 /* Llamada por la tabla de importaciones: la ranura tiene
                  * direccion fija, asi que el destino se LEE.  Se sigue como
                  * cualquier otra. */
-                pendientes.push_back(ext);
+                destinos.push_back(ext);
                 res.tables_resolved++;
             } else if (const uint32_t n = isa::resolve_dispatch_table(
-                           *insn, table_state, pendientes)) {
+                           *insn, table_state, destinos)) {
                 // Despacho por tabla: los destinos SI se conocen, asi que esto
                 // deja de ser un agujero.  Es el caso de la familia ALU.
                 res.tables_resolved++;
@@ -1037,6 +1242,7 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                     res.unresolved.push_back(std::string(b) + ctx);
                 }
 }
+            for (uint64_t d : destinos) pendientes.emplace_back(d, sub);
             /* Tras la llamada no se sabe que queda en los registros -- la
              * convencion permite machacar la mitad --, asi que se olvida todo.
              * Perder una base solo cuesta una resolucion; conservar una que ya
@@ -1045,6 +1251,11 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
             continue;
         }
         if (isa::is_jump(*insn)) {
+            /* Un salto de cola no monta marco: el destino recibe los MISMOS
+             * argumentos que tiene esta funcion ahora mismo.  Por eso la semilla
+             * se toma igual que en un `call`. */
+            const CallSeed sub = isa::capture_call_seed(table_state);
+            std::vector<uint64_t> destinos;
             if (!destino) {
                 res.llamadas++; // salto indirecto: se trata como no seguible
                 if (const uint64_t ext = isa::indirect_call_target(*insn)) {
@@ -1052,10 +1263,10 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                      * un salto de cola a otro modulo, con la direccion en una
                      * ranura fija.  Mismo caso que el `call` equivalente, y era
                      * la causa de 34 de los 56 huecos. */
-                    pendientes.push_back(ext);
+                    destinos.push_back(ext);
                     res.tables_resolved++;
                 } else if (const uint32_t n = resolve_dispatch_table(
-                        *insn, table_state, pendientes)) {
+                        *insn, table_state, destinos)) {
                     res.tables_resolved++;
                     (void)n;
                 } else {
@@ -1079,9 +1290,11 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
             } else if (destino > hi && destino < lo + kWalkBytesMax) {
                 res.saltos_adelante++;
             } else if (isa::is_tail_jump(*insn)) {
-                pendientes.push_back(destino); // tail call
+                destinos.push_back(destino); // tail call
+                for (uint64_t d : destinos) pendientes.emplace_back(d, sub);
                 break;
             }
+            for (uint64_t d : destinos) pendientes.emplace_back(d, sub);
         }
         if (res.instrs > kWalkInstrMax) {
             res.truncado = true;
@@ -1090,8 +1303,8 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
     }
     cs_free(insn, 1);
 
-    for (uint64_t d : pendientes)
-        walk_handler(cs, d, profundidad - 1, vistas, ver, res);
+    for (const auto &p : pendientes)
+        walk_handler(cs, p.first, profundidad - 1, vistas, ver, res, p.second);
 }
 
 } // namespace tests

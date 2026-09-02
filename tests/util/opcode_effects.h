@@ -152,6 +152,11 @@ constexpr size_t kRegs = offsetof(runtime::ProcessVM, registers);
 constexpr size_t kRegsOff =
     kRegs + offsetof(runtime::context_registers_vm, regs);
 
+/// Lo que ocupa UN registro del banco.  Acota que desplazamientos, contados
+/// desde el puntero que se le paso al ayudante, siguen siendo el mismo
+/// registro: mas alla ya es el de al lado, y atribuirselo seria un error.
+constexpr size_t kRegSize = sizeof(runtime::GeneralRegister);
+
 /* Los campos, por offset.  `regs[]` va entero como un solo rango: un acceso con
  * indice variable cae en cualquier parte de el, y no se puede saber en cual sin
  * ejecutar -- para eso esta la forma, que sale del desensamblador. */
@@ -194,6 +199,12 @@ struct ImplicitEffects {
      * lo vio, y hay que tratarlo como desconocido igual que los efectos. */
     uint8_t form_read = 0;
     uint8_t form_write = 0;
+    /// Accesos que caen en el banco pero cuyo campo NO se pudo identificar.
+    /// Sin esto, "forma vacia" no distingue "no toca registros" de "no se supo
+    /// de cual", que son cosas distintas y llevan a arreglos distintos.
+    uint32_t form_unknown = 0;
+    /// El primero de ellos, para poder mirarlo.
+    std::string form_why;
     uint32_t tablas = 0; ///< despachos por tabla que se pudieron seguir
     /* La instruccion CONCRETA que produjo cada efecto, una por campo y por
      * direccion.
@@ -298,29 +309,75 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                  * ahi es LEER EL PUNTERO; el acceso al campo sigue siendo por el
                  * registro donde lo deja, y ese si se mira. */
                 if (acc.via_stack) continue;
-                if (acc.disp <= 0) continue;
-                const size_t d = static_cast<size_t>(acc.disp);
                 const bool escribe = acc.writes;
                 const bool lee = acc.reads;
 
                 /* --- La FORMA: un acceso al BANCO de registros --------------
                  *
-                 * `regs[campo]` sale en codigo maquina como un acceso con el
-                 * banco de desplazamiento y el campo de indice.  Con la
-                 * procedencia del indice se sabe CUAL de los dos campos es, que
-                 * es lo que no se podia responder antes.
+                 * Va ANTES del filtro de desplazamiento porque el caso mas
+                 * comun tiene desplazamiento CERO: el manejador calcula
+                 * `&regs[campo]` y se lo pasa al ayudante, que accede por `[reg]`
+                 * a secas.
                  *
-                 * Se exige ademas que la base sea el PRIMER argumento -- el
-                 * proceso --: un acceso con el mismo desplazamiento sobre otra
+                 * Dos formas de llegar, y las dos hacen falta:
+                 *
+                 *  1. El manejador toca el banco el mismo: el acceso lleva el
+                 *     banco de desplazamiento y el campo de indice.
+                 *  2. El ayudante lo toca por un puntero que le pasaron: el
+                 *     desplazamiento y el indice viajaron en la semilla de la
+                 *     llamada, y aqui solo queda un `[reg]`.
+                 *
+                 * En los dos casos se exige que la base salga del PRIMER
+                 * argumento -- el proceso --: el mismo desplazamiento sobre otra
                  * estructura no es el banco. */
-                if (d == kRegsOff && acc.index >= 0 && acc.base >= 0 &&
-                    st.arg[acc.base] == 0) {
-                    const uint8_t bit = operand_field_bit(st.origin[acc.index]);
+                if (acc.base >= 0 && !acc.address_only) {
+                    const tests::AddrOrigin &a = st.addr[acc.base];
+                    const bool caso1 =
+                        acc.disp == static_cast<int64_t>(kRegsOff) &&
+                        acc.index >= 0 && st.arg[acc.base] == 0;
+                    const bool caso2 =
+                        a.valid && a.base == 0 &&
+                        a.disp == static_cast<int64_t>(kRegsOff) &&
+                        acc.disp >= 0 &&
+                        static_cast<size_t>(acc.disp) < kRegSize;
+                    uint8_t bit = 0;
+                    if (caso1)
+                        bit = operand_field_bit(st.origin[acc.index]);
+                    else if (caso2)
+                        bit = operand_field_bit(a.index);
                     if (bit != 0) {
                         if (escribe) out.form_write |= bit;
                         if (lee) out.form_read |= bit;
+                    } else if (caso1 || caso2) {
+                        /* Se llego al banco pero no se supo a que campo.  Es
+                         * distinto de no tocarlo, y se cuenta aparte. */
+                        ++out.form_unknown;
+                        if (out.form_why.empty()) {
+                            char buf[200];
+                            std::snprintf(
+                                buf, sizeof(buf),
+                                "0x%llX: %s %s  (caso %d, indice base=%d "
+                                "disp=%lld shift=%u width=%u valid=%d)",
+                                (unsigned long long)in.address, in.mnemonic,
+                                in.op_str, caso1 ? 1 : 2,
+                                caso1 ? st.origin[acc.index].base : a.index.base,
+                                (long long)(caso1 ? st.origin[acc.index].disp
+                                                  : a.index.disp),
+                                caso1 ? st.origin[acc.index].shift
+                                      : a.index.shift,
+                                caso1 ? st.origin[acc.index].width
+                                      : a.index.width,
+                                (caso1 ? st.origin[acc.index].valid
+                                       : a.index.valid)
+                                    ? 1
+                                    : 0);
+                            out.form_why = buf;
+                        }
                     }
                 }
+
+                if (acc.disp <= 0) continue;
+                const size_t d = static_cast<size_t>(acc.disp);
 
                 for (size_t k = 0; k < sizeof(kFields) / sizeof(kFields[0]);
                      ++k) {
