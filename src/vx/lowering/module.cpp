@@ -1235,6 +1235,11 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         bind(p->name, v_new);
     }
 
+    /* Y el `string[] args` de `main`, que nadie rellenaba: la firma se
+     * aceptaba, `args[0]` compilaba, y al ejecutarlo se leia de la direccion
+     * cero.  Va aqui, con los parametros ya atados y antes del cuerpo. */
+    emit_main_args_prologue(fd);
+
     // Pre-pase: identificar variables locales cuya direccion se toma con
     // '&'.  Influye en lower_var_decl (ALLOCA en lugar de SSA) y en
     // read_local / write_local (LOAD/STORE).
@@ -2201,4 +2206,115 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
     }
 }
 
+
+/**
+ * @brief Rellena el parametro `string[] args` de `main`.
+ *
+ * La firma `i32 main(string[] args)` se aceptaba y `args[0]` compilaba, pero
+ * nadie llenaba nunca ese parametro: la variable traia lo que hubiera, asi
+ * que indexarla leia de la direccion cero y el programa moria con
+ * "invalid memory access".  Los argumentos solo se podian leer con
+ * `args_count()` y `args_get(i)` -- que es de donde salen tambien ahora, para
+ * que las dos formas no puedan discrepar.
+ *
+ * Se construye un bloque de `argc` huecos de ocho bytes en memoria del
+ * anfitrion y se guarda en cada uno el identificador de la cadena que
+ * devuelve `args_get(i)`.  El indice vive en un hueco de pila en vez de en un
+ * PHI: la funcion todavia no tiene cuerpo bajado y un contador en memoria
+ * evita tener que coser la confluencia a mano.
+ *
+ * `args[0]` es el PRIMER argumento del usuario, no el nombre del ejecutable,
+ * porque es lo que ya devuelve `args_get(0)`: dos formas de leer lo mismo que
+ * no empiecen a contar igual son una trampa, no una comodidad.
+ *
+ * Se emite SIEMPRE que el parametro este declarado, aunque el cuerpo no lo
+ * toque.  Afinarlo pide saber si el nombre se USA, y ese calculo falla del
+ * lado malo: si se equivoca por poco, el parametro se queda sin rellenar y
+ * vuelve la lectura de la direccion cero -- un fallo mudo -- en vez de un
+ * getargc de mas, que cuesta una llamada al entrar a `main`.
+ *
+ * @param fd La funcion que se esta bajando.
+ * @return true si se relleno algo (o sea, si era `main` con ese parametro).
+ */
+bool Lowering::emit_main_args_prologue(const ast::FunctionDecl *fd) {
+    if (!fd || fd->name != "main") return false;
+    // El parametro que buscamos: `string[] nombre`, sin tamano escrito.
+    const ast::ParamDecl *pd = nullptr;
+    for (const auto &p : fd->params) {
+        if (!p || !p->type || p->type->kind != ast::NodeKind::ArrayTypeNode)
+            continue;
+        const auto *at = static_cast<const ast::ArrayTypeNode *>(p->type.get());
+        if (!at->element_type ||
+            at->element_type->kind != ast::NodeKind::PrimitiveTypeNode)
+            continue;
+        const auto *et =
+            static_cast<const ast::PrimitiveTypeNode *>(at->element_type.get());
+        if (et->prim != PrimitiveKind::STRING) continue;
+        pd = p.get();
+        break;
+    }
+    if (!pd) return false;
+
+    const uint32_t ln = static_cast<uint32_t>(pd->loc.line);
+    const ir::IrValueId v_argc = emit_getargc(ln);
+    const ir::IrValueId v_ocho = emit_const(ir::IrType::I64, 8, ln);
+    // Un hueco de mas: con cero argumentos, pedir cero bytes puede devolver
+    // nada, y entonces el propio `args` seria un puntero invalido en vez de
+    // un array vacio.
+    const ir::IrValueId v_uno = emit_const(ir::IrType::I64, 1, ln);
+    const ir::IrValueId v_n1 =
+        emit_ir_binop(ir::IrOp::ADD, v_argc, v_uno, ir::IrType::I64, ln);
+    const ir::IrValueId v_bytes =
+        emit_ir_binop(ir::IrOp::MUL, v_n1, v_ocho, ir::IrType::I64, ln);
+
+    ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_buf].is_host_ptr = true;
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::RAW_ALLOC;
+        al.type = ir::IrType::PTR;
+        al.dst = v_buf;
+        al.operands = {v_bytes};
+        al.source_line = ln;
+        emit(current_block_, std::move(al));
+    }
+
+    // El contador, en un hueco de pila del anfitrion.
+    const ir::IrValueId v_i_slot = stack_alloc_buf(8, ln, /*host_memory=*/true);
+    emit_store_i64(v_i_slot, emit_const(ir::IrType::I64, 0, ln), ln);
+
+    const ir::IrBlockId bb_test = fn_->new_block("args_test");
+    const ir::IrBlockId bb_body = fn_->new_block("args_body");
+    const ir::IrBlockId bb_done = fn_->new_block("args_done");
+    emit_br(bb_test, ln);
+
+    current_block_ = bb_test;
+    block_terminated_ = false;
+    const ir::IrValueId v_i = emit_load_i64(v_i_slot, ln);
+    const ir::IrValueId v_sigue =
+        emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_argc, ir::IrType::BOOL, ln);
+    emit_br_cond_from(bb_test, v_sigue, bb_body, bb_done, ln);
+
+    current_block_ = bb_body;
+    block_terminated_ = false;
+    const ir::IrValueId v_i2 = emit_load_i64(v_i_slot, ln);
+    const ir::IrValueId v_h = emit_getarg(v_i2, ln);
+    const ir::IrValueId v_off =
+        emit_ir_binop(ir::IrOp::MUL, v_i2, v_ocho, ir::IrType::I64, ln);
+    ir::IrValueId v_addr =
+        emit_ir_binop(ir::IrOp::ADD, v_buf, v_off, ir::IrType::PTR, ln);
+    fn_->values[v_addr].is_host_ptr = true;
+    emit_store_i64(v_addr, v_h, ln);
+    emit_store_i64(v_i_slot,
+                   emit_ir_binop(ir::IrOp::ADD, v_i2, v_uno, ir::IrType::I64,
+                                 ln),
+                   ln);
+    emit_br(bb_test, ln);
+
+    current_block_ = bb_done;
+    block_terminated_ = false;
+    // Y a partir de aqui, el nombre del parametro ES ese bloque.
+    bind(pd->name, v_buf);
+    return true;
+}
 } // namespace vx

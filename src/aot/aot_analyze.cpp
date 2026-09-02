@@ -314,9 +314,14 @@ static const char *aot_runtime_subsystem(IrOp op) noexcept {
     case IrOp::SPAWN_ARGS:
     case IrOp::SPAWN_ON:
     case IrOp::HLT:
-    case IrOp::GETPID:
+    case IrOp::GETPID: return "scheduler/procesos (runtime)";
+    /* Los argumentos del programa NO son cosa del planificador: es que el
+     * arranque nativo nunca los recoge.  Decir "runtime" mandaba a buscarlo
+     * al sitio equivocado. */
     case IrOp::GETARGC:
-    case IrOp::GETARG: return "scheduler/procesos (runtime)";
+    case IrOp::GETARG:
+        return "los argumentos del programa, que el arranque nativo todavia "
+               "no recoge";
     case IrOp::FINDCLASS:
     case IrOp::DEFCLASS:
     case IrOp::DEFFIELD:

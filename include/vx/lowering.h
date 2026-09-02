@@ -4835,7 +4835,7 @@ class Lowering {
     };
     std::unordered_map<std::string, GotoEntry> goto_labels_;
 
-    /// Nombres asignados en ALGuN sitio de la funcion que se esta bajando.
+    /// Nombres asignados en ALGUN sitio de la funcion que se esta bajando.
     /// Sirve para acotar los PHIs de una etiqueta de `goto`: no hace falta
     /// uno por cada variable viva, solo por las que pueden cambiar.  Se llena
     /// al empezar cada funcion, junto al `goto_labels_.clear()`.
@@ -4852,6 +4852,14 @@ class Lowering {
      */
     void emit_label_phis(GotoEntry &ge, ir::IrBlockId lab_bb,
                          ir::IrBlockId fall_pred, const SourceLoc &loc);
+
+    /**
+     * @brief Rellena el parametro `string[] args` de `main`.  Ver la
+     *        definicion para el porque.
+     * @param fd La funcion que se esta bajando.
+     * @return true si era `main` con ese parametro y se relleno.
+     */
+    bool emit_main_args_prologue(const ast::FunctionDecl *fd);
 
     /// contador monotono para nombrar funciones sinteticas
     /// generadas por @c spawn @c { @c body @c }.  Cada spawn produce

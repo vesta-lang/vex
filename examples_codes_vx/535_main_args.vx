@@ -1,0 +1,49 @@
+namespace ejemplos.main_args;
+
+// El parametro `string[] args` de `main`, que nadie rellenaba.
+//
+// La firma se aceptaba y `args[0]` compilaba, pero el parametro llegaba con
+// lo que hubiera: indexarlo leia de la direccion CERO y el programa moria con
+// "invalid memory access".  Los argumentos solo se podian leer con
+// `args_count()` y `args_get(i)`.
+//
+// Ahora `main` rellena el parametro al entrar, y lo hace DESDE esas dos
+// funciones -- no por otro camino --, para que las dos formas no puedan
+// discrepar.  `args[0]` es el PRIMER argumento del usuario, no el nombre del
+// ejecutable, que es lo que ya devolvia `args_get(0)`.
+//
+// OJO: este ejemplo NO compila a nativo, y a proposito.  El arranque nativo
+// todavia no recoge los argumentos del programa, asi que `args_count()` y
+// `args_get()` -- y por tanto el relleno de `args` -- solo existen en la
+// maquina virtual y en el JIT.  Compilarlo con `-m aot` lo DICE, en vez de
+// dejarlo pasar.
+//
+// Resultado esperado: 42 (sin argumentos, que es como lo ejecuta la suite).
+
+i32 main(string[] args) {
+	i32 n = args_count();
+
+	// (1) Las dos formas de contar tienen que decir lo mismo.  Sin argumentos
+	// no hay nada que indexar, y eso tambien es una respuesta valida.
+	if (n == 0) {
+		println("main args: sin argumentos");
+		return 42_i32;
+	}
+
+	// (2) Y con argumentos, cada hueco tiene que traer lo que trae su
+	// `args_get` equivalente.
+	i32 i = 0_i32;
+	while (i < n) {
+		string por_indice = args[i];
+		string por_get    = args_get(i);
+		if (!por_indice.equals(por_get)) {
+			println("(2) args[${i}]=${por_indice} pero args_get=${por_get}");
+			return 1_i32;
+		}
+		println("arg[${i}] = ${por_indice}");
+		i = i + 1_i32;
+	}
+
+	println("main args: ${n} argumento(s), y los dos caminos coinciden");
+	return 42_i32;
+}
