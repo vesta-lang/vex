@@ -202,66 +202,35 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
     std::set<uint64_t> vistas;
     tests::walk_handler(
         cs, reinterpret_cast<uint64_t>(handler), 6, vistas,
-        [&out](const cs_insn &in) {
-            if (in.detail == nullptr) return;
-            const cs_x86 &x = in.detail->x86;
-            for (uint8_t i = 0; i < x.op_count; ++i) {
-                const cs_x86_op &op = x.operands[i];
-                if (op.type != X86_OP_MEM) continue;
+        [&out](const cs_insn &in, const tests::TableState &) {
+            /* Los accesos a memoria, ya interpretados por el idioma de la ISA.
+             * Aqui no se sabe que es un operando ni si el destino va primero:
+             * eso cambia con la arquitectura y vive en `isa::mem_access`.  Lo
+             * que si es del dominio son los DESPLAZAMIENTOS que interesan. */
+            const int n_mem = tests::isa::mem_access_count(in);
+            for (int a = 0; a < n_mem; ++a) {
+                const tests::isa::MemAccess acc = tests::isa::mem_access(in, a);
+
                 /* Un campo de `ProcessVM` NUNCA se alcanza por la pila: el
                  * manejador recibe un PUNTERO, y el objeto vive en el monton.
-                 * Por `rsp`/`rbp` solo se llega a las variables locales del
-                 * propio manejador, y por `rip` a las globales.
+                 * Por la pila solo se llega a las variables locales de la propia
+                 * funcion, y por el contador de programa a las globales.
                  *
                  * Sin este filtro el criterio es solo el desplazamiento, y los
-                 * campos vigilados caen en [0x40, 0x60) -- justo el rango de
-                 * los marcos de pila corrientes --, asi que cualquier
-                 * `mov [rsp+0x58], rax` se contaba como "escribe flags".  De
-                 * ahi salia que `mov` escribiera las banderas y que `not` no
-                 * las escribiera pero tocase el contador de programa.
+                 * campos vigilados caen en [0x40, 0x60) -- justo el rango de los
+                 * marcos de pila corrientes --, asi que cualquier
+                 * `mov [rsp+0x58], rax` se contaba como "escribe flags".  De ahi
+                 * salia que `mov` escribiera las banderas y que `not` no las
+                 * escribiera pero tocase el contador de programa.
                  *
-                 * Si el compilador guarda el puntero en la pila, lo que hace
-                 * por `rsp` es LEER EL PUNTERO; el acceso al campo sigue siendo
-                 * por el registro donde lo deja, y ese si se mira. */
-                if (op.mem.base == X86_REG_RSP || op.mem.base == X86_REG_ESP ||
-                    op.mem.base == X86_REG_RBP || op.mem.base == X86_REG_EBP ||
-                    op.mem.base == X86_REG_RIP)
-                    continue;
-                const int64_t disp = op.mem.disp;
-                if (disp <= 0) continue;
-                const size_t d = static_cast<size_t>(disp);
-
-                /* Direccion del acceso: LEER o ESCRIBIR.
-                 *
-                 * NO se usa `op.access` de Capstone.  Se comprobo con la prueba
-                 * y marca como ESCRITURA el operando FUENTE: el veredicto
-                 * "`cmp` escribe las banderas" salia de un
-                 * `movzx r11d, byte ptr [rcx+0x58]`, que es una lectura, y el
-                 * de `enter` de un `mov rbx, qword ptr [rcx+0x40]`, tambien.
-                 * Con esa clasificacion "lee" y "escribe" significaban lo
-                 * mismo, y para reordenar es justo lo que hay que distinguir:
-                 * dos lecturas del mismo campo conmutan, una lectura y una
-                 * escritura no.
-                 *
-                 * La FORMA de x86 si es de fiar: el destino es el primer
-                 * operando.  De ahi salen los tres casos. */
-                const std::string mn = in.mnemonic;
-                bool escribe = false, lee = false;
-                if (mn == "lea") {
-                    /* `lea` no accede: calcula una direccion.  Pero si la de un
-                     * campo se pasa a otro sitio, ese sitio puede leerlo y
-                     * escribirlo, y puede que no se llegue a recorrer.  Se
-                     * marca lo peor de los dos. */
-                    escribe = lee = true;
-                } else if (i == 0 && mn != "cmp" && mn != "test" &&
-                           mn != "push" && mn != "call" && mn[0] != 'j') {
-                    // Destino: se escribe.  Y se lee tambien salvo que la
-                    // instruccion se limite a poner un valor encima.
-                    escribe = true;
-                    lee = (mn.compare(0, 3, "mov") != 0);
-                } else {
-                    lee = true; // fuente, o instruccion que solo compara
-                }
+                 * Si el compilador guarda el puntero en la pila, lo que hace por
+                 * ahi es LEER EL PUNTERO; el acceso al campo sigue siendo por el
+                 * registro donde lo deja, y ese si se mira. */
+                if (acc.via_stack) continue;
+                if (acc.disp <= 0) continue;
+                const size_t d = static_cast<size_t>(acc.disp);
+                const bool escribe = acc.writes;
+                const bool lee = acc.reads;
 
                 for (size_t k = 0; k < sizeof(kFields) / sizeof(kFields[0]);
                      ++k) {

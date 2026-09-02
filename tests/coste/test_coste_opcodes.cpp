@@ -229,7 +229,7 @@ int main(int argc, char **argv) {
                 tests::walk_handler(
                     cs, reinterpret_cast<uint64_t>(par.first), g_profundidad,
                     vistas,
-                    [&fila](const cs_insn &in) {
+                    [&fila](const cs_insn &in, const tests::TableState &) {
                         fila.h.cuerpo += in.mnemonic;
                         if (in.op_str[0]) {
                             fila.h.cuerpo += ' ';

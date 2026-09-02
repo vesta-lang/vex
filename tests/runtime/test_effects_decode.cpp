@@ -402,7 +402,7 @@ int main(int argc, char **argv) {
                 reinterpret_cast<uint64_t>(
                     reinterpret_cast<const void *>(&runtime::decode_effects)),
                 /*profundidad=*/1, vistas,
-                [&](const cs_insn &in) {
+                [&](const cs_insn &in, const tests::TableState &) {
                     ++instrucciones;
                     const std::string m = in.mnemonic;
                     if (m == "call" || m == "callq") ++llamadas;
