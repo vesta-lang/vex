@@ -697,6 +697,22 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             if (n < st.origin[d].width) st.origin[d].width = n;
         }
     }
+    /* Un desplazamiento a la IZQUIERDA no selecciona bits: ESCALA.
+     *
+     * `shl rax, 6` sobre el numero de un registro vectorial lo convierte en un
+     * desplazamiento dentro del banco -- 64 bytes por registro --, y el valor
+     * sigue siendo el mismo campo del operando.  Hace falta porque la escala de
+     * un acceso indexado solo llega a 8, asi que para un banco de 64 bytes el
+     * compilador NO puede usarla y multiplica aparte; invalidando aqui la
+     * procedencia se perdia el indice de toda la coma flotante.
+     *
+     * Se conserva tal cual: `Origin` dice QUE BITS del campo lleva el registro,
+     * y escalar no cambia ninguno. */
+    if ((m == "shl" || m == "sal") && x.op_count == 2 &&
+        x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_IMM) {
+        const int d = gpr_slot(x.operands[0].reg);
+        if (d >= 0 && st.origin[d].valid) return; // se conserva
+    }
     if ((m == "shr" || m == "sar") && x.op_count == 2 &&
         x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_IMM &&
         x.operands[1].imm > 0 && x.operands[1].imm < 64) {

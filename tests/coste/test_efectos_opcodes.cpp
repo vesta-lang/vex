@@ -261,6 +261,17 @@ int main(int argc, char **argv) {
                 if (!lee.empty() || !esc.empty())
                     std::printf("  forma    lee=[%s] escribe=[%s]\n",
                                 lee.c_str(), esc.c_str());
+                std::string vlee, vesc;
+                for (int b = 0; b < 6; ++b) {
+                    if (f.imp.form_vec_read >> b & 1)
+                        vlee += std::string(vlee.empty() ? "" : " ") + kParts[b];
+                    if (f.imp.form_vec_write >> b & 1)
+                        vesc += std::string(vesc.empty() ? "" : " ") + kParts[b];
+                }
+                if (!vlee.empty() || !vesc.empty())
+                    std::printf("  forma.v  lee=[%s] escribe=[%s]  (banco "
+                                "VECTORIAL)\n",
+                                vlee.c_str(), vesc.c_str());
                 if (f.imp.form_unknown != 0)
                     std::printf("  forma    %u acceso(s) al banco SIN campo "
                                 "identificado\n           %s\n",

@@ -159,6 +159,13 @@ constexpr size_t kRegsOff =
 /// registro: mas alla ya es el de al lado, y atribuirselo seria un error.
 constexpr size_t kRegSize = sizeof(runtime::GeneralRegister);
 
+/// Y lo mismo para el banco VECTORIAL.  Va aparte porque son bancos distintos:
+/// `fadd f7, f8` y `adds r7, r8` llevan el mismo numero y no se estorban, asi
+/// que atribuirlos al mismo sitio inventaria una dependencia que no existe.
+constexpr size_t kZmmOff =
+    kRegs + offsetof(runtime::context_registers_vm, zmm);
+constexpr size_t kZmmSize = sizeof(runtime::ZmmRegister);
+
 /* Los campos, por offset.  `regs[]` va entero como un solo rango: un acceso con
  * indice variable cae en cualquier parte de el, y no se puede saber en cual sin
  * ejecutar -- para eso esta la forma, que sale del desensamblador. */
@@ -201,6 +208,9 @@ struct ImplicitEffects {
      * lo vio, y hay que tratarlo como desconocido igual que los efectos. */
     uint8_t form_read = 0;
     uint8_t form_write = 0;
+    /// Lo mismo, pero sobre el banco VECTORIAL (`registers.zmm[]`).
+    uint8_t form_vec_read = 0;
+    uint8_t form_vec_write = 0;
     /// Accesos que caen en el banco pero cuyo campo NO se pudo identificar.
     /// Sin esto, "forma vacia" no distingue "no toca registros" de "no se supo
     /// de cual", que son cosas distintas y llevan a arreglos distintos.
@@ -406,22 +416,51 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                  * estructura no es el banco. */
                 if (acc.base >= 0 && !acc.address_only) {
                     const tests::AddrOrigin &a = st.addr[acc.base];
-                    const bool caso1 =
-                        acc.disp == static_cast<int64_t>(kRegsOff) &&
-                        acc.index >= 0 && st.arg[acc.base] == 0;
-                    const bool caso2 =
-                        a.valid && a.base == 0 &&
-                        a.disp == static_cast<int64_t>(kRegsOff) &&
-                        acc.disp >= 0 &&
-                        static_cast<size_t>(acc.disp) < kRegSize;
+                    /* Los dos bancos, con el mismo criterio.  El desplazamiento
+                     * dice CUAL es, y de ahi sale a que mitad de la forma va lo
+                     * que se encuentre. */
+                    const struct {
+                        size_t off, tam;
+                        bool vec;
+                    } kBancos[2] = {{kRegsOff, kRegSize, false},
+                                    {kZmmOff, kZmmSize, true}};
+                    bool caso1 = false, caso2 = false, es_vec = false;
+                    for (const auto &b : kBancos) {
+                        if (acc.disp == static_cast<int64_t>(b.off) &&
+                            acc.index >= 0 && st.arg[acc.base] == 0) {
+                            caso1 = true;
+                            es_vec = b.vec;
+                            break;
+                        }
+                        if (a.valid && a.base == 0 &&
+                            a.disp == static_cast<int64_t>(b.off) &&
+                            acc.disp >= 0 &&
+                            (static_cast<size_t>(acc.disp) < b.tam ||
+                             acc.index >= 0)) {
+                            caso2 = true;
+                            es_vec = b.vec;
+                            break;
+                        }
+                    }
+                    /* De donde sale el campo: del indice que iba en el
+                     * calculo de la direccion, o del que se aplica en el propio
+                     * acceso.  Las dos formas existen y dependen de cuanto
+                     * pudo plegar el compilador -- con un banco de 64 bytes por
+                     * registro la escala del acceso NO llega, asi que calcula la
+                     * base una vez y multiplica el indice aparte. */
                     uint8_t bit = 0;
                     if (caso1)
                         bit = operand_field_bit(st.origin[acc.index]);
-                    else if (caso2)
+                    else if (caso2) {
                         bit = operand_field_bit(a.index);
+                        if (bit == 0 && acc.index >= 0)
+                            bit = operand_field_bit(st.origin[acc.index]);
+                    }
                     if (bit != 0) {
-                        if (escribe) out.form_write |= bit;
-                        if (lee) out.form_read |= bit;
+                        uint8_t &w = es_vec ? out.form_vec_write : out.form_write;
+                        uint8_t &r = es_vec ? out.form_vec_read : out.form_read;
+                        if (escribe) w |= bit;
+                        if (lee) r |= bit;
                     } else if (caso1 || caso2) {
                         /* Se llego al banco pero no se supo a que campo.  Es
                          * distinto de no tocarlo, y se cuenta aparte. */

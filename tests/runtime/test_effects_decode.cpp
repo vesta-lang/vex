@@ -469,7 +469,7 @@ int main(int argc, char **argv) {
              * no mas alla -- el fallo fatal arrastra media libreria estandar. */
             int llamadas = 0, saltos_indirectos = 0, instrucciones = 0;
             tests::WalkResult res;
-            std::set<uint64_t> vistas;
+            std::set<tests::WalkVisit> vistas;
             tests::walk_handler(
                 cs,
                 reinterpret_cast<uint64_t>(
@@ -765,6 +765,42 @@ int main(int argc, char **argv) {
             std::printf("  %d formas declaradas contrastadas con su "
                         "manejador, %d cuadran\n",
                         comparadas, cubiertas);
+
+            /* Y CUANTAS no se pudieron contrastar, que es lo que no puede
+             * quedarse callado.
+             *
+             * Las formas del banco VECTORIAL estan declaradas leyendo el
+             * manejador -- `fadd` opera sobre `registers.zmm[]`, y eso el fuente
+             * lo dice sin ambiguedad --, pero el derivador todavia no ve esos
+             * accesos: con 64 bytes por registro la escala de un acceso indexado
+             * no llega, asi que el compilador calcula la base aparte y el rastro
+             * se pierde.  O sea que descansan sobre UNA fuente y no sobre dos,
+             * que es justo lo que este test existe para evitar.
+             *
+             * Se cuenta para que sea un numero que baja, y no una nota al pie
+             * que se olvida. */
+            int con_vec = 0, vec_derivadas = 0;
+            for (const tests::OpcodeRow &f : filas) {
+                if (!f.implementada) continue;
+                const bool ext = std::strcmp(f.tabla, "extended") == 0;
+                uint8_t bytes[16];
+                for (size_t k = 0; k < sizeof(bytes); ++k)
+                    bytes[k] = operand_byte(k);
+                runtime::DecodedInstr d;
+                if (!build(ext, f.indice, bytes, sizeof(bytes), d)) continue;
+                runtime::InstrEffects e;
+                if (!runtime::probe_effects(d, e)) continue;
+                if (e.vec_read == 0 && e.vec_write == 0) continue;
+                ++con_vec;
+                if (f.imp.form_vec_read != 0 || f.imp.form_vec_write != 0)
+                    ++vec_derivadas;
+            }
+            if (con_vec > 0)
+                std::printf("  %d usan el banco VECTORIAL; el derivador "
+                            "confirma %d\n"
+                            "  (el resto descansa solo en el fuente del "
+                            "manejador, no en dos fuentes)\n",
+                            con_vec, vec_derivadas);
         }
     }
 

@@ -84,6 +84,24 @@ enum RegSlot : uint8_t {
     RS_REG2_HI, ///< nibble alto de `reg2`
 };
 
+/**
+ * @brief QUE BANCO indexa el numero de registro que vive en un `RegSlot`.
+ *
+ * El `RegSlot` dice DONDE, en los bytes de la instruccion, esta escrito el
+ * numero.  No dice a que se refiere ese numero, y la VM tiene dos bancos: los
+ * de proposito general (`regs[16]`) y los vectoriales (`zmm[16]`).
+ *
+ * Son ejes distintos y hace falta separarlos: `fadd f7, f8` y `adds r7, r8`
+ * llevan los mismos numeros en los mismos campos y NO se estorban.  Con un solo
+ * banco, la aritmetica de coma flotante declararia tocar registros generales --
+ * lo que impide reordenar alrededor de ella sin motivo -- o, si se declarase al
+ * reves, dejaria pasar dos operaciones flotantes que si dependian.
+ */
+enum RegBank : uint8_t {
+    RB_GP = 0,  ///< `registers.regs[]`, proposito general
+    RB_VEC = 1, ///< `registers.zmm[]`, banco vectorial (f/xmm/ymm/zmm)
+};
+
 /// Bits de los campos implicitos, en el orden en que los vigila el derivador.
 enum EffField : uint8_t {
     EF_FLAGS = 1u << 0,
@@ -100,8 +118,13 @@ enum EffField : uint8_t {
  * que un opcode sin entrada en la tabla no se optimice por descuido.
  */
 struct InstrEffects {
-    uint16_t reg_read = 0;  ///< bit por registro de VM leido
-    uint16_t reg_write = 0; ///< bit por registro escrito
+    uint16_t reg_read = 0;  ///< bit por registro GENERAL leido
+    uint16_t reg_write = 0; ///< bit por registro GENERAL escrito
+    /// Lo mismo para el banco VECTORIAL.  Va aparte y no mezclado porque son
+    /// bancos distintos: `fadd f7, f8` no estorba a `adds r7, r8`.  Ver
+    /// @ref RegBank.
+    uint16_t vec_read = 0;
+    uint16_t vec_write = 0;
     uint8_t field_read = 0; ///< bits de EffField
     uint8_t field_write = 0;
     bool mem_read = false;  ///< toca la memoria de la VM
@@ -113,6 +136,9 @@ struct InstrEffects {
      * que no hay destino conocido, y entonces no se puede retargetear. */
     uint8_t dest_reg = 0;
     uint8_t dest_slot = RS_NONE;
+    /// A que banco pertenece el destino.  Sin esto, reescribir el destino de una
+    /// operacion flotante cambiaria un registro general con el mismo numero.
+    uint8_t dest_bank = RB_GP;
     /// El destino se pisa ENTERO (no se acumula sobre su valor previo).  Es lo
     /// que decide si una instruccion MATA un temporal o solo lo actualiza.
     bool dest_is_kill = false;

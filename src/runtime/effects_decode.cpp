@@ -66,22 +66,111 @@ namespace runtime {
 namespace {
 
 /// Marca en @p e que se LEE el registro que vive en @p slot.
-inline void mark_read(const DecodedInstr &d, InstrEffects &e, uint8_t slot) {
-    e.reg_read |= static_cast<uint16_t>(1u << (reg_slot_get(d, slot) & 0x0F));
+inline void mark_read(const DecodedInstr &d, InstrEffects &e, uint8_t slot,
+                      uint8_t bank = RB_GP) {
+    const uint16_t bit =
+        static_cast<uint16_t>(1u << (reg_slot_get(d, slot) & 0x0F));
+    if (bank == RB_VEC)
+        e.vec_read |= bit;
+    else
+        e.reg_read |= bit;
 }
 
 /// Marca el destino: se ESCRIBE, y se apunta DONDE vive para poder cambiarlo.
 inline void mark_write(const DecodedInstr &d, InstrEffects &e, uint8_t slot,
-                       bool kill) {
+                       bool kill, uint8_t bank = RB_GP) {
     const uint8_t r = reg_slot_get(d, slot);
-    e.reg_write |= static_cast<uint16_t>(1u << (r & 0x0F));
+    const uint16_t bit = static_cast<uint16_t>(1u << (r & 0x0F));
+    uint16_t &escritos = (bank == RB_VEC) ? e.vec_write : e.reg_write;
+    uint16_t &leidos = (bank == RB_VEC) ? e.vec_read : e.reg_read;
+    escritos |= bit;
     e.dest_reg = r;
     e.dest_slot = slot;
+    e.dest_bank = bank;
     e.dest_is_kill = kill;
     /* Si el destino NO se pisa entero, la instruccion tambien lo LEE: `add rd,
      * rs` acumula sobre lo que hubiera.  Sin esto, un temporal pareceria muerto
      * donde solo estaba siendo actualizado. */
-    if (!kill) e.reg_read |= static_cast<uint16_t>(1u << (r & 0x0F));
+    if (!kill) leidos |= bit;
+}
+
+/**
+ * @brief Convencion B con el destino en el nibble ALTO: `strlen r_dst, r_src`.
+ *
+ * `byte2 = (r_dst << 4) | r_src`, y el decoder deja byte2 en `reg1`.  Asi que
+ * el destino es el nibble ALTO y la fuente el bajo.
+ *
+ * Y eso es lo CONTRARIO de `form_alu3`, que comparte decoder: alli
+ * `byte2 = (rs1 << 4) | rd`, o sea el destino en el nibble BAJO.  Compartir
+ * decoder solo significa compartir donde estan los campos; cual de ellos es el
+ * destino lo decide el MANEJADOR, y estas dos familias eligieron al reves.
+ * Declararlas juntas por venir del mismo decoder habria puesto el destino en el
+ * campo equivocado, que es la peor forma de equivocarse aqui.
+ *
+ * El destino se pisa ENTERO: se calcula a partir de la fuente y no se acumula.
+ */
+inline void form_b_dst_hi(const DecodedInstr &d, InstrEffects &e) {
+    mark_write(d, e, RS_REG1_HI, /*kill=*/true);
+    mark_read(d, e, RS_REG1_LO);
+}
+
+/**
+ * @brief Como la anterior, pero el destino tambien se LEE: `strfinalize`.
+ *
+ * Saca de el el objeto que va a actualizar, asi que no lo pisa entero.  Comparte
+ * decoder y disposicion con las demas de su familia y NO comparte efecto: es la
+ * excepcion que aparecio al verificarlas una por una.
+ */
+inline void form_b_rmw_hi(const DecodedInstr &d, InstrEffects &e) {
+    mark_write(d, e, RS_REG1_HI, /*kill=*/false);
+    mark_read(d, e, RS_REG1_LO);
+}
+
+/**
+ * @brief Igual, pero con un TERCER operando en el nibble alto de `reg2`.
+ *
+ * `strcat r_dst, r_a, r_b` y compania: `byte3 = (r3 << 4) | extra`.
+ */
+inline void form_b_dst_hi3(const DecodedInstr &d, InstrEffects &e) {
+    mark_write(d, e, RS_REG1_HI, /*kill=*/true);
+    mark_read(d, e, RS_REG1_LO);
+    mark_read(d, e, RS_REG2_HI);
+}
+
+/**
+ * @brief Coma flotante de dos operandos: `fadd f_dst, f_src`.
+ *
+ * Misma disposicion que la ALU binaria -- los dos numeros directos en `reg1` y
+ * `reg2` -- pero indexan OTRO BANCO: `registers.zmm[]`, no `registers.regs[]`.
+ * Por eso se declara con @c RB_VEC.
+ *
+ * Sin el banco, `fadd f7, f8` diria que toca los registros generales 7 y 8, y
+ * entonces no se podria mover nada de enteros alrededor de una operacion
+ * flotante sin motivo ninguno.
+ *
+ * El destino se ACUMULA (`fadd` es `dst += src`), asi que tambien se lee.
+ */
+inline void form_fp_bin(const DecodedInstr &d, InstrEffects &e) {
+    mark_write(d, e, RS_REG1, /*kill=*/false, RB_VEC);
+    mark_read(d, e, RS_REG2, RB_VEC);
+}
+
+/**
+ * @brief Coma flotante que PISA el destino: `fmov`, `fsqrt`, `fabs`, `fneg`...
+ *
+ * Se distingue de la anterior justo por eso: el resultado sale solo de la
+ * fuente, asi que el destino no se lee.  Es lo que permite que estas MATEN un
+ * temporal, que es la mitad de las fusiones posibles.
+ */
+inline void form_fp_un(const DecodedInstr &d, InstrEffects &e) {
+    mark_write(d, e, RS_REG1, /*kill=*/true, RB_VEC);
+    mark_read(d, e, RS_REG2, RB_VEC);
+}
+
+/// @brief `fcmp f_a, f_b`: compara y NO escribe ningun registro.
+inline void form_fp_cmp(const DecodedInstr &d, InstrEffects &e) {
+    mark_read(d, e, RS_REG1, RB_VEC);
+    mark_read(d, e, RS_REG2, RB_VEC);
 }
 
 /**
@@ -294,6 +383,40 @@ inline bool decode_effects_impl(const DecodedInstr &d, InstrEffects &out,
         // ALU de tres operandos: nueve opcodes, UNA etiqueta.
         for (unsigned o = 0x73; o <= 0x7B; ++o) dispatch[0x100 | o] = &&L_ALU3;
 
+        /* --- Cadenas: convencion B con el destino en el nibble ALTO --------
+         *
+         * Cada una VERIFICADA en su manejador, no agrupada por compartir
+         * decoder: `form_alu3` comparte el mismo y pone el destino en el nibble
+         * contrario.  Y dentro de la propia familia hay una excepcion --
+         * `strfinalize` --, que fue justo lo que aparecio al mirarlas una por
+         * una en vez de declararlas en bloque. */
+        for (unsigned o : {0x47u, 0x4Bu, 0x4Du, 0x4Eu, 0x4Fu, 0x50u, 0x51u,
+                           0x52u, 0x53u})
+            dispatch[0x100 | o] = &&L_B_HI; // strlen strraw strflat strhash
+                                            // strintern strgetenc strgetbytes
+                                            // strgetkind strreserve
+        for (unsigned o : {0x46u, 0x48u, 0x49u, 0x4Au, 0x4Cu, 0x5Eu})
+            dispatch[0x100 | o] = &&L_B_HI3; // strmake strcat strcmp strconv
+                                             // strslice strmake_h
+        /* `strfinalize` LEE su primer operando ademas de escribirlo: saca de el
+         * el objeto que va a actualizar.  Misma disposicion, distinto efecto. */
+        dispatch[0x100 | 0x54] = &&L_B_HI_RMW;
+
+        /* --- Coma flotante: mismos campos, OTRO BANCO ----------------------
+         *
+         * `fadd f7, f8` lleva los numeros en `reg1` y `reg2` igual que
+         * `adds r7, r8`, pero indexan `registers.zmm[]`.  Declararlas en el
+         * banco general diria que una operacion flotante estorba a la
+         * aritmetica de enteros, y no se estorban en nada. */
+        for (unsigned o : {0xF1u, 0xF2u, 0xF3u, 0xF4u, 0x80u, 0x81u})
+            dispatch[0x100 | o] = &&L_FP_BIN; // fadd fsub fmul fdiv fmin fmax
+        for (unsigned o : {0xF0u, 0xF6u, 0xF7u, 0xF8u, 0x5Cu, 0x5Du, 0x82u,
+                           0x83u, 0x84u, 0x85u})
+            dispatch[0x100 | o] = &&L_FP_UN; // fmov fsqrt fabs fneg fextend
+                                             // fnarrow ffloor fceil fround
+                                             // ftrunc
+        dispatch[0x100 | 0xF5] = &&L_FP_CMP; // fcmp: compara, no escribe
+
         dispatch_ready = true;
     }
     goto *dispatch[idx];
@@ -309,6 +432,24 @@ L_MOV:
     goto L_DONE;
 L_ALU3:
     form_alu3(d, out);
+    goto L_DONE;
+L_B_HI:
+    form_b_dst_hi(d, out);
+    goto L_DONE;
+L_B_HI3:
+    form_b_dst_hi3(d, out);
+    goto L_DONE;
+L_B_HI_RMW:
+    form_b_rmw_hi(d, out);
+    goto L_DONE;
+L_FP_BIN:
+    form_fp_bin(d, out);
+    goto L_DONE;
+L_FP_UN:
+    form_fp_un(d, out);
+    goto L_DONE;
+L_FP_CMP:
+    form_fp_cmp(d, out);
     goto L_DONE;
 L_UNDECLARED:
     /* Solo en el camino FRIO se va a la tabla grande, y solo para sacar el
