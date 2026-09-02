@@ -53,6 +53,7 @@
 #include "util/reloj.h"
 
 #include "../util/handler_walk.h"
+#include "../util/opcode_effects.h"
 
 namespace {
 
@@ -111,6 +112,28 @@ bool disasm_regs(const uint8_t *bytes, size_t n,
     return true;
 }
 
+/**
+ * @brief El `RegSlot` de cada bit de la forma DERIVADA del codigo maquina.
+ *
+ * El derivador responde en campos del operando -- reg1 entero, nibble bajo de
+ * reg2... -- y el descodificador en `RegSlot`.  Son la misma nocion con dos
+ * nombres, y esta tabla es el puente.  El orden es el que produce
+ * `operand_field_bit`: campo (reg1, reg2) por parte (entero, bajo, alto).
+ */
+constexpr runtime::RegSlot kFormSlot[6] = {
+    runtime::RS_REG1,     runtime::RS_REG1_LO, runtime::RS_REG1_HI,
+    runtime::RS_REG2,     runtime::RS_REG2_LO, runtime::RS_REG2_HI};
+
+/// Los registros a los que apunta @p forma sobre la instancia @p d.
+uint16_t regs_de_forma(uint8_t forma, const runtime::DecodedInstr &d) {
+    uint16_t m = 0;
+    for (int b = 0; b < 6; ++b)
+        if ((forma >> b) & 1)
+            m |= static_cast<uint16_t>(
+                1u << (runtime::reg_slot_get(d, kFormSlot[b]) & 0x0F));
+    return m;
+}
+
 /// `r3 r5=` en texto, para que el fallo diga QUE difiere y no solo que difiere.
 std::string mascara(uint16_t m) {
     std::string s;
@@ -142,6 +165,31 @@ int main(int argc, char **argv) {
      * disposicion de los campos, asi que comparten forma y se declaran de una
      * vez.  211 sueltas no se atacan; una docena de familias si. */
     if (familias) {
+        /* Lo que el MANEJADOR hace, derivado de su codigo maquina, indexado por
+         * opcode.  El decoder dice DONDE viven los campos -- eso es lo que
+         * comparten los de una familia --, pero no cual se lee y cual se
+         * escribe: eso lo decide el manejador, y dos opcodes con el mismo
+         * decoder pueden diferir (`isnull` escribe su primer operando,
+         * `monenter` solo lo lee).
+         *
+         * Juntando las dos cosas, declarar una familia deja de ser leer el
+         * manejador de cada una: la disposicion la da el grupo y la direccion,
+         * la derivacion.  Y no es una propuesta a ciegas -- las 21 formas ya
+         * escritas cuadran con ella, que es lo que le da credito. */
+        std::map<int, std::pair<uint8_t, uint8_t>> derivada;
+        for (const tests::OpcodeRow &f : tests::build_opcode_model(0)) {
+            const int clave =
+                (std::strcmp(f.tabla, "extended") == 0 ? 0x100 : 0) + f.indice;
+            derivada[clave] = {f.imp.form_read, f.imp.form_write};
+        }
+        auto texto_forma = [](uint8_t m) {
+            static const char *kN[6] = {"r1", "r1.bajo", "r1.alto",
+                                        "r2", "r2.bajo", "r2.alto"};
+            std::string s;
+            for (int b = 0; b < 6; ++b)
+                if ((m >> b) & 1) s += std::string(s.empty() ? "" : ",") + kN[b];
+            return s.empty() ? std::string("-") : s;
+        };
         std::map<const void *, std::vector<std::string>> grupos;
         for (int t = 0; t < 2; ++t) {
             const bool ext = (t == 1);
@@ -172,10 +220,15 @@ int main(int argc, char **argv) {
                     disasm::disasm_bytes(bytes, sizeof(bytes), 0, opts);
                 std::string texto = res.empty() ? "?" : res[0].operands;
 
-                char linea[160];
-                std::snprintf(linea, sizeof(linea), "%-16s %s 0x%02X   %s",
+                const auto it = derivada.find((ext ? 0x100 : 0) + idx);
+                const uint8_t fr = it == derivada.end() ? 0 : it->second.first;
+                const uint8_t fw = it == derivada.end() ? 0 : it->second.second;
+                char linea[220];
+                std::snprintf(linea, sizeof(linea),
+                              "%-16s %s 0x%02X  %-14s  lee=%-16s esc=%s",
                               d.metadata->name, ext ? "ext" : "pri", idx,
-                              texto.c_str());
+                              texto.c_str(), texto_forma(fr).c_str(),
+                              texto_forma(fw).c_str());
                 grupos[reinterpret_cast<const void *>(d.metadata->decode)]
                     .push_back(linea);
             }
@@ -183,6 +236,26 @@ int main(int argc, char **argv) {
         std::printf("Formas por declarar, agrupadas por decoder (%zu "
                     "familias)\n\n",
                     grupos.size());
+        /* El aviso va aqui y no en la documentacion porque es justo donde
+         * alguien va a copiar la columna. */
+        std::printf(
+            "  El texto del desensamblador dice DONDE viven los campos; lo "
+            "comparten\n"
+            "  los de una familia.  `lee`/`esc` salen de recorrer el "
+            "manejador y dicen\n"
+            "  la DIRECCION, que no la comparten: `isnull` escribe su primer "
+            "operando\n"
+            "  y `monenter` solo lo lee, con el mismo decoder.\n\n"
+            "  CUIDADO: lo derivado es una COTA INFERIOR.  Lo que aparece, "
+            "esta; lo que\n"
+            "  NO aparece puede estar igualmente -- el recorrido se queda "
+            "corto ante una\n"
+            "  llamada indirecta --.  Un `esc=-` NO demuestra que no escriba, "
+            "y declarar\n"
+            "  eso seria decir que una instruccion no mata un temporal cuando "
+            "si lo mata.\n"
+            "  Se declara desde el CONTRATO del opcode; esto confirma, no "
+            "decide.\n\n");
         std::vector<std::pair<size_t, const void *>> orden;
         for (const auto &kv : grupos) orden.push_back({kv.second.size(), kv.first});
         std::sort(orden.begin(), orden.end(),
@@ -623,6 +696,75 @@ int main(int argc, char **argv) {
         } else {
             std::printf("  dentro de los dos topes (%.2f ns y %.1fx)\n", tope_ns,
                         kRazonMax);
+        }
+    }
+
+    /* --- Tercera fuente: lo que hace el MANEJADOR de verdad ---------------
+     *
+     * El desensamblador dice que registros NOMBRA una instruccion, y con eso se
+     * comprueba que la forma declarada no se invente ninguno.  Pero no puede
+     * decir cual se LEE y cual se ESCRIBE: eso no esta en el formato, esta en el
+     * codigo del manejador.
+     *
+     * Aqui se compara contra el, derivado de su codigo maquina.  Es la unica
+     * fuente que responde a la pregunta que de verdad importa para reordenar --
+     * "escribe A lo que lee B?" -- y llega por un camino que no comparte nada
+     * con la declaracion.
+     *
+     * La comparacion NO es de igualdad, y la asimetria es lo importante:
+     *
+     *   derivado ⊆ declarado   ->  bien.  Lo que el recorrido no alcanzo a ver
+     *                              -- una llamada indirecta, un tope -- queda
+     *                              fuera, y por eso lo derivado es una COTA
+     *                              INFERIOR.
+     *   derivado ⊄ declarado   ->  FALLO.  El manejador toca un registro que la
+     *                              declaracion no menciona, y eso reordena algo
+     *                              que si dependia.
+     *
+     * Lo que esta comprobacion NO ve: la diferencia entre "el byte entero" y
+     * "su nibble bajo".  Para un numero de registro (0..15) son el mismo valor,
+     * y solo se separan al REESCRIBIR el operando -- que byte hay que parchear
+     * --.  Eso lo cubre la comprobacion de reescritura del destino, mas arriba.
+     */
+    {
+        std::printf("\nLa forma declarada, contra lo que hace el manejador\n");
+        csh cs2 = 0;
+        if (cs_open(tests::kWalkArch, tests::kWalkMode, &cs2) != CS_ERR_OK) {
+            std::printf("  (sin Capstone: no se comprueba)\n");
+        } else {
+            cs_close(&cs2);
+            const std::vector<tests::OpcodeRow> filas =
+                tests::build_opcode_model(0);
+            int comparadas = 0, cubiertas = 0;
+            for (const tests::OpcodeRow &f : filas) {
+                if (!f.implementada) continue;
+                if (f.imp.form_read == 0 && f.imp.form_write == 0) continue;
+                const bool ext = std::strcmp(f.tabla, "extended") == 0;
+                uint8_t bytes[16];
+                for (size_t k = 0; k < sizeof(bytes); ++k)
+                    bytes[k] = operand_byte(k);
+                runtime::DecodedInstr d;
+                if (!build(ext, f.indice, bytes, sizeof(bytes), d)) continue;
+                runtime::InstrEffects e;
+                if (!runtime::probe_effects(d, e)) continue; // sin forma escrita
+                ++comparadas;
+                const uint16_t der_r = regs_de_forma(f.imp.form_read, d);
+                const uint16_t der_w = regs_de_forma(f.imp.form_write, d);
+                const uint16_t falta_r = static_cast<uint16_t>(der_r & ~e.reg_read);
+                const uint16_t falta_w =
+                    static_cast<uint16_t>(der_w & ~e.reg_write);
+                if (falta_r == 0 && falta_w == 0) {
+                    ++cubiertas;
+                    continue;
+                }
+                mal("el manejador toca registros que la forma no declara",
+                    f.nombre.c_str(), f.tabla, f.indice,
+                    "lee de mas: " + mascara(falta_r) +
+                        "  escribe de mas: " + mascara(falta_w));
+            }
+            std::printf("  %d formas declaradas contrastadas con su "
+                        "manejador, %d cuadran\n",
+                        comparadas, cubiertas);
         }
     }
 
