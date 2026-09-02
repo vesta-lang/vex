@@ -120,6 +120,24 @@ std::string nombrar(const disasm::RegOperand &r) {
     return s;
 }
 
+/**
+ * @brief Imprime EN QUE FUNCION cae el hueco @p k, si se sabe.
+ *
+ * Un hueco es una direccion, y una direccion no es accionable: para cerrarla
+ * hay que saber en que funcion cae.  Los nombres salen de la tabla de simbolos
+ * del propio binario -- ver `tests/util/module_symbols.h` --, que el enlace de
+ * Release borra con `--strip-all`.  Ahi no se imprime nada, en vez de inventar:
+ * para verlos se usa el build de `Profile`, que compila exactamente lo mismo
+ * sin estripar.
+ */
+void imprimir_funcion(const ImplicitEffects &imp, size_t k) {
+    if (k >= imp.sin_resolver_fn.size()) return;
+    const std::string n = tests::symbol_at(
+        reinterpret_cast<const void *>(&runtime::exec_instr_hlt),
+        imp.sin_resolver_fn[k]);
+    if (!n.empty()) std::printf("      en: %s\n", n.c_str());
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -215,8 +233,10 @@ int main(int argc, char **argv) {
                         f.indice, f.salta ? "(salta)" : "");
             if (f.imp.sin_resolver.empty())
                 std::printf("    (sin sitio: truncado por tamano)\n");
-            for (const auto &s : f.imp.sin_resolver)
-                std::printf("    %s\n", s.c_str());
+            for (size_t k = 0; k < f.imp.sin_resolver.size(); ++k) {
+                std::printf("    %s\n", f.imp.sin_resolver[k].c_str());
+                imprimir_funcion(f.imp, k);
+            }
         }
         std::printf("\n%d instrucciones implementadas con efectos INCOMPLETOS "
                     "de %d\n",
@@ -285,8 +305,10 @@ int main(int argc, char **argv) {
                 std::printf("  [COTA INFERIOR] el recorrido se quedo aqui:\n");
                 if (f.imp.sin_resolver.empty())
                     std::printf("    (sin sitio: truncado por tamano)\n");
-                for (const auto &s : f.imp.sin_resolver)
-                    std::printf("    %s\n", s.c_str());
+                for (size_t k = 0; k < f.imp.sin_resolver.size(); ++k) {
+                    std::printf("    %s\n", f.imp.sin_resolver[k].c_str());
+                    imprimir_funcion(f.imp, k);
+                }
             }
             std::printf("\n");
         }

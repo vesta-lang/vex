@@ -63,6 +63,7 @@
 #include "runtime/proceso_runtime.h"
 
 #include "handler_walk.h"
+#include "module_symbols.h"
 
 namespace tests {
 
@@ -222,6 +223,9 @@ struct ImplicitEffects {
     /// un valor conservador es lo que hizo que `lea` estuviera sin modelar sin
     /// que nadie lo notara.
     std::set<std::string> unmodeled;
+    /// La funcion que contiene cada sitio de `sin_resolver`, en paralelo.  Es
+    /// lo que convierte un hueco de "una direccion" en trabajo concreto.
+    std::vector<uint64_t> sin_resolver_fn;
     /// Accesos que caen en el rango de un campo vigilado pero cuya base NO se
     /// pudo situar en nuestra estructura.  No se atribuyen -- serian efectos
     /// inventados -- pero se cuentan: cada uno es procedencia que el recorrido
@@ -615,6 +619,7 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
         res, tests::CallSeed{}, fatal_frontier(), ambito_lo, ambito_hi);
     out.completo = res.completo();
     out.sin_resolver = res.unresolved;
+    out.sin_resolver_fn = res.unresolved_fn;
     out.tablas = res.tables_resolved;
     out.unmodeled = res.unmodeled;
     out.can_abort = !res.fronteras.empty();

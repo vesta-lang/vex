@@ -1447,6 +1447,15 @@ struct WalkResult {
      * no puede haber instrucciones con efectos desconocidos, asi que cada
      * renuncia es trabajo pendiente, y sin la direccion no se sabe cual. */
     std::vector<std::string> unresolved;
+    /**
+     * @brief La FUNCION que contiene cada sitio de `unresolved`, en paralelo.
+     *
+     * Va como direccion y no como nombre porque el recorredor no sabe de
+     * simbolos, ni tiene por que: los lee quien presenta el informe.  Pero sin
+     * esto, un hueco es una direccion suelta y averiguar en que funcion cae hay
+     * que hacerlo a mano, que es justo lo que impide cerrarlos.
+     */
+    std::vector<uint64_t> unresolved_fn;
 
     /* Instrucciones que la BASE no supo emparejar a una forma.
      *
@@ -1639,6 +1648,7 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                                   (unsigned long long)insn->address,
                                   insn->mnemonic, insn->op_str);
                     res.unresolved.push_back(std::string(b) + ctx);
+                    res.unresolved_fn.push_back(dir);
                 }
 }
             for (uint64_t d : destinos) pendientes.emplace_back(d, sub);
@@ -1709,6 +1719,7 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                                   (unsigned long long)insn->address,
                                   insn->mnemonic, insn->op_str);
                     res.unresolved.push_back(std::string(b) + ctx);
+                    res.unresolved_fn.push_back(dir);
                 }
                 }
             } else if (destino <= insn->address && destino >= lo) {
