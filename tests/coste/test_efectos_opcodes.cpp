@@ -362,6 +362,25 @@ int main(int argc, char **argv) {
                       kFields[k].nombre, kFields[k].ini, kFields[k].fin);
         out.s(b);
     }
+    {
+        /* El banco de registros y los campos del operando, por el mismo camino.
+         * No se vigilan todavia, pero son los offsets que hacen falta para
+         * derivar la FORMA: el manejador accede a `regs[campo]` como
+         * `[vm + indice*8 + este_offset]`, y el indice sale de leer uno de los
+         * dos bytes del operando. */
+        const size_t regs_off =
+            kRegs + offsetof(runtime::context_registers_vm, regs);
+        char b[128];
+        std::snprintf(b, sizeof(b),
+                      "  %-8s  0x%02zX  (banco; el indice sale del operando)\n"
+                      "  %-8s  0x%02zX / 0x%02zX  dentro de DecodedInstr\n",
+                      "regs[]", regs_off, "reg1/2",
+                      offsetof(runtime::DecodedInstr,
+                               data_instruction.reg_data.reg1),
+                      offsetof(runtime::DecodedInstr,
+                               data_instruction.reg_data.reg2));
+        out.s(b);
+    }
 
     /* --- Cuanto se SABE ---------------------------------------------------
      *
@@ -602,8 +621,50 @@ int main(int argc, char **argv) {
                     discrepan);
         return 1;
     }
+    /* --- Las DOS representaciones dicen lo mismo? ------------------------
+     *
+     * Los efectos viven en dos sitios: `VmInstr`, que lleva ademas el nombre y
+     * el coste, y la tabla CALIENTE, que es solo los bits y es la que consulta
+     * el que forma un paquete.  Existe la segunda porque `VmInstr` mide 272
+     * bytes y de ahi solo se necesitan dos.
+     *
+     * Dos copias del mismo hecho que nadie compara acaban separandose, y la que
+     * se quedaria vieja es justo la que usa la VM.  Las dos salen del mismo
+     * generador, asi que coincidir es lo esperado; comprobarlo es lo que impide
+     * que deje de serlo. */
+    int discrepan_hot = 0;
+    for (int t = 0; t < 2; ++t) {
+        const bool ext = (t == 1);
+        for (int i = 0; i < 256; ++i) {
+            const runtime::vm_isa::VmInstr &v =
+                ext ? runtime::vm_isa::kExtended[i]
+                    : runtime::vm_isa::kPrimary[i];
+            const uint16_t hot = runtime::vm_isa::vm_hot(ext, (uint8_t)i);
+            const uint16_t esperado = static_cast<uint16_t>(
+                v.effects |
+                (static_cast<uint16_t>(v.narrow) << runtime::vm_isa::kNarrowShift));
+            if (hot != esperado) {
+                if (discrepan_hot == 0)
+                    std::printf("\nLA TABLA CALIENTE NO DICE LO MISMO QUE "
+                                "`VmInstr`:\n");
+                std::printf("  %-16s %s 0x%02X: caliente=0x%04X VmInstr=0x%04X\n",
+                            v.name ? v.name : "(vacia)",
+                            ext ? "extended" : "primary", i, hot, esperado);
+                ++discrepan_hot;
+            }
+        }
+    }
+    if (discrepan_hot > 0) {
+        std::printf("\n%d entradas difieren.  Las dos salen del mismo "
+                    "generador, asi que\nesto significa que se edito una a "
+                    "mano o que el generador se partio.\n",
+                    discrepan_hot);
+        return 1;
+    }
+
     std::printf("\nLa base de datos generada cuadra con el codigo (%d "
-                "instrucciones).\n",
+                "instrucciones),\ny la tabla caliente dice lo mismo que "
+                "`VmInstr` en las 512 ranuras.\n",
                 (int)rows.size());
     return 0;
 }

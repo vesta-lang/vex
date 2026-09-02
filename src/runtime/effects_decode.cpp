@@ -234,15 +234,23 @@ inline bool decode_effects_impl(const DecodedInstr &d, InstrEffects &out,
     const bool ext = (d.flags_info.is_not_extended == 0x00);
     const uint8_t op = static_cast<uint8_t>(d.flags_info.opcode_index);
 
-    /* La base, de la tabla generada: los campos implicitos, si transfiere
-     * control y si lo derivado es completo.  Nada de eso se recalcula aqui. */
-    const vm_isa::VmInstr *v = vm_isa::vm_instr(ext, op);
-    if (v == nullptr) return false; // ranura inexistente: nada se mueve
+    /* La base, de la tabla CALIENTE: los campos implicitos, si transfiere
+     * control y si lo derivado es completo.  Nada de eso se recalcula aqui.
+     *
+     * Se lee de `vm_hot` y no de `VmInstr` a proposito.  `VmInstr` mide 272
+     * bytes -- lleva el coste en 21 microarquitecturas por cada una de las
+     * cuatro ISA -- y de ahi solo se necesitan DOS: los bits.  Consultarlo por
+     * la tabla grande arrastraria una linea de cache por opcode para no usar
+     * casi nada de ella, y las dos tablas juntas son 136 KB, o sea que no caben
+     * en L1.  La caliente son 1 KB y cabe entera. */
+    const uint16_t hot = vm_isa::vm_hot(ext, op);
+    if ((hot & vm_isa::VE_IMPL) == 0 && hot == 0)
+        return false; // ranura inexistente: nada se mueve
 
-    out.field_write = static_cast<uint8_t>(v->effects & 0x0F);
-    out.field_read = static_cast<uint8_t>((v->effects >> 4) & 0x0F);
-    out.control = (v->effects & vm_isa::VE_CONTROL) != 0;
-    out.mem_read = out.mem_write = (v->effects & vm_isa::VE_MEMORY) != 0;
+    out.field_write = static_cast<uint8_t>(hot & 0x0F);
+    out.field_read = static_cast<uint8_t>((hot >> 4) & 0x0F);
+    out.control = (hot & vm_isa::VE_CONTROL) != 0;
+    out.mem_read = out.mem_write = (hot & vm_isa::VE_MEMORY) != 0;
 
     /* Indice del salto, igual que en el `run_loop`: 0..255 la tabla primaria,
      * 0x100..0x1FF la extendida.  Acotado por construccion, asi que el salto no
@@ -303,7 +311,10 @@ L_ALU3:
     form_alu3(d, out);
     goto L_DONE;
 L_UNDECLARED:
-    if (fatal) fail_undeclared(v, ext, op);
+    /* Solo en el camino FRIO se va a la tabla grande, y solo para sacar el
+     * NOMBRE: el mensaje tiene que decir cual falta, y morir puede permitirse
+     * una linea de cache. */
+    if (fatal) fail_undeclared(vm_isa::vm_instr(ext, op), ext, op);
     return false;
 L_DONE:;
 #else
@@ -320,8 +331,7 @@ L_DONE:;
 
     /* Solo aqui se puede prometer exactitud, y solo si las DOS mitades la
      * tienen: la base derivada del codigo maquina y la forma declarada arriba. */
-    out.exact = (v->effects & vm_isa::VE_EXACT) != 0 &&
-                (v->effects & vm_isa::VE_IMPL) != 0;
+    out.exact = (hot & vm_isa::VE_EXACT) != 0 && (hot & vm_isa::VE_IMPL) != 0;
     return true; // la forma esta declarada; la exactitud la dice `out.exact`
 }
 

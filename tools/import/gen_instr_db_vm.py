@@ -266,6 +266,37 @@ struct VmInstr {
 extern const VmInstr kPrimary[256];
 extern const VmInstr kExtended[256];
 
+/**
+ * @brief Lo CALIENTE, aparte y denso: los efectos de cada opcode.
+ *
+ * `VmInstr` mide 272 bytes -- nombre, tamano y el coste en 21
+ * microarquitecturas por cada una de las cuatro ISA --, y el camino caliente
+ * lee de ahi DOS: los bits de efectos.  Consultarlo por la tabla grande
+ * arrastra una linea de cache por opcode para no usar casi nada de ella, y las
+ * dos tablas juntas son 136 KB, o sea que no caben en L1.
+ *
+ * Aqui van solo los bits, indexados igual.  512 entradas de 2 bytes = 1 KB, que
+ * cabe entero y de sobra.  El coste sigue en `VmInstr`, que es FRIO: lo miran
+ * los informes y las herramientas, no el que forma un paquete.
+ *
+ * Las dos representaciones salen del MISMO generador, y `test_efectos_opcodes`
+ * comprueba que coinciden: dos copias del mismo hecho que nadie compara acaban
+ * separandose.
+ *
+ * En los bits altos (13-15) va el estrechamiento, que si no ocuparia otro array
+ * y otra linea de cache para tres valores posibles.
+ */
+extern const uint16_t kHotPrimary[256];
+extern const uint16_t kHotExtended[256];
+
+/// Desplazamiento del estrechamiento dentro de la palabra caliente.
+constexpr uint16_t kNarrowShift = 13;
+
+/// @return Los efectos de @p opcode, con el estrechamiento en los bits altos.
+inline uint16_t vm_hot(bool extended, uint8_t opcode) {
+    return extended ? kHotExtended[opcode] : kHotPrimary[opcode];
+}
+
 /// @return La instruccion, o nullptr si esa ranura no existe.
 inline const VmInstr *vm_instr(bool extended, uint8_t opcode) {
     const VmInstr &v = extended ? kExtended[opcode] : kPrimary[opcode];
@@ -509,6 +540,27 @@ def emitir(por_clave, nombres_micro, decl):
             filas.append('    {"%s", 0x%04X, %d, %d, {%s}},'
                          % (o["nombre"].replace('"', ''), bits(o, dec),
                             o["bytes"], nar, ", ".join(costes)))
+        filas.append("};")
+        filas.append("")
+        tablas.append("\n".join(filas))
+
+    # --- La tabla CALIENTE, densa: solo los bits, 1 KB en total -------------
+    for nombre_tabla, tabla in (("kHotPrimary", "primary"),
+                                ("kHotExtended", "extended")):
+        filas = ["const uint16_t %s[256] = {" % nombre_tabla]
+        linea = "   "
+        for i in range(256):
+            o = por_clave.get((tabla, i))
+            if o is None:
+                v = 0
+            else:
+                dec = decl.get((tabla, i))
+                nar = NARROW.get((dec or {}).get("regla", ""), 0)
+                v = bits(o, dec) | (nar << 13)
+            linea += " 0x%04X," % v
+            if (i % 8) == 7:
+                filas.append(linea)
+                linea = "   "
         filas.append("};")
         filas.append("")
         tablas.append("\n".join(filas))
