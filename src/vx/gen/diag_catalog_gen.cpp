@@ -94,6 +94,8 @@ const CatEntry kEntries[] = {
     {"VX7024", {"a catch below takes it, so the program continues", "un catch de mas abajo se hace cargo, asi que el programa continua"}},
     {"VX7025", {"assembly block with wide-bank operands (xmm/ymm/zmm) cannot run this way: their values do not fit in the integer list the operands travel in, so they neither go in nor come out", "bloque de ensamblador con operandos del banco ancho (xmm/ymm/zmm) no ejecutable por esta via: sus valores no caben en la lista de enteros por la que viajan los operandos, asi que ni entran ni salen"}},
     {"VX7026", {"uncaught exception: {0}", "excepcion sin capturar: {0}"}},
+    {"VX7027", {"operand shape not declared for VM instruction '{0}' (table {1}, opcode {2})", "forma de los operandos sin declarar para la instruccion de VM '{0}' (tabla {1}, opcode {2})"}},
+    {"VX7028", {"which registers it reads and writes is unknown, so it cannot be reordered or fused; declare it in decode_effects (src/runtime/effects_decode.cpp) pointing its opcode at its family label", "no se sabe que registros lee ni cual escribe, asi que no se puede reordenar ni fusionar; declararla en decode_effects (src/runtime/effects_decode.cpp) apuntando su opcode a la etiqueta de su familia"}},
     {"VX9100", {"Container: `{0}`", "Contenedor: `{0}`"}},
     {"VX9101", {"Complexity: **{0}**", "Complejidad: **{0}**"}},
     {"VX9102", {"(own body {0})", "(cuerpo propio {0})"}},
@@ -376,7 +378,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 355;
+const int kEntryCount = 357;
 
 } // namespace
 

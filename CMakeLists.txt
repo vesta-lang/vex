@@ -1135,6 +1135,20 @@ else ()
     target_link_libraries(test_bundle_ilp PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Valida el descodificador de efectos contra el desensamblador, que llega al
+# mismo dato por otro camino: dos derivaciones que coinciden son una prueba.
+add_executable(test_effects_decode tests/runtime/test_effects_decode.cpp)
+target_include_directories(test_effects_decode PRIVATE ${VM_INCLUDES} tests)
+target_link_libraries(test_effects_decode PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_effects_decode PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_effects_decode PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_effects_decode PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 
 
 
@@ -2054,6 +2068,7 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/decode_table.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/instr_db_vm_gen.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/instr_db_vm_narrow.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/effects_decode.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exception_runtime.cpp
 
         # Runtime - exec instructions (todas las familias del set)

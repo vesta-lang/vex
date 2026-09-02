@@ -523,6 +523,20 @@ es = "excepcion sin capturar: {0}"
 en = "assembly block with wide-bank operands (xmm/ymm/zmm) cannot run this way: their values do not fit in the integer list the operands travel in, so they neither go in nor come out"
 es = "bloque de ensamblador con operandos del banco ancho (xmm/ymm/zmm) no ejecutable por esta via: sus valores no caben en la lista de enteros por la que viajan los operandos, asi que ni entran ni salen"
 
+# Una instruccion de la VM cuya FORMA no esta declarada.  No se sigue a
+# proposito: sin saber que registros lee y cual escribe no se puede decidir si
+# se reordena o se fusiona con la de al lado, y hacerlo a ciegas no da un error,
+# da otro resultado.  Y si "no lo se" fuese una respuesta valida, las que faltan
+# se quedarian sin declarar para siempre, porque nadie las echaria de menos.
+
+[VX7027]
+en = "operand shape not declared for VM instruction '{0}' (table {1}, opcode {2})"
+es = "forma de los operandos sin declarar para la instruccion de VM '{0}' (tabla {1}, opcode {2})"
+
+[VX7028]
+en = "which registers it reads and writes is unknown, so it cannot be reordered or fused; declare it in decode_effects (src/runtime/effects_decode.cpp) pointing its opcode at its family label"
+es = "no se sabe que registros lee ni cual escribe, asi que no se puede reordenar ni fusionar; declararla en decode_effects (src/runtime/effects_decode.cpp) apuntando su opcode a la etiqueta de su familia"
+
 # ---------------------------------------------------------------------------
 # VX9xxx -- texto de las herramientas (CLI y servidor de lenguaje).
 #
