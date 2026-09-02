@@ -1006,6 +1006,18 @@ Token Lexer::lex_string(bool raw) {
                         make_token(TokenKind::ISTR_EXPR_BEGIN, "", loc_dollar));
                     // Lex tokens internos hasta cerrar el '{' matching.
                     int depth = 1;
+                    /* Ternarios ABIERTOS dentro de la expresion.
+                     *
+                     * Los dos puntos de un `${cond ? a : b}` son del TERNARIO,
+                     * no el separador del especificador de formato de
+                     * `${expr:fmt}`.  Sin llevar la cuenta, el primero que
+                     * aparecia cortaba la expresion y salia "se esperaba ':' en
+                     * la expresion ternaria", que ademas acusa a quien lo
+                     * escribio bien.
+                     *
+                     * (Aqui ponia que "Vesta no tiene ternario".  Lo tiene; el
+                     * comentario se quedo de antes.) */
+                    int ternarios = 0;
                     while (pos_ < source_.size() && depth > 0) {
                         skip_trivia();
                         if (pos_ >= source_.size()) break;
@@ -1036,6 +1048,12 @@ Token Lexer::lex_string(bool raw) {
                                 string_emit_queue_.push_back(std::move(tend));
                                 break;
                             }
+                        } else if (inner.kind == TokenKind::QUESTION &&
+                                   depth == 1) {
+                            ++ternarios;
+                        } else if (inner.kind == TokenKind::COLON &&
+                                   depth == 1 && ternarios > 0) {
+                            --ternarios; // este `:` cierra un ternario
                         } else if (inner.kind == TokenKind::COLON &&
                                    depth == 1) {
                             // Format spec (mismo patron que el path normal).
@@ -1242,6 +1260,10 @@ Token Lexer::lex_string(bool raw) {
                 // decrementa.  Al llegar a 0 emitimos ISTR_EXPR_END y
                 // salimos del sub-loop.
                 int depth = 1;
+                /* Ternarios ABIERTOS: los dos puntos de un `${cond ? a : b}`
+                 * son del TERNARIO, no el separador del especificador de
+                 * formato.  Ver la nota del otro sitio, mas arriba. */
+                int ternarios = 0;
                 while (pos_ < source_.size() && depth > 0) {
                     // skip_trivia + lex_one_raw del flujo normal, sin
                     // tocar string_emit_queue_ (ya estamos drenando).
@@ -1294,15 +1316,21 @@ Token Lexer::lex_string(bool raw) {
                             string_emit_queue_.push_back(std::move(tend));
                             break;
                         }
+                    } else if (inner.kind == TokenKind::QUESTION &&
+                               depth == 1) {
+                        ++ternarios;
+                    } else if (inner.kind == TokenKind::COLON && depth == 1 &&
+                               ternarios > 0) {
+                        --ternarios; // este `:` cierra un ternario
                     } else if (inner.kind == TokenKind::COLON && depth == 1) {
                         // Format spec: tras `:` capturamos texto raw
                         // hasta el `}` de cierre, sin tokenizar.  El
                         // formato se almacena en @c str_val del
-                        // token ISTR_EXPR_FMT.  No permitimos `:`
-                        // como operador ternario dentro de la expr
-                        // (Vesta no tiene ternario).  Si se necesita
-                        // un `:` dentro del formato (improbable),
-                        // habria que usar paren-balanced sub-spec.
+                        // token ISTR_EXPR_FMT.  Los `:` de un TERNARIO no
+                        // llegan aqui: los consume la rama de arriba, que
+                        // lleva la cuenta de los `?` abiertos.  Si se
+                        // necesitara un `:` dentro del formato (improbable),
+                        // habria que usar una sub-spec con parentesis.
                         std::string fmt;
                         const SourceLoc fmt_loc = inner.loc;
                         // Saltar trivia inicial (espacios entre `:` y la

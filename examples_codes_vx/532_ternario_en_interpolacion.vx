@@ -1,0 +1,84 @@
+namespace ejemplos.ternario_en_interpolacion;
+
+// Un ternario DENTRO de una interpolacion, que comparte caracter con otra cosa.
+//
+// `${expr:fmt}` usa los dos puntos para separar el especificador de formato, y
+// un ternario los usa para separar sus dos ramas.  El lexer de la interpolacion
+// tomaba el primero que veia por el separador, asi que
+//
+//     println("mayor = ${a > b ? a : b}");
+//
+// no compilaba: "se esperaba ':' en la expresion ternaria" -- un error que
+// ademas acusa a quien lo habia escrito bien.
+//
+// Ahora se lleva la cuenta de los `?` abiertos: un `:` con un ternario pendiente
+// es del ternario, y solo el que no cierra ninguno abre el formato.  Las dos
+// formas conviven en la misma cadena, y el ternario puede ir anidado.
+//
+// Resultado esperado: 42.
+
+i32 main() {
+	i64 a = 9;
+	i64 b = 4;
+	i64 n = 255;
+
+	// (1) El ternario suelto.
+	string m1 = "${a > b ? a : b}";
+	if (!m1.equals("9")) {
+		println("(1) ternario: ${m1}, esperaba 9");
+		return 1_i32;
+	}
+
+	// (2) El especificador de formato sigue funcionando por `println`, que es
+	// el camino que lo honra entero.
+	println("(2) formato: ${n:hex} y alineado [${n:hex:>8}]");
+	//
+	// OJO: en contexto de CADENA -- `string m = "${n:bin}"` -- el especificador
+	// se honra A MEDIAS: `hex` si, `bin` no, y la alineacion nunca.  Es un hueco
+	// APARTE del ternario y por eso aqui no se afirma nada de el; se arregla en
+	// su propio sitio, unificando ese camino con el de `println`.
+
+	// (4) Ternario ANIDADO: el `:` de dentro cierra el `?` de dentro.
+	string m4 = "${a > b ? (a > 100 ? 1 : 2) : 3}";
+	if (!m4.equals("2")) {
+		println("(4) ternario anidado: ${m4}, esperaba 2");
+		return 4_i32;
+	}
+
+	// (5) DOS interpolaciones con ternario en la MISMA cadena.
+	i64    d  = 7;
+	i64    f  = 2;
+	string m5 = "${a > b ? a : b} y ${d > f ? d : f}";
+	if (!m5.equals("9 y 7")) {
+		println("(5) mezcla: ${m5}");
+		return 5_i32;
+	}
+
+	// (6) ENCADENADO, sin parentesis: `c1 ? x : c2 ? y : z`.
+	//
+	// Es la forma habitual de escribir varios casos, y la que mas cuesta al
+	// lexer: dos `?` y dos `:` alternandose.  La cuenta de ternarios abiertos
+	// los empareja, y por eso vale a cualquier profundidad.
+	string m6 = "${a > b ? a : d > f ? d : f}"; // 9 > 4 -> 9
+	if (!m6.equals("9")) {
+		println("(6) encadenado: ${m6}, esperaba 9");
+		return 6_i32;
+	}
+	// El mismo, cayendo a la segunda rama.
+	string m7 = "${f > a ? f : d > b ? d : a}"; // 2 > 9 no; 7 > 4 -> 7
+	if (!m7.equals("7")) {
+		println("(6) encadenado, segunda rama: ${m7}, esperaba 7");
+		return 7_i32;
+	}
+	// Y tres seguidos, para que no quede duda de que no hay techo.  La primera
+	// condicion es FALSA a proposito: asi se comprueba que la cadena cae de una
+	// rama a la siguiente y no que acierta por quedarse en la primera.
+	string m8 = "${f > a ? 1 : d > f ? 2 : f > 100 ? 3 : 4}"; // 2>9 no; 7>2 -> 2
+	if (!m8.equals("2")) {
+		println("(6) tres encadenados: ${m8}, esperaba 2");
+		return 8_i32;
+	}
+
+	println("ternario e interpolacion: ${a > b ? a : b} y ${n:hex}");
+	return 42_i32;
+}

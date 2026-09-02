@@ -5153,6 +5153,10 @@ modes3_case("literal_flotante_hex",
             "el literal flotante hexadecimal (`0x1.8p+1`), y el punto que NO es",
             "531_literal_flotante_hex.vx", 42)
 
+modes3_case("ternario_en_interpolacion",
+            "el `:` de un ternario dentro de `${...}` no es el del formato",
+            "532_ternario_en_interpolacion.vx", 42)
+
 # Las OCHO formas de llamar bajan por caminos distintos, y cuatro de ellos no
 # tomaban la direccion: el metodo de un struct, una lambda en una variable, un
 # metodo ligado y un constructor.  Ninguno daba un error -- daban CERO --, asi
