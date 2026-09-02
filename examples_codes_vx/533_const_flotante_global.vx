@@ -1,0 +1,74 @@
+namespace ejemplos.const_flotante_global;
+
+// Una constante de coma flotante A NIVEL DE FICHERO.
+//
+// Una global `const` con inicializador literal no tiene almacenamiento: cada
+// uso la inlina.  De las tres formas del lenguaje solo entraban por ahi el
+// entero y la cadena, asi que
+//
+//     const f64 PI = 3.14159;
+//
+// compilaba -- con un aviso diciendo que se ignoraba -- y reventaba mucho
+// despues, en el PRIMER USO, con "lowering: nombre no resuelto: 'PI'".  El
+// mensaje acusaba al nombre de no existir cuando el problema estaba en la
+// declaracion, y dentro de una funcion no pasaba, porque ahi es una local.
+//
+// Ahora entra igual que las otras dos, con signo delante o sin el, y en f32
+// tanto como en f64.
+//
+// Resultado esperado: 42.
+
+const f64 PI    =  3.14159_f64;
+const f32 MEDIO =  0.5_f32;
+const f64 NEG   = -1.5_f64;
+const f32 NEG32 = -0.25_f32;
+const i64 VECES =  2_i64;
+
+// Sirven de verdad para calcular, no solo para imprimirse.  (El cuerpo de
+// expresion `=>` es solo para metodos y propiedades, no para una funcion
+// libre.)
+f64 area(f64 r) {
+	return PI * r * r;
+}
+
+i32 main() {
+	// (1) La constante se usa en una expresion.
+	f64 a = area(2.0);
+	if (a < 12.56 || a > 12.57) {
+		println("(1) area: ${a}, esperaba ~12.566");
+		return 1_i32;
+	}
+
+	// (2) f32, que es el otro ancho y guarda 4 bytes en vez de 8.
+	f32 m = MEDIO * 3.0_f32;
+	if (m != 1.5_f32) {
+		println("(2) f32: ${m}, esperaba 1.5");
+		return 2_i32;
+	}
+
+	// (3) Con signo delante: `-1.5` no es un literal, es un menos sobre uno.
+	f64 n = NEG + NEG;
+	if (n != -3.0) {
+		println("(3) negativa: ${n}, esperaba -3");
+		return 3_i32;
+	}
+	if (NEG32 != -0.25_f32) {
+		println("(4) negativa f32: ${NEG32}, esperaba -0.25");
+		return 4_i32;
+	}
+
+	// (5) La entera de siempre, para que quede claro que no se rompio.
+	i64 v = VECES * 21;
+	if (v != 42) {
+		println("(5) entera: ${v}, esperaba 42");
+		return 5_i32;
+	}
+
+	// Se imprimen solo los valores EXACTOS en binario.  `PI` se deja fuera a
+	// proposito: el formateo de flotantes no coincide entre modos todavia
+	// (el interprete usa "%g" de la libc y el nativo su propia version, que
+	// trunca en vez de redondear), asi que imprimirlo aqui hornearia esa
+	// diferencia en una prueba en vez de dejarla a la vista donde toca.
+	println("const flotante global: MEDIO=${MEDIO} NEG=${NEG} NEG32=${NEG32}");
+	return 42_i32;
+}

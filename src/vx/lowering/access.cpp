@@ -771,6 +771,27 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             return emit_const(t, static_cast<uint64_t>(lit->value),
                               e->loc.line);
         }
+        /* Constante de COMA FLOTANTE, positiva o negativa.
+         *
+         * Aqui solo se inlinaban enteros y cadenas, asi que
+         * `const f64 PI = 3.14159;` compilaba y luego reventaba al USARLA con
+         * "lowering: nombre no resuelto: 'PI'": la global no tiene
+         * almacenamiento -- ninguna lo tiene por este camino -- y su unico
+         * modo de existir es inlinarse en cada uso.  Dentro de una funcion no
+         * pasaba, porque ahi es una local normal.
+         *
+         * El valor viaja como BITS, que es como los lleva el resto del
+         * intermedio; el ancho lo decide el tipo declarado (`f32` guarda 4
+         * bytes, `f64` ocho).  Es la misma conversion que usa el sitio que
+         * inicializa los datos estaticos, y por eso comparte helper. */
+        auto emitir_flotante = [&](double d) {
+            return emit_const(t, float_bits_from_double(d, t == ir::IrType::F32),
+                              e->loc.line);
+        };
+        if (gv->init->kind == ast::NodeKind::FloatLitExpr) {
+            return emitir_flotante(
+                static_cast<ast::FloatLitExpr *>(gv->init.get())->value);
+        }
         // Constante entera negativa: UnaryExpr Neg sobre IntLitExpr.
         if (gv->init->kind == ast::NodeKind::UnaryExpr) {
             auto *u = static_cast<ast::UnaryExpr *>(gv->init.get());
@@ -779,6 +800,11 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 auto *lit = static_cast<ast::IntLitExpr *>(u->operand.get());
                 int64_t v = -static_cast<int64_t>(lit->value);
                 return emit_const(t, static_cast<uint64_t>(v), e->loc.line);
+            }
+            if (u->op == ast::UnOp::Neg && u->operand &&
+                u->operand->kind == ast::NodeKind::FloatLitExpr) {
+                return emitir_flotante(
+                    -static_cast<ast::FloatLitExpr *>(u->operand.get())->value);
             }
         }
         // Bug fix 2026-05-23: const string GLOBAL = "literal"; cada uso

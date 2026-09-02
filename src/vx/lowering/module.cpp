@@ -34,7 +34,7 @@
 #include <sstream>
 #include <utility>
 #include "analysis/facts/definite_store.h" // si un `out` se escribe SIEMPRE
-#include "lowering_internal.h" // la cocina compartida del lowering
+#include "lowering_internal.h"             // la cocina compartida del lowering
 
 namespace vx {
 
@@ -53,18 +53,6 @@ namespace {
  * @param is_f32 true si el global se declaro @c f32; false si @c f64.
  * @return Patron de bits a grabar en el slot.
  */
-static uint64_t float_bits_for_global(double d, bool is_f32) {
-    uint64_t bits = 0;
-    if (is_f32) {
-        const float f = static_cast<float>(d);
-        uint32_t u32 = 0;
-        std::memcpy(&u32, &f, sizeof(u32));
-        bits = u32;
-    } else {
-        std::memcpy(&bits, &d, sizeof(d));
-    }
-    return bits;
-}
 
 /**
  * @brief Bytes que ocupa un array global nativo @c T[N] con @c N sabido al
@@ -421,18 +409,33 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             // globales NO-const o las que tienen inicializador no-literal
             // (que efectivamente se ignoran).
             auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
-            bool literal_const =
-                gv->is_const && gv->init &&
-                (gv->init->kind == ast::NodeKind::IntLitExpr ||
-                 gv->init->kind ==
-                     ast::NodeKind::StringLitExpr // 2026-05-23 const string
-                 // global
-                 || (gv->init->kind == ast::NodeKind::UnaryExpr &&
-                     static_cast<ast::UnaryExpr *>(gv->init.get())->op ==
-                         ast::UnOp::Neg &&
-                     static_cast<ast::UnaryExpr *>(gv->init.get())->operand &&
-                     static_cast<ast::UnaryExpr *>(gv->init.get())
-                             ->operand->kind == ast::NodeKind::IntLitExpr));
+            /* Una global `const` con inicializador LITERAL no necesita
+             * almacenamiento: cada uso la inlina.  Lo que cuenta como
+             * literal son las tres formas del lenguaje -- entero, coma
+             * flotante y cadena -- mas el signo delante de las dos
+             * numericas.
+             *
+             * El flotante FALTABA, y el modo de fallar era el peor: la
+             * declaracion compilaba con un aviso que decia que se
+             * ignoraba, y el error salia mucho despues, en el primer USO,
+             * acusando al nombre de no estar resuelto. */
+            auto es_literal_inlinable = [](const ast::Expr *x) {
+                return x && (x->kind == ast::NodeKind::IntLitExpr ||
+                             x->kind == ast::NodeKind::FloatLitExpr ||
+                             x->kind == ast::NodeKind::StringLitExpr);
+            };
+            bool literal_const = false;
+            if (gv->is_const && gv->init) {
+                literal_const = es_literal_inlinable(gv->init.get());
+                if (!literal_const &&
+                    gv->init->kind == ast::NodeKind::UnaryExpr) {
+                    auto *u = static_cast<ast::UnaryExpr *>(gv->init.get());
+                    literal_const =
+                        u->op == ast::UnOp::Neg && u->operand &&
+                        u->operand->kind != ast::NodeKind::StringLitExpr &&
+                        es_literal_inlinable(u->operand.get());
+                }
+            }
             /* A.38/A.39: `comptime const` y `static_assert` (que se
              * envuelve como GlobalVarDecl dummy con type=void) no
              * tienen storage runtime y NO necesitan warning. */
@@ -536,7 +539,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                                 const double d =
                                     static_cast<const ast::FloatLitExpr *>(ie)
                                         ->value;
-                                cval = float_bits_for_global(d, g_is_f32);
+                                cval = float_bits_from_double(d, g_is_f32);
                                 have = true;
                                 break;
                             }
@@ -560,7 +563,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                                         -static_cast<const ast::FloatLitExpr *>(
                                              u->operand.get())
                                              ->value;
-                                    cval = float_bits_for_global(d, g_is_f32);
+                                    cval = float_bits_from_double(d, g_is_f32);
                                     have = true;
                                 }
                                 break;

@@ -18,9 +18,9 @@ namespace ejemplos.ternario_en_interpolacion;
 // Resultado esperado: 42.
 
 i32 main() {
-	i64 a = 9;
-	i64 b = 4;
-	i64 n = 255;
+	i64 a = 9_i64;
+	i64 b = 4_i64;
+	i64 n = 255_i64;
 
 	// (1) El ternario suelto.
 	string m1 = "${a > b ? a : b}";
@@ -46,8 +46,8 @@ i32 main() {
 	}
 
 	// (5) DOS interpolaciones con ternario en la MISMA cadena.
-	i64    d  = 7;
-	i64    f  = 2;
+	i64    d  = 7_i64;
+	i64    f  = 2_i64;
 	string m5 = "${a > b ? a : b} y ${d > f ? d : f}";
 	if (!m5.equals("9 y 7")) {
 		println("(5) mezcla: ${m5}");

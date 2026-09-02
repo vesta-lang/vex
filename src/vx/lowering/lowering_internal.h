@@ -28,6 +28,7 @@
 #include "vx/type_checker.h"
 
 #include <cstdint>
+#include <cstring> // memcpy: los bits de un flotante
 #include <string>
 #include <set>
 #include <unordered_map>
@@ -223,6 +224,35 @@ inline uint64_t pack_le(const std::vector<uint8_t> &data, uint64_t pos, int n) {
     for (int k = 0; k < n; ++k)
         v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
     return v;
+}
+
+/**
+ * @brief Los BITS de un `double` con el ancho del tipo destino.
+ *
+ * El intermedio lleva los flotantes como bits, asi que una constante de coma
+ * flotante se convierte una sola vez y de una sola forma.  `f32` guarda cuatro
+ * bytes y `f64` ocho: hacerlo a ojo en cada sitio es como se separan dos
+ * caminos que deberian dar lo mismo.
+ *
+ * Estaba `static` en el bajado de MODULO, que es quien inicializa los datos
+ * estaticos.  Lo necesita tambien quien inlina una constante global en cada
+ * uso, y por eso vive aqui: son la misma conversion.
+ *
+ * @param d Valor.
+ * @param is_f32 Si el destino es de 32 bits.
+ * @return Los bits, en los 32 o 64 de abajo segun el ancho.
+ */
+inline uint64_t float_bits_from_double(double d, bool is_f32) {
+    uint64_t bits = 0;
+    if (is_f32) {
+        const float f = static_cast<float>(d);
+        uint32_t u32 = 0;
+        std::memcpy(&u32, &f, sizeof(u32));
+        bits = u32;
+    } else {
+        std::memcpy(&bits, &d, sizeof(d));
+    }
+    return bits;
 }
 
 } // namespace vx
