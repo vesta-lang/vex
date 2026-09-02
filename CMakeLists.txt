@@ -1121,6 +1121,20 @@ else ()
     target_link_libraries(test_bundles PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Mide cuanta independencia real hay dentro de los paquetes: es lo que decide
+# si la reordenacion al formar (OoO de VM) tiene algo que mover.
+add_executable(test_bundle_ilp tests/runtime/test_bundle_ilp.cpp)
+target_include_directories(test_bundle_ilp PRIVATE ${VM_INCLUDES} tests)
+target_link_libraries(test_bundle_ilp PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_bundle_ilp PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_bundle_ilp PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_bundle_ilp PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 
 
 
@@ -2038,6 +2052,8 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/manager_runtime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/decode_instruction.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/decode_table.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/instr_db_vm_gen.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/instr_db_vm_narrow.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exception_runtime.cpp
 
         # Runtime - exec instructions (todas las familias del set)

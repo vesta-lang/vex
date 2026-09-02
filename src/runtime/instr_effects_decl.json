@@ -1,0 +1,434 @@
+{
+  "_documentacion": [
+    "DECLARACION de efectos para los opcodes que el derivador no cierra solo.",
+    "",
+    "Por que existe.  En una VM PROPIA no puede haber instrucciones con efectos",
+    "desconocidos: son NUESTRAS instrucciones.  Pero el derivador --que recorre el",
+    "codigo maquina del manejador-- se queda corto cuando el destino de una llamada",
+    "o un salto esta en un registro o en una ranura, o sea cuando solo se conoce EN",
+    "EJECUCION.  Eso no es no saberlo: es no saberlo TODAVIA.",
+    "",
+    "Sin este fichero la generacion FALLA.  Un opcode que no se derive y no se",
+    "declare no entra en la base de datos: una entrada silenciosamente incompleta",
+    "hace que se reordenen instrucciones que si dependian, y eso no da un error,",
+    "da OTRO RESULTADO.",
+    "",
+    "La semilla la escribio el propio derivador (nombre, sitio y motivo), asi que",
+    "lo declarado nace del diagnostico y no de lo que alguien recuerde.",
+    "",
+    "CLASES:",
+    "  runtime  El efecto depende de un valor que solo existe al ejecutar (el",
+    "           destino de un despacho dinamico).  Se resuelve al FORMAR el paquete",
+    "           observandolo, con guarda y abandono.",
+    "  narrow   El efecto depende de un CAMPO DEL OPERANDO, que ya esta",
+    "           descodificado al formar.  Exacto y gratis: no hay que especular.",
+    "           `regla` dice cual.",
+    "  fixed    Efectos declarados a mano; `escribe`/`lee` son mascaras sobre los",
+    "           campos [banderas, pila, marco, pc].",
+    "",
+    "REGLAS de narrow:",
+    "  special_reg  El campo afectado sale del codigo de registro especial",
+    "               (reg2 & 0xF): 8=pc, 9=marco, 10=pila, 11=banderas.  0..3 son",
+    "               cursores y no tocan ninguno de los cuatro.  Y solo aplica a la",
+    "               variante extendida (s=1): con s=0 es un mov normal y no toca",
+    "               nada.",
+    "",
+    "El derivador VERIFICA que lo declarado no se quede corto: si encuentra un",
+    "efecto que la declaracion no cubre, falla diciendo cual."
+  ],
+  "opcodes": [
+    {
+      "tabla": "primary",
+      "indice": 16,
+      "nombre": "callvm",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "primary",
+      "indice": 17,
+      "nombre": "jmp",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "primary",
+      "indice": 20,
+      "nombre": "xchg",
+      "clase": "runtime",
+      "motivo": "call qword ptr [rax + r8*8]"
+    },
+    {
+      "tabla": "primary",
+      "indice": 22,
+      "nombre": "callvmr",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 3,
+      "nombre": "hlt",
+      "clase": "runtime",
+      "motivo": "call rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 6,
+      "nombre": "add",
+      "clase": "runtime",
+      "motivo": "call qword ptr [r10 + rax*8]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 9,
+      "nombre": "sub",
+      "clase": "runtime",
+      "motivo": "call qword ptr [r10 + rax*8]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 12,
+      "nombre": "mul",
+      "clase": "runtime",
+      "motivo": "call qword ptr [r10 + rax*8]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 14,
+      "nombre": "div",
+      "clase": "runtime",
+      "motivo": "call r12"
+    },
+    {
+      "tabla": "extended",
+      "indice": 15,
+      "nombre": "div",
+      "clase": "runtime",
+      "motivo": "call qword ptr [r10 + rax*8]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 16,
+      "nombre": "div",
+      "clase": "runtime",
+      "motivo": "call r12"
+    },
+    {
+      "tabla": "extended",
+      "indice": 18,
+      "nombre": "cmp",
+      "clase": "runtime",
+      "motivo": "call qword ptr [r10 + rax*8]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 20,
+      "nombre": "mov",
+      "clase": "narrow",
+      "motivo": "write_special/read_special despachan por tabla; el registro afectado sale de reg2 & 0xF, que ya esta descodificado",
+      "regla": "special_reg"
+    },
+    {
+      "tabla": "extended",
+      "indice": 32,
+      "nombre": "mkclosure",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 33,
+      "nombre": "callclosure",
+      "clase": "runtime",
+      "motivo": "call r12"
+    },
+    {
+      "tabla": "extended",
+      "indice": 36,
+      "nombre": "tailcall",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 45,
+      "nombre": "jrel",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 56,
+      "nombre": "monnoti",
+      "clase": "runtime",
+      "motivo": "call qword ptr [rax + 0x58]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 57,
+      "nombre": "monnota",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 64,
+      "nombre": "mod",
+      "clase": "runtime",
+      "motivo": "call r12"
+    },
+    {
+      "tabla": "extended",
+      "indice": 65,
+      "nombre": "mod",
+      "clase": "runtime",
+      "motivo": "call qword ptr [r10 + rax*8]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 66,
+      "nombre": "mod",
+      "clase": "runtime",
+      "motivo": "call r12"
+    },
+    {
+      "tabla": "extended",
+      "indice": 67,
+      "nombre": "setcc",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 70,
+      "nombre": "strmake",
+      "clase": "runtime",
+      "motivo": "jmp rdx"
+    },
+    {
+      "tabla": "extended",
+      "indice": 72,
+      "nombre": "strcat",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 74,
+      "nombre": "strconv",
+      "clase": "runtime",
+      "motivo": "jmp rdx"
+    },
+    {
+      "tabla": "extended",
+      "indice": 76,
+      "nombre": "strslice",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 83,
+      "nombre": "strreserve",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 85,
+      "nombre": "calln",
+      "clase": "runtime",
+      "motivo": "call rsi"
+    },
+    {
+      "tabla": "extended",
+      "indice": 86,
+      "nombre": "gchandle",
+      "clase": "runtime",
+      "motivo": "call qword ptr [rax + 0x48]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 88,
+      "nombre": "spawnon",
+      "clase": "runtime",
+      "motivo": "call rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 90,
+      "nombre": "panic",
+      "clase": "runtime",
+      "motivo": "call r12"
+    },
+    {
+      "tabla": "extended",
+      "indice": 94,
+      "nombre": "strmake_h",
+      "clase": "runtime",
+      "motivo": "jmp rdx"
+    },
+    {
+      "tabla": "extended",
+      "indice": 98,
+      "nombre": "dlopen",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 99,
+      "nombre": "dlsym",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 100,
+      "nombre": "callni",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 101,
+      "nombre": "gcallocp",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 102,
+      "nombre": "spawnargs",
+      "clase": "runtime",
+      "motivo": "call rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 103,
+      "nombre": "fulfillhlt",
+      "clase": "runtime",
+      "motivo": "call rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 140,
+      "nombre": "gccollect",
+      "clase": "runtime",
+      "motivo": "call qword ptr [rax + 0x10]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 142,
+      "nombre": "gcfinall",
+      "clase": "runtime",
+      "motivo": "call rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 161,
+      "nombre": "gcrun",
+      "clase": "runtime",
+      "motivo": "call qword ptr [rax + 0x10]"
+    },
+    {
+      "tabla": "extended",
+      "indice": 165,
+      "nombre": "gcalloc",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 167,
+      "nombre": "gcpromote",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 168,
+      "nombre": "gcdemote",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 174,
+      "nombre": "callitf",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 176,
+      "nombre": "alloc",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 177,
+      "nombre": "free",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 178,
+      "nombre": "realloc",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 202,
+      "nombre": "deffield",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 203,
+      "nombre": "defmethod",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 206,
+      "nombre": "addadvice",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 209,
+      "nombre": "callvirt",
+      "clase": "runtime",
+      "motivo": "call rbx"
+    },
+    {
+      "tabla": "extended",
+      "indice": 210,
+      "nombre": "callsuper",
+      "clase": "runtime",
+      "motivo": "call r12"
+    },
+    {
+      "tabla": "extended",
+      "indice": 238,
+      "nombre": "spawn",
+      "clase": "runtime",
+      "motivo": "call rax"
+    },
+    {
+      "tabla": "extended",
+      "indice": 253,
+      "nombre": "callm",
+      "clase": "runtime",
+      "motivo": "jmp rax"
+    }
+  ]
+}

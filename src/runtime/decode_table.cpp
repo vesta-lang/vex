@@ -18,6 +18,31 @@
  * Contiene las tablas estaticas de despacho:                                  \
  *   - @c decode_table_primary : instrucciones de un byte (0x01-0xFF)          \
  *   - @c decode_table_extended: instrucciones de dos bytes con prefijo 0x00   \
+ *                                                                             \
+ * AL ANADIR O CAMBIAR UNA INSTRUCCION, REGENERAR LA BASE DE DATOS DE LA VM    \
+ * ---------------------------------------------------------------------      \
+ * `include/runtime/instr_db_vm.h` y `src/runtime/instr_db_vm_gen.cpp` guardan \
+ * lo que cada opcode TOCA sin nombrarlo en un operando --banderas, pila,      \
+ * marco, contador de programa-- y lo que cuesta.  De ahi sale la respuesta a  \
+ * "son estas dos instrucciones independientes?", que es lo que permite        \
+ * reordenar al formar un paquete, fusionar y vectorizar.                      \
+ *                                                                             \
+ * Esa tabla se GENERA de lo que se deriva del codigo maquina de los           \
+ * manejadores, no la escribe nadie:                                           \
+ *                                                                             \
+ *     test_efectos_opcodes --json > efectos.json                              \
+ *     test_coste_opcodes                    # escribe coste_opcodes.json      \
+ *     python tools/import/gen_instr_db_vm.py efectos.json coste_opcodes.json  \
+ *                                                                             \
+ * Hay que regenerarla al anadir una instruccion aqui, al quitarla, y tambien  \
+ * cuando CAMBIE lo que hace su manejador aunque el opcode siga igual.  Una    \
+ * tabla que diga que un opcode no toca las banderas cuando ya las toca no da  \
+ * un error: hace que se reordenen dos instrucciones que si dependian, y eso   \
+ * da OTRO RESULTADO.                                                          \
+ *                                                                             \
+ * No hace falta acordarse: `test_efectos_opcodes` la comprueba en cada        \
+ * ejecucion contra lo derivado y sale con codigo 1 diciendo QUE instruccion   \
+ * difiere.                                                                    \
  */                                                                            \
 #include "runtime/decode_table.h"
 
