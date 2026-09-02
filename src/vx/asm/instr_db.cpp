@@ -64,7 +64,8 @@ void form_ops(const IsaData &t, const DbForm &f, bool con_implicitos,
 
 /// Puntua los operandos del usuario contra los de la forma; -1 si no casan.
 int score_ops(const std::vector<ParsedOp> &user,
-              const std::vector<const DbOperand *> &form) {
+              const std::vector<const DbOperand *> &form,
+              bool agrupar_mem = false) {
     /* Se pueden OMITIR los operandos opcionales del final.
      *
      * `ADDS <Wd>, <Wn>, <Wm>{, <shift> #<amount>}` declara cinco operandos y un
@@ -76,28 +77,11 @@ int score_ops(const std::vector<ParsedOp> &user,
      *
      * Casar exacto puntua mas: entre una forma que usa todos sus operandos y
      * otra que deja opcionales fuera, gana la que encaja del todo. */
-    if (user.size() > form.size()) return -1;
     int s = 0;
-    if (user.size() < form.size()) {
-        for (size_t i = user.size(); i < form.size(); ++i) {
-            /* Se puede dejar fuera lo OPCIONAL (bit4) y lo IMPLICITO (bit2/3).
-             *
-             * Lo implicito por definicion no hay que escribirlo: el `rcx` que
-             * consume un `rep movsq` esta en la instruccion se escriba o no.  Y
-             * quien lee una linea decide cuanto detalle pone -- un
-             * desensamblador escribe los `[rdi]`/`[rsi]` y se calla el `rcx` --,
-             * asi que exigir que aparezcan todos deja sin modelar la instruccion
-             * entera por un operando que nadie escribe nunca.
-             *
-             * Esto es la otra mitad de admitirlos cuando SI se escriben: entre
-             * las dos, que aparezcan o no deja de decidir si la forma casa. */
-            if ((form[i]->flags & 0x1C) == 0) return -1;
-        }
-        s -= 1; // encajo, pero dejando cosas fuera
-    }
-    for (size_t i = 0; i < user.size(); ++i) {
-        const ParsedOp &u = user[i];
-        const DbOperand &fo = *form[i];
+    size_t iu = 0, jf = 0;
+    while (iu < user.size() && jf < form.size()) {
+        const ParsedOp &u = user[iu];
+        const DbOperand &fo = *form[jf];
         /* Una direccion GENERADA (`agen`) y un acceso a memoria se escriben
          * EXACTAMENTE igual: `[base + indice*escala + desp]`.  La diferencia no
          * esta en el texto, esta en lo que la instruccion hace con el -- `lea`
@@ -122,9 +106,41 @@ int score_ops(const std::vector<ParsedOp> &user,
          * cualquier funcion compilada. */
         const bool destino_por_imm =
             u.kind == OP_IMM && (fo.kind == OP_RELBR || fo.kind == OP_ABSBR);
+        /* Un `[...]` escrito puede cubrir VARIOS operandos de la forma.
+         *
+         * Es como ARM modela una direccion: `LDRB` declara cuatro operandos --
+         * destino, registro base, desplazamiento inmediato y el acceso --,
+         * mientras que quien escribe la linea pone dos, `w8` y `[x1, #0x5]`.
+         * Las partes de la direccion van DENTRO de los corchetes.
+         *
+         * Es el mismo desajuste que `agen`/`mem` y que `relbr`/`imm`, pero al
+         * reves: alli la forma sabia algo que el texto no distingue, y aqui el
+         * texto AGRUPA lo que la forma separa.  Sin esto no casaba ni un
+         * `ldrb`, ni un `ldrh`, ni un `strb`: la aridad no coincide nunca.
+         *
+         * Se consume una tirada de registros e inmediatos que TERMINE en el
+         * acceso -- que es lo que hay dentro de unos corchetes y nada mas --, y
+         * solo en la ultima pasada, para que ninguna forma que casa del todo la
+         * pierda frente a esta. */
+        if (agrupar_mem && u.kind == OP_MEM && fo.kind != OP_MEM &&
+            fo.kind != OP_AGEN) {
+            size_t k = jf;
+            while (k < form.size() &&
+                   (form[k]->kind == OP_REG || form[k]->kind == OP_IMM))
+                ++k;
+            if (k > jf && k < form.size() &&
+                (form[k]->kind == OP_MEM || form[k]->kind == OP_AGEN)) {
+                s += 1;
+                ++iu;
+                jf = k + 1;
+                continue;
+            }
+        }
         if (u.kind != fo.kind && !agen_por_mem && !destino_por_imm) return -1;
         if (agen_por_mem || destino_por_imm) {
             s += 1;
+            ++iu;
+            ++jf;
             continue; // ni una direccion ni un destino tienen ancho de acceso
         }
         if (u.width && fo.width) {
@@ -147,13 +163,28 @@ int score_ops(const std::vector<ParsedOp> &user,
                 const bool vectorial = u.kind == OP_REG && u.width >= 128;
                 if (!vectorial || fo.width > u.width) return -1;
                 s += 1;
+                ++iu;
+                ++jf;
                 continue;
             }
             s += 2;
         } else {
             s += 1;
         }
+        ++iu;
+        ++jf;
     }
+    /* Lo que la forma declara y nadie escribio: vale si es OPCIONAL (bit4) o
+     * IMPLICITO (bit2/3).
+     *
+     * Lo implicito por definicion no hay que escribirlo -- el `rcx` que consume
+     * un `rep movsq` esta en la instruccion se escriba o no --, y quien lee una
+     * linea decide cuanto detalle pone.  Exigir que aparezcan todos dejaba sin
+     * modelar la instruccion entera por un operando que nadie escribe nunca. */
+    for (size_t k = jf; k < form.size(); ++k)
+        if ((form[k]->flags & 0x1C) == 0) return -1;
+    if (iu < user.size()) return -1; // sobran operandos ESCRITOS
+    if (jf < form.size()) s -= 1;    // encajo, pero dejando cosas fuera
     return s;
 }
 
@@ -590,13 +621,13 @@ int32_t match(Isa isa, const std::string &mnemonic,
      * admite tener escritos los operandos implicitos.  El orden importa -- una
      * forma que casa del todo no la puede desplazar otra que necesita la
      * indulgencia --, y por eso no es una sola pasada con menos puntos. */
-    for (int pasada = 0; pasada < 2 && best < 0; ++pasada) {
+    for (int pasada = 0; pasada < 3 && best < 0; ++pasada) {
         for (const DbIclassRange *rango : rangos) {
             if (rango == nullptr) continue;
             for (uint32_t fid = rango->first_fid;
                  fid < rango->first_fid + rango->count; ++fid) {
-                form_ops(t, t.forms[fid], /*con_implicitos=*/pasada == 1, fo);
-                int s = score_ops(ops, fo);
+                form_ops(t, t.forms[fid], /*con_implicitos=*/pasada >= 1, fo);
+                int s = score_ops(ops, fo, /*agrupar_mem=*/pasada == 2);
                 if (s > best_s) {
                     best_s = s;
                     best = static_cast<int32_t>(fid);
@@ -1233,8 +1264,37 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
         /* Hasta donde llegan los TOKENS: la forma puede declarar mas operandos
          * que los escritos -- los opcionales omitidos --, y recorrerlos todos
          * leeria fuera de la linea. */
-        for (size_t k = 0; k < expl.size() && k < toks.size(); ++k) {
-            int i = expl[k];
+        /* Los tokens y los operandos de la forma van EN PARALELO... salvo
+         * cuando un `[...]` escrito cubre varios de la forma.
+         *
+         * Es como ARM modela una direccion: `LDRB` declara destino, registro
+         * base, desplazamiento y acceso -- cuatro --, y la linea escribe dos.
+         * El emparejador ya sabe absorber esa tirada; si aqui se recorriera en
+         * paralelo a secas, el `[x1, #0x5]` se emparejaria con el operando
+         * BASE, que es un registro, y el operando de MEMORIA no se alcanzaria
+         * nunca.  Resultado: una carga que no declara leer memoria y un
+         * almacenamiento que no declara escribirla, que es de los peores
+         * errores posibles -- deja mover un acceso por encima de otro. */
+        size_t kf = 0;
+        for (size_t k = 0; k < toks.size() && kf < expl.size(); ++k, ++kf) {
+            if (toks[k].find('[') != std::string::npos) {
+                /* Un corchete se queda con la tirada que TERMINA en el acceso:
+                 * las partes de la direccion van dentro de el. */
+                size_t fin = kf;
+                while (fin < expl.size()) {
+                    const DbOpKind kk = static_cast<DbOpKind>(
+                        tb.ops[f.ops_off + expl[fin]].kind);
+                    if (kk == OP_MEM || kk == OP_AGEN) break;
+                    if (kk != OP_REG && kk != OP_IMM) break;
+                    ++fin;
+                }
+                if (fin < expl.size() && fin > kf) {
+                    const DbOpKind kk = static_cast<DbOpKind>(
+                        tb.ops[f.ops_off + expl[fin]].kind);
+                    if (kk == OP_MEM || kk == OP_AGEN) kf = fin;
+                }
+            }
+            int i = expl[kf];
             const DbOperand &o = tb.ops[f.ops_off + i];
             bool rd = (f.rmask >> i) & 1;
             bool wr = (f.wmask >> i) & 1;

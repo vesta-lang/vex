@@ -137,6 +137,32 @@ int main() {
     int32_t aadd = match(Isa::ARM64, "add", {reg(0), reg(0), reg(0)});
     CHECK(aadd >= 0 && std::string(iclass_name(Isa::ARM64, aadd)) == "ADD",
           "arm64: match add x,x,x");
+    /* Un `[...]` escrito cubre VARIOS operandos de la forma.
+     *
+     * ARM modela la direccion por partes: `LDRB` declara destino, registro
+     * base, desplazamiento y acceso -- cuatro --, y quien escribe la linea pone
+     * dos, `w8` y `[x1, #0x5]`.  Sin absorber la tirada no casaba ni un `ldrb`,
+     * ni un `ldrh`, ni un `strb`: la aridad no coincide nunca.
+     *
+     * Y lo que se comprueba no es solo que CASE, sino que la semantica salga
+     * bien: la alineacion tiene que agrupar igual que el emparejador.  Si no,
+     * el `[x1, #0x5]` se empareja con el operando BASE -- un registro --, el
+     * operando de MEMORIA no se alcanza, y sale una carga que no declara leer
+     * memoria.  Eso deja mover un acceso por encima de otro, que es de los
+     * peores errores que puede cometer esto. */
+    {
+        const AsmInsnSem ld = asm_insn_sem(Isa::ARM64, "ldrb w8, [x1, #0x5]", 0);
+        CHECK(ld.modeled, "arm64: ldrb con direccion por partes casa");
+        CHECK(ld.reads_mem && !ld.writes_mem, "arm64: ldrb LEE memoria");
+        CHECK(!ld.writes.empty(), "arm64: ldrb escribe su destino");
+        const AsmInsnSem st = asm_insn_sem(Isa::ARM64, "strb w9, [x0, #0x58]", 0);
+        CHECK(st.modeled, "arm64: strb casa");
+        CHECK(st.writes_mem && !st.reads_mem, "arm64: strb ESCRIBE memoria");
+        // Y la agrupacion no se lleva por delante la forma directa.
+        const AsmInsnSem l8 = asm_insn_sem(Isa::ARM64, "ldr x8, [x1]", 0);
+        CHECK(l8.modeled && l8.reads_mem, "arm64: ldr de 64 bits sigue bien");
+    }
+
     // ldaxr (LL/SC) -> overlay ll_sc; dmb -> barrera.
     int32_t ldaxr = match(Isa::ARM64, "ldaxr", {reg(0), mem(0)});
     CHECK(ldaxr >= 0 && (overlay_of(Isa::ARM64, ldaxr) & OVL_LL_SC),
