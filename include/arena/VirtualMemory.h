@@ -317,6 +317,30 @@ class VirtualMemory {
      *          desaloje la pagina del TLB (unmap, clear_tlb_entry).
      */
     uint8_t &operator[](uint64_t vaddr) {
+        const uint64_t page = vaddr & ~0xFFFULL;
+        /* La cache de pagina PRIMERO.
+         *
+         * Existia desde antes y este acceso no la usaba: iba directo al arbol
+         * de la TLB, tres cargas dependientes y tres comprobaciones de rango,
+         * en CADA byte.  `read_u64_fast` y `write_u64_fast` si la consultan, o
+         * sea que aqui faltaba el mismo camino rapido que ya estaba escrito al
+         * lado -- el mismo modo de fallo que el camino rapido del slab, que
+         * tambien dejo consumidores atras.
+         *
+         * Y no es un acceso raro: `cursor_en` trae los bytes de cada
+         * instruccion UNO A UNO por aqui, dieciseis por descodificacion.  Su
+         * comentario dice que el coste es irrelevante porque descodificar solo
+         * ocurre al fallar la icache "el 0,57% de las ejecuciones", pero medido
+         * con VTune retira 6,17 veces mas instrucciones que `icache_lookup`,
+         * que corre una vez por instruccion ejecutada: la tasa de fallo real
+         * ronda el 6%, un orden de magnitud mas.
+         *
+         * La invalidacion no cambia: la cache la rellenan `read_bytes` y
+         * `write_bytes`, y la limpia `invalidate_page_cache()` tras `map` o
+         * una asignacion perezosa.  Aqui solo se LEE. */
+        if (__builtin_expect(page == cached_page_vaddr, 1))
+            return cached_page_host[vaddr & 0xFFF];
+
         tlb::TLBEntryData *entry =
             tlb.get_entry(vaddr); // buscar entrada en TLB
 
@@ -329,7 +353,12 @@ class VirtualMemory {
 
         uint8_t *base = static_cast<uint8_t *>(
             entry->address.ptr_host); // base de la pagina
-        return base[vaddr & 0xFFF];   // offset dentro de la pagina (12 bits)
+        /* Y se DEJA cacheada, que es lo que hace que el siguiente byte de la
+         * misma pagina no vuelva a recorrer el arbol.  Sin esto el camino
+         * rapido de arriba solo acertaria por lo que dejaran otros. */
+        cached_page_vaddr = page;
+        cached_page_host = base;
+        return base[vaddr & 0xFFF]; // offset dentro de la pagina (12 bits)
     }
 
     /**
