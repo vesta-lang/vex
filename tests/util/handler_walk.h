@@ -416,6 +416,10 @@ struct AddrOrigin {
     bool valid = false;
 };
 
+/// Cuantas ranuras del area de argumentos se siguen.  Ocho por ocho bytes son
+/// 64, de sobra para cualquier manejador: el que mas argumentos pasa usa cinco.
+constexpr int kStackArgs = 8;
+
 /// Lo que se sabe de los registros en este punto del recorrido.  Plano y de
 /// tamano fijo: son 16 ranuras, no hace falta un mapa.
 struct TableState {
@@ -425,6 +429,22 @@ struct TableState {
     Origin origin[16];
     /// Direcciones calculadas y aun no desreferenciadas.  Ver `AddrOrigin`.
     AddrOrigin addr[16];
+    /* --- Los argumentos que NO caben en registro -------------------------
+     *
+     * A partir del quinto, un argumento viaja por la pila, y ese es justo el
+     * camino del caso que mas importa: el nucleo de la ALU no escribe por la
+     * referencia que le pasan, sino que recompone `regs[indice]` a partir del
+     * INDICE, que le llega como quinto argumento.  Sin seguir la pila, la
+     * escritura del destino de `add`, `sub`, `mul`... no se deriva.
+     *
+     * Se sigue con el desplazamiento del puntero de pila desde la entrada de la
+     * funcion.  Si algo que no sea un prologo reconocible lo toca, se deja de
+     * saber y se renuncia -- atribuir un campo EQUIVOCADO es mucho peor que no
+     * atribuir ninguno. */
+    int64_t rsp_delta = 0;   ///< puntero de pila actual menos el de la entrada
+    bool rsp_known = true;   ///< sigue siendo calculable?
+    Origin outgoing[kStackArgs]; ///< lo que dejo yo para la proxima llamada
+    Origin incoming[kStackArgs]; ///< lo que me dejo mi llamante
     /// Registros que llevan un argumento de la funcion, sin transformar.  Se
     /// siembra al entrar (la convencion fija cual es cual) y se propaga por las
     /// copias.  -1 = ninguno.
@@ -511,6 +531,62 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
     if (in.detail == nullptr) return;
     const cs_x86 &x = in.detail->x86;
     const std::string m = in.mnemonic;
+
+    /* --- El puntero de pila, para poder leer los argumentos que van por ella
+     *
+     * Se sigue solo lo que un prologo hace: apilar, desapilar y reservar o
+     * soltar marco con un inmediato.  Cualquier otra escritura sobre el puntero
+     * -- un marco de tamano variable, un `and` de alineacion -- deja de ser
+     * calculable, y entonces NO se lee ningun argumento de la pila.  Es la
+     * unica postura segura: con el desplazamiento mal, lo que se lee es otra
+     * ranura, y eso atribuye un campo EQUIVOCADO. */
+    if (st.rsp_known) {
+        if (m == "push")
+            st.rsp_delta -= 8;
+        else if (m == "pop")
+            st.rsp_delta += 8;
+        else if ((m == "sub" || m == "add") && x.op_count == 2 &&
+                 x.operands[0].type == X86_OP_REG &&
+                 x.operands[0].reg == X86_REG_RSP &&
+                 x.operands[1].type == X86_OP_IMM)
+            st.rsp_delta += (m == "sub" ? -1 : 1) * x.operands[1].imm;
+        else if (x.op_count >= 1 && x.operands[0].type == X86_OP_REG &&
+                 x.operands[0].reg == X86_REG_RSP)
+            st.rsp_known = false; // toca el puntero de otra forma
+    }
+
+    /* Guardar un valor en el area de argumentos SALIENTES.  Va antes que nada
+     * porque el destino es la pila, y el resto del seguimiento la descarta. */
+    if (m == "mov" && x.op_count == 2 && x.operands[0].type == X86_OP_MEM &&
+        x.operands[0].mem.base == X86_REG_RSP &&
+        x.operands[0].mem.index == X86_REG_INVALID &&
+        x.operands[1].type == X86_OP_REG) {
+        const int64_t off = x.operands[0].mem.disp;
+        const int s = gpr_slot(x.operands[1].reg);
+        if (s >= 0 && off >= 0 && (off % 8) == 0 && off / 8 < kStackArgs)
+            st.outgoing[off / 8] = st.origin[s];
+    }
+    /* Y leer uno de los que dejo el LLAMANTE.  La ranura N del llamante se ve
+     * aqui en `[rsp + N + 8 + reservado]`: los ocho son la direccion de retorno
+     * que el `call` apilo. */
+    if ((m == "mov" || m == "movzx" || m == "movsx" || m == "movsxd") &&
+        x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
+        x.operands[1].type == X86_OP_MEM &&
+        x.operands[1].mem.base == X86_REG_RSP &&
+        x.operands[1].mem.index == X86_REG_INVALID && st.rsp_known) {
+        const int d = gpr_slot(x.operands[0].reg);
+        const int64_t n = x.operands[1].mem.disp + st.rsp_delta - 8;
+        if (d >= 0 && n >= 0 && (n % 8) == 0 && n / 8 < kStackArgs &&
+            st.incoming[n / 8].valid) {
+            st.origin[d] = st.incoming[n / 8];
+            st.arg[d] = -1;
+            st.base[d] = 0;
+            st.mask[d] = 0;
+            st.loaded[d].clear();
+            st.addr[d] = AddrOrigin{};
+            return;
+        }
+    }
     /* La cota de un `switch`: `cmp REG, imm` + la rama que se va cuando NO
      * cabe.  El `cmp` SOLO no acota nada -- podria ser cualquier comparacion --,
      * asi que se apunta y se confirma con la instruccion siguiente.  Como el
@@ -1016,11 +1092,13 @@ inline int arg_slot(int n) {
  * que hace el ayudante en un acceso atribuible al campo del operando.
  */
 struct CallSeed {
-    AddrOrigin arg[kArgRegs];
-    bool any = false; ///< hay algo que sembrar; si no, ni se mira
+    AddrOrigin arg[kArgRegs];    ///< direcciones en los argumentos de registro
+    Origin stack[kStackArgs];    ///< valores dejados en el area de la pila
+    bool any = false;            ///< hay algo que sembrar; si no, ni se mira
 };
 
-/// Apunta que direcciones lleva cada argumento en este punto.
+/// Apunta que se lleva a la llamada: direcciones en los registros y valores en
+/// el area de argumentos de la pila.
 inline CallSeed capture_call_seed(const TableState &st) {
     CallSeed s;
     for (int n = 0; n < kArgRegs; ++n) {
@@ -1028,6 +1106,10 @@ inline CallSeed capture_call_seed(const TableState &st) {
         if (slot < 0) continue;
         s.arg[n] = st.addr[slot];
         if (s.arg[n].valid) s.any = true;
+    }
+    for (int n = 0; n < kStackArgs; ++n) {
+        s.stack[n] = st.outgoing[n];
+        if (s.stack[n].valid) s.any = true;
     }
     return s;
 }
@@ -1038,6 +1120,7 @@ inline void apply_call_seed(TableState &st, const CallSeed &s) {
         const int slot = arg_slot(n);
         if (slot >= 0 && s.arg[n].valid) st.addr[slot] = s.arg[n];
     }
+    for (int n = 0; n < kStackArgs; ++n) st.incoming[n] = s.stack[n];
 }
 
 /// Termina aqui la funcion?
@@ -1246,8 +1329,21 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
             /* Tras la llamada no se sabe que queda en los registros -- la
              * convencion permite machacar la mitad --, asi que se olvida todo.
              * Perder una base solo cuesta una resolucion; conservar una que ya
-             * no vale es leer una tabla que no es. */
-            table_state = TableState{};
+             * no vale es leer una tabla que no es.
+             *
+             * Lo de la PILA si sobrevive, y no es una excepcion caprichosa: una
+             * llamada deja el puntero de pila donde estaba y no toca los
+             * argumentos que mi propio llamante me dejo.  Olvidarlos haria que
+             * el segundo argumento por pila de una funcion no se supiera leer
+             * solo por venir despues de una llamada. */
+            const int64_t rsp_delta = table_state.rsp_delta;
+            const bool rsp_known = table_state.rsp_known;
+            TableState limpio;
+            limpio.rsp_delta = rsp_delta;
+            limpio.rsp_known = rsp_known;
+            for (int n = 0; n < isa::kStackArgs; ++n)
+                limpio.incoming[n] = table_state.incoming[n];
+            table_state = limpio;
             continue;
         }
         if (isa::is_jump(*insn)) {

@@ -282,14 +282,33 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
 
     tests::WalkResult res;
     std::set<uint64_t> vistas;
+    /* Las ultimas instrucciones vistas.  Un acceso al banco cuyo indice no se
+     * identifica no se explica con la instruccion en si: se explica con lo que
+     * cargo el indice, que esta ANTES.  Sin eso, el diagnostico dice que no se
+     * supo pero no que hay que cerrar. */
+    std::vector<std::string> previas;
     tests::walk_handler(
         cs, reinterpret_cast<uint64_t>(handler), 6, vistas,
-        [&out](const cs_insn &in, const tests::TableState &st) {
+        [&out, &previas](const cs_insn &in, const tests::TableState &st) {
             /* Los accesos a memoria, ya interpretados por el idioma de la ISA.
              * Aqui no se sabe que es un operando ni si el destino va primero:
              * eso cambia con la arquitectura y vive en `isa::mem_access`.  Lo
              * que si es del dominio son los DESPLAZAMIENTOS que interesan. */
             const int n_mem = tests::isa::mem_access_count(in);
+            /* Se apunta ANTES de mirar los accesos para que, cuando uno no se
+             * sepa explicar, lo que se guarde sea lo que vino antes de EL. */
+            struct Apuntar {
+                std::vector<std::string> &v;
+                const cs_insn &i;
+                ~Apuntar() {
+                    char b[160];
+                    std::snprintf(b, sizeof(b), "0x%llX: %s %s",
+                                  (unsigned long long)i.address, i.mnemonic,
+                                  i.op_str);
+                    v.push_back(b);
+                    if (v.size() > 5) v.erase(v.begin());
+                }
+            } apuntar{previas, in};
             for (int a = 0; a < n_mem; ++a) {
                 const tests::isa::MemAccess acc = tests::isa::mem_access(in, a);
 
@@ -353,25 +372,21 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                          * distinto de no tocarlo, y se cuenta aparte. */
                         ++out.form_unknown;
                         if (out.form_why.empty()) {
-                            char buf[200];
+                            const tests::Origin &o =
+                                caso1 ? st.origin[acc.index] : a.index;
+                            char buf[220];
                             std::snprintf(
                                 buf, sizeof(buf),
                                 "0x%llX: %s %s  (caso %d, indice base=%d "
                                 "disp=%lld shift=%u width=%u valid=%d)",
                                 (unsigned long long)in.address, in.mnemonic,
-                                in.op_str, caso1 ? 1 : 2,
-                                caso1 ? st.origin[acc.index].base : a.index.base,
-                                (long long)(caso1 ? st.origin[acc.index].disp
-                                                  : a.index.disp),
-                                caso1 ? st.origin[acc.index].shift
-                                      : a.index.shift,
-                                caso1 ? st.origin[acc.index].width
-                                      : a.index.width,
-                                (caso1 ? st.origin[acc.index].valid
-                                       : a.index.valid)
-                                    ? 1
-                                    : 0);
+                                in.op_str, caso1 ? 1 : 2, o.base,
+                                (long long)o.disp, o.shift, o.width,
+                                o.valid ? 1 : 0);
                             out.form_why = buf;
+                            /* Y lo de antes, que es donde esta la respuesta. */
+                            for (const std::string &p : previas)
+                                out.form_why += "\n           " + p;
                         }
                     }
                 }
