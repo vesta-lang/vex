@@ -156,8 +156,20 @@ void vx_gc_init(void) {
 uint32_t vx_gc_alloc(uint64_t size) {
     // v1 no-moving: pinned -> OldGen (el nursery queda vacio).  El GC colecta
     // por mark-sweep con raices precisas; sin compactacion (optimizacion v2).
-    return static_cast<uint32_t>(
-        gc_heap().alloc_pinned(static_cast<size_t>(size)));
+    gc::GcHeap &h = gc_heap();
+    const gc::GcHandle handle = h.alloc_pinned(static_cast<size_t>(size));
+    if (handle == gc::GC_NULL_HANDLE)
+        return static_cast<uint32_t>(gc::GC_NULL_HANDLE);
+    /* BLOQUE CRUDO: el contrato de esta funcion es "size bytes de payload" y
+     * no exige forma alguna, asi que obj[0] es lo que el consumidor escriba
+     * ahi.  El trazado preciso de AOT lee obj[0] como puntero al descriptor de
+     * tipo, y sin esta marca seguia lo que hubiera -- un entero, una cadena,
+     * lo que fuera -- y se llevaba el proceso por delante al colectar.
+     *
+     * Los objetos del frontend NO pasan por aqui: usan vx_gc_alloc_ptr y si
+     * escriben descriptor. */
+    h.mark_no_type_desc(h.deref(handle));
+    return static_cast<uint32_t>(handle);
 }
 
 uint8_t *vx_gc_alloc_ptr(uint64_t size) {

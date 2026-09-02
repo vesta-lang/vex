@@ -843,7 +843,19 @@ struct alignas(8) GcHeader {
                                 *   handle-pequeno que impedia la colecta
                                 *   determinista); SI se marcan por host_ptr
                                 *   real (ptr_to_handle_ + interior scan). */
-    uint8_t _pad : 1;          /**< Bit reservado para uso futuro. */
+    uint8_t no_type_desc : 1;  /**< 1 si el payload NO empieza por un puntero
+                                *   a descriptor de tipo.  Lo ponen los bloques
+                                *   CRUDOS de la C-ABI (vx_gc_alloc): su
+                                *   contrato es "size bytes de payload", sin
+                                *   exigir forma alguna, asi que obj[0] es lo
+                                *   que el consumidor escriba ahi.
+                                *
+                                *   Por defecto 0 = "tiene descriptor", que es
+                                *   el comportamiento de siempre: el sentido
+                                *   esta elegido para que olvidarse haga que un
+                                *   objeto se TRACE de mas (vive un ciclo extra)
+                                *   y nunca de menos (que seria colectar algo
+                                *   alcanzable). */
     uint8_t _reserved[3];      /**< Padding hasta 8 bytes; reservado. */
 };
 
@@ -1043,6 +1055,19 @@ struct GcStats {
      */
     uint64_t interp_precise_roots_marked = 0;
     uint64_t interp_precise_notified = 0;
+
+    /**
+     * Objetos que el trazado preciso de AOT SOLTO por no poder fiarse de su
+     * descriptor de tipo: obj[0] no era un puntero plausible, o no llevaba la
+     * firma del descriptor, o su field-map declaraba mas campos de los que
+     * caben en el objeto.
+     *
+     * Es la cifra que separa "no habia nada raro" de "hubo algo raro y nadie
+     * lo vio".  Un objeto soltado NO se traza, asi que lo que solo el
+     * referenciara se puede colectar: distinto de cero significa que hay un
+     * bloque sin descriptor sin marcar, o memoria corrupta.
+     */
+    uint64_t tdesc_rejected = 0;
 
     /**
      * Verificador diferencial de COMPLETITUD (solo con VESTA_GC_VERIFY=1;
@@ -1955,6 +1980,19 @@ class GcHeap {
                             uint64_t dtor_vaddr = 0);
 
     /**
+     * @brief El GcHeader que precede a @p payload, o nullptr si es nulo.
+     *
+     * El layout [GcHeader][payload] lo sabe UN solo sitio.  Repetir la resta
+     * en cada marcador es como se acaba con dos ideas distintas del mismo
+     * layout, que es justo la clase de divergencia que no da error: da otro
+     * objeto.
+     */
+    static GcHeader *header_of(uint8_t *payload) noexcept {
+        if (payload == nullptr) return nullptr;
+        return reinterpret_cast<GcHeader *>(payload - sizeof(GcHeader));
+    }
+
+    /**
      * @brief Marca el objeto @p payload como alcanzable SOLO por host_ptr.
      *
      * Lo llaman los boxes @c gc_allocp (gc<T> por valor): el bytecode los
@@ -1968,9 +2006,24 @@ class GcHeap {
      * gcallocp).
      */
     void mark_host_ptr_only(uint8_t *payload) {
-        if (payload == nullptr) return;
-        auto *hdr = reinterpret_cast<GcHeader *>(payload - sizeof(GcHeader));
-        hdr->host_ptr_only = 1;
+        if (GcHeader *hdr = header_of(payload)) hdr->host_ptr_only = 1;
+    }
+
+    /**
+     * @brief Marca el objeto @p payload como BLOQUE CRUDO: su obj[0] no es un
+     *        puntero a descriptor de tipo.
+     *
+     * Lo pone la C-ABI cruda (@c vx_gc_alloc), cuyo contrato publico es "size
+     * bytes de payload" y no exige forma ninguna.  Sin esta marca el trazado
+     * preciso de AOT lee obj[0] como descriptor y sigue lo que el consumidor
+     * hubiera escrito ahi -- que no es un puntero.
+     *
+     * No-op si @p payload es nulo.
+     *
+     * @param payload Puntero host al payload del bloque.
+     */
+    void mark_no_type_desc(uint8_t *payload) {
+        if (GcHeader *hdr = header_of(payload)) hdr->no_type_desc = 1;
     }
 
     /**

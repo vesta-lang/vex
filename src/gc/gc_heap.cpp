@@ -232,28 +232,130 @@ namespace {
 constexpr uint32_t VX_TDESC_HDR = 32;            // cabecera antes de la vtable
 constexpr uint32_t VX_TDESC_MAGIC = 0x44545856u; // 'VXTD' little-endian
 
+/// Direccion por debajo de la cual un valor no puede ser un puntero real: la
+/// primera pagina nunca esta mapeada.  Mismo umbral que usa el resto del
+/// fichero al filtrar candidatos.
+constexpr uint64_t VX_MIN_PLAUSIBLE_PTR = 65536u;
+
 // Lee el field-map de un objeto gc<X> AOT a partir de su @p payload (= obj[0],
 // inicio del ObjectHeader).  Devuelve el numero de campos-referencia en
-// @p count y el array de offsets en @p offs.  Robusto: los boxes por valor
-// (@p host_ptr_only) y los objetos sin descriptor o sin campos-referencia
-// devuelven count=0 (nada que trazar/reescribir).  Solo lecturas de memoria
-// host valida (.rodata/.data.rel.ro); freestanding-safe (sin libc/stdio).
-inline void read_gc_field_map(const uint8_t *payload, bool host_ptr_only,
-                              uint32_t &count, const uint32_t *&offs) noexcept {
+// @p count y el array de offsets en @p offs.
+//
+// TODO LO QUE SE LEE AQUI SALIO DE LA MEMORIA DEL PROGRAMA, asi que se
+// comprueba antes de seguirlo.  El descriptor lleva un numero magico
+// precisamente para esto y durante un tiempo nadie lo miraba: un objeto cuyo
+// obj[0] no fuera un descriptor -- un bloque crudo de la C-ABI, o uno
+// corrupto -- se seguia igual y mataba el proceso con violacion de acceso, sin
+// una linea que dijera donde.  Los filtros van de mas barato a mas caro y
+// ninguno toca memoria ajena hasta que los anteriores pasan.
+//
+// @param sz       Bytes del payload: sin el, obj[0] se lee fuera en objetos
+//                 de menos de 8 bytes.
+// @param rejected Se incrementa cada vez que se suelta un objeto por no poder
+//                 fiarse de su descriptor.  Un analisis que renuncia sin
+//                 decirlo parece que funciona.
+inline void read_gc_field_map(const uint8_t *payload, const GcHeader *hdr,
+                              size_t sz, uint64_t &rejected, uint32_t &count,
+                              const uint32_t *&offs) noexcept {
     count = 0;
     offs = nullptr;
-    if (host_ptr_only) return; // box por valor (gc<primitivo>): sin descriptor
+    if (hdr->host_ptr_only) return; // box por valor (gc<primitivo>)
+    if (hdr->no_type_desc) return;  // bloque crudo: obj[0] no es descriptor
+    if (sz < 8) return;             // no cabe ni el puntero
+
     uint64_t obj0 = 0;
     std::memcpy(&obj0, payload, 8); // obj[0] = &descriptor + 32
-    if (obj0 == 0) return;
+    // Un descriptor real esta alineado a 8 y vive muy por encima de la pagina
+    // nula.  Esto descarta casi todo lo que no lo sea sin desreferenciar nada.
+    if (obj0 < VX_MIN_PLAUSIBLE_PTR || (obj0 & 7u) != 0) {
+        if (obj0 != 0) ++rejected; // el 0 es legitimo: sin clase
+        return;
+    }
+
     const uint8_t *desc =
         reinterpret_cast<const uint8_t *>(obj0) - VX_TDESC_HDR;
+    // La firma del descriptor, que es la comprobacion para la que se emitio.
+    uint32_t magic = 0;
+    std::memcpy(&magic, desc + 24, 4); // magic @ desc+24
+    if (magic != VX_TDESC_MAGIC) {
+        ++rejected;
+        return;
+    }
+
     uint64_t fmap_ptr = 0;
     std::memcpy(&fmap_ptr, desc, 8); // field_map_ptr @ desc+0
     if (fmap_ptr == 0) return;       // clase gc sin campos-referencia
+    if (fmap_ptr < VX_MIN_PLAUSIBLE_PTR || (fmap_ptr & 3u) != 0) {
+        ++rejected;
+        return;
+    }
     const uint8_t *fmap = reinterpret_cast<const uint8_t *>(fmap_ptr);
-    std::memcpy(&count, fmap, 4);                        // count @ fmap+0
+    uint32_t n = 0;
+    std::memcpy(&n, fmap, 4); // count @ fmap+0
+    // Cada campo-referencia ocupa 8 bytes DENTRO del payload, asi que no puede
+    // haber mas de sz/8.  Un field-map plausible por casualidad casi siempre
+    // cae aqui.
+    if (n > sz / 8u) {
+        ++rejected;
+        return;
+    }
+    count = n;
     offs = reinterpret_cast<const uint32_t *>(fmap + 8); // offsets @ fmap+8
+}
+
+/**
+ * @brief Recorre los campos-referencia gc<Y> de un objeto AOT.
+ *
+ * Los tres consumidores del field-map -- marcar, reescribir tras mover y
+ * verificar -- hacian el MISMO bucle con la MISMA guarda de rango, cada uno
+ * por su cuenta.  Aqui esta una sola vez: si manana el layout cambia, cambia
+ * en un sitio en vez de en tres, que es como dos de ellos se quedan atras sin
+ * que nada falle.
+ *
+ * @param fn Recibe (offset_en_payload, valor_del_campo).  Los campos nulos NO
+ *           se entregan: ninguno de los tres tiene nada que hacer con ellos.
+ */
+template <typename Fn>
+inline void for_each_gc_field(const GcHeader *hdr, uint8_t *payload, size_t sz,
+                              GcStats &st, Fn &&fn) noexcept {
+    uint32_t count = 0;
+    const uint32_t *offs = nullptr;
+    read_gc_field_map(payload, hdr, sz, st.tdesc_rejected, count, offs);
+    for (uint32_t k = 0; k < count; ++k) {
+        const uint32_t off = offs[k];
+        if (off + 8 > sz) continue; // offset fuera del payload
+        uint64_t value = 0;
+        std::memcpy(&value, payload + off, 8);
+        // Un campo que no puede ser un puntero no es un campo que seguir.
+        // Los tres consumidores querian esto mismo y dos lo escribian a mano
+        // con el umbral repetido; el tercero se apoyaba en que su busqueda
+        // fallara.  Una sola idea de "puntero plausible" en el fichero.
+        if (value < VX_MIN_PLAUSIBLE_PTR) continue;
+        fn(off, value);
+    }
+}
+/**
+ * @brief Recorre los objetos vivos de los bloques de OldGen.
+ *
+ * El recorrido -- cursor, cabecera, tamano del hueco redondeado a 8 -- estaba
+ * escrito dos veces palabra por palabra.  Es el layout del heap: tenerlo dos
+ * veces es tener dos versiones de el en cuanto una cambie.
+ *
+ * @param fn Recibe (hdr, payload, sz) de cada objeto.
+ */
+template <typename Blocks, typename Fn>
+inline void for_each_old_object(Blocks &blocks, Fn &&fn) noexcept {
+    for (auto &block : blocks) {
+        uint8_t *cursor = block.ptr;
+        uint8_t *end = block.ptr + block.bump_offset;
+        while (cursor + sizeof(GcHeader) <= end) {
+            auto *hdr = reinterpret_cast<GcHeader *>(cursor);
+            if (hdr->size == 0) break;
+            const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+            fn(hdr, cursor + sizeof(GcHeader), static_cast<size_t>(hdr->size));
+            cursor += total;
+        }
+    }
 }
 } // namespace
 
@@ -1775,27 +1877,22 @@ void GcHeap::mark_reachable(GcHandle h, std::vector<GcHandle> &worklist) {
     // offsets de campos gc<Y>.  Esto hace el mark SOUND (sin ello, un objeto
     // alcanzable solo via un campo quedaria WHITE y se colectaria -> UAF).
     if (aot_precise_roots_) {
-        uint32_t fcount = 0;
-        const uint32_t *foffs = nullptr;
-        read_gc_field_map(payload, hdr->host_ptr_only != 0, fcount, foffs);
-        for (uint32_t k = 0; k < fcount; ++k) {
-            const uint32_t fo = foffs[k];
-            if (fo + 8 > sz) continue; // defensivo: offset fuera del payload
-            uint64_t fptr = 0;
-            std::memcpy(&fptr, payload + fo, 8);
-            if (fptr == 0) continue; // campo nulo
-            const GcHandle ref =
-                handle_for_ptr(reinterpret_cast<const uint8_t *>(fptr));
-            if (ref == GC_NULL_HANDLE ||
-                ref >= static_cast<GcHandle>(handles_.size()))
-                continue;
-            if (!handles_[ref].live || !handles_[ref].addr) continue;
-            auto *ref_hdr = reinterpret_cast<GcHeader *>(handles_[ref].addr);
-            if (ref_hdr->gen != GcGen::OLD || ref_hdr->color != GcColor::WHITE)
-                continue;
-            ref_hdr->color = GcColor::BLACK;
-            worklist.push_back(ref);
-        }
+        for_each_gc_field(
+            hdr, payload, sz, stats_, [&](uint32_t, uint64_t fptr) {
+                const GcHandle ref =
+                    handle_for_ptr(reinterpret_cast<const uint8_t *>(fptr));
+                if (ref == GC_NULL_HANDLE ||
+                    ref >= static_cast<GcHandle>(handles_.size()))
+                    return;
+                if (!handles_[ref].live || !handles_[ref].addr) return;
+                auto *ref_hdr =
+                    reinterpret_cast<GcHeader *>(handles_[ref].addr);
+                if (ref_hdr->gen != GcGen::OLD ||
+                    ref_hdr->color != GcColor::WHITE)
+                    return;
+                ref_hdr->color = GcColor::BLACK;
+                worklist.push_back(ref);
+            });
         return;
     }
 
@@ -3143,31 +3240,15 @@ bool GcHeap::compact_old_gen_aot() {
     // campo-referencia gc<Y> a la direccion de destino de su objeto.  Un objeto
     // que no se movio puede referir a uno que si -> hay que recorrerlos todos.
     if (!ranges.empty()) {
-        for (auto &block : old_blocks_) {
-            uint8_t *cursor = block.ptr;
-            uint8_t *end = block.ptr + block.bump_offset;
-            while (cursor + sizeof(GcHeader) <= end) {
-                auto *hdr = reinterpret_cast<GcHeader *>(cursor);
-                if (hdr->size == 0) break;
-                const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
-                uint8_t *payload = cursor + sizeof(GcHeader);
-                const size_t sz = hdr->size;
-                uint32_t fcount = 0;
-                const uint32_t *foffs = nullptr;
-                read_gc_field_map(payload, hdr->host_ptr_only != 0, fcount,
-                                  foffs);
-                for (uint32_t k = 0; k < fcount; ++k) {
-                    const uint32_t fo = foffs[k];
-                    if (fo + 8 > sz) continue;
-                    uint64_t fptr = 0;
-                    std::memcpy(&fptr, payload + fo, 8);
-                    if (fptr < 65536) continue;
-                    const uint64_t nptr = aot_remap(ranges, fptr);
-                    if (nptr != fptr) std::memcpy(payload + fo, &nptr, 8);
-                }
-                cursor += total;
-            }
-        }
+        for_each_old_object(old_blocks_, [&](GcHeader *hdr, uint8_t *payload,
+                                             size_t sz) {
+            for_each_gc_field(hdr, payload, sz, stats_,
+                              [&](uint32_t fo, uint64_t fptr) {
+                                  const uint64_t nptr = aot_remap(ranges, fptr);
+                                  if (nptr != fptr)
+                                      std::memcpy(payload + fo, &nptr, 8);
+                              });
+        });
     }
 
     // ---- Fase F2: REESCRITURA DE RAICES (pila nativa via stackmaps) ----
@@ -3195,34 +3276,17 @@ bool GcHeap::compact_old_gen_aot() {
         // Campos-referencia de cada objeto vivo (tras la reescritura): 0 deben
         // apuntar al hueco.  Si alguno lo hace, el mark tenia un hueco o falto
         // un offset en el field-map.
-        for (auto &block : old_blocks_) {
-            uint8_t *cursor = block.ptr;
-            uint8_t *end = block.ptr + block.bump_offset;
-            while (cursor + sizeof(GcHeader) <= end) {
-                auto *hdr = reinterpret_cast<GcHeader *>(cursor);
-                if (hdr->size == 0) break;
-                const size_t total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
-                uint8_t *payload = cursor + sizeof(GcHeader);
-                const size_t sz = hdr->size;
-                uint32_t fcount = 0;
-                const uint32_t *foffs = nullptr;
-                read_gc_field_map(payload, hdr->host_ptr_only != 0, fcount,
-                                  foffs);
-                for (uint32_t k = 0; k < fcount; ++k) {
-                    const uint32_t fo = foffs[k];
-                    if (fo + 8 > sz) continue;
-                    uint64_t v = 0;
-                    std::memcpy(&v, payload + fo, 8);
-                    if (v >= 65536 && in_hole(v)) {
+        for_each_old_object(
+            old_blocks_, [&](GcHeader *hdr, uint8_t *payload, size_t sz) {
+                for_each_gc_field(
+                    hdr, payload, sz, stats_, [&](uint32_t fo, uint64_t v) {
+                        if (!in_hole(v)) return;
                         ++stale_fields;
-                        GC_AOT_DBG("[gc-verify-move-aot] STALE field cursor=%p "
-                                   "off=%u v=0x%llx\n",
-                                   (void *)cursor, fo, (unsigned long long)v);
-                    }
-                }
-                cursor += total;
-            }
-        }
+                        GC_AOT_DBG("[gc-verify-move-aot] STALE field "
+                                   "payload=%p off=%u v=0x%llx\n",
+                                   (void *)payload, fo, (unsigned long long)v);
+                    });
+            });
         // Raices de pila nativa (tras la reescritura).
         AotVerifyCtx vctx{&holes, 0};
         jit::scan_aot_frames(&aot_root_verify_cb, &vctx, bpc, bsp);
