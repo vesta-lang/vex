@@ -431,3 +431,8 @@ bench_compilacion.json
 bench_plots_compilacion/
 /.deps/
 doc/C29.md
+
+# Lineas base de rendimiento: dependen de la MAQUINA, asi que una cifra de otro
+# equipo no dice nada de este.  Cada uno crea la suya en la primera ejecucion.
+effects_decode_baseline.txt
+coste_opcodes.json

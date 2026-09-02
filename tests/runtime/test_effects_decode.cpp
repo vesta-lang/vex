@@ -476,6 +476,72 @@ int main(int argc, char **argv) {
          * El numerador es el bucle de opcodes mezclados.  Se penso que seria la
          * cota mala por la prediccion del salto, pero al medir el patron fijo
          * sale igual, asi que no lo es: los dos patrones cuestan lo mismo. */
+        /* --- Rendimiento, y su LINEA BASE ---------------------------------
+         *
+         * Las cifras de arriba dicen lo que cuesta UNA consulta; esta dice
+         * cuantas instrucciones se analizan por unidad de tiempo, que es la
+         * forma de compararlo entre ejecuciones sin tener que acordarse del
+         * numero anterior.
+         *
+         * La linea base se guarda en un fichero y NO se commitea: depende de la
+         * maquina, y una cifra de otro equipo no dice nada de este.  La primera
+         * ejecucion la crea; las siguientes comparan.
+         *
+         * La tolerancia va en instrucciones por milisegundo, que es la magnitud
+         * que se lee, y sale de la dispersion MEDIDA (4,20-4,73 ns por consulta,
+         * o sea unas 211.000-238.000 por ms: un 12%).  Se pone al 25% para que
+         * el ruido de una maquina cargada no dispare, y aun asi caza el 2x de
+         * meter una construccion de cadena en el camino. */
+        const double instr_ms = 1e6 / ns_todo;
+        const double instr_s = instr_ms * 1000.0;
+        std::printf("  %.0f instrucciones analizadas por ms  (%.1f millones por "
+                    "segundo)\n",
+                    instr_ms, instr_s / 1e6);
+
+        constexpr double kToleranciaMs = 0.25;
+        const char *kBase = "effects_decode_baseline.txt";
+        double base_ms = 0.0;
+        if (std::FILE *f = std::fopen(kBase, "r")) {
+            if (std::fscanf(f, "%lf", &base_ms) != 1) base_ms = 0.0;
+            std::fclose(f);
+        }
+        if (base_ms <= 0.0) {
+            if (std::FILE *f = std::fopen(kBase, "w")) {
+                std::fprintf(f, "%.0f\n", instr_ms);
+                std::fclose(f);
+                std::printf("  linea base creada en %s; la proxima ejecucion "
+                            "compara\n",
+                            kBase);
+            }
+        } else {
+            const double dif = instr_ms - base_ms;
+            const double rel = dif / base_ms;
+            std::printf("  linea base %.0f por ms  (%+.0f, %+.1f%%)\n", base_ms,
+                        dif, rel * 100.0);
+            if (rel < -kToleranciaMs) {
+                std::printf("  FALLO  se analizan %.0f instrucciones por ms "
+                            "MENOS que la linea base\n"
+                            "         (%.0f contra %.0f, tolerancia %.0f%%).  "
+                            "Posible regresion; si el\n"
+                            "         cambio es deliberado, borrar %s y volver a "
+                            "medir.\n",
+                            -dif, instr_ms, base_ms, kToleranciaMs * 100.0,
+                            kBase);
+                ++fallos;
+            } else if (rel > kToleranciaMs) {
+                /* Subir tambien se avisa, pero no falla: puede ser una mejora
+                 * de verdad, y tratarla como error obligaria a borrar el
+                 * fichero para aceptar algo bueno.  Lo que no puede es pasar
+                 * inadvertida -- si el numero se dispara sin que nadie haya
+                 * tocado esto, lo que cambio es la MEDIDA, no el codigo. */
+                std::printf("  AVISO  %.0f por ms MAS que la linea base.  Si "
+                            "nadie ha tocado esto,\n"
+                            "         lo que cambio es la medida; borrar %s "
+                            "para re-anclarla.\n",
+                            dif, kBase);
+            }
+        }
+
         const double tope_ns =
             (clk.coste_ns > 0) ? 4.0 * static_cast<double>(clk.coste_ns) : 20.0;
         constexpr double kRazonMax = 11.0;
