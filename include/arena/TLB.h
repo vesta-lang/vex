@@ -294,7 +294,60 @@ class LazyHybridTLB {
      * translate() sobre la misma pagina (la reasignacion puede reubicar el
      * nodo).
      */
-    [[nodiscard]] TLBEntryData *get_entry(uint64_t ptr) const;
+    /* Definida AQUI y no en el `.cpp`, a proposito.
+     *
+     * Es la funcion que se llama en CADA acceso a la memoria de la VM, y medida
+     * con VTune sobre 68 bancos se lleva el 10,8% del tiempo del interprete
+     * ella sola.  Pero el coste real es mayor: estando fuera de linea, tampoco
+     * se inlinan las tres indexaciones de `unique_ptr` que hace (otro 11,0%
+     * repartido en tres entradas de `std::vector<std::unique_ptr<TLBNode>>`) ni
+     * `VirtualMemory::operator[]`, que SI esta en su cabecera y no se inlina
+     * porque llama a esto.
+     *
+     * El cuerpo es tres indexaciones con comprobacion de rango y tres
+     * desreferencias, sin bucles ni llamadas: cabe.
+     *
+     * Y va con `always_inline`, no solo en la cabecera.  Ponerla aqui deja al
+     * compilador ELEGIR, y con veintitantas lineas y muchos llamantes elige que
+     * no: quedaria igual que antes -- una llamada -- y ademas duplicada en cada
+     * unidad de traduccion, que es lo peor de las dos opciones.
+     *
+     * @note El puntero devuelto puede quedar invalidado si se llama a
+     * translate() sobre la misma pagina (la reasignacion puede reubicar el
+     * nodo). */
+#if defined(__GNUC__)
+    [[nodiscard]] __attribute__((always_inline)) inline TLBEntryData *
+    get_entry(uint64_t ptr_) const {
+#else
+    [[nodiscard]] TLBEntryData *get_entry(uint64_t ptr_) const {
+#endif
+        const uint32_t pt2 = GET_PT2(ptr_); // indice PT2 de la direccion
+
+        // verificar que el nodo PT2 existe
+        if (pt2 >= root.size() || !root[pt2]) return nullptr;
+        const TLBNode &pt2_node = *root[pt2];
+        if (pt2_node.type != PT2) return nullptr; // corrupto o sin inicializar
+
+        const uint16_t pt1 = GET_PT1(ptr_); // indice PT1 de la direccion
+
+        // verificar que el nodo PT1 existe dentro del nodo PT2
+        if (pt1 >= pt2_node.children.size() || !pt2_node.children[pt1])
+            return nullptr;
+        const TLBNode &pt1_node = *pt2_node.children[pt1];
+        if (pt1_node.type != PT1) return nullptr; // corrupto o sin inicializar
+
+        const uint16_t pt = GET_PT(ptr_); // indice PT de la direccion
+
+        // verificar que el nodo hoja PT existe dentro del nodo PT1
+        if (pt >= pt1_node.children.size() || !pt1_node.children[pt])
+            return nullptr;
+        const TLBNode &pt_node = *pt1_node.children[pt];
+        if (pt_node.type != DATA) return nullptr; // no es hoja de datos
+
+        // puntero mutable al dato de traduccion (const_cast justificado: quien
+        // llama puede necesitar actualizar la entrada)
+        return const_cast<TLBEntryData *>(&pt_node.data);
+    }
 
     /**
      * @brief Devuelve el puntero real del host para una direccion virtual.

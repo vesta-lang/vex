@@ -234,48 +234,12 @@ void LazyHybridTLB::clear_tlb_entry(uint64_t page_vaddr) {
                     pm); // sobreescribir la hoja con el valor invalido
 }
 
-/**
- * @brief Devuelve un puntero al dato de traduccion de la pagina indicada.
+/* `get_entry` vive ahora en la CABECERA (`include/arena/TLB.h`), no aqui.
  *
- * Recorre el arbol PT2 -> PT1 -> PT buscando la hoja DATA.
- * Devuelve nullptr si cualquier nivel no existe (lazy miss).
- *
- * @warning El puntero devuelto puede quedar invalidado si se llama a
- *          translate() sobre la misma pagina (la reasignacion puede
- *          reubicar el nodo en memoria).
- *
- * @param ptr_ Direccion virtual a consultar.
- * @return     Puntero al TLBEntryData de la pagina, o nullptr si no esta
- * mapeada.
- */
-TLBEntryData *LazyHybridTLB::get_entry(uint64_t ptr_) const {
-    uint32_t pt2 = GET_PT2(ptr_); // indice PT2 de la direccion
-
-    // verificar que el nodo PT2 existe
-    if (pt2 >= root.size() || !root[pt2]) return nullptr;
-    const TLBNode &pt2_node = *root[pt2];
-    if (pt2_node.type != PT2) return nullptr; // nodo corrupto o sin inicializar
-
-    uint16_t pt1 = GET_PT1(ptr_); // indice PT1 de la direccion
-
-    // verificar que el nodo PT1 existe dentro del nodo PT2
-    if (pt1 >= pt2_node.children.size() || !pt2_node.children[pt1])
-        return nullptr;
-    const TLBNode &pt1_node = *pt2_node.children[pt1];
-    if (pt1_node.type != PT1) return nullptr; // nodo corrupto o sin inicializar
-
-    uint16_t pt = GET_PT(ptr_); // indice PT de la direccion
-
-    // verificar que el nodo hoja PT existe dentro del nodo PT1
-    if (pt >= pt1_node.children.size() || !pt1_node.children[pt])
-        return nullptr;
-    const TLBNode &pt_node = *pt1_node.children[pt];
-    if (pt_node.type != DATA) return nullptr; // nodo no es hoja de datos
-
-    // devolver puntero mutable al dato de traduccion (const_cast justificado:
-    // el caller puede necesitar actualizar la entrada)
-    return const_cast<TLBEntryData *>(&pt_node.data);
-}
+ * Se llama en cada acceso a la memoria de la VM, y estando fuera de linea
+ * impedia inlinar tambien sus tres indexaciones de `unique_ptr` y
+ * `VirtualMemory::operator[]`, que la llama.  El motivo completo, con las
+ * medidas, esta junto a la definicion. */
 
 /**
  * @brief Devuelve el puntero real del host para una direccion virtual de tipo
