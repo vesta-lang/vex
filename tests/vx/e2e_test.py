@@ -5149,6 +5149,10 @@ fails_case("direccion_tipo_err",
            "perder o inventar la marca en el tipo es un ERROR",
            "528_direccion_tipo_err.vx", "incompatible con tipo declarado")
 
+modes3_case("literal_flotante_hex",
+            "el literal flotante hexadecimal (`0x1.8p+1`), y el punto que NO es",
+            "531_literal_flotante_hex.vx", 42)
+
 # Las OCHO formas de llamar bajan por caminos distintos, y cuatro de ellos no
 # tomaban la direccion: el metodo de un struct, una lambda en una variable, un
 # metodo ligado y un constructor.  Ninguno daba un error -- daban CERO --, asi

@@ -612,7 +612,50 @@ Token Lexer::lex_number() {
                 ++pos_;
                 ++column_;
             }
-            return finish_int();
+            /* Flotante hexadecimal IEEE 754: `0x1.8p+1`.
+             *
+             * Se mira SIN consumir si lo que viene completa la forma, porque el
+             * punto tambien puede ser un acceso (`0x10.metodo()`) y ahi no es
+             * parte del numero.  El exponente `p` es OBLIGATORIO -- lo es en C
+             * y aqui tambien --, asi que es el que decide: sin el, esto sigue
+             * siendo un entero y el punto es de quien lo reclame.
+             *
+             * Sirve para escribir una constante de coma flotante con sus BITS
+             * exactos, que es justo el caso en que un literal decimal no vale.
+             * La forma estaba documentada y el lexer no la conocia: se comia
+             * `0x1` como entero y el punto pasaba a ser un acceso a campo. */
+            {
+                size_t k = pos_;
+                auto es_hex = [](char c) {
+                    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                           (c >= 'A' && c <= 'F');
+                };
+                if (k < source_.size() && source_[k] == '.') {
+                    ++k;
+                    while (k < source_.size() &&
+                           (es_hex(source_[k]) || source_[k] == '_'))
+                        ++k;
+                }
+                if (k < source_.size() &&
+                    (source_[k] == 'p' || source_[k] == 'P')) {
+                    size_t e = k + 1;
+                    if (e < source_.size() &&
+                        (source_[e] == '+' || source_[e] == '-'))
+                        ++e;
+                    const size_t primer_digito = e;
+                    while (e < source_.size() &&
+                           std::isdigit((unsigned char)source_[e]))
+                        ++e;
+                    if (e > primer_digito) { // el exponente lleva digitos
+                        while (pos_ < e) {
+                            ++pos_;
+                            ++column_;
+                        }
+                        is_float = true;
+                    }
+                }
+            }
+            if (!is_float) return finish_int();
         }
         if (b == 'b' || b == 'B') {
             pos_ += 2;
