@@ -162,6 +162,15 @@ programas) y showcase curado en [doc/EXAMPLES.md](./doc/EXAMPLES.md).
 - **AOT nativo**: **43× geomean** sobre intérprete (pico 416×) y solo
   **1.65× más lento que C** en media geométrica — por delante de Go (2.52×)
   y a la par de Rust (1.55×).
+- **Auto-vectorizacion**: los bucles elemento a elemento (aritmeticos,
+  unarios y de reduccion) y el idioma de copia de bytes bajan a operaciones
+  vectoriales de 256 bits, en el JIT y en el binario nativo.  Se apaga con
+  `VESTA_NO_VECTORIZE=1`; `tools/verify_vectorize.py` comprueba que no cambia
+  ningun resultado del corpus y `tools/bench_vectorize.py` cuanto gana.
+- **SIMD como LIBRERIA, no como magia del compilador**: `stdlib/vx/simd_string.vx`
+  aporta un `strcmp` vectorizado que un `import` HEREDA (via
+  `@HelperOverride`), con auto-despacho SSE2/AVX2 leyendo `cpu_features()`.
+  Se lee, se modifica y se sustituye como cualquier otro codigo Vesta.
 - **Super-instrucciones**: `cmpjmp`/`cmpjmpu`, `decjnz`, `alu3` (9 variantes
   fusionando `mov+OP`), `loadz`/`loadzh` (zero-extend LOAD), `mvtake`,
   `gcallocp`, `spawnargs`, `fulfillhlt`.
@@ -377,10 +386,12 @@ Vesta AOT gana **29/29** benches a Java y a Python, **18/29** a Go y
 
 Los peores casos del AOT frente a C son `cmp_fusion` (4.9x),
 `hash_lookup` (4.8x), `struct_field` (4.1x), `fp_jit` (4.0x) y
-`vec_axpy` (2.5x), y apuntan a dos huecos distintos del pipeline: la
+`vec_axpy` (2.5x).  Uno de ellos es un hueco conocido del pipeline: la
 **desambiguacion de memoria** (sin ella no se pueden hoistear ni fusionar
-accesos a campos y tablas hash) y la **auto-vectorizacion**, que es lo que
-separa a `fp_jit` y `vec_axpy` del codigo que emite gcc. El JIT tiene
+accesos a campos y tablas hash). La **auto-vectorizacion** YA no es uno de
+esos huecos: existe y dispara -- `vec_axpy` baja a operaciones vectoriales de
+256 bits --, asi que la distancia que le queda a ese bench frente a gcc tiene
+otra causa, todavia sin diagnosticar. El JIT tiene
 ademas su propio pendiente -- devirtualizacion especulativa guiada por
 perfil, que es de lo que vive `pic_real` -- pero eso es un optimizador de
 runtime y no afecta a estos numeros de AOT.
@@ -422,7 +433,7 @@ genera una gráfica dedicada por cada bench en
 `python tools/bench/run_all_benches.py`).
 
 **Roadmap completo** (JIT C2 optimizador con devirtualizacion especulativa
-y deoptimizacion, auto-vectorizacion, AOT en 3 tiers de deployment):
+y deoptimizacion, AOT en 3 tiers de deployment):
 [doc/ROADMAP.md](./doc/ROADMAP.md).
 
 ---
@@ -479,8 +490,8 @@ distribución y herramientas se diseñan juntos. Comparativa de features clave:
 
 - **Madurez del ecosistema**: 0 paquetes públicos vs millones en npm/cargo/maven.
 - **Velocidad bruta**: el AOT queda a 1.65× de C en geomean y el JIT a 6.0×;
-  el optimizador C2 (devirtualización especulativa, deopt, vectorización)
-  cerrará la brecha restante.
+  el optimizador C2 (devirtualización especulativa, deopt) cerrará parte de
+  la brecha restante. La auto-vectorización ya está y dispara.
 - **Documentación en inglés**: toda la doc del proyecto está en español ASCII.
 - **Plataformas ARM/AArch64**: JIT y AOT emiten x86-64 (y x86-32); el backend
   arm64 está en curso.

@@ -354,9 +354,11 @@ a Go y **10/29** a Rust. Empata o gana a C en seis (`callvirt_hot`,
 **Donde el AOT pierde contra C** son `cmp_fusion` (4.9x), `hash_lookup`
 (4.8x), `struct_field` (4.1x), `fp_jit` (4.0x) y `vec_axpy` (2.5x). Los tres
 primeros piden **desambiguacion de memoria** (sin ella no se hoistean ni
-fusionan accesos a campos y a tablas hash); los dos ultimos,
-**auto-vectorizacion**. Ninguno de los cinco depende del C2, que es un
-optimizador de runtime.
+fusionan accesos a campos y a tablas hash). Los dos ultimos NO piden
+auto-vectorizacion: ya la hay y dispara -- comprobado el 2026-09-02, `vec_axpy`
+baja a operaciones vectoriales de 256 bits --, asi que lo que les separa de C
+queda sin diagnosticar desde que el vectorizador entro. Ninguno de los cinco
+depende del C2, que es un optimizador de runtime.
 
 **El JIT vence a HotSpot C2 en 27 de 29 benches** y a CPython en 28 de 29,
 pero queda por detras de Go y Rust: la compilacion en caliente paga un
@@ -370,8 +372,9 @@ Ese mismo bench, compilado AOT, baja a 10.5 ms.
   dispatch polimorfico sin devirtualizacion especulativa.
 - `string_workout` (JIT 258 ms vs Java 182 ms) — sin small-string
   optimization en `StringObject`.
-- `fp_jit` (JIT 69 ms vs C 10.7 ms) — el camino float **escalar**; la
-  auto-vectorizacion SSE2/AVX lo cierra.
+- `fp_jit` (JIT 69 ms vs C 10.7 ms) — el camino float **escalar** del JIT.
+  La auto-vectorizacion existe y dispara en AOT; queda ver por que este bench
+  no la aprovecha.
 - `branch_unpredict` (JIT 55 ms vs C 17.7 ms) — branches genuinamente
   impredecibles; cerrable con branch hints del perfil PGO.
 
