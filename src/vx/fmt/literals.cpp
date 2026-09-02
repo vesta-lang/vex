@@ -155,6 +155,24 @@ std::string canonical_based(std::string_view text) {
     // millares (`0xDEAD_BEEF`), y reagrupar seria discutir con el autor.
     if (grouped) return {};
 
+    // Un FLOTANTE hexadecimal (`0x1.8p+1`) no es un entero con sufijo, y su
+    // parte entera no se rellena ni se agrupa.
+    //
+    // El recorrido de arriba se para en el `.` o en la `p` -- no son digitos
+    // hexadecimales --, asi que sin esto lo que sigue se tomaba por el sufijo
+    // de tipo, y `0x1.8p+1` salia `0x01_.8p+1`: relleno a par de digitos y
+    // separador metidos en mitad de la mantisa.  Seguia valiendo lo mismo, pero para un literal
+    // cuya razon de ser es ensenar los BITS EXACTOS, esconderlos detras de un
+    // relleno es justo lo contrario de lo que se pide.
+    //
+    // Ni el `.` ni la `p` aparecen en un sufijo de tipo (i8..i64, u8..u64,
+    // f32, f64), asi que basta buscarlos en todo el lexema: asi tambien se
+    // reconoce uno que YA venga con la forma estropeada.
+    //
+    // La forma la elige el autor y se respeta; el sufijo de tipo lo pone
+    // despues `add_type_suffixes`, que trabaja aparte.
+    if (hex && text.find_first_of(".pP") != std::string_view::npos) return {};
+
     const std::string_view digits = text.substr(2, end - 2);
     std::string_view suffix = text.substr(end);
     if (!suffix.empty() && suffix.front() == '_') suffix.remove_prefix(1);

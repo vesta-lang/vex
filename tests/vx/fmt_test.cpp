@@ -314,8 +314,7 @@ void check_spacing() {
           "la llave de apertura no arrastra la primera sentencia");
     check(una_pasada.find("\n}") != std::string::npos,
           "la llave de cierre empieza linea");
-    check(fmt(una_pasada) == una_pasada,
-          "y una segunda pasada no cambia nada");
+    check(fmt(una_pasada) == una_pasada, "y una segunda pasada no cambia nada");
     // Un cuerpo que SI cabe entero se queda como esta: no todo se reparte.
     const std::string cabe = fmt("i32 f() { return 0; }\n");
     check(cabe.find("f() { return 0; }") != std::string::npos,
@@ -620,6 +619,21 @@ void check_numbers() {
     // `R107`: un `_` ya puesto marca campos de un formato y no se reagrupa.
     check(one("0xDEAD_BEEF") == "0xDEAD_BEEF",
           "un hex ya agrupado por el autor no se toca");
+
+    /* Un FLOTANTE hexadecimal no es un entero: ni se rellena a par de digitos
+     * ni se le mete un separador.
+     *
+     * El recorrido de digitos se para en el `.` o en la `p` -- no son digitos
+     * hexadecimales -- y lo que seguia se tomaba por el sufijo de tipo, asi
+     * que `0x1.8p+1` salia `0x01_.8p+1`.  Valia lo mismo, y ese es el
+     * problema: para un literal cuya razon de ser es ensenar los BITS
+     * EXACTOS, taparlos con un relleno es lo contrario de lo que se pide. */
+    check(one("0x1.8p+1") == "0x1.8p+1", "un flotante hex no se rellena");
+    check(one("0x1p-1") == "0x1p-1",
+          "tampoco el que no tiene parte fraccionaria");
+    check(one("0X1.0P+3") == "0X1.0P+3", "en mayusculas, igual de intacto");
+    check(one("0x1.8p+1_f64") == "0x1.8p+1_f64",
+          "uno que ya trae su sufijo tampoco se toca");
 
     // `R109`: los millares de un decimal, a partir de cinco digitos.
     check(one("1000000") == "1_000_000", "un decimal largo agrupa millares");
