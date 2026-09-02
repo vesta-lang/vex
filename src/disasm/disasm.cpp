@@ -58,8 +58,28 @@ using namespace Assembly::Bytecode;
 
 namespace disasm {
 
-// sufijos de modo de tamano (indice = modo 0-3)
-static const char *mode_sfx[] = {"b", "w", "d", "q"};
+/* Sufijo de ancho, indexado por modo 0-3.
+ *
+ * El ancho va PEGADO AL REGISTRO -- `r9w`, `r8d` -- que es la sintaxis del
+ * lenguaje: el lexer acepta `r0..r15` con sufijo opcional `b`/`w`/`d`, y sin
+ * sufijo es de 64 bits.  El desensamblador escribia `r1, r2 [w]`, que no es
+ * sintaxis de Vesta y ni siquiera se puede volver a ensamblar.
+ *
+ * El modo 3 (q) no lleva sufijo: `r9` YA es el registro entero. */
+static const char *mode_sfx[] = {"b", "w", "d", ""};
+
+/**
+ * @brief Nombre de un registro general con su ancho: `r9`, `r9d`, `r9w`, `r9b`.
+ *
+ * @param dst  Buffer del llamante (basta con 8 bytes).
+ * @param idx  Numero de registro 0-15.
+ * @param mode Modo de ancho 0-3; cualquier otro valor se trata como 64 bits.
+ */
+static const char *reg_nombre(char (&dst)[8], unsigned idx, unsigned mode) {
+    snprintf(dst, sizeof(dst), "r%u%s", idx & 0x0F,
+             mode_sfx[mode < 4 ? mode : 3]);
+    return dst;
+}
 // multiplicadores de escala SIB
 // nombres de las condiciones de salto (indice 16 = salto incondicional).
 // Vive a nivel de fichero porque la usan los dos formateadores de operandos.
@@ -130,8 +150,8 @@ static std::string fmt_xchg_operand(uint8_t b) {
         // registro general: nibble alto = modo de acceso, nibble bajo = numero
         uint8_t mode = code >> 4; // modo de tamano (0=b, 1=w, 2=d, 3=q)
         uint8_t reg = code & 0xF; // numero de registro 0-15
-        snprintf(buf, sizeof(buf), "r%u [%s]", reg,
-                 mode_sfx[mode < 4 ? mode : 3]);
+        char rb[8];
+        snprintf(buf, sizeof(buf), "%s", reg_nombre(rb, reg, mode));
         return buf;
     }
 }
@@ -182,9 +202,25 @@ static bool is_zmm_unary(uint8_t opc) {
  * @param isz  Tamano total de la instruccion en bytes.
  * @return Cadena de texto con los operandos formateados.
  */
+/**
+ * @brief Anota un registro nombrado por la instruccion.
+ *
+ * Se llama junto a cada sitio que imprime un `r%u` o un `f%u`, con el mismo
+ * valor: la version estructurada y la de texto salen del mismo dato, asi que no
+ * se pueden desincronizar.  @p dest marca la posicion de destino.
+ */
+static void anota(std::vector<RegOperand> *out, unsigned idx, bool dest,
+                  bool floating = false) {
+    if (out == nullptr) return;
+    out->push_back(
+        RegOperand{static_cast<uint8_t>(idx & 0x0F), floating, dest});
+}
+
 static std::string fmt_ext_operands(uint8_t opc,
                                     const runtime::InstrFormat *fmt,
-                                    const uint8_t *raw, size_t isz) {
+                                    const uint8_t *raw, size_t isz,
+                                    const runtime::DecodedInstr &d,
+                                    std::vector<RegOperand> *out = nullptr) {
     char buf[128] = {};
 
     switch (fmt->mode) {
@@ -205,6 +241,7 @@ static std::string fmt_ext_operands(uint8_t opc,
                              8); // reinterpretar como double IEEE 754
             snprintf(buf, sizeof(buf), "f%u, 0x%016llx  ; %.17g", zmm_dst,
                      (unsigned long long)bits, dval);
+            anota(out, zmm_dst, true, true);
         } else if (opc == 0x55 && isz >= 10) {
             // calln <addr_nativa>: el inmediato de 64 bits empieza en raw[2].
             uint64_t fn = 0;
@@ -222,6 +259,8 @@ static std::string fmt_ext_operands(uint8_t opc,
                 if (!(mask & (1u << r))) continue;
                 n += static_cast<size_t>(snprintf(regs + n, sizeof(regs) - n,
                                                   "%sr%d", (n ? " " : ""), r));
+                // fastpop los restaura (escribe); fastpush los guarda (lee).
+                anota(out, static_cast<unsigned>(r), opc == 0x71);
                 if (n >= sizeof(regs) - 8) break;
             }
             snprintf(buf, sizeof(buf), "0x%04x {%s}", mask, regs);
@@ -240,6 +279,10 @@ static std::string fmt_ext_operands(uint8_t opc,
             const unsigned rb2 = raw[3] & 0x0F;
             snprintf(buf, sizeof(buf), "r%u, r%u ? r%u : r%u", rd, rc, ra2,
                      rb2);
+            anota(out, rd, true);
+            anota(out, rc, false);
+            anota(out, ra2, false);
+            anota(out, rb2, false);
         } else if (opc == 0x92 && isz >= 4) {
             // sext r_dst, N: el segundo campo NO es un registro, es el ancho
             // en bits desde el que se extiende el signo (8/16/32).  Salia como
@@ -247,6 +290,7 @@ static std::string fmt_ext_operands(uint8_t opc,
             // no toca.
             snprintf(buf, sizeof(buf), "r%u, %u", (unsigned)(raw[2] & 0x0F),
                      (unsigned)raw[3]);
+            anota(out, raw[2] & 0x0F, true);
         } else if (opc == 0x43 && isz >= 4) {
             // setcc r_dst, cond: byte2 = (cond << 4) | registro.  La condicion
             // es justo el dato que interesa al leer una comparacion, y salia
@@ -254,6 +298,7 @@ static std::string fmt_ext_operands(uint8_t opc,
             const unsigned cond = (raw[2] >> 4) & 0x0F;
             const unsigned reg = raw[2] & 0x0F;
             snprintf(buf, sizeof(buf), "r%u, %s", reg, cc_setcc[cond]);
+            anota(out, reg, true);
         } else if ((opc == 0x68 || opc == 0x69) && isz >= 8) {
             // cmpjmp/cmpjmpu: comparacion y salto fusionados.  Se leen igual
             // que decode_instr_cmpjmp: registros en b2, condicion en b3 y el
@@ -266,6 +311,8 @@ static std::string fmt_ext_operands(uint8_t opc,
             const int ci = (cond < 0x10) ? (int)cond : 16;
             snprintf(buf, sizeof(buf), "r%u, r%u, %s 0x%08x", ra, rb, cc[ci],
                      (unsigned)target);
+            anota(out, ra, false);
+            anota(out, rb, false);
         } else if ((opc == 0x90 || opc == 0x91) && isz >= 8) {
             // mld/mst: se leen los campos IGUAL que decode_instr_mem_full, en
             // vez de reinterpretar los bytes por cuenta propia.
@@ -297,13 +344,19 @@ static std::string fmt_ext_operands(uint8_t opc,
                 n += snprintf(addr + n, sizeof(addr) - n, " %c %d",
                               (disp < 0 ? '-' : '+'),
                               (disp < 0 ? -(int)disp : (int)disp));
-            const char *mark = host ? "h" : "";
+            // `h` a secas se pasaba por alto.  La diferencia entre tocar
+            // memoria de la VM y un puntero del host merece leerse.
+            const char *mark = host ? "host" : "vm";
             if (opc == 0x90)
                 snprintf(buf, sizeof(buf), "r%u, %s[%s] (%u bytes%s)", reg,
                          mark, addr, width, sign_ext ? ", con signo" : "");
             else
                 snprintf(buf, sizeof(buf), "%s[%s], r%u (%u bytes)", mark, addr,
                          reg, width);
+            // mld escribe el registro y lee la direccion; mst al reves.
+            anota(out, reg, opc == 0x90);
+            if (base < 16) anota(out, base, false);
+            if (has_index) anota(out, index, false);
         } else if (opc == 0x1F || opc == 0x1E) {
             // MOVC/MOVCH: ctrl[2], datos[3]
             uint8_t ctrl = raw[2], b4 = raw[3];
@@ -311,10 +364,21 @@ static std::string fmt_ext_operands(uint8_t opc,
             uint8_t r1 = ctrl & 0xF;         // registro fuente/destino
             uint8_t flag = (b4 >> 5) & 0x7;  // bandera de condicion
             uint8_t r2 = b4 & 0x1F;          // registro de memoria
+            /* MOVC y MOVCH comparten opcode Y NOMBRE en la tabla: lo unico que
+             * las separa son los bits 7-6 del ctrl (0b10 = host), igual que lo
+             * lee `decode_instr_movc`.  Sin mostrarlo, el volcado ensena `movc`
+             * para las dos y no se puede saber cual toca memoria de la VM y
+             * cual un puntero del HOST -- que es justo la diferencia que decide
+             * si el acceso se puede razonar o no. */
+            const char *donde = (((ctrl >> 6) & 0x3) == 0x2) ? "host" : "vm";
             if (dir == 0)
-                snprintf(buf, sizeof(buf), "r%u, [r%u], flag=%u", r1, r2, flag);
+                snprintf(buf, sizeof(buf), "r%u, %s[r%u], flag=%u", r1, donde,
+                         r2, flag);
             else
-                snprintf(buf, sizeof(buf), "[r%u], r%u, flag=%u", r2, r1, flag);
+                snprintf(buf, sizeof(buf), "%s[r%u], r%u, flag=%u", donde, r2,
+                         r1, flag);
+            anota(out, r1, dir == 0);
+            anota(out, r2, false);
         } else if (is_zmm_binary(opc) && isz == 4) {
             // fmov, fadd, fsub, fmul, fdiv, fcmp: dos registros ZMM
             // nibble bajo de raw[3] = ZMM destino
@@ -322,12 +386,16 @@ static std::string fmt_ext_operands(uint8_t opc,
             uint8_t zmm_dst = raw[3] & 0xF;
             uint8_t zmm_src = raw[3] >> 4;
             snprintf(buf, sizeof(buf), "f%u, f%u", zmm_dst, zmm_src);
+            anota(out, zmm_dst, true, true);
+            anota(out, zmm_src, false, true);
         } else if (is_zmm_unary(opc) && isz == 4) {
             // fsqrt fDst, fSrc / fabs fDst, fSrc / fneg fDst, fSrc
             // nibble bajo de raw[3] = ZMM destino, nibble alto = ZMM fuente
             uint8_t zmm_dst = raw[3] & 0xF;
             uint8_t zmm_src = raw[3] >> 4;
             snprintf(buf, sizeof(buf), "f%u, f%u", zmm_dst, zmm_src);
+            anota(out, zmm_dst, true, true);
+            anota(out, zmm_src, false, true);
         } else if (opc == 0xF9 && isz == 4) {
             // fcvt / fcvt.ps: conversion GP<->ZMM
             // bit 2 de ctrl (raw[2]) = s: 0=GP->ZMM, 1=ZMM->GP
@@ -340,31 +408,203 @@ static std::string fmt_ext_operands(uint8_t opc,
                 snprintf(buf, sizeof(buf), "f%u, r%u", zmm_reg, gp_reg);
             else
                 snprintf(buf, sizeof(buf), "r%u, f%u", gp_reg, zmm_reg);
+            anota(out, s == 0 ? zmm_reg : gp_reg, true, s == 0);
+            anota(out, s == 0 ? gp_reg : zmm_reg, false, s != 0);
         } else if (opc == 0xFB && isz == 4) {
             // fload fDst, rAddr: ZMM nibble bajo, GP nibble alto
             uint8_t zmm_dst = raw[3] & 0xF;
             uint8_t gp_addr = raw[3] >> 4;
             snprintf(buf, sizeof(buf), "f%u, r%u", zmm_dst, gp_addr);
+            anota(out, zmm_dst, true, true);
+            anota(out, gp_addr, false);
         } else if (opc == 0xFC && isz == 4) {
             // fstore rAddr, fSrc: GP nibble alto, ZMM nibble bajo
             uint8_t zmm_src = raw[3] & 0xF;
             uint8_t gp_addr = raw[3] >> 4;
             snprintf(buf, sizeof(buf), "r%u, f%u", gp_addr, zmm_src);
+            anota(out, gp_addr, false);
+            anota(out, zmm_src, false, true);
         } else if ((opc == 0xED || opc == 0xEE) && isz == 4) {
             // resume rPID / spawn rAddr: un solo registro GP en nibble bajo
             uint8_t r1 = raw[3] & 0xF;
             snprintf(buf, sizeof(buf), "r%u", r1);
+            anota(out, r1, false);
         } else if (opc == 0xEF && isz == 4) {
             // swapctx rDst, rSrc: nibble alto = destino, nibble bajo = origen
             uint8_t r_src = raw[3] & 0xF;
             uint8_t r_dst = raw[3] >> 4;
             snprintf(buf, sizeof(buf), "r%u, r%u", r_dst, r_src);
+            anota(out, r_dst, true);
+            anota(out, r_src, false);
+        } else if (fmt->decode == &runtime::decode_instr_raw_bytes) {
+            /* Familia "convencion B": los registros van en BYTE2, no en byte3.
+             *
+             * Esto salia por la rama generica de abajo, que lee los nibbles de
+             * `raw[3]`.  Para estas instrucciones eso son los registros
+             * EQUIVOCADOS: `strcat r_dst, r_a, r_b` se enseñaba como dos
+             * registros sacados de byte3, uno de los cuales ni interviene.  34
+             * opcodes afectados.
+             *
+             * El reparto de nibbles se saco de los MANEJADORES, que son quienes
+             * deciden que registro usan, y hay dos convenciones opuestas que
+             * conviene no mezclar:
+             *
+             *   strings  (0x46-0x54, 0x5E): dst = b2hi, src = b2lo, [b3hi]
+             *   ALU3/mem/fmadd:             dst = b2lo, src = b2hi,  b3hi
+             *
+             * Vive aqui y no en `InstrFormat` por decision explicita.  El
+             * riesgo conocido es que se quede vieja: si alguien anade un opcode
+             * con `decode_instr_raw_bytes` y no lo mete en estas listas, saldra
+             * con la forma de dos registros por defecto. */
+            const uint8_t b2 = raw[2], b3 = raw[3];
+            const unsigned n_hi = (b2 >> 4) & 0x0F; // nibble alto de byte2
+            const unsigned n_lo = b2 & 0x0F;        // nibble bajo de byte2
+            const unsigned n_b3 = (b3 >> 4) & 0x0F; // nibble alto de byte3
+
+            // Los que ademas usan un tercer registro en b3hi.
+            const bool tres_str = (opc == 0x46 || opc == 0x48 || opc == 0x49 ||
+                                   opc == 0x4A || opc == 0x4C || opc == 0x5E);
+            // ALU 3-operandos, fmadd y la familia de memoria en bloque.
+            const bool alu3 = (opc >= 0x73 && opc <= 0x7B);
+            const bool bloque = (opc >= 0xB6 && opc <= 0xB9);
+
+            if (alu3 || bloque || opc == 0x5F) {
+                // dst = b2lo, luego b2hi y b3hi.  `fmadd` opera sobre el banco
+                // ZMM, asi que se nombra con `f`.
+                const bool fp = (opc == 0x5F);
+                snprintf(buf, sizeof(buf), "%c%u, %c%u, %c%u", fp ? 'f' : 'r',
+                         n_lo, fp ? 'f' : 'r', n_hi, fp ? 'f' : 'r', n_b3);
+                anota(out, n_lo, true, fp);
+                anota(out, n_hi, false, fp);
+                anota(out, n_b3, false, fp);
+            } else if (opc == 0xCE) {
+                // addadvice: byte2 = (r_advice << 4) | r_target, byte3 = kind
+                // (no es un registro).
+                snprintf(buf, sizeof(buf), "r%u, r%u, kind=%u", n_hi, n_lo,
+                         (unsigned)b3);
+                anota(out, n_hi, false);
+                anota(out, n_lo, false);
+            } else if (tres_str) {
+                snprintf(buf, sizeof(buf), "r%u, r%u, r%u", n_hi, n_lo, n_b3);
+                anota(out, n_hi, true);
+                anota(out, n_lo, false);
+                anota(out, n_b3, false);
+            } else {
+                snprintf(buf, sizeof(buf), "r%u, r%u", n_hi, n_lo);
+                anota(out, n_hi, true);
+                anota(out, n_lo, false);
+            }
+        } else if (fmt->decode == &runtime::decode_instr_dlopen_dlsym) {
+            /* dlopen/dlsym: TRES o CUATRO registros, no dos.  El decoder los
+             * deja en `mem_data`, y la rama generica solo enseñaba dos.
+             *   dlopen: r_dst, r_path_addr, r_path_len
+             *   dlsym:  r_dst, r_handle, r_name_addr, r_name_len */
+            const auto &m = d.data_instruction.mem_data;
+            if (opc == 0x63)
+                snprintf(buf, sizeof(buf), "r%u, r%u, r%u, r%u", m.reg_base,
+                         m.reg_index, m.reg_final, m.scale);
+            else
+                snprintf(buf, sizeof(buf), "r%u, r%u, r%u", m.reg_base,
+                         m.reg_index, m.reg_final);
+            anota(out, m.reg_base, true);
+            anota(out, m.reg_index, false);
+            anota(out, m.reg_final, false);
+            if (opc == 0x63) anota(out, m.scale, false);
+        } else if (fmt->decode == &runtime::decode_instr_three_reg) {
+            // msgsend: r_pid, r_addr, r_len.  Los tres se leen.
+            const auto &m = d.data_instruction.mem_data;
+            snprintf(buf, sizeof(buf), "r%u, r%u, r%u", m.reg_base, m.reg_index,
+                     m.reg_final);
+            anota(out, m.reg_base, false);
+            anota(out, m.reg_index, false);
+            anota(out, m.reg_final, false);
+        } else if (fmt->decode == &runtime::decode_instr_atomic_rmw) {
+            // Cuatro registros empaquetados en dos bytes.
+            const auto &m = d.data_instruction.mem_data;
+            snprintf(buf, sizeof(buf), "r%u, r%u, r%u, r%u", m.reg_base,
+                     m.reg_index, m.reg_final, m.scale);
+            anota(out, m.reg_base, true);
+            anota(out, m.reg_index, false);
+            anota(out, m.reg_final, false);
+            anota(out, m.scale, false);
+        } else if (fmt->decode == &runtime::decode_instr_vmcopy) {
+            // vmcopy/vcopyh: copia entre memoria de VM y del host.
+            const auto &m = d.data_instruction.mem_data;
+            snprintf(buf, sizeof(buf), "r%u, r%u, r%u", m.reg_base, m.reg_index,
+                     m.reg_final);
+            anota(out, m.reg_base, false);
+            anota(out, m.reg_index, false);
+            anota(out, m.reg_final, false);
+        } else if (fmt->decode == &runtime::decode_instr_static_offset) {
+            /* getstatic/setstatic: dos registros MAS el offset, que se perdia.
+             * El papel de cada uno cambia con el opcode:
+             *   getstatic: r0 = destino, r1 = clase
+             *   setstatic: r0 = clase,   r1 = valor  (no escribe registro) */
+            const auto &s = d.data_instruction.static_data;
+            snprintf(buf, sizeof(buf), "r%u, r%u, +%u", s.r0, s.r1, s.offset);
+            anota(out, s.r0, opc == 0x60);
+            anota(out, s.r1, false);
+        } else if (fmt->decode == &runtime::decode_instr_decjnz) {
+            // decjnz r_counter, target: decrementa y salta si no es cero.
+            const auto &s = d.data_instruction.static_data;
+            snprintf(buf, sizeof(buf), "r%u, 0x%08x", s.r0, (unsigned)s.offset);
+            anota(out, s.r0, true); // lo lee y lo escribe
+        } else if (fmt->decode == &runtime::decode_instr_oop_reg_imm8) {
+            // [reg, imm8]: el segundo operando NO es un registro.  La rama
+            // generica lo enseñaba como `rN`, mandando a mirar donde no toca.
+            const auto &r = d.data_instruction.reg_data;
+            snprintf(buf, sizeof(buf), "r%u, %u", r.reg1, (unsigned)r.reg2);
+            anota(out, r.reg1, true);
+        } else if (fmt->decode == &runtime::decode_instr_callni) {
+            // callni r_fn: un solo registro; reg2 queda sin uso.
+            snprintf(buf, sizeof(buf), "r%u", d.data_instruction.reg_data.reg1);
+            anota(out, d.data_instruction.reg_data.reg1, false);
+        } else if (fmt->decode == &runtime::decode_instr_gcallocp) {
+            // gcallocp r_dst, r_size
+            const auto &r = d.data_instruction.reg_data;
+            snprintf(buf, sizeof(buf), "r%u, r%u", r.reg1, r.reg2);
+            anota(out, r.reg1, true);
+            anota(out, r.reg2, false);
+        } else if (fmt->decode == &runtime::decode_instr_addcur) {
+            // addcur: el decoder solo rellena reg2; reg1 no interviene.
+            snprintf(buf, sizeof(buf), "r%u", d.data_instruction.reg_data.reg2);
+            anota(out, d.data_instruction.reg_data.reg2, true);
+        } else if (fmt->decode == &runtime::decode_instr_jumptable) {
+            // jumptable/typeswitch: r_val y r_table en byte2; `count` es el
+            // numero de entradas, no un registro.
+            const auto &m = d.data_instruction.mem_data;
+            snprintf(buf, sizeof(buf), "r%u, r%u, count=%u", m.reg_base,
+                     m.reg_index, (unsigned)m.scale);
+            anota(out, m.reg_base, false);
+            anota(out, m.reg_index, false);
+        } else if (fmt->decode == &runtime::decode_instr_cursor_rw) {
+            /* Lectura/escritura via cursor: `reg2` NO es un registro general,
+             * es el indice del cursor (0-3), que sale del byte de control.  La
+             * rama generica lo enseñaba como `rN` -- un registro que no existe
+             * -- y ademas se perdia de vista cual es el cursor. */
+            const auto &r = d.data_instruction.reg_data;
+            snprintf(buf, sizeof(buf), "r%u, cur%u", r.reg1, (unsigned)r.reg2);
+            anota(out, r.reg1, true);
+        } else if (fmt->decode == &runtime::decode_instr_spawnargs) {
+            // spawnargs r_pc: un solo registro (argc va en R15, implicito).
+            snprintf(buf, sizeof(buf), "r%u", d.data_instruction.reg_data.reg1);
+            anota(out, d.data_instruction.reg_data.reg1, false);
+        } else if (fmt->decode == &runtime::decode_instr_fulfillhlt) {
+            // fulfillhlt r_fut, r_value: los dos en byte2.
+            const auto &r = d.data_instruction.reg_data;
+            snprintf(buf, sizeof(buf), "r%u, r%u", r.reg1, r.reg2);
+            anota(out, r.reg1, false);
+            anota(out, r.reg2, false);
         } else if (isz == 4) {
             // instruccion reg-reg generica: ctrl[2] (mode 7-6), regs[3]
             uint8_t ctrl = raw[2], regs = raw[3];
             uint8_t mode = (ctrl >> 6) & 0x3;
             uint8_t r1 = regs & 0xF, r2 = regs >> 4;
-            snprintf(buf, sizeof(buf), "r%u, r%u [%s]", r1, r2, mode_sfx[mode]);
+            char n1[8], n2[8];
+            snprintf(buf, sizeof(buf), "%s, %s", reg_nombre(n1, r1, mode),
+                     reg_nombre(n2, r2, mode));
+            anota(out, r1, true);
+            anota(out, r2, false);
         }
         break;
 
@@ -398,12 +638,15 @@ static std::string fmt_ext_operands(uint8_t opc,
                 imm &= 0xFFFFu;
             else if (mode == 2)
                 imm &= 0xFFFFFFFFu;
+            char rn[8];
+            reg_nombre(rn, reg, mode);
             if (dir == 0)
-                snprintf(buf, sizeof(buf), "r%u, 0x%llx [%s]", reg,
-                         (unsigned long long)imm, mode_sfx[mode]);
+                snprintf(buf, sizeof(buf), "%s, 0x%llx", rn,
+                         (unsigned long long)imm);
             else
-                snprintf(buf, sizeof(buf), "[r%u], 0x%llx [%s]", reg,
-                         (unsigned long long)imm, mode_sfx[mode]);
+                snprintf(buf, sizeof(buf), "[%s], 0x%llx", rn,
+                         (unsigned long long)imm);
+            anota(out, reg, dir == 0);
         }
         break;
     }
@@ -418,21 +661,28 @@ static std::string fmt_ext_operands(uint8_t opc,
         uint8_t rfin = regs >> 4;          // registro final
         uint8_t rbase = regs & 0xF;        // registro base
         uint8_t ridx = idx & 0xF;          // registro indice
+        /* El ancho es el del ACCESO, asi que lo lleva el registro de datos.
+         * La base y el indice forman una direccion: van enteros, sin sufijo. */
+        char rf[8];
+        reg_nombre(rf, rfin, mode);
         if (dir == 0) {
             if (hasi)
-                snprintf(buf, sizeof(buf), "r%u, [r%u+r%u*%d] [%s]", rfin,
-                         rbase, ridx, scale_val[scale], mode_sfx[mode]);
+                snprintf(buf, sizeof(buf), "%s, [r%u+r%u*%d]", rf, rbase, ridx,
+                         scale_val[scale]);
             else
-                snprintf(buf, sizeof(buf), "r%u, [r%u] [%s]", rfin, rbase,
-                         mode_sfx[mode]);
+                snprintf(buf, sizeof(buf), "%s, [r%u]", rf, rbase);
         } else {
             if (hasi)
-                snprintf(buf, sizeof(buf), "[r%u+r%u*%d], r%u [%s]", rbase,
-                         ridx, scale_val[scale], rfin, mode_sfx[mode]);
+                snprintf(buf, sizeof(buf), "[r%u+r%u*%d], %s", rbase, ridx,
+                         scale_val[scale], rf);
             else
-                snprintf(buf, sizeof(buf), "[r%u], r%u [%s]", rbase, rfin,
-                         mode_sfx[mode]);
+                snprintf(buf, sizeof(buf), "[r%u], %s", rbase, rf);
         }
+        // rfin es destino solo cuando el movimiento va hacia el registro; la
+        // base y el indice se leen siempre, porque forman la direccion.
+        anota(out, rfin, dir == 0);
+        anota(out, rbase, false);
+        if (hasi) anota(out, ridx, false);
         break;
     }
 
@@ -449,9 +699,10 @@ static std::string fmt_ext_operands(uint8_t opc,
  * @param raw Buffer con los bytes crudos de la instruccion (hasta 12).
  * @return Cadena de texto con los operandos formateados.
  */
-static std::string fmt_primary_operands(uint8_t opc,
-                                        const runtime::InstrFormat *fmt,
-                                        const uint8_t *raw) {
+static std::string
+fmt_primary_operands(uint8_t opc, const runtime::InstrFormat *fmt,
+                     const uint8_t *raw, const runtime::DecodedInstr &d,
+                     std::vector<RegOperand> *out = nullptr) {
     char buf[128] = {};
 
     // tabla de mnemoticos de condicion de salto (indice = byte de condicion)
@@ -465,8 +716,10 @@ static std::string fmt_primary_operands(uint8_t opc,
             // inc/dec: bit6=variante (0=inc, 1=dec), bits5-4=modo de tamano
             uint8_t mode = (data >> 4) & 0x3;
             uint8_t var = (data >> 6) & 0x1;
-            snprintf(buf, sizeof(buf), "%s r%u [%s]", (var ? "dec" : "inc"),
-                     reg, mode_sfx[mode]);
+            char rn[8];
+            snprintf(buf, sizeof(buf), "%s %s", (var ? "dec" : "inc"),
+                     reg_nombre(rn, reg, mode));
+            anota(out, reg, true); // inc/dec lo lee y lo escribe
         } else if (opc == 0x14) {
             // XCHG: byte[2] y byte[3] codifican dos operandos mixtos
             // (general/especial)
@@ -476,10 +729,15 @@ static std::string fmt_primary_operands(uint8_t opc,
             std::string op1 = fmt_xchg_operand(raw[2]);
             std::string op2 = fmt_xchg_operand(raw[3]);
             snprintf(buf, sizeof(buf), "%s, %s", op1.c_str(), op2.c_str());
+            // xchg escribe LOS DOS: es un intercambio.  Los especiales (bit 6)
+            // no son generales y no se anotan como tales.
+            if (((raw[2] >> 6) & 1) == 0) anota(out, raw[2] & 0xF, true);
+            if (((raw[3] >> 6) & 1) == 0) anota(out, raw[3] & 0xF, true);
         } else {
             // push, pop, jmpr, callvmr: un solo registro en nibble bajo de
-            // raw[1]
+            // raw[1].  `pop` lo ESCRIBE; los demas solo lo leen.
             snprintf(buf, sizeof(buf), "r%u", reg);
+            anota(out, reg, opc == 0x13);
         }
         break;
     }
@@ -509,6 +767,8 @@ static std::string fmt_primary_operands(uint8_t opc,
                 if (!(mask & (1u << r))) continue;
                 n += static_cast<size_t>(snprintf(regs + n, sizeof(regs) - n,
                                                   "%sr%d", (n ? " " : ""), r));
+                // fastpop los restaura (escribe); fastpush los guarda (lee).
+                anota(out, static_cast<unsigned>(r), opc == 0x71);
                 if (n >= sizeof(regs) - 8) break;
             }
             snprintf(buf, sizeof(buf), "0x%04x {%s}", mask, regs);
@@ -630,7 +890,8 @@ std::vector<DisasmResult> disasm_bytes(const uint8_t *data, size_t len,
         r.address = base_addr + off;
 
         // opcode desconocido: volcar como .db
-        if (fmt->mode == AddressingMode::COUNT || !fmt->name || !fmt->name[0]) {
+        if (fmt->mode == AddressingMode::COUNT || !fmt->name || !fmt->name[0] ||
+            fmt->decode == nullptr) {
             char hb[8];
             snprintf(hb, sizeof(hb), "%02x", b0);
             r.size = 1;
@@ -644,28 +905,31 @@ std::vector<DisasmResult> disasm_bytes(const uint8_t *data, size_t len,
             continue;
         }
 
-        // calcular tamano de la instruccion
-        size_t isz;
-        if (fmt->size == InstrSizeMode::MIXED_SIZE) {
-            if (off + 2 >= len) break; // no hay ctrl byte
-            uint8_t ctrl = data[off + 2];
-            uint8_t mode = (ctrl >> 6) & 0x3;
-            uint8_t sign = (ctrl >> 5) & 0x1;
-            uint8_t dir = (ctrl >> 4) & 0x1;
-            isz = (dir == 1 && sign == 1) ? 11u
-                                          : (size_t)(3 + mode_to_bytes(mode));
-        } else {
-            isz = instr_size(fmt->size);
-        }
-        if (off + isz > len) isz = len - off; // truncar si pasa el limite
+        /* Se descodifica con EL DECODER DE LA VM, no reinterpretando los
+         * bytes por cuenta propia.  Antes el desensamblador calculaba el
+         * tamano de las MIXED_SIZE a mano, repitiendo lo que ya hace el
+         * decoder; cualquier cambio de formato habia que acordarse de
+         * copiarlo aqui.  Ahora `size_instr` sale del propio decoder. */
+        runtime::DecodedInstr d{};
+        d.metadata = const_cast<runtime::InstrFormat *>(fmt);
+        d.exec_cached = fmt->exec;
+        d.pc = r.address;
+        d.flags_info.is_not_extended = ext ? 0x00 : b0;
+        d.flags_info.opcode_index = opc;
+        const size_t queda = len - off;
+        fmt->decode(runtime::InstrCursor{data + off, queda, r.address}, d);
+
+        size_t isz = d.flags_info.size_instr;
+        if (isz == 0) isz = instr_size(fmt->size); // formatos sin size propio
+        if (isz > queda) isz = queda;              // truncar si pasa el limite
 
         uint8_t raw[12] = {};
         memcpy(raw, data + off, (isz < 12) ? isz : 12);
 
         r.size = isz;
         r.mnemonic = fmt->name;
-        r.operands = ext ? fmt_ext_operands(opc, fmt, raw, isz)
-                         : fmt_primary_operands(opc, fmt, raw);
+        r.operands = ext ? fmt_ext_operands(opc, fmt, raw, isz, d, &r.regs)
+                         : fmt_primary_operands(opc, fmt, raw, d, &r.regs);
         if (opts.show_hex)
             r.hex = build_hex_string(raw, isz,
                                      opts.use_color && ansi::is_enabled());
@@ -738,7 +1002,8 @@ void disasm_velb(const std::string &file, std::ostream &out,
         }
 
         // opcode desconocido: volcar como .db y avanzar un byte
-        if (fmt->mode == AddressingMode::COUNT || !fmt->name || !fmt->name[0]) {
+        if (fmt->mode == AddressingMode::COUNT || !fmt->name || !fmt->name[0] ||
+            fmt->decode == nullptr) {
             if (col) out << ansi::DIM;
             char line[96];
             snprintf(line, sizeof(line), "  %016llx   ",
@@ -772,33 +1037,41 @@ void disasm_velb(const std::string &file, std::ostream &out,
             } catch (...) {
                 break;
             }
-            uint8_t mode = (ctrl >> 6) & 0x3;
-            uint8_t sign = (ctrl >> 5) & 0x1;
-            uint8_t dir = (ctrl >> 4) & 0x1;
-            isz = (dir == 1 && sign == 1) ? 11u
-                                          : (size_t)(3 + mode_to_bytes(mode));
-        } else {
-            isz = instr_size(fmt->size);
+            (void)ctrl; // el tamano lo dara el decoder, no este calculo
         }
 
         // copiar bytes al buffer local
-        for (size_t i = 0; i < isz && i < 12; ++i) {
+        for (size_t i = 0; i < sizeof(raw); ++i) {
             try {
                 raw[i] = proc->vm_mem[ip + i];
             } catch (...) {
-                done = true;
+                // Fin de la memoria mapeada: lo leido hasta aqui basta para
+                // las instrucciones cortas.
                 break;
             }
         }
-        if (done) break;
+
+        /* Igual que en `disasm_bytes`: descodifica EL DECODER DE LA VM.  El
+         * calculo de tamano a mano que habia aqui era una copia del que hace
+         * el decoder, y se quedaba viejo por su cuenta. */
+        runtime::DecodedInstr d{};
+        d.metadata = const_cast<runtime::InstrFormat *>(fmt);
+        d.exec_cached = fmt->exec;
+        d.pc = ip;
+        d.flags_info.is_not_extended = ext ? 0x00 : b0;
+        d.flags_info.opcode_index = opc;
+        fmt->decode(runtime::InstrCursor{raw, sizeof(raw), ip}, d);
+
+        isz = d.flags_info.size_instr;
+        if (isz == 0) isz = instr_size(fmt->size);
 
         // construir y delegar en print_instruction
         DisasmResult r{};
         r.address = ip;
         r.size = isz;
         r.mnemonic = fmt->name;
-        r.operands = ext ? fmt_ext_operands(opc, fmt, raw, isz)
-                         : fmt_primary_operands(opc, fmt, raw);
+        r.operands = ext ? fmt_ext_operands(opc, fmt, raw, isz, d, &r.regs)
+                         : fmt_primary_operands(opc, fmt, raw, d, &r.regs);
         if (opts.show_hex) r.hex = build_hex_string(raw, isz, col);
 
         print_instruction(out, r, opts);

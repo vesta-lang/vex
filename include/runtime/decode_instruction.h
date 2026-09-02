@@ -101,6 +101,52 @@ struct DecodedInstr; ///< Declaracion adelantada de la instruccion descodificada
 class ProcessVM;     ///< Declaracion adelantada del proceso virtual
 
 /**
+ * @brief Lo unico que hace falta para descodificar: bytes y direccion.
+ *
+ * Descodificar es una funcion PURA de los bytes de la instruccion.  Los
+ * decoders pedian un @c ProcessVM entero solo para leer @c registers.rip y
+ * unos bytes de @c vm_mem, y ese acoplamiento tenia un coste real: cualquiera
+ * que quisiera saber la forma de una instruccion sin ejecutarla -- el
+ * desensamblador, un analisis, una herramienta -- no podia usar el decoder de
+ * la VM y acababa reinterpretando los bytes por su cuenta.  El desensamblador
+ * lo hacia en dos funciones de 300 lineas, y sus propios comentarios registran
+ * los bugs que eso produjo: condiciones de salto atribuidas al reves, un `sext`
+ * que mostraba un registro que no interviene.
+ *
+ * Con el cursor hay UN solo decoder para todos.  La VM le pasa un puntero
+ * dentro de su propia memoria; el desensamblador, su buffer.
+ *
+ * Ofrece los mismos accesos que se usaban sobre @c vm_mem, POR DIRECCION
+ * ABSOLUTA, para que los decoders lean igual que antes.
+ */
+struct InstrCursor {
+    const uint8_t *base = nullptr; ///< primer byte de la instruccion
+    size_t available = 0;          ///< bytes legibles desde @c base
+    uint64_t addr = 0;             ///< direccion virtual de @c base
+
+    /// Byte en una direccion absoluta.  Fuera de rango devuelve 0: un buffer
+    /// truncado da una instruccion incompleta, no una lectura invalida.
+    uint8_t operator[](uint64_t vaddr) const {
+        const uint64_t off = vaddr - addr;
+        return (off < available) ? base[off] : 0u;
+    }
+
+    uint16_t read_u16(uint64_t vaddr) const { return read<uint16_t>(vaddr); }
+    uint32_t read_u32(uint64_t vaddr) const { return read<uint32_t>(vaddr); }
+    uint64_t read_u64(uint64_t vaddr) const { return read<uint64_t>(vaddr); }
+
+  private:
+    /// Little-endian byte a byte: no supone alineacion ni el endianness del
+    /// host, y respeta el limite del buffer.
+    template <typename T> T read(uint64_t vaddr) const {
+        T v = 0;
+        for (size_t i = 0; i < sizeof(T); ++i)
+            v |= static_cast<T>(static_cast<T>((*this)[vaddr + i]) << (8 * i));
+        return v;
+    }
+};
+
+/**
  * @brief Metadatos de una instruccion del bytecode VestaVM.
  *
  * Cada entrada de decode_table_primary y decode_table_extended es un
@@ -171,7 +217,7 @@ typedef struct InstrFormat {
      * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
      * @param instr Estructura de instruccion que se rellena con los operandos.
      */
-    void (*decode)(ProcessVM *, DecodedInstr &) = nullptr;
+    void (*decode)(const InstrCursor &, DecodedInstr &) = nullptr;
 } InstrFormat;
 
 // =========================================================================
@@ -187,7 +233,7 @@ typedef struct InstrFormat {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_two_op_reg(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica instrucciones con codificacion de bytes crudos.
@@ -199,7 +245,7 @@ void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_raw_bytes(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_raw_bytes(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica una instruccion de un solo registro con modo (INC/DEC).
@@ -213,7 +259,7 @@ void decode_instr_raw_bytes(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_one_op_reg(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_one_op_reg(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica una instruccion MOV registro-registro con byte de control.
@@ -225,7 +271,7 @@ void decode_instr_one_op_reg(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_simple_mov(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica instrucciones de un solo byte sin operandos (NOP, HLT...).
@@ -235,7 +281,7 @@ void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_simple(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica instrucciones ALU inmediato-registro (ADD/SUB/MUL/DIV/CMP
@@ -247,7 +293,7 @@ void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_inmed_reg(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica una instruccion CALLN (llamada a funcion nativa).
@@ -258,7 +304,7 @@ void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_calln(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica PUSH/POP con soporte de registros generales y especiales.
@@ -271,7 +317,7 @@ void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_push_pop(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica MOV con inmediato de longitud variable.
@@ -284,7 +330,7 @@ void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_inmed_mov(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica MOVC/MOVCH: movimiento entre registro y memoria (4 bytes
@@ -296,7 +342,7 @@ void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_movc(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica XCHG con operandos mixtos (generales y/o especiales).
@@ -307,7 +353,7 @@ void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_xchg(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica JMP/Jcc y CALLVM (salto absoluto, 10 bytes fijos).
@@ -319,7 +365,7 @@ void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_jump(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_jump(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica instrucciones sin operandos (RET, LEAVE).
@@ -329,7 +375,7 @@ void decode_instr_jump(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_no_operands(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_no_operands(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica JREL: salto relativo condicional (FIXED_8 extendido).
@@ -340,7 +386,7 @@ void decode_instr_no_operands(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_jrel(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica instrucciones OOP de la forma [reg, imm8].
@@ -353,7 +399,7 @@ void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_oop_reg_imm8(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica instrucciones de lectura/escritura via cursor
@@ -366,7 +412,7 @@ void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_cursor_rw(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica ADDCUR: avance/retroceso del cursor por inmediato con
@@ -378,7 +424,7 @@ void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_addcur(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_addcur(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica VMCOPY y VCOPYH: copia entre VM memory y host memory.
@@ -390,7 +436,7 @@ void decode_instr_addcur(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_vmcopy(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_vmcopy(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica instrucciones SIB (Scale-Index-Base).
@@ -403,7 +449,7 @@ void decode_instr_vmcopy(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_sib(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica JUMPTABLE / TYPESWITCH (3 operandos empaquetados,
@@ -417,7 +463,7 @@ void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_jumptable(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_jumptable(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica una instruccion de tres registros (msgsend).
@@ -430,7 +476,7 @@ void decode_instr_jumptable(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_three_reg(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica 4 regs empacados en FIXED_4 (4 nibbles, 2 bytes):
@@ -439,8 +485,8 @@ void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr);
  * Almacena en mem_data: reg_base=r0, reg_index=r1, reg_final=r2, scale=r3.
  * Util para @c atomiccas (dst, addr, exp, des).
  */
-void decode_instr_four_reg(ProcessVM *vm, DecodedInstr &instr);
-void decode_instr_atomic_rmw(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_four_reg(const InstrCursor &c, DecodedInstr &instr);
+void decode_instr_atomic_rmw(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica una instruccion de acceso a static field (getstatic /
@@ -462,11 +508,11 @@ void decode_instr_atomic_rmw(ProcessVM *vm, DecodedInstr &instr);
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_static_offset(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_static_offset(const InstrCursor &c, DecodedInstr &instr);
 
 /// @brief Decoder de mld/mst (load/store universal, FIXED_8).  Lee la instr en
 ///        1 read_u64 y pre-decodifica a mem_full.  Ver exec_instr_mld/mst.
-void decode_instr_mem_full(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_mem_full(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodificador de @c dlopen / @c dlsym (FFI runtime, FIXED_4).
@@ -484,7 +530,7 @@ void decode_instr_mem_full(ProcessVM *vm, DecodedInstr &instr);
  * Para dlopen: r_dst=destino, rB=r_path_addr, rC=r_path_len, rD=0.
  * Para dlsym:  r_dst=destino, rB=r_handle,    rC=r_name_addr, rD=r_name_len.
  */
-void decode_instr_dlopen_dlsym(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_dlopen_dlsym(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodificador de @c callni (FIXED_4, 1 reg) para FFI runtime.
@@ -493,26 +539,26 @@ void decode_instr_dlopen_dlsym(ProcessVM *vm, DecodedInstr &instr);
  * Almacena @c r_fn en @c data_instruction.reg_data.reg1.  El argc se
  * lee en runtime desde R15 igual que CALLN estatico.
  */
-void decode_instr_callni(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_callni(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Decoder de @c gcallocp (FIXED_4, 2 regs en byte2).
  * Layout: [0x00][0x65][b2][0x00] con b2 = (r_dst<<4) | r_size.
  */
-void decode_instr_gcallocp(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_gcallocp(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Decoder de @c spawnargs (FIXED_4, 1 reg en byte2 hi-nibble).
  * Layout: [0x00][0x66][b2][0x00] con b2 = (r_pc<<4).  argc se lee de R15
  * en runtime (mismo modelo que callni / callvm).
  */
-void decode_instr_spawnargs(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_spawnargs(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Decoder de @c fulfillhlt (FIXED_4, 2 regs en byte2).
  * Layout: [0x00][0x67][b2][0x00] con b2 = (r_fut<<4) | r_value.
  */
-void decode_instr_fulfillhlt(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_fulfillhlt(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Decoder de @c cmpjmp / @c cmpjmpu (FIXED_8, 2 regs + cond + target).
@@ -524,7 +570,7 @@ void decode_instr_fulfillhlt(ProcessVM *vm, DecodedInstr &instr);
  *   static_data._pad   = cond_byte (0x00..0x0D)
  *   static_data.offset = target u32
  */
-void decode_instr_cmpjmp(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_cmpjmp(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Decoder de @c decjnz (FIXED_8, 1 reg + target).
@@ -533,7 +579,7 @@ void decode_instr_cmpjmp(ProcessVM *vm, DecodedInstr &instr);
  *   static_data.r0     = r_counter (b2 high nibble)
  *   static_data.offset = target u32
  */
-void decode_instr_decjnz(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_decjnz(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Descodifica @c fastpush / @c fastpop (extended 0x6B / 0x6C).
@@ -541,7 +587,7 @@ void decode_instr_decjnz(ProcessVM *vm, DecodedInstr &instr);
  * Layout: [0x00][opcode2][mask_lo][mask_hi].  El mask uint16 (LE) se
  * almacena en @c data_instruction.mask_data.mask.
  */
-void decode_instr_fastmask(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_fastmask(const InstrCursor &c, DecodedInstr &instr);
 
 // =========================================================================
 //  Funciones principales del pipeline

@@ -364,6 +364,20 @@ static constexpr uint32_t ICACHE_SIZE = 1024;
 #define ICACHE_WAYS 1
 #endif
 
+/* Los interruptores de PAQUETES (runtime/bundle.h) se definen AQUI y no alli
+ * aunque sea alli donde se usan: anaden campos a `ProcessVM`, y si el defecto
+ * viviera en `bundle.h` una unidad de traduccion que no lo incluya veria un
+ * `ProcessVM` de otro tamano.  Eso es una violacion de ODR que no da error de
+ * compilacion ni de enlazado: da corrupcion en ejecucion.
+ *
+ * Ver `runtime/bundle.h` para que hace cada uno. */
+#ifndef VM_BUNDLES
+#define VM_BUNDLES 1
+#endif
+#ifndef VM_BUNDLE_STATS
+#define VM_BUNDLE_STATS 0
+#endif
+
 /// Conjuntos = entradas / vias.  Con 1 via es la tabla entera, como antes.
 static constexpr uint32_t ICACHE_SETS = ICACHE_SIZE / ICACHE_WAYS;
 
@@ -653,6 +667,50 @@ class ProcessVM {
 
     DecodedInstr *decoded_ptr =
         nullptr; ///< Puntero a la entrada icache activa durante DECODE/EXECUTE
+
+    /// Hueco para descodificar SIN cachear.  Se usa cuando la ranura de icache
+    /// que tocaria es la que se esta ejecutando: pisarla dejaria rancio el
+    /// puntero que el run_loop sostiene a traves de `exec_cached`.  Ver
+    /// `icache_victim`.
+    DecodedInstr decoded_scratch = {};
+
+    /// Entrada de icache ANCLADA: no se desaloja aunque toque.  La pone
+    /// `exec_bundle` con su cabecera mientras ejecuta, porque ahi
+    /// `decoded_ptr` apunta a la arena y no protegeria la entrada por la que
+    /// el run_loop entro.  Sin esto no se pueden meter llamadas en un paquete.
+    DecodedInstr *icache_pinned = nullptr;
+
+#if VM_BUNDLES
+    /// Paquetes formados para este proceso (ver runtime/bundle.h).  El tipo va
+    /// borrado a `void*` para que ESTA cabecera, que la incluye medio mundo, no
+    /// tenga que conocer `BundleArena`: `bundle.h` incluye a esta, no al reves.
+    void *bundle_arena = nullptr;
+
+    /// Si se forman paquetes.  Se mira SOLO en el camino de fallo de icache
+    /// (0,57% de las ejecuciones), nunca en el hot path: en el despacho la
+    /// diferencia ya esta en a donde apunta `exec_cached`.
+    ///
+    /// APAGADO por defecto: hasta que este medido, el binario que se entrega se
+    /// comporta exactamente como antes.  Encenderlo es esta linea.
+    bool bundles_on = false;
+#endif
+
+#if VM_BUNDLES
+    /// Telemetria de paquetes.  El CAMPO existe siempre; lo que desaparece con
+    /// `VM_BUNDLE_STATS=0` son los INCREMENTOS (ver bundle.cpp).
+    ///
+    /// Podria ir tambien bajo la bandera, pero entonces un test compilado con
+    /// la telemetria encendida y enlazado contra un `vmcore` sin ella veria un
+    /// `ProcessVM` de otro tamano: corrupcion en ejecucion, sin error de
+    /// compilacion ni de enlazado.  48 bytes en una estructura que ya lleva
+    /// 64 KB de icache no cuestan nada, y con los incrementos fuera el codigo
+    /// generado es identico.  Lo que no puede pasar es que MEDIR el coste
+    /// cambie lo que se mide, y eso se cumple igual.
+    struct {
+        uint64_t formed, not_formed, dispatches, instrs_in_bundles, aborts,
+            flushes, shrinks, chained;
+    } bundle_stats = {};
+#endif
 
     // --- Memoria privada del proceso ---
     vm::ArenaManager
@@ -1095,10 +1153,30 @@ inline DecodedInstr *icache_victim(ProcessVM *p, uint64_t pc) {
 #if ICACHE_WAYS > 1
     const uint8_t v = p->icache_way[s];
     p->icache_way[s] = static_cast<uint8_t>((v + 1u) % ICACHE_WAYS);
-    return &p->icache[s * ICACHE_WAYS + v];
+    DecodedInstr *victim = &p->icache[s * ICACHE_WAYS + v];
 #else
-    return &p->icache[s];
+    DecodedInstr *victim = &p->icache[s];
 #endif
+
+    /* La entrada que se esta EJECUTANDO no se desaloja.
+     *
+     * El run_loop sostiene `d = decoded_ptr` a traves de `exec_cached` y, al
+     * volver, lee `d->flags_info` para decidir si avanza `rip`.  Si esa misma
+     * entrada se desalojo durante la ejecucion -- lo que puede pasar cuando la
+     * instruccion REENTRA al interprete: finalizadores del GC, una llamada
+     * nativa que vuelve, codigo cargado al vuelo -- esa lectura es de otra
+     * instruccion, y el `rip` avanza mal.
+     *
+     * La icache es de mapeo directo, asi que no hay otra ranura a la que ir:
+     * cuando toca la ocupada se devuelve `nullptr` y quien llama descodifica
+     * SIN cachear.  Cuesta un fallo de icache -- 0,57% de las ejecuciones, y de
+     * esas solo las que colisionan con la que corre -- a cambio de que el
+     * puntero que sostiene el run_loop no pueda quedarse rancio.
+     *
+     * Sin esto no se pueden meter llamadas dentro de un paquete, y sin llamadas
+     * dentro no hay inlinado, ni tramos largos, ni ILP que explotar. */
+    if (victim == p->decoded_ptr || victim == p->icache_pinned) return nullptr;
+    return victim;
 }
 
 /**

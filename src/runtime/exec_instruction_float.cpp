@@ -676,13 +676,12 @@ static void fneg_avx512_f32(uint8_t *__restrict__ d,
  * @param vm    Proceso virtual.
  * @param instr Estructura de instruccion que se rellena.
  */
-void decode_instr_fmowi(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_fmowi(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 11; /* tamano fijo FIXED_11 */
 
-    const uint64_t base =
-        vm->registers.rip.raw() + 2; /* saltar prefijo y opcode2 */
-    const uint8_t ctrl = static_cast<uint8_t>(vm->vm_mem.read_u16(base) & 0xFF);
-    const uint64_t imm = vm->vm_mem.read_u64(base + 1);
+    const uint64_t base = c.addr + 2; /* saltar prefijo y opcode2 */
+    const uint8_t ctrl = static_cast<uint8_t>(c.read_u16(base) & 0xFF);
+    const uint64_t imm = c.read_u64(base + 1);
 
     instr.flags_info.mode = (ctrl >> 6) & 0x3;
     instr.flags_info._signed_instruct = (ctrl >> 5) & 0x1;

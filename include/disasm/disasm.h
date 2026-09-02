@@ -56,6 +56,27 @@ struct DisasmOptions {
 };
 
 /**
+ * @brief Un registro que la instruccion NOMBRA, con su papel.
+ *
+ * Es la misma informacion que ya se imprime como texto (`r3`, `f0`), pero
+ * estructurada.  Existe porque hay analisis que necesitan saber que registros
+ * toca una instruccion sin volver a leer el formato de cada opcode: la
+ * dependencia entre dos instrucciones dentro de un paquete, por ejemplo, que
+ * decide si se pueden reordenar.
+ *
+ * El desensamblador es el sitio donde vive esto porque es el unico que ya
+ * conocia el formato de los 232 opcodes -- no se puede imprimir `r3` sin saber
+ * de que campo sale -- y porque nadie puede anadir un opcode sin ensenarselo.
+ * Una tabla aparte se quedaria vieja en silencio.
+ */
+struct RegOperand {
+    uint8_t index; ///< 0..15
+    bool floating; ///< banco ZMM (`f0`..`f15`) en vez de general
+    bool dest;     ///< ocupa la posicion de destino de la instruccion
+};
+
+
+/**
  * @brief Resultado del desensamblado de una sola instruccion.
  */
 struct DisasmResult {
@@ -67,6 +88,16 @@ struct DisasmResult {
                           ///< "add", "mov").
     std::string
         operands; ///< Operandos formateados como texto (p.ej. "r0, r1 [q]").
+
+    /**
+     * @brief Los registros nombrados, en el mismo orden en que se imprimen.
+     *
+     * `dest` marca la posicion de destino, que es lo que el formato distingue.
+     * Si el destino ademas se LEE depende de la operacion (`add` lo lee, `mov`
+     * no), y eso no lo sabe el formato: quien analice dependencias debe tratar
+     * el destino como leido salvo que sepa lo contrario, que es el lado seguro.
+     */
+    std::vector<RegOperand> regs;
 };
 
 /**

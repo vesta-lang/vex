@@ -19,10 +19,32 @@
  * tabla extendida (prefijo 0x00) de instrucciones.                            \
  */                                                                            \
 #include "ffi/native_ffi.h"
+#include "runtime/bundle.h"
 #include "runtime/decode_table.h"
 #include "runtime/dispatch_table.h"
 #include "runtime/runtime.h"
 #include <cstdio> // debug temporal
+
+namespace {
+
+/**
+ * @brief Cuantos bytes del cursor se pueden volcar sin salirse del buffer.
+
+ * *
+ * El volcado de un aserto es diagnostico: leer 64 bytes fijos desde el
+ * inicio
+ * de la instruccion se sale del buffer en cuanto la instruccion esta
+ * al final
+ * -- y justo el caso que se quiere diagnosticar (bytes truncados)
+ * es el que
+ * mas cerca del borde ocurre.  El cursor ya sabe cuanto queda
+ * legible.
+ */
+inline uint16_t cursor_dump_len(const runtime::InstrCursor &c) {
+    return static_cast<uint16_t>(c.available < 64u ? c.available : 64u);
+}
+
+} // namespace
 
 // Activar con -DDEBUG_DECODE_PRINT para volcar cada instruccion descodificada
 // #define DEBUG_DECODE_PRINT
@@ -53,7 +75,7 @@
             exit(-1);                                                          \
         }                                                                      \
         uint8_t *exit_data = new uint8_t[size];                                \
-        vm->vm_mem.read_bytes(vm->registers.rip.raw(), exit_data, size);       \
+        vm->vm_mem.read_bytes(c.addr, exit_data, size);                        \
         vesta::scout_decode().dump_memory(exit_data, size);                    \
         vesta::scout_decode() << std::endl;                                    \
         delete[] exit_data;                                                    \
@@ -106,15 +128,15 @@ using clock = std::chrono::high_resolution_clock;
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_oop_reg_imm8(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = Assembly::Bytecode::instr_size(
         instr.metadata->size); // fijar longitud de instruccion
 
     // las instrucciones extendidas siempre tienen prefijo 0x00, por eso el
     // offset es +2
-    uint64_t offset = vm->registers.rip.raw() + 2;
+    uint64_t offset = c.addr + 2;
     uint16_t data =
-        vm->vm_mem.read_u16(offset); // leer reg_byte e imm8 de una sola lectura
+        c.read_u16(offset); // leer reg_byte e imm8 de una sola lectura
 
     uint8_t reg_byte =
         static_cast<uint8_t>(data & 0xFF); // byte 2: contiene el registro
@@ -143,13 +165,13 @@ void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_sib(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // fijar longitud
 
     // 4 bytes tras los 2 bytes de opcode: ctrl | regs | index | pad
-    uint64_t offset = vm->registers.rip.raw() + 2;
-    uint32_t data = vm->vm_mem.read_u32(offset); // lectura de bloque de 4 bytes
+    uint64_t offset = c.addr + 2;
+    uint32_t data = c.read_u32(offset); // lectura de bloque de 4 bytes
 
     uint8_t ctrl_byte =
         static_cast<uint8_t>(data & 0xFF); // byte de control SIB
@@ -190,17 +212,17 @@ void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_two_op_reg(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = Assembly::Bytecode::instr_size(
         instr.metadata->size); // tamano constante
 
     // calcular offset al primer byte de datos segun si es opcode extendido o
     // primario
-    uint64_t offset = vm->registers.rip.raw() +
-                      ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+    uint64_t offset =
+        c.addr + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
 
     // leer los dos bytes de datos de la instruccion
-    uint16_t data = vm->vm_mem.read_u16(offset);
+    uint16_t data = c.read_u16(offset);
 
     uint8_t n1 = static_cast<uint8_t>(data & 0x00FF); // byte de modo
     uint8_t n2 =
@@ -244,14 +266,14 @@ void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_raw_bytes(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_raw_bytes(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
 
-    uint64_t offset = vm->registers.rip.raw() +
-                      ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+    uint64_t offset =
+        c.addr + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
 
-    uint16_t data = vm->vm_mem.read_u16(offset);
+    uint16_t data = c.read_u16(offset);
 
     // almacenar byte2 y byte3 en bruto para que exec pueda extraer nibbles
     instr.data_instruction.reg_data.reg1 =
@@ -282,14 +304,14 @@ void decode_instr_raw_bytes(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_simple_mov(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // fijar longitud
 
-    uint64_t offset = vm->registers.rip.raw() +
-                      ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+    uint64_t offset =
+        c.addr + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
     uint16_t data =
-        vm->vm_mem.read_u16(offset); // leer byte de control y byte de registros
+        c.read_u16(offset); // leer byte de control y byte de registros
 
     uint8_t n1 = static_cast<uint8_t>(data & 0x00FF); // byte de control
     uint8_t n2 =
@@ -333,12 +355,12 @@ void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_inmed_mov(const InstrCursor &c, DecodedInstr &instr) {
     // leer el byte de metadatos en PC+2
-    uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 2];
+    uint8_t data = c[c.addr + 2];
 
     // leer 8 bytes del inmediato de golpe; se usaran 1, 2, 4 u 8 segun el modo
-    uint64_t inmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 3);
+    uint64_t inmed = c.read_u64(c.addr + 3);
 
     // extraer los campos del byte de datos
     instr.flags_info.mode =
@@ -415,7 +437,7 @@ void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_simple(const InstrCursor &c, DecodedInstr &instr) {
     DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
@@ -432,27 +454,26 @@ void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_one_op_reg(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_one_op_reg(const InstrCursor &c, DecodedInstr &instr) {
     VM_ASSERT(
         instr_size(instr.metadata->size) == 2,
         std::string(
             "VM::decode_instr_one_op_reg() Instruccion invalida en RIP[") +
-                vesta::hex64(vm->registers.rip.raw()) + "] opcode1(" +
+                vesta::hex64(c.addr) + "] opcode1(" +
                 vesta::hex64(instr.flags_info.is_not_extended) + ") opcode2(" +
                 vesta::hex64(instr.flags_info.opcode_index) + ")\n"
             << "decode_instr_one_op_reg() Error la instruccion encontrada no "
                "tiene size 2 sino un size: "
             << instr_size(instr.metadata->size) << "\n",
         {
-            vesta::scout() << vesta::dump(vm->vm_mem, vm->registers.rip.raw(),
-                                          64)
+            vesta::scout() << vesta::dump(c.base, cursor_dump_len(c))
                            << std::endl;
         });
     instr.flags_info.size_instr = Assembly::Bytecode::instr_size(
         instr.metadata->size); // tamano siempre 2
 
     // leer el unico byte de datos (byte opcode+1)
-    uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 1];
+    uint8_t data = c[c.addr + 1];
 
     // bits 5-4: modo de acceso (tamano del operando)
     instr.flags_info.mode = (data >> 4) & 0b11;
@@ -482,12 +503,12 @@ void decode_instr_one_op_reg(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_movc(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4; // MOVC/MOVCH es siempre de 4 bytes
 
-    uint64_t base = vm->registers.rip.raw() + 2; // offset al byte de control
-    uint8_t ctrl = vm->vm_mem[base];   // byte de control de la instruccion
-    uint8_t b4 = vm->vm_mem[base + 1]; // cuarto byte: codigo de flag y reg2
+    uint64_t base = c.addr + 2; // offset al byte de control
+    uint8_t ctrl = c[base];     // byte de control de la instruccion
+    uint8_t b4 = c[base + 1];   // cuarto byte: codigo de flag y reg2
 
     // bits 7-6 del ctrl: 0b10 = MOVCH (host), 0b00 = MOVC (vm)
     uint8_t host_bits = (ctrl >> 6) & 0b11;
@@ -514,11 +535,11 @@ void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_push_pop(const InstrCursor &c, DecodedInstr &instr) {
     VM_ASSERT(instr_size(instr.metadata->size) == 2,
               std::string(
                   "VM::decode_instr_push_pop() Instruccion invalida en RIP[") +
-                      vesta::hex64(vm->registers.rip.raw()) + "] opcode1(" +
+                      vesta::hex64(c.addr) + "] opcode1(" +
                       vesta::hex64(instr.flags_info.is_not_extended) +
                       ") opcode2(" +
                       vesta::hex64(instr.flags_info.opcode_index) + ")\n"
@@ -527,14 +548,13 @@ void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr) {
                   << instr_size(instr.metadata->size) << "\n",
               {
                   vesta::scout()
-                      << vesta::dump(vm->vm_mem, vm->registers.rip.raw(), 64)
-                      << std::endl;
+                      << vesta::dump(c.base, cursor_dump_len(c)) << std::endl;
               });
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // siempre 2 bytes
 
     // leer el unico byte de datos tras el opcode
-    uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 1];
+    uint8_t data = c[c.addr + 1];
 
     // bit 6: indica si el operando es un registro especial
     uint8_t reg_ext = (data >> 6) & 0b1;
@@ -580,11 +600,11 @@ void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_inmed_reg(const InstrCursor &c, DecodedInstr &instr) {
     VM_ASSERT(instr.flags_info.is_not_extended == false,
               std::string(
                   "VM::decode_instr_inmed_reg() Instruccion invalida en RIP[") +
-                      vesta::hex64(vm->registers.rip.raw()) + "] opcode1(" +
+                      vesta::hex64(c.addr) + "] opcode1(" +
                       vesta::hex64(instr.flags_info.is_not_extended) +
                       ") opcode2(" +
                       vesta::hex64(instr.flags_info.opcode_index) + ")\n"
@@ -594,8 +614,7 @@ void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr) {
                   << std::to_string(instr.flags_info.is_not_extended) << "\n",
               {
                   vesta::scout()
-                      << vesta::dump(vm->vm_mem, vm->registers.rip.raw(), 64)
-                      << std::endl;
+                      << vesta::dump(c.base, cursor_dump_len(c)) << std::endl;
               });
 
     /**
@@ -606,10 +625,10 @@ void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr) {
      *      |  +------- s     (1 bit):  signo
      *      +----------- mode (2 bits): tamano del inmediato
      */
-    uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 2]; // byte de control
+    uint8_t data = c[c.addr + 2]; // byte de control
 
     // leer 8 bytes del inmediato; se recortaran al modo elegido
-    uint64_t inmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 3);
+    uint64_t inmed = c.read_u64(c.addr + 3);
 
     /**
      * direction=0: opera sobre el registro        (adds reg, 0x1000)
@@ -662,12 +681,12 @@ void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_xchg(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
 
     // leer los 2 bytes de datos saltando el opcode extendido (PC+2)
-    uint16_t data = vm->vm_mem.read_u16(vm->registers.rip.raw() + 2);
+    uint16_t data = c.read_u16(c.addr + 2);
 
     auto byte1 = static_cast<uint8_t>(data & 0xFF); // byte del primer operando
     auto byte2 = static_cast<uint8_t>(data >> 8);   // byte del segundo operando
@@ -698,14 +717,14 @@ void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_cursor_rw(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
 
     // los 2 bytes de datos empiezan tras los 2 bytes de opcode extendido
-    uint64_t offset = vm->registers.rip.raw() + 2;
+    uint64_t offset = c.addr + 2;
     uint16_t data =
-        vm->vm_mem.read_u16(offset); // leer byte de control y byte de registro
+        c.read_u16(offset); // leer byte de control y byte de registro
 
     uint8_t ctrl = static_cast<uint8_t>(data & 0x00FF); // byte de control
     uint8_t reg =
@@ -738,13 +757,13 @@ void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_addcur(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_addcur(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // 6 bytes
 
     // leer los 4 bytes de datos (bytes 2-5 de la instruccion)
-    uint64_t offset = vm->registers.rip.raw() + 2;
-    uint32_t data32 = vm->vm_mem.read_u32(offset);
+    uint64_t offset = c.addr + 2;
+    uint32_t data32 = c.read_u32(offset);
 
     uint8_t ctrl = static_cast<uint8_t>(data32 & 0xFF); // byte 2: ctrl
     // byte 3 (bits 8-15): padding, se ignora
@@ -780,12 +799,12 @@ void decode_instr_addcur(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_vmcopy(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_vmcopy(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // 4 bytes
 
-    uint64_t offset = vm->registers.rip.raw() + 2;
-    uint16_t data16 = vm->vm_mem.read_u16(offset);
+    uint64_t offset = c.addr + 2;
+    uint16_t data16 = c.read_u16(offset);
 
     uint8_t byte_A =
         static_cast<uint8_t>(data16 & 0xFF); // primer byte de datos
@@ -813,13 +832,13 @@ void decode_instr_vmcopy(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_jump(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_jump(const InstrCursor &c, DecodedInstr &instr) {
     // [opcode][cond_o_reservado][8 bytes addr] = 10 bytes (FIXED_10, opcode
     // primario)
     instr.data_instruction.inmmed_data.reg =
-        vm->vm_mem[vm->registers.rip.raw() + 1]; // codigo de condicion
-    instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(
-        vm->registers.rip.raw() + 2); // direccion absoluta de destino
+        c[c.addr + 1]; // codigo de condicion
+    instr.data_instruction.inmmed_data.inmmed =
+        c.read_u64(c.addr + 2); // direccion absoluta de destino
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
 
@@ -843,7 +862,7 @@ void decode_instr_jump(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_no_operands(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_no_operands(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = Assembly::Bytecode::instr_size(
         instr.metadata->size); // tamano segun tabla
     DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
@@ -860,13 +879,11 @@ void decode_instr_no_operands(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_jrel(const InstrCursor &c, DecodedInstr &instr) {
     // [0x00][0x2D][cond][padding][disp32] - extended FIXED_8
-    instr.data_instruction.inmmed_data.reg =
-        vm->vm_mem[vm->registers.rip.raw() + 2]; // byte de condicion
-    uint32_t raw_disp = 0;
-    vm->vm_mem.read_bytes(vm->registers.rip.raw() + 4, &raw_disp,
-                          4); // leer desplazamiento de 32 bits
+    instr.data_instruction.inmmed_data.reg = c[c.addr + 2]; // byte de condicion
+    const uint32_t raw_disp =
+        c.read_u32(c.addr + 4); // desplazamiento de 32 bits
     // extension de signo: int32 -> int64 -> uint64 para preservar el signo en
     // la aritmetica de punteros
     instr.data_instruction.inmmed_data.inmmed = static_cast<uint64_t>(
@@ -904,21 +921,21 @@ void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr) {
  * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
  * @param instr Estructura de instruccion descodificada que se rellena.
  */
-void decode_instr_jumptable(ProcessVM *vm, DecodedInstr &instr) {
-    instr.flags_info.size_instr = 4;             // FIXED_4
-    uint64_t base = vm->registers.rip.raw() + 2; // saltar opcode1 + opcode2
-    uint8_t b2 = vm->vm_mem[base];     // byte empaquetado: r_val|r_table
-    uint8_t b3 = vm->vm_mem[base + 1]; // count
+void decode_instr_jumptable(const InstrCursor &c, DecodedInstr &instr) {
+    instr.flags_info.size_instr = 4; // FIXED_4
+    uint64_t base = c.addr + 2;      // saltar opcode1 + opcode2
+    uint8_t b2 = c[base];            // byte empaquetado: r_val|r_table
+    uint8_t b3 = c[base + 1];        // count
     instr.data_instruction.mem_data.reg_base = (b2 >> 4) & 0x0F; // r_val/r_obj
     instr.data_instruction.mem_data.reg_index = b2 & 0x0F;       // r_table
     instr.data_instruction.mem_data.scale = b3;                  // count
 }
 
-void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_three_reg(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4; // FIXED_4: opcode1 + opcode2 + b2 + b3
-    uint64_t base = vm->registers.rip.raw() + 2; // saltar opcode1 + opcode2
-    uint8_t b2 = vm->vm_mem[base];               // (r_pid<<4) | r_addr
-    uint8_t b3 = vm->vm_mem[base + 1];           // (r_len<<4) | 0
+    uint64_t base = c.addr + 2;      // saltar opcode1 + opcode2
+    uint8_t b2 = c[base];            // (r_pid<<4) | r_addr
+    uint8_t b3 = c[base + 1];        // (r_len<<4) | 0
     instr.data_instruction.mem_data.reg_base = (b2 >> 4) & 0x0F;  // r_pid
     instr.data_instruction.mem_data.reg_index = b2 & 0x0F;        // r_addr
     instr.data_instruction.mem_data.reg_final = (b3 >> 4) & 0x0F; // r_len
@@ -928,11 +945,11 @@ void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr) {
 //   byte2 (rip+2) = (r0 << 4) | r1
 //   byte3 (rip+3) = (r2 << 4) | r3
 // Util para atomiccas: r0=dst, r1=addr, r2=expected, r3=desired.
-void decode_instr_four_reg(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_four_reg(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4;
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t b2 = vm->vm_mem[base];
-    uint8_t b3 = vm->vm_mem[base + 1];
+    uint64_t base = c.addr + 2;
+    uint8_t b2 = c[base];
+    uint8_t b3 = c[base + 1];
     instr.data_instruction.mem_data.reg_base = (b2 >> 4) & 0x0F;  // r0
     instr.data_instruction.mem_data.reg_index = b2 & 0x0F;        // r1
     instr.data_instruction.mem_data.reg_final = (b3 >> 4) & 0x0F; // r2
@@ -942,12 +959,12 @@ void decode_instr_four_reg(ProcessVM *vm, DecodedInstr &instr) {
 // Atomicos RMW width-aware (atomicadd/atomiccas, FIXED_6): igual que four_reg
 // pero con un ctrl-byte DELANTE que porta el mode (ancho 8/16/32/64).  Layout:
 //   [0x00][op][ctrl=mode<<6][b2=(base<<4)|index][b3=(final<<4)|scale][pad].
-void decode_instr_atomic_rmw(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_atomic_rmw(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 6; // FIXED_6
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t ctrl = vm->vm_mem[base];
-    uint8_t b2 = vm->vm_mem[base + 1];
-    uint8_t b3 = vm->vm_mem[base + 2];
+    uint64_t base = c.addr + 2;
+    uint8_t ctrl = c[base];
+    uint8_t b2 = c[base + 1];
+    uint8_t b3 = c[base + 2];
     instr.flags_info.mode = (ctrl >> 6) & 0x3; // ancho: 0=8b 1=16b 2=32b 3=64b
     instr.data_instruction.mem_data.reg_base = (b2 >> 4) & 0x0F;  // dst
     instr.data_instruction.mem_data.reg_index = b2 & 0x0F;        // addr
@@ -966,12 +983,12 @@ void decode_instr_atomic_rmw(ProcessVM *vm, DecodedInstr &instr) {
  * Para getstatic: r0=r_dst, r1=r_class.
  * Para setstatic: r0=r_class, r1=r_value.
  */
-void decode_instr_static_offset(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_static_offset(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         8; // FIXED_8: prefix(2) + regs(1) + pad(1) + offset(4)
-    uint64_t base = vm->registers.rip.raw() + 2;     // saltar opcode1 + opcode2
-    uint8_t regs_byte = vm->vm_mem[base];            // (r0<<4) | r1
-    uint32_t offset = vm->vm_mem.read_u32(base + 2); // bytes 4-7 absolutos
+    uint64_t base = c.addr + 2;             // saltar opcode1 + opcode2
+    uint8_t regs_byte = c[base];            // (r0<<4) | r1
+    uint32_t offset = c.read_u32(base + 2); // bytes 4-7 absolutos
     instr.data_instruction.static_data.r0 = (regs_byte >> 4) & 0x0F;
     instr.data_instruction.static_data.r1 = regs_byte & 0x0F;
     instr.data_instruction.static_data.offset = offset;
@@ -987,12 +1004,12 @@ void decode_instr_static_offset(ProcessVM *vm, DecodedInstr &instr) {
  * Pre-decodifica todo a @c mem_full para que el exec sea minimo (el decode se
  * cachea; el coste real es de ejecucion).
  */
-void decode_instr_mem_full(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_mem_full(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 8; // FIXED_8
     // Una sola lectura de 8 bytes (la instruccion entera) en vez de 5 accesos
     // byte a byte -> 1 lookup TLB/pagina.  Layout de raw (LE):
     //   b0=0x00 b1=op2 b2=ctrl b3=basef b4=regs b5=disp_lo b6=disp_hi b7=pad
-    const uint64_t raw = vm->vm_mem.read_u64(vm->registers.rip.raw());
+    const uint64_t raw = c.read_u64(c.addr);
     const uint8_t ctrl = static_cast<uint8_t>(raw >> 16);
     const uint8_t basef = static_cast<uint8_t>(raw >> 24);
     const uint8_t regs = static_cast<uint8_t>(raw >> 32);
@@ -1019,11 +1036,11 @@ void decode_instr_mem_full(ProcessVM *vm, DecodedInstr &instr) {
  * Lee 2 bytes desde @c rip+2 y los desempaqueta en 4 nibbles que se
  * almacenan en @c mem_data (reg_base, reg_index, reg_final, scale).
  */
-void decode_instr_dlopen_dlsym(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_dlopen_dlsym(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4; // FIXED_4: prefix(2) + b2 + b3
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t b2 = vm->vm_mem[base];
-    uint8_t b3 = vm->vm_mem[base + 1];
+    uint64_t base = c.addr + 2;
+    uint8_t b2 = c[base];
+    uint8_t b3 = c[base + 1];
     instr.data_instruction.mem_data.reg_base = (b2 >> 4) & 0x0F; // r_dst
     instr.data_instruction.mem_data.reg_index =
         b2 & 0x0F; // rB (path_addr / handle)
@@ -1036,10 +1053,10 @@ void decode_instr_dlopen_dlsym(ProcessVM *vm, DecodedInstr &instr) {
 /**
  * @brief Decoder de @c callni (FIXED_4, 1 registro en byte2 hi-nibble).
  */
-void decode_instr_callni(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_callni(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4; // FIXED_4: prefix(2) + b2 + b3
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t b2 = vm->vm_mem[base];
+    uint64_t base = c.addr + 2;
+    uint8_t b2 = c[base];
     instr.data_instruction.reg_data.reg1 = (b2 >> 4) & 0x0F; // r_fn
     instr.data_instruction.reg_data.reg2 = 0;                // sin uso
 }
@@ -1049,10 +1066,10 @@ void decode_instr_callni(ProcessVM *vm, DecodedInstr &instr) {
  * Layout: [0x00][0x65][b2][0x00] con b2 = (r_dst<<4) | r_size.
  * Aloca en GcHeap y deposita host_ptr al payload directo en r_dst.
  */
-void decode_instr_gcallocp(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_gcallocp(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4;
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t b2 = vm->vm_mem[base];
+    uint64_t base = c.addr + 2;
+    uint8_t b2 = c[base];
     instr.data_instruction.reg_data.reg1 = (b2 >> 4) & 0x0F; // r_dst
     instr.data_instruction.reg_data.reg2 = b2 & 0x0F;        // r_size
 }
@@ -1061,10 +1078,10 @@ void decode_instr_gcallocp(ProcessVM *vm, DecodedInstr &instr) {
  * @brief Decoder de @c spawnargs (FIXED_4, 1 reg en byte2 hi-nibble).
  * Layout: [0x00][0x66][b2][0x00] con b2 = (r_pc<<4).  argc se lee de R15.
  */
-void decode_instr_spawnargs(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_spawnargs(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4;
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t b2 = vm->vm_mem[base];
+    uint64_t base = c.addr + 2;
+    uint8_t b2 = c[base];
     instr.data_instruction.reg_data.reg1 = (b2 >> 4) & 0x0F; // r_pc
     instr.data_instruction.reg_data.reg2 = 0;
 }
@@ -1073,10 +1090,10 @@ void decode_instr_spawnargs(ProcessVM *vm, DecodedInstr &instr) {
  * @brief Decoder de @c fulfillhlt (FIXED_4, 2 regs en byte2).
  * Layout: [0x00][0x67][b2][0x00] con b2 = (r_fut<<4) | r_value.
  */
-void decode_instr_fulfillhlt(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_fulfillhlt(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4;
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t b2 = vm->vm_mem[base];
+    uint64_t base = c.addr + 2;
+    uint8_t b2 = c[base];
     instr.data_instruction.reg_data.reg1 = (b2 >> 4) & 0x0F; // r_fut
     instr.data_instruction.reg_data.reg2 = b2 & 0x0F;        // r_value
 }
@@ -1089,15 +1106,15 @@ void decode_instr_fulfillhlt(ProcessVM *vm, DecodedInstr &instr) {
  *   static_data._pad   = cond_byte (0x00..0x0D)
  *   static_data.offset = target u32
  */
-void decode_instr_cmpjmp(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_cmpjmp(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 8;
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t b2 = vm->vm_mem[base];
-    uint8_t cond = vm->vm_mem[base + 1];
+    uint64_t base = c.addr + 2;
+    uint8_t b2 = c[base];
+    uint8_t cond = c[base + 1];
     instr.data_instruction.static_data.r0 = (b2 >> 4) & 0x0F;
     instr.data_instruction.static_data.r1 = b2 & 0x0F;
     instr.data_instruction.static_data._pad = static_cast<uint16_t>(cond);
-    instr.data_instruction.static_data.offset = vm->vm_mem.read_u32(base + 2);
+    instr.data_instruction.static_data.offset = c.read_u32(base + 2);
 }
 
 /**
@@ -1106,14 +1123,14 @@ void decode_instr_cmpjmp(ProcessVM *vm, DecodedInstr &instr) {
  *   static_data.r0     = r_counter
  *   static_data.offset = target u32
  */
-void decode_instr_decjnz(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_decjnz(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 8;
-    uint64_t base = vm->registers.rip.raw() + 2;
-    uint8_t b2 = vm->vm_mem[base];
+    uint64_t base = c.addr + 2;
+    uint8_t b2 = c[base];
     instr.data_instruction.static_data.r0 = (b2 >> 4) & 0x0F;
     instr.data_instruction.static_data.r1 = 0;
     instr.data_instruction.static_data._pad = 0;
-    instr.data_instruction.static_data.offset = vm->vm_mem.read_u32(base + 2);
+    instr.data_instruction.static_data.offset = c.read_u32(base + 2);
 }
 
 /**
@@ -1122,11 +1139,11 @@ void decode_instr_decjnz(ProcessVM *vm, DecodedInstr &instr) {
  * Layout fisico: [0x00][opcode2][mask_lo][mask_hi]
  * Bytes [rip+2..rip+3] forman el mask uint16 little-endian.
  */
-void decode_instr_fastmask(ProcessVM *vm, DecodedInstr &instr) {
+void decode_instr_fastmask(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr = 4;
-    const uint64_t base = vm->registers.rip.raw() + 2;
-    const uint8_t lo = vm->vm_mem[base];
-    const uint8_t hi = vm->vm_mem[base + 1];
+    const uint64_t base = c.addr + 2;
+    const uint8_t lo = c[base];
+    const uint8_t hi = c[base + 1];
     instr.data_instruction.mask_data.mask =
         static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8);
 
@@ -1136,9 +1153,9 @@ void decode_instr_fastmask(ProcessVM *vm, DecodedInstr &instr) {
                           << std::dec);
 }
 
-void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
-    instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(
-        vm->registers.rip.raw() + 2); // direccion de la funcion nativa
+void decode_instr_calln(const InstrCursor &c, DecodedInstr &instr) {
+    instr.data_instruction.inmmed_data.inmmed =
+        c.read_u64(c.addr + 2); // direccion de la funcion nativa
 
     // tamano de la instruccion para luego incrementar rip tras la ejecucion
     instr.flags_info.size_instr =
@@ -1147,8 +1164,8 @@ void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
     // argc se cachea en decode para que exec pueda obtenerlo sin acceder a
     // registros: al ser constante por PC, el IBP de la CPU predecira bien el
     // switch(argc) tras la primera ejecucion
-    instr.data_instruction.inmmed_data.reg =
-        static_cast<uint64_t>(vm->registers.regs[R15].qword());
+    // `argc` (R15) lo pone `cachear_estado_de_runtime`, no este decoder: es
+    // estado del proceso, no parte del formato de la instruccion.
     DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
                "[" << (int)instr.data_instruction.inmmed_data.reg << "] "
                    << (uint64_t)instr.data_instruction.inmmed_data.inmmed);
@@ -1202,6 +1219,41 @@ static InstrFormat *select_metadata(uint8_t b0, uint8_t b1) {
     return &m;
 }
 
+/// Bytes maximos que ocupa una instruccion (la mas larga es FIXED_11).
+static constexpr size_t INSTR_BYTES_MAX = 16;
+
+/**
+ * @brief Cursor sobre los bytes de la instruccion que hay en @p pc.
+ *
+ * Copia a un buffer del llamante porque la memoria de la VM es paginada y una
+ * instruccion puede cruzar de pagina: un puntero crudo no serviria para las dos
+ * mitades.  El coste es irrelevante -- descodificar solo ocurre al FALLAR la
+ * icache, el 0,57% de las ejecuciones -- y a cambio los decoders dejan de
+ * necesitar el proceso.
+ */
+static InstrCursor cursor_en(ProcessVM *process, uint64_t pc,
+                             uint8_t (&buf)[INSTR_BYTES_MAX]) {
+    for (size_t i = 0; i < INSTR_BYTES_MAX; ++i)
+        buf[i] = process->vm_mem[pc + i];
+    return InstrCursor{buf, INSTR_BYTES_MAX, pc};
+}
+
+/**
+ * @brief Lo que `calln` necesita del proceso y NO es descodificar.
+ *
+ * `calln` cachea `argc` (R15) en el momento de descodificar para que `exec` no
+ * tenga que leer un registro: al ser constante por PC, el predictor de saltos
+ * acierta el `switch(argc)` desde la segunda vez.  Es una cache de RUNTIME, no
+ * parte del formato de la instruccion, asi que vive aqui y no dentro del
+ * decoder -- que asi se queda puro como los otros 32.
+ */
+static void cachear_estado_de_runtime(ProcessVM *process, const InstrFormat &m,
+                                      DecodedInstr &out) {
+    if (m.decode == &decode_instr_calln)
+        out.data_instruction.inmmed_data.reg =
+            static_cast<uint64_t>(process->registers.regs[R15].qword());
+}
+
 bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
     if (process == nullptr) return false;
     out = DecodedInstr{};
@@ -1216,15 +1268,13 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
     out.metadata = m;
     out.exec_cached = m->exec;
 
-    /* Las funciones de descodificacion leen el PC del proceso, no el que se
-
-     * * les pasa.  Se le pone el que interesa y se le devuelve el suyo: es lo
-
-     * * unico que se toca, y queda como estaba pase lo que pase. */
-    const uint64_t rip_previo = process->registers.rip.raw();
-    process->registers.rip.qword(pc);
-    m->decode(process, out);
-    process->registers.rip.qword(rip_previo);
+    /* Antes habia que FALSEAR el rip del proceso: los decoders leian el PC del
+     * proceso en vez del que se les pasaba, asi que mirar otra direccion
+     * obligaba a ponerlo, descodificar y devolverlo.  Con el cursor la
+     * direccion es un argumento y el proceso no se toca. */
+    uint8_t buf[INSTR_BYTES_MAX];
+    m->decode(cursor_en(process, pc, buf), out);
+    cachear_estado_de_runtime(process, *m, out);
     return true;
 }
 
@@ -1295,6 +1345,7 @@ void decode_instruction(ProcessVM *process) {
         decode_tmp.exec_cached =
             nullptr; // sentinel: el run_loop detecta nullptr y emite HALT
         DecodedInstr *slot = icache_victim(process, pc);
+        if (slot == nullptr) slot = &process->decoded_scratch;
         *slot = decode_tmp; // cachear para que decoded_ptr sea valido
         process->decoded_ptr = slot;
         if (measuring) process->scheduler.time_decode += now_ns() - t1;
@@ -1329,13 +1380,29 @@ void decode_instruction(ProcessVM *process) {
     decode_tmp.exec_cached = metadata.exec;
 
     // llamar al metodo especializado de descodificacion de la instruccion
-    metadata.decode(process, decode_tmp);
+    uint8_t instr_buf[INSTR_BYTES_MAX];
+    metadata.decode(cursor_en(process, pc, instr_buf), decode_tmp);
+    cachear_estado_de_runtime(process, metadata, decode_tmp);
 
     // guardar el resultado en la icache (muy importante: despues de llamar a
     // decode).  `icache_victim` elige la via a desalojar; con una sola via es
     // la entrada de siempre.
+    // `icache_victim` devuelve nullptr cuando la ranura que tocaria es la que
+    // se esta ejecutando: esa no se puede pisar sin dejar rancio el puntero que
+    // sostiene el run_loop.  En ese caso se descodifica SIN cachear, usando un
+    // hueco de reserva del proceso.  Es correcto -- la instruccion se ejecuta
+    // igual -- y solo cuesta que la proxima vez vuelva a fallar.
     DecodedInstr *slot = icache_victim(process, pc);
+    if (slot == nullptr) slot = &process->decoded_scratch;
     *slot = decode_tmp;
+
+#if VM_BUNDLES
+    // Formar paquete, si procede.  Va AQUI y no en el hot path a proposito:
+    // este es el camino de FALLO, que esta medido en el 0,57% de las
+    // ejecuciones, asi que el analisis se amortiza por PC.  Si no forma nada,
+    // la entrada se queda como estaba y todo sigue igual.
+    bundle_try_form(process, slot, pc);
+#endif
 
     // apuntar decoded_ptr a la entrada de la icache (sin copiar)
     process->decoded_ptr = slot;

@@ -25,6 +25,14 @@
  * rango.
  *   - Declaraciones de todos los ejecutores: ALU reg, ALU imm, ALU SIB, control
  * de flujo, pila, FFI nativa, GC, raw allocator y sistema OOP.
+ *
+ * Si CAMBIA lo que hace un manejador, hay que regenerar la base de datos de la
+ * VM (`src/runtime/instr_db_vm_gen.cpp`): guarda que toca cada opcode sin
+ * nombrarlo en un operando --banderas, pila, marco, contador de programa--, y
+ * de ahi sale si dos instrucciones se pueden reordenar.  Se deriva del CODIGO
+ * MAQUINA de estas funciones, asi que cambiar una y no regenerar deja la tabla
+ * mintiendo.  Las instrucciones estan en la cabecera de
+ * `src/runtime/decode_table.cpp`; `test_efectos_opcodes` avisa si no cuadra.
  */
 
 #ifndef EXEC_INSTRUCTION_H
@@ -197,6 +205,12 @@ static constexpr ReadSpecialFn read_special_table[12] = {
     read_rflags ///< 11 -> RFLAGS
 };
 
+/// Entradas de las tablas de registros especiales.  Se DERIVA del array en vez
+/// de escribirse: un literal se queda atras el dia que la tabla crezca, y el
+/// que se queda atras aqui no da un error -- deja pasar un indice invalido.
+constexpr size_t kSpecialCount =
+    sizeof(read_special_table) / sizeof(read_special_table[0]);
+
 /**
  * @brief Nombres de los registros especiales para mensajes de diagnostico.
  *
@@ -218,7 +232,7 @@ static const char *regs_special[] = {
  * @return Valor del registro, o 0 si el codigo es invalido.
  */
 inline uint64_t read_special(ProcessVM *vm, uint8_t code) {
-    if (code >= 12 || read_special_table[code] == nullptr) {
+    if (code >= kSpecialCount || read_special_table[code] == nullptr) {
         return 0; // codigo invalido o entrada reservada
     }
     return read_special_table[code](vm);
@@ -288,22 +302,33 @@ static constexpr WriteSpecialFn write_special_table[] = {
     write_rflags ///< 11 -> RFLAGS
 };
 
+/* Las dos tablas se indexan con el MISMO codigo, asi que tienen que medir lo
+ * mismo: si una crece y la otra no, el codigo valido para una se sale de la
+ * otra. */
+static_assert(sizeof(write_special_table) / sizeof(write_special_table[0]) ==
+                  kSpecialCount,
+              "read_special_table y write_special_table deben tener el mismo "
+              "numero de entradas");
+
 /**
  * @brief Escribe un valor en un registro especial de forma segura.
- *
- * Valida el codigo de registro y que la funcion de escritura no sea nullptr.
- * En modo VM_DEBUG_CHECKS aborta si el codigo es invalido.
  *
  * @param vm   Proceso virtual propietario de los registros.
  * @param code Codigo del registro especial (0-11).
  * @param v    Valor a escribir en el registro.
+ *
+ * @note La guarda comparaba `code` contra `sizeof(write_special_table)`, que
+ *       son los BYTES (96), no las entradas (12).  Como `code` sale de
+ *       `reg2 & 0xF`, los codigos 12..15 pasaban la comprobacion, leian FUERA
+ *       del array y, si lo leido no era nulo, se LLAMABA a ese puntero.  El
+ *       propio mensaje del aviso decia "code >= 12", que era la intencion.
  */
 inline void write_special(ProcessVM *vm, uint8_t code, uint64_t v) {
-    if (code >= sizeof(write_special_table) ||
-        write_special_table[code % sizeof(write_special_table)] == nullptr) {
+    if (code >= kSpecialCount || write_special_table[code] == nullptr) {
         VM_ASSERT(false,
                   "write_special: code=" + std::to_string(code) +
-                      " is not (code >= 12)",
+                      " fuera de rango (validos 0.." +
+                      std::to_string(kSpecialCount - 1) + ")",
                   {});
         return; // codigo invalido: no hacer nada en release
     }
@@ -1992,7 +2017,7 @@ void exec_instr_memsync(ProcessVM *vm, const DecodedInstr &instr);
  * @param vm    Proceso virtual.
  * @param instr Estructura que se rellena con el ZMM index y el inmediato.
  */
-void decode_instr_fmowi(ProcessVM *vm, DecodedInstr &instr);
+void decode_instr_fmowi(const InstrCursor &c, DecodedInstr &instr);
 
 /**
  * @brief Instala el runner de finalizadores GC en el GcHeap del proceso.

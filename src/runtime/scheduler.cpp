@@ -648,6 +648,7 @@ void Scheduler::run_loop() {
                  * la inicializacion es trivial y se beneficia de la
                  * proteccion natural por flag local).  El acceso a
                  * dispatch_table en sí es static (sin TLS overhead). */
+
                 static void *dispatch_table[512];
                 static bool dispatch_initialized = false;
                 if (__builtin_expect(!dispatch_initialized, 0)) {
