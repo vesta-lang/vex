@@ -414,14 +414,39 @@ int main(int argc, char **argv) {
             }
         const uint64_t t2 = util::reloj::ahora();
 
+        /* Dos patrones de acceso, no uno.  Se puso esperando que el mezclado
+         * fuese el caso malo -- 21 destinos rotando, prediccion fallando -- y
+         * el fijo el bueno.  MEDIDO, salen iguales, y el fijo incluso algo
+         * peor.  O sea que el despacho NO esta dominado por la prediccion: un
+         * patron de 21 lo captura cualquier predictor moderno.
+         *
+         * Se deja porque la cifra vale igual, pero sin la historia: son dos
+         * formas de acceder y las dos cuestan lo mismo. */
+        const runtime::DecodedInstr &fija = medir.front();
+        const uint64_t t3 = util::reloj::ahora();
+        for (int v = 0; v < kVueltas; ++v)
+            for (size_t k = 0; k < medir.size(); ++k) {
+                runtime::InstrEffects e;
+                (void)runtime::decode_effects(fija, e);
+                suma += e.reg_read ^ e.reg_write;
+            }
+        const uint64_t t4 = util::reloj::ahora();
+
         const double n = static_cast<double>(kVueltas) *
                          static_cast<double>(medir.size());
+        const double ns_predicho =
+            static_cast<double>(util::reloj::a_ns(t4 - t3)) / n;
         const double ns_todo = static_cast<double>(util::reloj::a_ns(t1 - t0)) / n;
         const double ns_base = static_cast<double>(util::reloj::a_ns(t2 - t1)) / n;
         const double razon = ns_base > 0.0 ? ns_todo / ns_base : 0.0;
 
-        std::printf("  %.2f ns por consulta completa (%zu opcodes x %d vueltas)\n",
+        std::printf("  %.2f ns por consulta, opcodes MEZCLADOS (%zu x %d "
+                    "vueltas)\n",
                     ns_todo, medir.size(), kVueltas);
+        std::printf("  %.2f ns por consulta, un solo opcode repetido\n",
+                    ns_predicho);
+        std::printf("  (salen iguales: el despacho no lo domina la prediccion "
+                    "del salto)\n");
         std::printf("  %.2f ns solo la lectura de la tabla (parte irreducible)\n",
                     ns_base);
         std::printf("  razon %.2fx\n", razon);
@@ -448,10 +473,9 @@ int main(int argc, char **argv) {
          * fallos falsos, que es peor que no cazarla.  Para eso esta la
          * comprobacion ESTRUCTURAL de arriba, que no depende del reloj.
          *
-         * Y el numerador es la cota MALA a proposito: el bucle rota entre 21
-         * opcodes, asi que el salto calculado falla la prediccion casi siempre.
-         * En el uso real un mismo sitio del programa ve siempre el mismo opcode
-         * y predice bien. */
+         * El numerador es el bucle de opcodes mezclados.  Se penso que seria la
+         * cota mala por la prediccion del salto, pero al medir el patron fijo
+         * sale igual, asi que no lo es: los dos patrones cuestan lo mismo. */
         const double tope_ns =
             (clk.coste_ns > 0) ? 4.0 * static_cast<double>(clk.coste_ns) : 20.0;
         constexpr double kRazonMax = 11.0;
