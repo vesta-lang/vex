@@ -1,0 +1,95 @@
+namespace ejemplos.goto_valores;
+
+// `goto`, y los valores que tienen que CRUZAR el salto.
+//
+// Una etiqueta es un punto de confluencia igual que la cabecera de un `while`:
+// llega el codigo que cae desde arriba y llega cada `goto` que la nombra.  El
+// bajado no ponia ahi ningun PHI, asi que las lecturas de despues se quedaban
+// con el valor de UN camino:
+//
+//   - hacia ATRAS, con el de la primera vuelta.  El clasico
+//         inicio: i = i + 1; if (i < 3) goto inicio;
+//     imprimia `i=1` para siempre: el incremento se ejecutaba, pero la vuelta
+//     siguiente volvia a leer el `i` de la entrada.  `goto` no servia para
+//     ningun bucle escrito a mano.
+//   - hacia DELANTE, con el del camino que CAE en vez del que salto.
+//
+// Ninguno de los dos daba error: daban otro valor, que es la forma cara de
+// fallar.  Y no lo cubria nadie -- en todo el corpus no habia un solo `goto`.
+//
+// Resultado esperado: 42.
+
+i32 main() {
+	// (1) El bucle hacia atras que no avanzaba.
+	i64 i    = 0_i64;
+	i64 suma = 0_i64;
+	// `orden` acumula los digitos en el orden en que se recorren (1,2,3,4,5
+	// -> 12345), que es como se comprueba la SECUENCIA sin depender de
+	// acumular una cadena -- eso en nativo todavia da basura, y es un fallo
+	// aparte que no toca a `goto`.
+	i64 orden = 0_i64;
+inicio:
+	i     = i + 1;
+	suma  = suma + i;
+	orden = orden * 10 + i;
+	if (i < 5) {
+		goto inicio;
+	}
+	if (i != 5 || suma != 15) {
+		println("(1) i=${i} suma=${suma}, esperaba 5 y 15");
+		return 1_i32;
+	}
+	// Y en el ORDEN correcto, no solo con la cuenta buena.
+	if (orden != 12_345) {
+		println("(1) orden=${orden}, esperaba 12345");
+		return 2_i32;
+	}
+
+	// (2) Hacia DELANTE: el valor que llega es el del camino que SALTO.
+	i64 v = 1_i64;
+	if (i == 5) {
+		v = 10;
+		goto fin;
+	}
+	v = 20; // no se ejecuta
+fin:
+	if (v != 10) {
+		println("(2) v=${v}, esperaba 10 (el del salto, no el que cae)");
+		return 3_i32;
+	}
+
+	// (3) Dos variables que cambian a distinto ritmo en el mismo bucle, y el
+	// salto sale desde DENTRO de un `if` -- o sea, desde otro ambito.
+	i64 pares = 0_i64;
+	i64 n     = 0_i64;
+otra:
+	n = n + 1;
+	if (n % 2 == 0) {
+		pares = pares + 1;
+	}
+	if (n < 10) {
+		goto otra;
+	}
+	if (n != 10 || pares != 5) {
+		println("(3) n=${n} pares=${pares}, esperaba 10 y 5");
+		return 4_i32;
+	}
+
+	// (4) Reintento: la etiqueta se alcanza cayendo Y saltando, y el contador
+	// tiene que sobrevivir a las dos formas de llegar.
+	i64 intentos = 0_i64;
+	i64 estado   = 0_i64;
+reintento:
+	intentos = intentos + 1;
+	estado   = estado + intentos;
+	if (intentos < 3) {
+		goto reintento;
+	}
+	if (intentos != 3 || estado != 6) {
+		println("(4) intentos=${intentos} estado=${estado}, esperaba 3 y 6");
+		return 5_i32;
+	}
+
+	println("goto: suma=${suma} orden=${orden} v=${v} pares=${pares} estado=${estado}");
+	return 42_i32;
+}

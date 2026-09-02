@@ -1244,6 +1244,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     static_local_slots_.clear();
     // Limpiar mapa de labels de goto (per-funcion).
     goto_labels_.clear();
+    /* Y con el, que nombres pueden CAMBIAR en esta funcion.  Es lo que acota
+     * los PHIs de una etiqueta: un `goto` hacia atras la convierte en
+     * cabecera de bucle, y sin PHI las lecturas de despues se quedan con el
+     * valor de la primera vuelta. */
+    fn_assigned_vars_.clear();
+    if (fd->body) collect_assigned_vars(fd->body.get(), fn_assigned_vars_);
     if (fd->body) scan_address_taken(fd->body.get());
     // Los params con ABI custom (register) viven en un ALLOCA (desugar mas
     // arriba, ANTES de este pre-pase).  El clear() de address_taken_locals_

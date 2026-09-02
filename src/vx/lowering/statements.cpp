@@ -264,11 +264,26 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         }
         // Conectar el bloque actual al label_bb si todavia no
         // termino (fall-through al label).
+        const ir::IrBlockId fall_pred =
+            block_terminated_ ? ir::IR_NO_BLOCK : current_block_;
         if (!block_terminated_) {
             emit_br(lab_bb, ls->loc.line);
         }
         current_block_ = lab_bb;
         block_terminated_ = false;
+        /* Una etiqueta es un punto de CONFLUENCIA, igual que la cabecera de
+         * un `while`: llega el codigo que cae desde arriba y llega cada
+         * `goto` que la nombra.  Sin un PHI por variable que pueda cambiar,
+         * las lecturas de despues se quedan con el valor de UN camino:
+         * hacia atras, el de la primera vuelta -- y `goto` no servia para
+         * ningun bucle escrito a mano --; hacia delante, el del camino que
+         * cae en vez del que salto.
+         *
+         * Solo llevan PHI los nombres que la funcion ASIGNA en algun sitio
+         * (`fn_assigned_vars_`) y que existen aqui: uno por cada variable
+         * viva seria correcto pero llenaria de PHIs triviales que nadie
+         * limpia despues. */
+        emit_label_phis(goto_labels_[ls->name], lab_bb, fall_pred, ls->loc);
         return;
     }
     case ast::NodeKind::GotoStmt: {
@@ -284,8 +299,27 @@ void Lowering::lower_stmt(ast::Stmt *s) {
             ge.declared = false;
             ge.first_use_loc = gs->loc;
             goto_labels_[gs->label] = ge;
+            it = goto_labels_.find(gs->label);
         } else {
             lab_bb = it->second.block;
+        }
+        /* Aportar el valor de cada variable por este camino.
+         *
+         * Si la etiqueta ya se declaro (salto hacia ATRaS) sus PHIs existen
+         * y se les anade el argumento ahora.  Si no (salto hacia DELANTE)
+         * todavia no se sabe cuales haran falta, asi que se guarda el
+         * bloque de origen y una foto de los ambitos; al declararla se
+         * resuelve cada nombre contra esa foto. */
+        if (it->second.declared) {
+            for (const auto &lp : it->second.phis) {
+                ir::IrValueId v = lookup(lp.name);
+                if (v == ir::IR_NO_VALUE) v = lp.value;
+                fn_->blocks[lab_bb].instrs[lp.idx].phi_args.push_back(
+                    {v, current_block_});
+            }
+        } else {
+            it->second.pending_preds.push_back(current_block_);
+            it->second.pending_scopes.push_back(scopes_);
         }
         emit_br(lab_bb, gs->loc.line);
         block_terminated_ = true;
@@ -310,6 +344,75 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         unsupported(s->loc, "statement no soportado por el lowering actual");
         return;
     }
+}
+
+/**
+ * @brief Pone en una etiqueta de `goto` los PHI que hacen que los valores
+ *        crucen el salto.
+ *
+ * Una etiqueta es un punto de confluencia como la cabecera de un `while`:
+ * llega el codigo que cae desde arriba y llega cada `goto` que la nombra.
+ * Sin PHI, las lecturas posteriores se quedan con el valor de UN camino, y
+ * ni el bucle hacia atras avanza ni el salto hacia delante trae lo suyo.
+ *
+ * Se emite un PHI por nombre que la funcion asigne en algun sitio
+ * (@c fn_assigned_vars_) y que exista en el ambito actual.  Uno por variable
+ * viva seria igual de correcto pero dejaria PHIs triviales que ningun pase
+ * limpia despues.
+ *
+ * @param ge Entrada de la etiqueta; se rellena su lista de PHIs.
+ * @param lab_bb Bloque de la etiqueta.
+ * @param fall_pred Bloque que CAE en la etiqueta, o @c IR_NO_BLOCK si el
+ *                  codigo de arriba ya habia terminado (un `return` justo
+ *                  antes, por ejemplo).
+ * @param loc Posicion de la etiqueta, para la linea de las instrucciones.
+ */
+void Lowering::emit_label_phis(GotoEntry &ge, ir::IrBlockId lab_bb,
+                               ir::IrBlockId fall_pred, const SourceLoc &loc) {
+    // Sin caminos que unir no hay nada que decidir: ni cae nadie ni saltaba
+    // nadie todavia.  Un `goto` posterior (hacia atras) tampoco tendria con
+    // que mezclar, asi que aqui no se emite PHI y ese caso se resuelve solo.
+    if (fall_pred == ir::IR_NO_BLOCK && ge.pending_preds.empty()) return;
+
+    for (const auto &name : fn_assigned_vars_) {
+        const ir::IrValueId cur = lookup(name);
+        if (cur == ir::IR_NO_VALUE) continue; // no existe aqui: nada que unir
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = fn_->values[cur].type;
+        phi.dst = fn_->new_value(phi.type);
+        phi.source_line = loc.line;
+        // El camino que cae trae el valor que hay ahora mismo.
+        if (fall_pred != ir::IR_NO_BLOCK) phi.phi_args.push_back({cur, fall_pred});
+        // Y cada `goto` hacia delante, el que tuviera en SU ambito.  La foto
+        // se busca de dentro hacia fuera, igual que haria `lookup`.
+        for (size_t k = 0; k < ge.pending_preds.size(); ++k) {
+            ir::IrValueId v = ir::IR_NO_VALUE;
+            const auto &snap = ge.pending_scopes[k];
+            for (auto it = snap.rbegin(); it != snap.rend(); ++it) {
+                auto j = it->find(name);
+                if (j != it->end()) {
+                    v = j->second;
+                    break;
+                }
+            }
+            // Fuera de ambito en el origen del salto: el PHI se apunta a si
+            // mismo, que es lo que hace el `while` cuando no encuentra la
+            // variable en el ambito de un `continue`.
+            if (v == ir::IR_NO_VALUE) v = phi.dst;
+            phi.phi_args.push_back({v, ge.pending_preds[k]});
+        }
+        GotoEntry::LabelPhi lp;
+        lp.name = name;
+        lp.value = phi.dst;
+        emit(lab_bb, std::move(phi));
+        lp.idx = fn_->blocks[lab_bb].instrs.size() - 1;
+        ge.phis.push_back(lp);
+        // A partir de la etiqueta, leer el nombre es leer el PHI.
+        update_scope(name, lp.value);
+    }
+    ge.pending_preds.clear();
+    ge.pending_scopes.clear();
 }
 
 void Lowering::lower_if(ast::IfStmt *s) {

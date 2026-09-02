@@ -5161,6 +5161,10 @@ modes3_case("const_flotante_global",
             "una `const` de coma flotante a nivel de fichero, que no se inlinaba",
             "533_const_flotante_global.vx", 42)
 
+modes3_case("goto_valores",
+            "un `goto` es un punto de confluencia: los valores tienen que cruzarlo",
+            "534_goto_valores.vx", 42)
+
 # Las OCHO formas de llamar bajan por caminos distintos, y cuatro de ellos no
 # tomaban la direccion: el metodo de un struct, una lambda en una variable, un
 # metodo ligado y un constructor.  Ninguno daba un error -- daban CERO --, asi

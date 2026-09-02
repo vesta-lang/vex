@@ -2056,6 +2056,7 @@ class Lowering {
     /// el init-once (horneado en gdata si el init es constante, o guardado con
     /// un booleano global si es dinamico).
     void lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type);
+
     void lower_if(ast::IfStmt *s);
     void lower_return(ast::ReturnStmt *s);
     void lower_while(ast::WhileStmt *s);
@@ -4794,12 +4795,63 @@ class Lowering {
     /// emite BR al bloque resuelto via este mapa.  Se vacia al cerrar
     /// la funcion.  Si una label se usa antes de declararse, se
     /// crea el bloque en el primer goto y se reusa al verla.
+    /**
+     * @brief Una etiqueta de `goto`, con lo que hace falta para que los
+     *        valores CRUCEN el salto.
+     *
+     * Un `goto` hacia atras es un bucle escrito a mano, asi que su etiqueta
+     * es una cabecera de bucle y necesita lo mismo que la de un `while`: un
+     * PHI por variable que cambie, con un argumento por cada camino que
+     * llega.  Sin eso, las lecturas tras la etiqueta seguian viendo el valor
+     * de la PRIMERA vuelta -- `i = i + 1` se ejecutaba, pero el `i` de la
+     * vuelta siguiente era otra vez el de la entrada -- y el bucle no
+     * avanzaba nunca.
+     *
+     * Un `goto` hacia DELANTE tenia el mismo agujero por el otro lado: al
+     * saltar desde una rama, la etiqueta leia el valor del camino que cae,
+     * no el del que salto.
+     */
     struct GotoEntry {
         ir::IrBlockId block;
         bool declared = false;   // true tras encontrar `label:`
         SourceLoc first_use_loc; // para diagnostico de undefined
+
+        /// Un PHI de la etiqueta: la variable que representa y donde esta.
+        struct LabelPhi {
+            std::string name;
+            ir::IrValueId value; // el dst del PHI
+            size_t idx;          // posicion dentro de block.instrs
+        };
+        /// Vacio hasta que se declara la etiqueta.
+        std::vector<LabelPhi> phis;
+
+        /// Los `goto` vistos ANTES de declarar la etiqueta (saltos hacia
+        /// delante).  Cuando no hay PHIs todavia no se les puede anadir el
+        /// argumento, asi que se guarda el bloque de origen y una foto de
+        /// los ambitos para resolver cada nombre al declararla.
+        std::vector<ir::IrBlockId> pending_preds;
+        std::vector<std::vector<std::unordered_map<std::string, ir::IrValueId>>>
+            pending_scopes;
     };
     std::unordered_map<std::string, GotoEntry> goto_labels_;
+
+    /// Nombres asignados en ALGuN sitio de la funcion que se esta bajando.
+    /// Sirve para acotar los PHIs de una etiqueta de `goto`: no hace falta
+    /// uno por cada variable viva, solo por las que pueden cambiar.  Se llena
+    /// al empezar cada funcion, junto al `goto_labels_.clear()`.
+    std::set<std::string> fn_assigned_vars_;
+
+    /**
+     * @brief Pone en una etiqueta de `goto` los PHI que hacen que los valores
+     *        crucen el salto.  Ver la definicion para el porque.
+     * @param ge Entrada de la etiqueta; se rellena su lista de PHIs.
+     * @param lab_bb Bloque de la etiqueta.
+     * @param fall_pred Bloque que CAE en ella, o @c ir::IR_NO_BLOCK si no cae
+     *                  ninguno.
+     * @param loc Posicion de la etiqueta.
+     */
+    void emit_label_phis(GotoEntry &ge, ir::IrBlockId lab_bb,
+                         ir::IrBlockId fall_pred, const SourceLoc &loc);
 
     /// contador monotono para nombrar funciones sinteticas
     /// generadas por @c spawn @c { @c body @c }.  Cada spawn produce

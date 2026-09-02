@@ -824,6 +824,8 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         address_taken_locals_.clear();
         host_bearing_locals_.clear();
         goto_labels_.clear();
+        fn_assigned_vars_.clear();
+        if (m->body) collect_assigned_vars(m->body.get(), fn_assigned_vars_);
         cleanup_stack_.clear();
         const_str_locals_.clear();
         escaping_locals_.clear();
