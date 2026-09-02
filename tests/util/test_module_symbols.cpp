@@ -69,7 +69,19 @@ const void *ancla() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+    /* Volcar la tabla ENTERA.  Por defecto se imprimen los manejadores, que es
+     * lo que este test contrasta; con `--todos` salen los 50.000 simbolos, que
+     * sirve para mirar a mano en que funcion cae una direccion concreta. */
+    bool todos = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--todos") == 0) {
+            todos = true;
+        } else {
+            std::fprintf(stderr, "uso: test_module_symbols [--todos]\n");
+            return 2;
+        }
+    }
     std::printf("=== test_module_symbols ===\n");
 
     const auto &tabla = tests::module_symbols(ancla());
@@ -83,6 +95,13 @@ int main() {
         return 0;
     }
     std::printf("  %zu simbolos de codigo\n\n", tabla.size());
+
+    if (todos) {
+        for (const tests::ModuleSymbol &s : tabla)
+            std::printf("  0x%016llX  %s\n", (unsigned long long)s.addr,
+                        tests::demangle(s.name).c_str());
+        std::printf("\n");
+    }
 
     // 5. La tabla esta ordenada: la busqueda binaria depende de ello.
     bool ordenada = true;
@@ -118,8 +137,15 @@ int main() {
                 ++aciertos;
             else if (primer_fallo.empty())
                 primer_fallo = std::string(fmt.name) + " -> " + n;
+            /* Se IMPRIME lo resuelto, no solo la cuenta.  Un "232 de 232" no
+             * deja ver que un opcode quedo atribuido a la funcion de al lado;
+             * la lista si, y ademas es la tabla que hace falta para saber que
+             * manejador mirar cuando el derivador senala un hueco. */
+            std::printf("  %-16s %s 0x%02X  %s\n", fmt.name,
+                        ext ? "ext" : "pri", i, n.c_str());
         }
     }
+    std::printf("\n");
     check(probados > 0, "se resolvio al menos un manejador");
     check(aciertos == probados,
           "todo manejador resuelto cae en una funcion `exec_instr_*`",

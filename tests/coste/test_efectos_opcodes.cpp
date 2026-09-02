@@ -135,7 +135,11 @@ void imprimir_funcion(const ImplicitEffects &imp, size_t k) {
     const std::string n = tests::symbol_at(
         reinterpret_cast<const void *>(&runtime::exec_instr_hlt),
         imp.sin_resolver_fn[k]);
-    if (!n.empty()) std::printf("      en: %s\n", n.c_str());
+    /* "dentro de", no "llama a": lo que se nombra es la funcion que CONTIENE la
+     * llamada indirecta, no su destino -- el destino es justo lo que no se
+     * sabe --.  Con un "en:" a secas se lee al reves, y lleva a pensar que hay
+     * que convertir esa funcion en una llamada directa cuando ya lo es. */
+    if (!n.empty()) std::printf("      dentro de: %s\n", n.c_str());
 }
 
 } // namespace
