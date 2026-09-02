@@ -7769,6 +7769,31 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
             return;
         }
         s.type = check_expr(vd->init.get());
+        /* Un literal de cadena se MODELA como puntero a los bytes de la
+         * seccion estatica -- es lo que pide la frontera FFI -- y el CONTEXTO
+         * lo refina cuando la variable se declara `string`.  Con `auto` no hay
+         * contexto que refine, asi que `auto a = "hola"` se quedaba en el
+         * puntero y `${a}` imprimia una direccion en vez del texto.
+         *
+         * El tipo de un literal de cadena es `string`, que es lo que deduce
+         * cualquier otro literal (entero, flotante, booleano, caracter): su
+         * tipo, no su representacion.  A `char*` se baja pidiendolo
+         * (`.cstr()`), igual que desde cualquier otra cadena. */
+        if (vd->init->kind == ast::NodeKind::StringLitExpr) {
+            s.type = Type{PrimitiveKind::STRING};
+            /* Y se ESCRIBE en el arbol, no solo en el simbolo.  El bajado
+             * saca el tipo de una variable inferida del `result_type` de su
+             * inicializador, y ese campo lo reescribe cualquier `check_expr`
+             * posterior sobre el mismo nodo: anotarlo ahi solo cambiaba el
+             * print -- que mira el simbolo -- y dejaba la DECLARACION en el
+             * camino del puntero, o sea una cadena vacia.  Con el nodo de
+             * tipo puesto, los dos lados ven lo mismo. */
+            auto tn = std::make_unique<ast::PrimitiveTypeNode>();
+            tn->loc = vd->init->loc;
+            tn->prim = PrimitiveKind::STRING;
+            vd->type = std::move(tn);
+            vd->init->result_type = s.type;
+        }
         if (s.type.kind == PrimitiveKind::VOID) {
             diags_.error(vd->loc, "no se pudo inferir el tipo de '" + vd->name +
                                       "' (init devuelve void)");

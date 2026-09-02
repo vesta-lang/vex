@@ -5165,6 +5165,18 @@ modes3_case("goto_valores",
             "un `goto` es un punto de confluencia: los valores tienen que cruzarlo",
             "534_goto_valores.vx", 42)
 
+# El `string[] args` de `main` solo existe donde existen los argumentos del
+# programa: la maquina virtual y el JIT.  El arranque nativo no los recoge
+# todavia, y compilar este caso con `-m aot` lo DICE -- por eso va aqui y no
+# en `modes3_case`, que exigiria los tres.
+vm_jit_r0_case("main_args",
+               "el `string[] args` de `main`, que nadie rellenaba",
+               "535_main_args.vx", 42)
+
+modes3_case("auto_literal_cadena",
+            "`auto` sobre un literal de cadena deduce `string`, no un puntero",
+            "536_auto_literal_cadena.vx", 42)
+
 # Las OCHO formas de llamar bajan por caminos distintos, y cuatro de ellos no
 # tomaban la direccion: el metodo de un struct, una lambda en una variable, un
 # metodo ligado y un constructor.  Ninguno daba un error -- daban CERO --, asi

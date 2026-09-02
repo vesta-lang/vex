@@ -1,0 +1,65 @@
+namespace ejemplos.auto_literal_cadena;
+
+// `auto` sobre un literal de cadena.
+//
+// Un literal de cadena se MODELA como puntero a los bytes de la seccion
+// estatica -- es lo que pide la frontera FFI -- y el CONTEXTO lo refina
+// cuando la variable se declara `string`.  Con `auto` no hay contexto que
+// refine, asi que
+//
+//     auto a = "hola";
+//     println("${a}");        // imprimia 0x110
+//
+// se quedaba en el puntero: el resto de literales (entero, flotante,
+// booleano, caracter) se deducian bien y solo la cadena no.  No daba error;
+// imprimia una direccion, que es la forma cara de fallar.
+//
+// El tipo de un literal de cadena es `string`: su TIPO, no su
+// representacion.  A `char*` se baja pidiendolo (`.cstr()`), igual que desde
+// cualquier otra cadena.
+//
+// Resultado esperado: 42.
+
+i32 main() {
+	auto   a = "hola";
+	string b = "hola";
+
+	// (1) Lo que se ve tiene que ser lo mismo por los dos caminos.
+	if (!a.equals(b)) {
+		println("(1) auto=${a} declarado=${b}");
+		return 1_i32;
+	}
+
+	// (2) Y es una cadena de VERDAD, no un puntero que se imprime bonito:
+	// responde a los metodos del tipo.
+	if (a.length() != 4) {
+		println("(2) length=${a.length()}, esperaba 4");
+		return 2_i32;
+	}
+	if (a.bytes() != 4) {
+		println("(2) bytes=${a.bytes()}, esperaba 4");
+		return 3_i32;
+	}
+
+	// (3) Se combina con otras cadenas como cualquiera.
+	auto saludo = a.concat(" mundo");
+	if (!saludo.equals("hola mundo")) {
+		println("(3) concat=${saludo}");
+		return 4_i32;
+	}
+
+	// (4) El resto de literales seguian deduciendose bien; que sigan.
+	auto n = 7;
+	auto f = 2.5;
+	auto t = true;
+	auto c = 'z';
+	if (n != 7 || f != 2.5 || !t || c != 'z') {
+		println("(4) n=${n} f=${f} t=${t} c=${c}");
+		return 5_i32;
+	}
+
+	// `${c}` de un `char` imprime su CODIGO; el glifo se pide con `:char`.
+	// Es del tipo, no de `auto`: un `char c` declarado hace lo mismo.
+	println("auto literal: ${a} / ${saludo} / n=${n} c=${c:char}");
+	return 42_i32;
+}
