@@ -28,6 +28,7 @@
 #include <algorithm> // UCRT64: no transitivo
 #include <capstone/capstone.h>
 #include <keystone/keystone.h>
+#include "vx/diag/diag_catalog.h" // los mensajes del ensamblador salen del catalogo
 
 const ArchSupport &get_available_architectures() {
     static ArchSupport archs;
@@ -139,8 +140,74 @@ bool assemble_file(const std::string &file, const std::string &arch_name,
     /* ensamblar el texto; encode recibe el buffer de bytes resultante */
     unsigned char *encode;
     size_t size, count;
-    if (ks_asm(ks, asm_code.c_str(), 0, &encode, &size, &count) != KS_ERR_OK) {
-        std::cerr << "Error ensamblando: " << ks_strerror(ks_errno(ks)) << "\n";
+    const bool ok_global =
+        ks_asm(ks, asm_code.c_str(), 0, &encode, &size, &count) == KS_ERR_OK;
+
+    /* Cuantas lineas traen codigo de verdad.  Hace falta para distinguir "el
+     * fichero estaba vacio" de "no se ensamblo nada de lo que habia", que hasta
+     * ahora daban EXACTAMENTE la misma salida. */
+    size_t con_codigo = 0;
+    for (size_t i = 0, ini = 0; i <= asm_code.size(); ++i) {
+        if (i != asm_code.size() && asm_code[i] != '\n') continue;
+        std::string ln = asm_code.substr(ini, i - ini);
+        ini = i + 1;
+        const size_t p = ln.find_first_not_of(" \t\r");
+        if (p != std::string::npos && ln[p] != ';' && ln[p] != '#') ++con_codigo;
+    }
+
+    /* Keystone puede decir que todo fue bien y devolver CERO instrucciones
+     * cuando una linea no le gusta.  Eso salia como un fichero vacio -- mismo
+     * texto, mismo codigo de salida cero -- y dejaba al usuario sin saber ni
+     * que habia fallado ni donde.  Aqui se vuelve a intentar LINEA A LINEA,
+     * que es lo unico que permite senalar la culpable. */
+    if (!ok_global || (count == 0 && con_codigo > 0)) {
+        if (ok_global) ks_free(encode);
+        std::cerr << vx::diag::format("VX9244", {std::to_string(con_codigo)})
+                  << "\n";
+        size_t num = 0;
+        bool sintaxis_masm = false;
+        for (size_t i = 0, ini = 0; i <= asm_code.size(); ++i) {
+            if (i != asm_code.size() && asm_code[i] != '\n') continue;
+            std::string ln = asm_code.substr(ini, i - ini);
+            ini = i + 1;
+            ++num;
+            const size_t p = ln.find_first_not_of(" \t\r");
+            if (p == std::string::npos || ln[p] == ';' || ln[p] == '#')
+                continue;
+            unsigned char *e1 = nullptr;
+            size_t s1 = 0, c1 = 0;
+            if (ks_asm(ks, ln.c_str(), 0, &e1, &s1, &c1) == KS_ERR_OK &&
+                c1 > 0) {
+                ks_free(e1);
+                continue; // esta linea si vale; el problema es de otra
+            }
+            if (e1) ks_free(e1);
+            /* Keystone puede no dar error Y no producir nada.  Decir "OK" como
+             * motivo del fallo es peor que no decir nada, asi que ese caso
+             * tiene su propia frase. */
+            const ks_err err = ks_errno(ks);
+            const std::string motivo = (err == KS_ERR_OK)
+                                           ? vx::diag::format("VX9247", {})
+                                           : ks_strerror(err);
+            std::cerr << "  "
+                      << vx::diag::format("VX9245", {std::to_string(num),
+                                                     ln.substr(p), motivo})
+                      << "\n";
+            /* El tropiezo mas comun con diferencia: escribir el operador de
+             * tamano al estilo NASM (`byte [..]`) donde esta herramienta espera
+             * el de MASM (`byte ptr [..]`).  Se dice una sola vez. */
+            if (!sintaxis_masm) {
+                const std::string b = ln.substr(p);
+                if (b.find(" ptr ") == std::string::npos &&
+                    (b.find("byte ") != std::string::npos ||
+                     b.find("word ") != std::string::npos ||
+                     b.find("dword ") != std::string::npos ||
+                     b.find("qword ") != std::string::npos))
+                    sintaxis_masm = true;
+            }
+        }
+        if (sintaxis_masm)
+            std::cerr << "  " << vx::diag::format("VX9246", {}) << "\n";
         ks_close(ks);
         return false;
     }

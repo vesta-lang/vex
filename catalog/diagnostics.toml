@@ -1489,6 +1489,29 @@ es = "uso: test_icache_real <fichero.velb> [...] [--tope N]"
 en = "before the process started"
 es = "antes de arrancar el proceso"
 
+# --- `--asm-file`: decir QUE linea no se pudo ensamblar -----------------------
+#
+# Keystone puede devolver "todo bien" y a la vez CERO instrucciones cuando una
+# linea no le gusta.  Eso salia como un fichero vacio -- misma salida, mismo
+# codigo de salida cero -- y convertia cualquier errata en depuracion a ciegas.
+# Ahora se vuelve a intentar linea a linea para poder senalar la culpable.
+
+[VX9244]
+en = "assembly failed: nothing was assembled from {0} line(s) with code"
+es = "no se ensamblo nada: el fichero tiene {0} linea(s) con codigo"
+
+[VX9245]
+en = "line {0}: {1}   <-- {2}"
+es = "linea {0}: {1}   <-- {2}"
+
+[VX9247]
+en = "no instruction produced (the assembler reported no error)"
+es = "no produjo ninguna instruccion (el ensamblador no dio error)"
+
+[VX9246]
+en = "note: `--asm-file` expects MASM/Intel syntax, where the size operator carries `ptr` (`add byte ptr [rcx+8], 2`).  The inline asm block of the language uses NASM syntax, without it."
+es = "nota: `--asm-file` espera sintaxis MASM/Intel, donde el operador de tamano lleva `ptr` (`add byte ptr [rcx+8], 2`).  El bloque de ensamblador en linea del lenguaje usa sintaxis NASM, sin el."
+
 # --- la ayuda del propio subcomando y las familias (VXW903-VXW911) ---
 #
 # El NOMBRE de una familia no se traduce nunca: es lo que se escribe en

@@ -194,6 +194,10 @@ const CatEntry kEntries[] = {
     {"VX9241", {"does not load: {0}", "no carga: {0}"}},
     {"VX9242", {"usage: test_icache_real <file.velb> [...] [--tope N]", "uso: test_icache_real <fichero.velb> [...] [--tope N]"}},
     {"VX9243", {"before the process started", "antes de arrancar el proceso"}},
+    {"VX9244", {"assembly failed: nothing was assembled from {0} line(s) with code", "no se ensamblo nada: el fichero tiene {0} linea(s) con codigo"}},
+    {"VX9245", {"line {0}: {1}   <-- {2}", "linea {0}: {1}   <-- {2}"}},
+    {"VX9246", {"note: `--asm-file` expects MASM/Intel syntax, where the size operator carries `ptr` (`add byte ptr [rcx+8], 2`).  The inline asm block of the language uses NASM syntax, without it.", "nota: `--asm-file` espera sintaxis MASM/Intel, donde el operador de tamano lleva `ptr` (`add byte ptr [rcx+8], 2`).  El bloque de ensamblador en linea del lenguaje usa sintaxis NASM, sin el."}},
+    {"VX9247", {"no instruction produced (the assembler reported no error)", "no produjo ninguna instruccion (el ensamblador no dio error)"}},
     {"VXA001", {"asm: dead code: unreachable instruction in the asm block", "asm: codigo muerto: instruccion inalcanzable en el bloque asm"}},
     {"VXA002", {"asm: jump to label '{0}' not defined in the asm block", "asm: salto a etiqueta '{0}' no definida en el bloque asm"}},
     {"VXA003", {"asm: infinite loop: control cannot leave the asm block", "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"}},
@@ -370,7 +374,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 349;
+const int kEntryCount = 353;
 
 } // namespace
 
