@@ -336,7 +336,7 @@ void exec_instr_spawnargs(ProcessVM *vm, const DecodedInstr &instr) {
  * El PC guardado apunta a la instruccion siguiente a SWAPCTX para que la
  * fibra reanudada continue en el punto correcto.
  *
- * Layout del buffer de contexto en memoria VM (152 bytes):
+ * Layout del buffer de contexto (152 bytes), en memoria del ANFITRION:
  *   Offset  0: PC   (8 bytes, uint64)
  *   Offset  8: SP   (8 bytes, uint64)
  *   Offset 16: BP   (8 bytes, uint64)

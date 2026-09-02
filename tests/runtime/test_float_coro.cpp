@@ -67,13 +67,46 @@ static const char *VEL_HEADER = "@Format(\"raw\")\n"
                                 "    @Align(0x1000)\n"
                                 "}\n";
 
-/* -------------------------------------------------------------------------
- * Estructura con el resultado de ejecutar un programa.
- * ---------------------------------------------------------------------- */
+/**
+ * @brief Resultado de ejecutar un programa, y DUENO de la VM que lo ejecuto.
+ *
+ * Cada caso crea su propia VM y ninguno la destruia: 24 VMs vivas a la vez con
+ * sus arenas y sus hilos, hasta que el proceso se quedaba sin memoria del
+ * sistema -- y no moria donde se agotaba, sino mas tarde y en otro sitio, con
+ * un `bad_alloc` que nadie capturaba.
+ *
+ * Liberar en el destructor y no en cada caso no es comodidad: los casos salen
+ * ANTES por `if (!r.ok) return`, y una limpieza escrita a mano se la salta
+ * justo cuando algo ha ido mal.  Ademas, un caso nuevo la hereda sin tener que
+ * acordarse, que es como se llego hasta aqui.
+ */
 struct RunResult {
-    runtime::ProcessVM *proc; ///< Puntero al proceso tras la ejecucion
-    runtime::VM *vm;          ///< Puntero a la VM (para limpiar al final)
-    bool ok; ///< true si el programa termino normalmente (HALT/DEAD)
+    runtime::ProcessVM *proc = nullptr; ///< Proceso tras la ejecucion
+    runtime::VM *vm = nullptr;          ///< VM que lo ejecuto (se destruye)
+    runtime::ManageVM *mgr = nullptr;   ///< Gestor al que pedirle la baja
+    bool ok = false; ///< true si el programa termino normalmente (HALT/DEAD)
+
+    RunResult() = default;
+    RunResult(const RunResult &) = delete;
+    RunResult &operator=(const RunResult &) = delete;
+    RunResult(RunResult &&other) noexcept { *this = std::move(other); }
+    RunResult &operator=(RunResult &&other) noexcept {
+        if (this != &other) {
+            proc = other.proc;
+            vm = other.vm;
+            mgr = other.mgr;
+            ok = other.ok;
+            other.proc = nullptr;
+            other.vm = nullptr;
+            other.mgr = nullptr;
+            other.ok = false;
+        }
+        return *this;
+    }
+    ~RunResult() {
+        // Tras esto `proc` cuelga, y es correcto: el caso ya leyo lo suyo.
+        if (mgr != nullptr && vm != nullptr) mgr->destroy_vm(vm->id);
+    }
 };
 
 /* -------------------------------------------------------------------------
@@ -86,7 +119,8 @@ struct RunResult {
  * ---------------------------------------------------------------------- */
 static RunResult run_vel(runtime::ManageVM &manager, const std::string &vel_src,
                          const char *test_name) {
-    RunResult result{nullptr, nullptr, false};
+    RunResult result;
+    result.mgr = &manager; // dueno desde el principio, aunque falle a medias
 
     /* 1. Lex + Parse */
     vm::Lexer lexer(vel_src);
@@ -123,6 +157,9 @@ static RunResult run_vel(runtime::ManageVM &manager, const std::string &vel_src,
 
     /* 4. Crear VM e instancia de proceso */
     runtime::VM *vm = manager.loader.create_vm_instance(1 /*1 scheduler*/);
+    /* Apuntarla YA, no al final: las salidas de aqui abajo (fallo del
+     * cargador, tiempo agotado) tambien tienen que devolverla. */
+    result.vm = vm;
 
     runtime::ProcessVM *proc = nullptr;
     try {
@@ -160,7 +197,6 @@ static RunResult run_vel(runtime::ManageVM &manager, const std::string &vel_src,
     vm->stop();
 
     result.proc = proc;
-    result.vm = vm;
     result.ok = true;
     return result;
 }
@@ -664,16 +700,30 @@ static void test_swapctx(runtime::ManageVM &mgr) {
         "    adds r11, 152\n" /* r11 = ctx_b (offset 152) */
         /* r9 = 0 como indice cero para SIB incondicional */
         "    mov r9, 0\n"
+        /* Las tres escrituras del contexto van con MOVH, no con MOV.
+         *
+         * `alloc` devuelve un puntero del ANFITRION -- lo dice su propia
+         * implementacion: "devolver puntero host en R00" -- y `swapctx` lee y
+         * escribe los dos contextos como punteros del anfitrion.  Escribirlos
+         * con `mov` los mandaba a la memoria de la MAQUINA VIRTUAL, a la
+         * direccion que sale de tomar el puntero del anfitrion como si fuera
+         * virtual: otro sitio.
+         *
+         * Y no fallaba.  Dejaba a CERO el contexto donde swapctx lo lee, o sea
+         * un PC de cero, o sea saltar al principio del programa -- que vuelve a
+         * reservar --, asi que cada vuelta pedia otro bloque en otra direccion
+         * y la maquina virtual mapeaba una pagina nueva por cada uno.  120.003
+         * paginas despues, el proceso moria sin memoria muy lejos de aqui. */
         /* escribir el PC de fiber_b en ctx_b[0] (offset 0 del contexto = PC) */
         "    mov r2, @Absolute(\"all.fiber_b\")\n"
-        "    mov [r11 + r9*1], r2\n" /* ctx_b.pc = fiber_b */
+        "    movh [r11 + r9*1], r2\n" /* ctx_b.pc = fiber_b */
         /* escribir SP valido en ctx_b[8] usando r11 desplazado */
         "    adds r11, 8\n"
-        "    mov [r11 + r9*1], r0\n" /* ctx_b.sp = r0 (puntero valido
+        "    movh [r11 + r9*1], r0\n" /* ctx_b.sp = r0 (puntero valido
                                         cualquiera) */
         "    adds r11, 8\n"
-        "    mov [r11 + r9*1], r0\n" /* ctx_b.bp = r0 */
-        "    subs r11, 16\n"         /* restaurar r11 a inicio de ctx_b */
+        "    movh [r11 + r9*1], r0\n" /* ctx_b.bp = r0 */
+        "    subs r11, 16\n"          /* restaurar r11 a inicio de ctx_b */
         /* intercambiar contexto: ir a fiber_b, guardar este en ctx_a */
         "    swapctx r11, r10\n" /* swapctx dst=ctx_b, src=ctx_a */
         "    hlt\n"              /* no se alcanza si swapctx funciona */
