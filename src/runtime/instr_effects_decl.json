@@ -18,8 +18,17 @@
     "",
     "CLASES:",
     "  runtime  El efecto depende de un valor que solo existe al ejecutar (el",
-    "           destino de un despacho dinamico).  Se resuelve al FORMAR el paquete",
-    "           observandolo, con guarda y abandono.",
+    "           destino de un despacho dinamico).  El destino es NUESTRO -- un",
+    "           metodo, un cierre, una direccion de la VM --, solo falta saber",
+    "           cual: se resuelve al FORMAR el paquete observandolo, con guarda",
+    "           y abandono.",
+    "  foreign  Sale a codigo AJENO: una funcion nativa, una API del sistema.",
+    "           Se separa de `runtime` porque el remedio es el contrario --",
+    "           observar el destino no da nada, sus efectos no se pueden derivar",
+    "           por mucho que se mire --.  Es una BARRERA permanente, y decirlo",
+    "           asi ahorra especular sobre algo que no se puede cerrar.  Estaban",
+    "           las nueve instrucciones de llamada juntas en `runtime`, mezclando",
+    "           las que saltan a un metodo nuestro con las que salen del proceso.",
     "  narrow   El efecto depende de un CAMPO DEL OPERANDO, que ya esta",
     "           descodificado al formar.  Exacto y gratis: no hay que especular.",
     "           `regla` dice cual.",
@@ -251,7 +260,8 @@
       "indice": 85,
       "nombre": "calln",
       "clase": "runtime",
-      "motivo": "call rsi"
+      "foreign": true,
+      "motivo": "el ejecutor SI se recorre entero -- se le ven los argumentos saliendo del banco de registros --; lo opaco es el salto final, a una funcion NATIVA cuyo puntero viene del inmediato. Ese puntero SI se puede observar al formar el paquete, y muchas veces apunta a NUESTRO runtime (vio_println, vmath_sqrt, las colecciones), cuyos efectos se conocen. Por eso es `runtime` y ademas `foreign`: se observa, y solo si cae fuera hay que tratarlo como barrera."
     },
     {
       "tabla": "extended",
@@ -285,22 +295,23 @@
       "tabla": "extended",
       "indice": 98,
       "nombre": "dlopen",
-      "clase": "runtime",
-      "motivo": "jmp rax"
+      "clase": "foreign",
+      "motivo": "sale a la API del sistema (LoadLibraryA / dlopen). El destino no es nuestro y no lo sera nunca: barrera permanente."
     },
     {
       "tabla": "extended",
       "indice": 99,
       "nombre": "dlsym",
-      "clase": "runtime",
-      "motivo": "jmp rax"
+      "clase": "foreign",
+      "motivo": "sale a la API del sistema (GetProcAddress / dlsym). El destino no es nuestro y no lo sera nunca: barrera permanente."
     },
     {
       "tabla": "extended",
       "indice": 100,
       "nombre": "callni",
       "clase": "runtime",
-      "motivo": "jmp rax"
+      "foreign": true,
+      "motivo": "invoca una funcion nativa por puntero, resuelto antes con dlsym. Mismo caso que calln: el destino se observa, y solo si cae fuera de nuestros modulos es barrera."
     },
     {
       "tabla": "extended",

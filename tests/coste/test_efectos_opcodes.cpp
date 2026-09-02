@@ -777,6 +777,45 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* --- Que dice cada una de las dos banderas, y por que no son excluyentes
+     *
+     * `VE_RUNTIME` dice "el destino solo se conoce al ejecutar": se observa al
+     * formar el paquete, con guarda.  `VE_FOREIGN` dice "el destino PUEDE estar
+     * fuera de nuestro mundo": aunque se observe, sus efectos pueden no ser
+     * derivables.
+     *
+     * Las dos juntas describen `calln`: el puntero esta en el inmediato, asi
+     * que observarlo SI dice a donde va -- y muchas veces va a NUESTRO runtime
+     * (`vio_println`, `vmath_sqrt`, las colecciones), cuyos efectos se conocen.
+     * Tratarlo como barrera SIEMPRE seria renunciar a la mayoria de los casos,
+     * que son los nuestros.
+     *
+     * Lo que si se comprueba: que quien llama a una entrada FIJA del sistema no
+     * se declare ademas observable.  Ahi no hay nada que observar -- `dlopen`
+     * siempre va a `LoadLibraryA` --, y decir que si mandaria poner una guarda
+     * que nunca puede dar otra cosa. */
+    int mal = 0;
+    for (const char *n : {"dlopen", "dlsym"}) {
+        for (int i = 0; i < 256; ++i) {
+            const auto *v = runtime::vm_isa::vm_instr(true, (uint8_t)i);
+            if (v == nullptr || v->name == nullptr ||
+                std::strcmp(v->name, n) != 0)
+                continue;
+            const uint16_t e = runtime::vm_isa::vm_hot(true, (uint8_t)i);
+            if ((e & runtime::vm_isa::VE_FOREIGN) == 0) {
+                std::printf("\n  %s deberia llevar VE_FOREIGN\n", n);
+                ++mal;
+            }
+            if ((e & runtime::vm_isa::VE_RUNTIME) != 0) {
+                std::printf("\n  %s llama a una entrada FIJA: no hay nada que "
+                            "observar, sobra VE_RUNTIME\n",
+                            n);
+                ++mal;
+            }
+        }
+    }
+    if (mal > 0) return 1;
+
     std::printf("\nLa base de datos generada cuadra con el codigo (%d "
                 "instrucciones),\ny la tabla caliente dice lo mismo que "
                 "`VmInstr` en las 512 ranuras.\n",

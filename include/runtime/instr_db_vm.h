@@ -139,6 +139,29 @@ enum VmEffect : uint16_t {
      * reordenacion alrededor.
      */
     VE_ABORT = 1u << 13,
+    /**
+     * @brief PUEDE salir a codigo ajeno: una funcion nativa, una API del
+     *        sistema.
+     *
+     * Dice algo distinto de `VE_RUNTIME`, y por eso NO son excluyentes:
+     *
+     *   `VE_RUNTIME`  el destino solo se conoce al ejecutar -> se observa al
+     *                 formar el paquete, con guarda.
+     *   `VE_FOREIGN`  el destino PUEDE estar fuera de nuestro mundo -> aunque
+     *                 se observe, sus efectos pueden no ser derivables.
+     *
+     * Las dos juntas describen `calln` exactamente: el puntero esta en el
+     * inmediato, asi que observarlo SI dice a donde va -- y muchas veces va a
+     * NUESTRO runtime (`vio_println`, `vmath_sqrt`, las colecciones), cuyos
+     * efectos si se conocen --.  Solo cuando cae en una biblioteca ajena hay
+     * que tratarlo como barrera.  Marcarlo como barrera SIEMPRE seria renunciar
+     * a la mayoria de los casos, que son los nuestros.
+     *
+     * `VE_FOREIGN` a secas, sin `VE_RUNTIME`, es el otro caso: `dlopen` y
+     * `dlsym` llaman a una entrada FIJA del sistema, asi que no hay nada que
+     * observar y nunca sera nuestra.
+     */
+    VE_FOREIGN = 1u << 14,
 };
 
 /**
@@ -269,7 +292,7 @@ extern const uint16_t kHotPrimary[256];
 extern const uint16_t kHotExtended[256];
 
 /// Desplazamiento del estrechamiento dentro de la palabra caliente.
-constexpr uint16_t kNarrowShift = 14;
+constexpr uint16_t kNarrowShift = 15;
 
 /// @return Los efectos de @p opcode, con el estrechamiento en los bits altos.
 inline uint16_t vm_hot(bool extended, uint8_t opcode) {
