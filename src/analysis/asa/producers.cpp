@@ -285,6 +285,33 @@ void produce_ranges(Production &p) {
             support_with_structure(p, fn, f, "data-flow");
             p.assert_fact(std::move(f));
         }
+
+    /* Y las operaciones que DAN LA VUELTA, que el dominio apunto al plegar.
+     *
+     * Van aparte de los rangos porque no son un rango: son una operacion.  Y
+     * tienen que salir de aqui porque despues NO se pueden reconstruir -- el
+     * plegado ya sustituyo `127 + 1` por un `-128` indistinguible de uno
+     * escrito --.  El consumidor que avisa (la familia `types.int_wraparound`
+     * del linter) mira el modulo ya optimizado, donde esa suma no existe. */
+    for (const RangeFacts::Wrap &w : rf.wraps) {
+        Fact f;
+        f.what.domain = kProducerRanges;
+        f.what.code = "range.wraps";
+        f.what.a = w.exacto;
+        f.what.b = static_cast<int64_t>(w.t);
+        /* Neutro respecto al idioma: el detalle acaba en el volcado y en el
+         * mensaje, y una frase escrita aqui no la puede traducir el catalogo. */
+        f.what.detail = p.store.intern(std::to_string(w.exacto) + " -> [" +
+                                       std::to_string(w.lo) + ", " +
+                                       std::to_string(w.hi) + "]");
+        f.about = value_subject(p, fn, w.dst);
+        f.seal = s;
+        // La LINEA viaja dentro del hecho: el consumidor tiene otro codigo
+        // delante y no puede deducirla de ningun indice.
+        f.seal.origin.site = w.line;
+        support_with_structure(p, fn, f, "data-flow");
+        p.assert_fact(std::move(f));
+    }
     }
 }
 
@@ -685,8 +712,8 @@ void produce_loops(Production &p) {
              * de bloque, que es una suposicion sobre como numera el frontend y
              * deja de valer en cuanto el optimizador reordena. */
             const uint32_t li = lf.innermost(b);
-            const uint32_t padre =
-                li == LoopFacts::NO_LOOP ? LoopFacts::NO_LOOP : lf.parent_of(li);
+            const uint32_t padre = li == LoopFacts::NO_LOOP ? LoopFacts::NO_LOOP
+                                                            : lf.parent_of(li);
             f.what.b = padre == LoopFacts::NO_LOOP
                            ? -1
                            : static_cast<int64_t>(lf.header_block_of(padre));
@@ -923,9 +950,10 @@ std::vector<const char *> registered_producers() {
     return v;
 }
 
-std::vector<ProductionSummary>
-produce(const ir::IrModule &mod, FactStore &store,
-        const std::vector<const char *> &wanted, const char *stage) {
+std::vector<ProductionSummary> produce(const ir::IrModule &mod,
+                                       FactStore &store,
+                                       const std::vector<const char *> &wanted,
+                                       const char *stage) {
     /* Antes de producir nada: los nombres de los productores tienen que ser
      * canonicos para que un hecho leido de disco se reconozca como suyo. */
     register_asa_canonical_names();

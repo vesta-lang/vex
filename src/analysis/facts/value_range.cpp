@@ -443,6 +443,20 @@ struct Contexto {
         return c.es_bottom() ? tipo : c;
     }
 
+    /**
+     * @brief Donde apuntar las operaciones que DAN LA VUELTA, o nulo.
+     *
+     * Plegar envolviendo es lo correcto -- modela lo que hace el procesador --
+     * pero BORRA la evidencia: aguas abajo `127 + 1` ya es un `-128` legitimo e
+     * indistinguible de un -128 escrito.  Este dominio es el unico que ve el
+     * momento, asi que lo apunta en vez de dejar que otro lo redescubra.
+     *
+     * Solo se rellena en la proyeccion FINAL (@c en_definicion), no en cada
+     * vuelta del punto fijo: si no, la misma operacion entraria una vez por
+     * iteracion.
+     */
+    std::vector<RangeFacts::Wrap> *wraps_out = nullptr;
+
     /// Que operacion del dominio corresponde a cada op del IR.  Nada mas.
     void transferir(const ir::IrInstr &in, Estado &e) const;
 };
@@ -1414,6 +1428,41 @@ void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
         break;
     default: break; // op sin modelar: lo que diga el tipo
     }
+    /* Una operacion que da la vuelta, cuando se sabe con CERTEZA.
+     *
+     * Se apunta antes de guardar, que es cuando todavia se tienen los dos
+     * operandos sin plegar.  Solo con los dos constantes: un `[100,127]+[1,1]`
+     * PUEDE desbordar, y avisar de lo posible convierte esto en ruido -- que
+     * es como muere una comprobacion util. */
+    if (wraps_out != nullptr && piso.acotada() &&
+        (in.op == IrOp::ADD || in.op == IrOp::SUB || in.op == IrOp::MUL)) {
+        const ValueRange va = arg(0), vb = arg(1);
+        int64_t x = 0, xh = 0, y = 0, yh = 0, tlo = 0, thi = 0;
+        if (va.es_constante() && vb.es_constante() &&
+            va.vista_con_signo(x, xh) && vb.vista_con_signo(y, yh) &&
+            piso.vista_con_signo(tlo, thi)) {
+            int64_t r = 0;
+            bool cabe_en_64 = true;
+            if (in.op == IrOp::ADD)
+                cabe_en_64 = !__builtin_add_overflow(x, y, &r);
+            else if (in.op == IrOp::SUB)
+                cabe_en_64 = !__builtin_sub_overflow(x, y, &r);
+            else
+                cabe_en_64 = !__builtin_mul_overflow(x, y, &r);
+            // Si ni en 64 bits cabe, el dominio no puede afirmar el valor
+            // exacto y no se dice nada.
+            if (cabe_en_64 && (r < tlo || r > thi)) {
+                RangeFacts::Wrap w;
+                w.dst = in.dst;
+                w.exacto = r;
+                w.lo = tlo;
+                w.hi = thi;
+                w.line = in.source_line;
+                w.t = in.type;
+                wraps_out->push_back(w);
+            }
+        }
+    }
     e.poner(in.dst, encajar_en(nuevo, piso));
 }
 
@@ -1439,9 +1488,9 @@ uint64_t huella_de_funcion(const ir::IrFunction &fn) {
              * de ahi salen decisiones del optimizador.
              *
              * El caso que lo destapo: un `switch` denso lleva su base en `imm`
-             * -- el brazo `i` se toma cuando el selector vale `base + i` --, asi
-             * que dos switch con bases 0 y 10 se daban el uno los rangos del
-             * otro y el segundo acotaba a 0..2 en vez de a 10..12.
+             * -- el brazo `i` se toma cuando el selector vale `base + i` --,
+             * asi que dos switch con bases 0 y 10 se daban el uno los rangos
+             * del otro y el segundo acotaba a 0..2 en vez de a 10..12.
              *
              * Los valores CONSTANTES ya viajaban por otro lado (`values[].
              * const_val`), y por eso esto aguanto: el `imm` de una CONST estaba
@@ -1449,8 +1498,7 @@ uint64_t huella_de_funcion(const ir::IrFunction &fn) {
              * otra cosa. */
             h = util::fnv_mix(h, in.imm);
             h = util::fnv_bytes(h, in.jump_targets.data(),
-                                in.jump_targets.size() *
-                                    sizeof(ir::IrBlockId));
+                                in.jump_targets.size() * sizeof(ir::IrBlockId));
             h = util::fnv_bytes(h, in.operands.data(),
                                 in.operands.size() * sizeof(ir::IrValueId));
             h = util::fnv_bytes(h, in.func_name.data(), in.func_name.size());
@@ -1618,7 +1666,12 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
         out.r.assign(facts.def_of.size(), ValueRange::top());
         return out;
     }
+    /* La proyeccion final es la UNICA pasada que apunta los desbordamientos:
+     * el punto fijo recorre las instrucciones muchas veces y cada vuelta
+     * volveria a apuntar la misma. */
+    m.wraps_out = &out.wraps;
     out.r = m.en_definicion();
+    m.wraps_out = nullptr;
     out.entrada = m.estados_de_entrada();
 
     /* Lo que se leyo para llegar aqui.  No se enumera: se recoge de lo que el
@@ -1797,9 +1850,8 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
                     return e.hechos;
     }
 
-    auto nuevos =
-        std::make_shared<const RangeFacts>(
-            calcular_rangos(fn, facts, op, sum, ivb));
+    auto nuevos = std::make_shared<const RangeFacts>(
+        calcular_rangos(fn, facts, op, sum, ivb));
     {
         std::lock_guard<std::mutex> g(mx_cache);
         std::vector<EntradaCache> &cajon = cache[clave];
@@ -1811,10 +1863,11 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
     return nuevos;
 }
 
-std::shared_ptr<const RangeFacts>
-compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
-                   const RangeOptions &op, const RangeSummaries *sum,
-                   const LoopIvBounds *ivb) {
+std::shared_ptr<const RangeFacts> compute_ranges_ptr(const ir::IrFunction &fn,
+                                                     const IrFacts &facts,
+                                                     const RangeOptions &op,
+                                                     const RangeSummaries *sum,
+                                                     const LoopIvBounds *ivb) {
     return rangos_de(fn, facts, op, sum, ivb);
 }
 

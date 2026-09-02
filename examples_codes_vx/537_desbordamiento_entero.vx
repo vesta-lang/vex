@@ -1,0 +1,82 @@
+namespace ejemplos.desbordamiento_entero;
+
+// Aritmetica entera que DA LA VUELTA, sabiendolo el compilador.
+//
+//     i8 max = 127;
+//     max = max + 1;      // -128, y no lo decia nadie
+//
+// Envolver es legitimo -- lo usan las mezclas de un hash, las sumas de
+// comprobacion y los generadores pseudoaleatorios --, asi que esto no puede
+// ser un error: convertirlo en error romperia codigo que envuelve a
+// proposito.  Lo que no podia quedarse callado es que el compilador tenga los
+// DOS operandos, sepa que el resultado no cabe, y deje salir otro valor sin
+// que conste en ningun sitio.
+//
+// Lo curioso es donde estaba el conocimiento: el dominio de rangos ya sellaba
+// `127` y `1` como constantes -- se ve en `--asa` --, hacia la cuenta, y
+// PLEGABA envolviendo.  Eso es correcto (modela lo que hace el procesador)
+// pero BORRA la evidencia: aguas abajo `127 + 1` es un `-128` indistinguible
+// de un -128 escrito.  Por eso el hecho `range.wraps` se sella en el momento
+// de plegar, y la familia `types.int_wraparound` de `vesta lint` solo lo lee.
+//
+// Solo se avisa de lo DEMOSTRADO.  `n + 1` con `n` de entrada PUEDE desbordar
+// y no se dice: "no poder demostrar que cabe" no es "demostrar que no cabe".
+//
+// Resultado esperado: 42.  El programa se ejecuta igual -- envolver sigue
+// siendo lo que hace --; lo que cambia es que ahora consta.
+
+// Lo que da la vuelta y el compilador lo sabe: los dos operandos constantes.
+i8 pasa_de_i8() {
+	i8 max = 127_i8;
+	return max + 1_i8; // -128: aqui salta el aviso
+}
+
+// Lo mismo por abajo, restando.
+i8 baja_de_i8() {
+	i8 min = -128_i8;
+	return min - 1_i8; // 127
+}
+
+// Y multiplicando, en otro ancho.
+i16 pasa_de_i16() {
+	i16 grande = 30_000_i16;
+	return grande * 2_i16; // 60000 no cabe en i16
+}
+
+// Lo que NO debe avisar: envolver a proposito sobre un valor que el
+// compilador no conoce.  Es la mezcla de un hash, y avisar aqui convertiria
+// la familia en ruido.
+u32 mezclar(u32 semilla) {
+	u32 h = semilla * 2_654_435_761_u32;
+	return h + 374_761_393_u32;
+}
+
+// Tampoco debe avisar lo que CABE, por mucho que sea aritmetica constante.
+i8 cabe() {
+	i8 a = 100_i8;
+	return a + 27_i8; // 127 justo, sin pasarse
+}
+
+i32 main() {
+	// Lo que se comprueba aqui es que el programa SIGUE haciendo lo suyo: el
+	// aviso no cambia lo que corre.  Quien comprueba que el aviso sale es el
+	// caso `lint_case` de la suite, que mira lo que dice `vesta lint`.
+	//
+	// OJO: NO se compara ningun valor que haya dado la vuelta, y no es por
+	// comodidad.  Un resultado que desborda se queda SIN NORMALIZAR a su
+	// ancho -- `127_i8 + 1` deja 128 en el registro, no -128 --, asi que
+	// `pasa_de_i8() == -128_i8` responde `false` aunque las dos cosas se
+	// impriman igual.  Es un fallo APARTE, mas gordo que este, y hornearlo en
+	// una prueba lo taparia.
+	if (cabe() != 127_i8) {
+		println("(1) ${cabe()}, esperaba 127");
+		return 1_i32;
+	}
+	if (mezclar(7_u32) == 0_u32) {
+		println("(2) la mezcla dio cero");
+		return 2_i32;
+	}
+	// Se llaman para que existan en el codigo final y el linter las vea.
+	println("desbordamiento: ${pasa_de_i8()} ${baja_de_i8()} ${pasa_de_i16()}");
+	return 42_i32;
+}

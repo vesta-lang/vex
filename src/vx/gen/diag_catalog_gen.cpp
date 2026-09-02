@@ -270,6 +270,7 @@ const CatEntry kEntries[] = {
     {"VXL001", {"C-style literal suffix '{0}': Vesta has no such type, write '{1}' instead", "sufijo de literal estilo C '{0}': Vesta no tiene ese tipo; escribe '{1}'"}},
     {"VXL002", {"unknown type suffix '{0}' on a numeric literal", "sufijo de tipo desconocido '{0}' en un literal numerico"}},
     {"VXL003", {"integer suffix '{0}' on a literal that has a fractional part", "sufijo entero '{0}' en un literal con parte decimal"}},
+    {"VXP090", {"'{0}' is not something a @Target can ask about: no target satisfies it, so everything under this mark would be silently dropped.  The keys are os, arch, cpu, mode, tier, and compiler/vm with a version comparison", "'{0}' no es algo por lo que un @Target pueda preguntar: ningun objetivo lo cumple, asi que todo lo que lleve esta marca se caeria sin decir nada.  Las claves son os, arch, cpu, mode, tier, y compiler/vm con comparacion de version"}},
     {"VXT001", {"literal {0} does not fit in {1} ({2}); write a cast if the truncation is intended", "el literal {0} no cabe en {1} ({2}); escribe un cast si la truncacion es intencionada"}},
     {"VXT002", {"literal {0} does not fit in its own suffix '{1}' ({2})", "el literal {0} no cabe en su propio sufijo '{1}' ({2})"}},
     {"VXT003", {"'{0}' is imported from two places and they are not the same function ({1} and {2}); qualify it with its namespace or rename one with 'as'", "'{0}' llega de dos sitios y no son la misma funcion ({1} y {2}); cualificala con su namespace o renombra una con 'as'"}},
@@ -304,6 +305,8 @@ const CatEntry kEntries[] = {
     {"VXW918", {"this loop fills a contiguous run with the same value: 'std.memory.fill' says it in one line, and says it to whoever reads it next", "este bucle rellena un tramo contiguo con el mismo valor: 'std.memory.fill' lo dice en una linea, y se lo dice a quien lo lea despues"}},
     {"VXW919", {"this loop copies a contiguous run: 'std.memory.copy' says it in one line, and says it to whoever reads it next", "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea, y se lo dice a quien lo lea despues"}},
     {"VXW920", {"this loop advances past its limit without ever equalling it, so its '!=' guard never stops it: it either does not end, or ends only after wrapping around the whole type", "este bucle se pasa de su limite sin llegar a igualarlo nunca, asi que su guarda '!=' no lo para: o no termina, o solo termina tras dar la vuelta al tipo entero"}},
+    {"VXW922", {"integer arithmetic that provably wraps around", "aritmetica entera que se demuestra que da la vuelta"}},
+    {"VXW923", {"this integer operation wraps around: the result {0} does not fit in {1} ({2} to {3}), so the value that comes out is a different one", "esta operacion entera da la vuelta: el resultado {0} no cabe en {1} ({2} a {3}), asi que el valor que sale es otro"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"bulk.body_does_more", {"the body does something beyond walking the run and moving it", "el cuerpo hace algo mas que recorrer el tramo y moverlo"}},
     {"bulk.bound_varies", {"the limit changes inside the loop, so there is no fixed run", "el limite cambia dentro del bucle, asi que no hay un tramo fijo"}},
@@ -374,7 +377,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 353;
+const int kEntryCount = 356;
 
 } // namespace
 

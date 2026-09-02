@@ -379,7 +379,8 @@ void family_dead_loop(const LintInput &in, vx::Diagnostics &diags) {
     /* Una vez por LINEA.  El inline copia el cuerpo en sus llamantes, asi que
      * un bucle escrito UNA vez se reconoce en dos o tres funciones: avisar por
      * funcion lo repite, y ademas lo senala en `main`, donde el usuario no
-     * puso ese bucle y no puede arreglarlo.  La linea viene dentro del hecho. */
+     * puso ese bucle y no puede arreglarlo.  La linea viene dentro del hecho.
+     */
     std::set<uint32_t> ya_dicho;
     auto donde = [&](const ir::IrFunction &fn, const analysis::asa::Fact *f) {
         vx::SourceLoc loc = where_is(in, fn.name);
@@ -504,6 +505,89 @@ void family_bulk_by_hand(const LintInput &in, vx::Diagnostics &diags) {
     }
 }
 
+
+/**
+ * @brief Aritmetica entera que DA LA VUELTA, sabiendolo el compilador.
+ *
+ * `i8 max = 127; max = max + 1;` da -128 sin decir nada.  Envolver es
+ * legitimo -- lo usan las mezclas de un hash, las sumas de comprobacion y los
+ * generadores pseudoaleatorios --, asi que esto es un AVISO y no un error:
+ * convertirlo en error romperia codigo que envuelve a proposito.  Lo que no
+ * puede quedarse callado es que el compilador tenga los DOS operandos, sepa
+ * que el resultado no cabe, y deje salir otro valor sin que conste.
+ *
+ * La familia son diez lineas porque no cuenta NADA: pregunta.  Quien lo sabe
+ * es el dominio de rangos, en el momento exacto de plegar -- y solo ahi:
+ * despues, `127 + 1` ya es un `-128` indistinguible de uno escrito, y el
+ * modulo que esta familia recibe es el YA optimizado, donde esa suma no
+ * existe --.  Por eso el hecho se sella alli y aqui solo se lee.
+ *
+ * Solo lo DEMOSTRADO.  Un `[100,127] + [1,1]` PUEDE desbordar y no se dice:
+ * "no poder demostrar que cabe" no es "demostrar que no cabe", y avisar de lo
+ * posible convertiria la familia en ruido, que es como muere una comprobacion
+ * util.
+ *
+ * @param in Lo que se sabe del modulo.
+ * @param diags Donde dejar los hallazgos.
+ */
+void family_int_wraparound(const LintInput &in, vx::Diagnostics &diags) {
+    /* Se pregunta por ANTES de optimizar: es lo que el usuario ESCRIBIO, y es
+     * el unico momento en que la operacion existe. */
+    analysis::asa::Scope escrito = in.here;
+    escrito.stage = analysis::asa::kStagePreOpt;
+
+    /* Una vez por LINEA y por resultado: en la misma linea puede haber dos
+     * operaciones distintas, y el inline replica una sola linea en varias
+     * funciones -- avisar por funcion la repite y ademas la senala donde el
+     * usuario no la escribio. */
+    /* Los limites del tipo se sacan AQUI, del propio tipo.  No es recalcular un
+     * analisis: es la definicion de `i8`, y traerla como dos numeros mas
+     * dentro del hecho gastaria las dos ranuras que le quedan por algo que ya
+     * se sabe con mirar el tipo. */
+    auto limites = [](ir::IrType t, int64_t &lo, int64_t &hi) {
+        int bits = 0;
+        bool con_signo = true;
+        switch (t) {
+        case ir::IrType::I8: bits = 8; break;
+        case ir::IrType::I16: bits = 16; break;
+        case ir::IrType::I32: bits = 32; break;
+        case ir::IrType::I64: bits = 64; break;
+        case ir::IrType::U8: bits = 8; con_signo = false; break;
+        case ir::IrType::U16: bits = 16; con_signo = false; break;
+        case ir::IrType::U32: bits = 32; con_signo = false; break;
+        default: return false;
+        }
+        if (con_signo) {
+            lo = bits == 64 ? INT64_MIN : -(int64_t{1} << (bits - 1));
+            hi = bits == 64 ? INT64_MAX : (int64_t{1} << (bits - 1)) - 1;
+        } else {
+            lo = 0;
+            hi = (int64_t{1} << bits) - 1;
+        }
+        return true;
+    };
+
+    std::set<std::pair<uint32_t, int64_t>> ya_dicho;
+    for (const ir::IrFunction &fn : in.mod.functions) {
+        if (fn.is_native) continue;
+        for (const analysis::asa::Fact *f :
+             in.facts.find_all("range.wraps", fn.name.c_str(), escrito)) {
+            if (f->seal.certainty != analysis::asa::Certainty::Proven) continue;
+            vx::SourceLoc loc = where_is(in, fn.name);
+            if (f->seal.origin.site > 0)
+                loc.line = static_cast<int>(f->seal.origin.site);
+            if (!ya_dicho.insert({static_cast<uint32_t>(loc.line), f->what.a})
+                     .second)
+                continue;
+            const ir::IrType t = static_cast<ir::IrType>(f->what.b);
+            int64_t lo = 0, hi = 0;
+            if (!limites(t, lo, hi)) continue;
+            diags.diag(loc, vx::DiagLevel::WARN, "VXW923",
+                       {std::to_string(f->what.a), ir_type_name(t),
+                        std::to_string(lo), std::to_string(hi)});
+        }
+    }
+}
 /* Lo que consulta cada familia.  Listas nombradas y no literales sueltos para
  * que se lean al lado de su familia y no haya que buscarlas. */
 const char *const kNeedsFingerprint[] = {"asa.fingerprint", nullptr};
@@ -517,6 +601,10 @@ const char *const kNeedsLoops[] = {"asa.loops", nullptr};
  * pedirla produce los dos y no hay forma de que se quede sin la mitad. */
 const char *const kNeedsUseDef[] = {"asa.use_def", "asa.asm", nullptr};
 const char *const kNeedsMemoryAccess[] = {"asa.memory_access", nullptr};
+/* `types.int_wraparound` consulta el dominio de rangos y nada mas: los dos
+ * operandos constantes ya estan sellados ahi. */
+const char *const kNeedsRanges[] = {"asa.ranges", nullptr};
+
 /* `memory.bulk_by_hand` consulta el dominio que reconoce las operaciones de
  * bloque.  Uno solo: ese productor ya pide por su cuenta la forma del bucle y
  * los efectos de memoria al armar su hecho. */
@@ -548,8 +636,14 @@ void register_builtin_families() {
      * no llegaba al almacen: lo sabia solo el pase que las reduce, asi que ni
      * se veia ni se podia preguntar.  Registrar el dominio ha bastado para que
      * esta familia sea seis lineas. */
-    register_lint_family("memory.bulk_by_hand", "VXW918",
-                         &family_bulk_by_hand, kNeedsBulkMemory);
+    register_lint_family("memory.bulk_by_hand", "VXW918", &family_bulk_by_hand,
+                         kNeedsBulkMemory);
+    /* Y la de la aritmetica que da la vuelta.  Es la que mejor ensena para que
+     * sirve el ASA: el dominio de rangos ya habia SELLADO los dos operandos
+     * como constantes -- se ve en `--asa` --, y nadie preguntaba.  La familia
+     * no calcula un rango: rehace la cuenta y mira si cabe. */
+    register_lint_family("types.int_wraparound", "VXW922",
+                         &family_int_wraparound, kNeedsRanges);
 }
 
 /* NO hay familia "contrato que nadie comprueba", y no es un olvido: eso lo dice

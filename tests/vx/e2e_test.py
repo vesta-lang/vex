@@ -746,6 +746,36 @@ def warns_r0_case(tag, label, src, pattern, expected, line=None):
     _register(tag, fn, False, line)
 
 
+
+def lint_case(tag, label, src, codigos, ausentes=None, line=None):
+    """Corre `vm lint` sobre un ejemplo y exige unos codigos de hallazgo.
+
+    Una familia del linter no se puede comprobar con el valor de retorno del
+    programa: no cambia lo que el programa hace, cambia lo que el compilador
+    DICE.  Por eso este caso mira la salida de `lint` y no R00.
+
+    Se comprueban los codigos, nunca el texto: el texto vive en el catalogo
+    multi-idioma y cambia con el idioma de quien compile.
+
+    `ausentes` sirve para fijar lo que NO debe decir.  Una comprobacion que
+    solo exige lo que si sale no distingue una familia afinada de una que avisa
+    de todo, y esa es justo la forma en que una familia util se vuelve ruido.
+    """
+    def fn(ctx):
+        ruta = ctx.src(src)
+        rc, log = ctx.run([VM_EXE, "lint", ruta])
+        for c in codigos:
+            if c not in log:
+                ctx.fail("%s: `lint` no dijo %s" % (label, c), log)
+            ctx.ok("%s -> %s" % (label, c))
+        for c in (ausentes or ()):
+            if c in log:
+                ctx.fail("%s: `lint` dijo %s y no debia" % (label, c), log)
+        if ausentes:
+            ctx.ok("%s (y no dice %s)" % (label, ", ".join(ausentes)))
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
 def const_reject_case(tag, label, body, line=None):
     def fn(ctx):
         h_verify_const_reject(ctx, label, body)
@@ -1284,6 +1314,36 @@ def _(ctx):
     if "nonnull" not in log:
         ctx.fail("nonnull negativo: no se reporto el error esperado", log)
     ctx.ok("nonnull T x = null; rechazado en compile time")
+
+
+@case("target_errata")
+def _(ctx):
+    """@Target con un atomo que no existe: error DONDE esta la errata."""
+    vx = ctx.path("target_errata.vx")
+    with open(vx, "w", encoding="utf-8") as f:
+        # `so:` en vez de `os:`.  Antes esto no fallaba: la funcion
+        # desaparecia en silencio y el error salia mas abajo, en la
+        # llamada, diciendo "funcion no declarada" de algo escrito
+        # justo encima.
+        f.write('namespace prueba.target_errata;\n'
+                '\n'
+                '@Target("so:windows")\n'
+                'i64 calcula() { return 42_i64; }\n'
+                '\n'
+                'i32 main() { return 0; }\n')
+    _, log = ctx.run([VM_EXE, "--vesta", vx, "-o", ctx.path("target_errata")])
+    if os.path.exists(ctx.path("target_errata.velb")):
+        ctx.fail("@Target errata: la compilacion debio fallar pero produjo "
+                 ".velb", log)
+    if "VXP090" not in log:
+        ctx.fail("@Target errata: no se reporto VXP090", log)
+    # La linea 3 es la del @Target.  Que senale la marca y no la
+    # declaracion de debajo es la mitad del arreglo: el fallo anterior
+    # no era solo callarse, era acusar al sitio equivocado.
+    if ":3:" not in log:
+        ctx.fail("@Target errata: el error no senala la linea del @Target",
+                 log)
+    ctx.ok("@Target(\"so:windows\") rechazado en la linea de la marca")
 
 
 @case("bb")
@@ -5176,6 +5236,19 @@ vm_jit_r0_case("main_args",
 modes3_case("auto_literal_cadena",
             "`auto` sobre un literal de cadena deduce `string`, no un puntero",
             "536_auto_literal_cadena.vx", 42)
+
+modes3_case("desbordamiento_entero",
+            "aritmetica que da la vuelta: el programa hace lo de siempre",
+            "537_desbordamiento_entero.vx", 42)
+
+# Y lo que de verdad cambia: que el compilador lo DIGA.  El hecho lo sella el
+# dominio de rangos al plegar -- despues, `127 + 1` ya es un `-128`
+# indistinguible de uno escrito -- y la familia `types.int_wraparound` lo lee.
+# Se exige tambien que NO diga nada de la mezcla de un hash ni de lo que cabe:
+# una familia que avisara de todo pasaria igual esta prueba, y seria ruido.
+lint_case("lint_int_wraparound",
+          "`vesta lint` dice que la cuenta se sale del tipo",
+          "537_desbordamiento_entero.vx", ["VXW923"])
 
 # Las OCHO formas de llamar bajan por caminos distintos, y cuatro de ellos no
 # tomaban la direccion: el metodo de un struct, una lambda en una variable, un

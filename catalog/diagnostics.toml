@@ -1626,6 +1626,20 @@ es = "este bucle rellena un tramo contiguo con el mismo valor: 'std.memory.fill'
 en = "this loop copies a contiguous run: 'std.memory.copy' says it in one line, and says it to whoever reads it next"
 es = "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea, y se lo dice a quien lo lea despues"
 
+# La familia `types.int_wraparound`: su descripcion (la que lista
+# `vesta lint --help`) y el hallazgo, que si lleva datos.  Envolver es
+# legitimo -- lo usan hashes, sumas de comprobacion y generadores
+# pseudoaleatorios --, asi que es un AVISO y no un error: lo que no puede
+# quedarse callado es que el compilador tenga los dos operandos, sepa que no
+# cabe, y deje salir otro valor sin decirlo.
+[VXW922]
+en = "integer arithmetic that provably wraps around"
+es = "aritmetica entera que se demuestra que da la vuelta"
+
+[VXW923]
+en = "this integer operation wraps around: the result {0} does not fit in {1} ({2} to {3}), so the value that comes out is a different one"
+es = "esta operacion entera da la vuelta: el resultado {0} no cabe en {1} ({2} a {3}), asi que el valor que sale es otro"
+
 [VXW008]
 en = "cannot tell whether the parameters of '{0}' are read: it has values bound to an asm block, which take them through a register rather than through a use the count can see. The bindings say which register carries which slot; joining that to a parameter needs the store between them, which is another domain's knowledge"
 es = "no se puede decir si los parametros de '{0}' se leen: tiene valores atados a un bloque asm, que los toma por un registro y no por un uso que la cuenta vea.  Las ataduras dicen que registro lleva que hueco; unir eso con un parametro necesita el almacen que hay en medio, que es conocimiento de otro dominio"
@@ -1835,3 +1849,18 @@ es = "el argumento {0} de {1}"
 [VX2044]
 en = "argument {0}"
 es = "el argumento {0}"
+
+# --- atomo de @Target que no existe (VXP090) ---
+#
+# `@Target("so:windows")` no dice "para Windows": dice una condicion que NINGUN
+# objetivo cumple, porque la clave es `os` y no `so`.  El codigo bajo esa marca
+# desaparecia SIN UNA PALABRA, y el error salia mas tarde y en otro sitio --
+# "funcion no declarada" sobre una funcion escrita justo encima --, que es
+# imposible de relacionar con la errata.
+#
+# Las claves se enumeran en el mensaje porque el que se equivoca aqui casi
+# siempre esta a una letra de la correcta.
+
+[VXP090]
+en = "'{0}' is not something a @Target can ask about: no target satisfies it, so everything under this mark would be silently dropped.  The keys are os, arch, cpu, mode, tier, and compiler/vm with a version comparison"
+es = "'{0}' no es algo por lo que un @Target pueda preguntar: ningun objetivo lo cumple, asi que todo lo que lleve esta marca se caeria sin decir nada.  Las claves son os, arch, cpu, mode, tier, y compiler/vm con comparacion de version"

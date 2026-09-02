@@ -682,6 +682,34 @@ struct RangeFacts {
     DependenciasRango deps;
     RangeStats stats;
 
+    /**
+     * @brief Una operacion entera que DA LA VUELTA, con los dos operandos
+     *        sabidos.
+     *
+     * El dominio pliega envolviendo, que es lo correcto -- modela lo que hace
+     * el procesador --, pero eso BORRA la evidencia: aguas abajo `127 + 1` ya
+     * es un `-128` legitimo y nadie puede distinguirlo de un -128 escrito.
+     * Quien lo ve es este dominio, en el momento de plegar, y por eso lo
+     * apunta aqui en vez de dejar que otro lo redescubra.
+     *
+     * Solo lo DEMOSTRADO: los dos operandos constantes.  Un `[100,127] + [1,1]`
+     * PUEDE desbordar y no entra -- no poder demostrar que cabe no es demostrar
+     * que no cabe --.
+     */
+    struct Wrap {
+        ir::IrValueId dst = 0;  ///< el resultado que sale envuelto.
+        int64_t exacto = 0;     ///< lo que daria la cuenta sin envolver.
+        int64_t lo = 0, hi = 0; ///< lo que el tipo del destino admite.
+        uint32_t line = 0;      ///< linea fuente de la operacion.
+        /* Sin inicializador con NOMBRE: aqui `ir::IrType` solo esta
+         * declarado hacia delante -- la cabecera no arrastra el IR entero a
+         * proposito -- y sus enumeradores todavia no se ven. */
+        ir::IrType t{}; ///< el tipo del destino.
+    };
+    /// Vacio en la inmensa mayoria de funciones: solo crece cuando de verdad
+    /// hay una operacion constante que no cabe.
+    std::vector<Wrap> wraps;
+
     const ValueRange &at(ir::IrValueId v) const {
         static const ValueRange kTop = ValueRange::top();
         return v < r.size() ? r[v] : kTop;
