@@ -57,6 +57,7 @@
 
 /* La base de instrucciones del propio compilador.  Ver `insn_sem`: es lo que
  * evita que aqui haya un SEGUNDO modelo de x86 escrito a mano. */
+#include "jit/target_reginfo.h"
 #include "vx/asm/instr_db.h"
 
 /* Para preguntarle al sistema si una direccion se puede leer y si es codigo.
@@ -1107,34 +1108,72 @@ inline MemAccess mem_access(const cs_insn &in, int k) {
  * "un campo del SEGUNDO argumento", que es lo que permite decir de QUE operando
  * salio un indice.
  */
-inline void seed_args(TableState &st) {
+/**
+ * @brief La convencion de llamada del ANFITRION, tal como la describe el JIT.
+ *
+ * Que registros llevan los argumentos y cuales sobreviven a una llamada estaba
+ * escrito aqui a mano, con su `#if defined(_WIN32)`.  Pero eso ya lo sabe el
+ * proyecto: el asignador de registros no puede funcionar sin saberlo, y lo
+ * tiene en `TargetRegInfo`, con el ABI del anfitrion y por clase de registro.
+ *
+ * Dos copias de un ABI acaban separandose, y la que se quedaria vieja seria
+ * esta -- la que casi nadie mira --.  Ademas el ABI es un eje DISTINTO de la
+ * ISA: el mismo x86-64 tiene convenciones diferentes en Windows y en Linux, y
+ * mezclarlo con los idiomas de la arquitectura era otra confusion de capas.
+ *
+ * Se pide el ABI nativo: lo que se recorre es codigo que compilo este mismo
+ * compilador para esta misma maquina.
+ */
+inline const jit::TargetRegInfo &host_abi() {
 #if defined(_WIN32)
-    // Windows x64: RCX, RDX, R8, R9.
-    st.arg[1] = 0;  // rcx
-    st.arg[2] = 1;  // rdx
-    st.arg[8] = 2;  // r8
-    st.arg[9] = 3;  // r9
+    return jit::target_x86_64_abi(/*sysv=*/false);
 #else
-    // System V: RDI, RSI, RDX, RCX.
-    st.arg[7] = 0;  // rdi
-    st.arg[6] = 1;  // rsi
-    st.arg[2] = 2;  // rdx
-    st.arg[1] = 3;  // rcx
+    return jit::target_x86_64_abi(/*sysv=*/true);
 #endif
 }
 
-/// Cuantos argumentos viajan en registro.  Los que se derraman a la pila no se
-/// siguen: haria falta rastrear el marco, y ninguna forma los usa.
+/// Cuantos argumentos se siguen por registro.  Los que se derraman a la pila
+/// van por otro camino (ver `incoming` en `TableState`).
 constexpr int kArgRegs = 4;
+
+inline int arg_slot(int n);
+
+inline void seed_args(TableState &st) {
+    for (int n = 0; n < kArgRegs; ++n) {
+        const int slot = arg_slot(n);
+        if (slot >= 0) st.arg[slot] = n;
+    }
+}
+
+/**
+ * @brief Sobrevive el registro @p slot a una llamada?
+ *
+ * La convencion parte los registros en dos: los que el llamado puede machacar y
+ * los que tiene que devolver como estaban.  Tras una llamada hay que olvidar los
+ * primeros -- conservar una base que ya no vale es leer una tabla que no es --,
+ * pero olvidar los SEGUNDOS tambien tiene precio, y no es pequeno: el
+ * compilador guarda ahi justo lo que necesita despues, y el puntero al proceso
+ * es el ejemplo tipico.
+ *
+ * Sin esta distincion, la procedencia se perdia en la primera llamada del
+ * manejador, y entonces exigirla dejaba fuera efectos REALES -- `push` sin
+ * escribir la pila, la ALU sin escribir las banderas --.  Que es peor que el
+ * problema que se queria arreglar: sobrar un efecto cuesta una optimizacion,
+ * faltar uno rompe el programa.
+ */
+inline bool is_callee_saved(int slot) {
+    return slot >= 0 &&
+           host_abi().is_callee_saved(jit::RegClass::GP,
+                                      static_cast<uint8_t>(slot));
+}
 
 /// La ranura de registro donde viaja el argumento @p n, o -1.
 inline int arg_slot(int n) {
-#if defined(_WIN32)
-    static const int kSlots[kArgRegs] = {1, 2, 8, 9}; // rcx rdx r8 r9
-#else
-    static const int kSlots[kArgRegs] = {7, 6, 2, 1}; // rdi rsi rdx rcx
-#endif
-    return (n >= 0 && n < kArgRegs) ? kSlots[n] : -1;
+    const auto &v =
+        host_abi().arg_regs[static_cast<size_t>(jit::RegClass::GP)];
+    return (n >= 0 && static_cast<size_t>(n) < v.size())
+               ? static_cast<int>(v[static_cast<size_t>(n)])
+               : -1;
 }
 
 /**
@@ -1147,18 +1186,49 @@ inline int arg_slot(int n) {
 struct CallSeed {
     AddrOrigin arg[kArgRegs];    ///< direcciones en los argumentos de registro
     Origin stack[kStackArgs];    ///< valores dejados en el area de la pila
-    bool any = false;            ///< hay algo que sembrar; si no, ni se mira
+    /**
+     * @brief Que argumento MIO va en cada argumento suyo (-1 = ninguno).
+     *
+     * Un ayudante recibe casi siempre el mismo puntero que el manejador -- el
+     * proceso --, y saberlo es lo que permite exigir PROCEDENCIA al atribuir un
+     * acceso.  Sin esto, el unico criterio es el desplazamiento, y entonces
+     * cualquier `[reg + 0x58]` de cualquier codigo cuenta como "escribe las
+     * banderas".
+     *
+     * No es teorico: `mod` divide, dividir por cero lanza, lanzar arrastra el
+     * runtime de C++ entero, y ahi dentro hay estructuras con campos en 0x40,
+     * 0x48, 0x50 y 0x58 como las hay en cualquier sitio.  `mod` acababa
+     * declarando que escribe la pila, el marco y el contador de programa.
+     */
+    int arg_de[kArgRegs] = {-1, -1, -1, -1};
+    bool any = false; ///< hay algo que sembrar; si no, ni se mira
+    /**
+     * @brief Esta semilla viene de una LLAMADA, no de la raiz.
+     *
+     * Separa dos casos que no se pueden tratar igual.  En la raiz, la
+     * convencion dice la verdad: el primer argumento del manejador ES el
+     * proceso.  En un ayudante NO: lo que traiga cada argumento lo decide quien
+     * llamo, y si no se sabe, la respuesta es "no se" y no "el proceso".
+     *
+     * Sin distinguirlas, `seed_args` afirmaba en CADA funcion recorrida que su
+     * primer argumento era el proceso, y con eso la procedencia no filtra nada.
+     */
+    bool from_call = false;
 };
 
 /// Apunta que se lleva a la llamada: direcciones en los registros y valores en
 /// el area de argumentos de la pila.
 inline CallSeed capture_call_seed(const TableState &st) {
     CallSeed s;
+    s.from_call = true;
     for (int n = 0; n < kArgRegs; ++n) {
         const int slot = arg_slot(n);
         if (slot < 0) continue;
         s.arg[n] = st.addr[slot];
         if (s.arg[n].valid) s.any = true;
+        // Y si lo que va ahi es un argumento MIO tal cual, cual.
+        s.arg_de[n] = st.arg[slot];
+        if (s.arg_de[n] >= 0) s.any = true;
     }
     for (int n = 0; n < kStackArgs; ++n) {
         s.stack[n] = st.outgoing[n];
@@ -1171,7 +1241,14 @@ inline CallSeed capture_call_seed(const TableState &st) {
 inline void apply_call_seed(TableState &st, const CallSeed &s) {
     for (int n = 0; n < kArgRegs; ++n) {
         const int slot = arg_slot(n);
-        if (slot >= 0 && s.arg[n].valid) st.addr[slot] = s.arg[n];
+        if (slot < 0) continue;
+        if (s.arg[n].valid) st.addr[slot] = s.arg[n];
+        /* La siembra por defecto dice "aqui viene MI argumento n", que es
+         * cierto en la RAIZ y falso en un ayudante: ahi lo que traiga cada
+         * argumento lo decide quien llamo.  Se corrige con lo que el llamante
+         * puso, y cuando no se sabe queda -1, que es "no se" -- no "el
+         * proceso". */
+        if (s.from_call) st.arg[slot] = s.arg_de[n];
     }
     for (int n = 0; n < kStackArgs; ++n) st.incoming[n] = s.stack[n];
 }
@@ -1228,6 +1305,32 @@ using AddrOrigin = isa::AddrOrigin;
 /// Lo que el llamante dejo en los argumentos.  Ver `isa::CallSeed`.
 using CallSeed = isa::CallSeed;
 
+/**
+ * @brief Una funcion YA RECORRIDA, con la procedencia con la que se llego.
+ *
+ * Cortar solo por direccion parece lo natural y esconde un fallo grande: los
+ * ayudantes se COMPARTEN -- el que escribe el puntero de pila lo llaman
+ * veintitantos opcodes --, y lo que se puede derivar de ellos depende de lo que
+ * traigan sus argumentos.  Si la primera vez que se llega es por un camino
+ * donde no se sabe de donde sale el puntero, el ayudante queda visto y sus
+ * efectos ya no se atribuyen NUNCA, ni por los caminos donde si se sabe.
+ *
+ * Asi desaparecia "push escribe la pila": la escritura vive en un ayudante
+ * compartido al que se llegaba antes sin procedencia.
+ *
+ * La firma es pequena a proposito -- de que argumento del llamante sale el
+ * primero del llamado, y si trae alguna direccion seguida --: es lo que cambia
+ * la respuesta, y acotarla evita recorrer la misma funcion una vez por cada
+ * combinacion de registros.
+ */
+struct WalkVisit {
+    uint64_t addr = 0;
+    uint8_t sig = 0;
+    bool operator<(const WalkVisit &o) const {
+        return addr != o.addr ? addr < o.addr : sig < o.sig;
+    }
+};
+
 /// Que se pudo ver del recorrido.
 struct WalkResult {
     uint32_t instrs = 0;          ///< instrucciones recorridas
@@ -1263,6 +1366,21 @@ struct WalkResult {
      *
      * Se guarda el TEXTO, sin repetir, para que quien lo lea sepa que cerrar. */
     std::set<std::string> unmodeled;
+    /**
+     * @brief Fronteras alcanzadas: destinos que el recorrido decidio NO cruzar.
+     *
+     * Hay codigo al que se llega y que no interesa recorrer, y no por tamano:
+     * porque lo que hay al otro lado no es lo que hace la instruccion.  El caso
+     * que lo motiva es el manejador de errores -- se llega a el con el proceso
+     * como argumento, o sea con procedencia legitima, y desde ahi se entra en la
+     * traza de pila, el formateo y el runtime de C++ --.  Seguirlo hacia que una
+     * division declarase escribir la pila, el marco y el contador de programa,
+     * que es lo que toca LANZAR, no dividir.
+     *
+     * Quien recorre dice cuales son (el recorredor no sabe de manejadores de
+     * error) y se entera aqui de cuales se alcanzaron.
+     */
+    std::set<uint64_t> fronteras;
 
     /// true si lo recorrido es todo lo que se ejecuta.  Con `sin_seguir` o
     /// `truncado` el resultado es una COTA, no la verdad completa.
@@ -1298,9 +1416,24 @@ using WalkVisitor = std::function<void(const cs_insn &, const TableState &)>;
  *                    ayudante hace por un puntero que le pasaron.
  */
 inline void walk_handler(csh cs, uint64_t dir, int profundidad,
-                         std::set<uint64_t> &vistas, const WalkVisitor &ver,
-                         WalkResult &res, const CallSeed &seed = CallSeed{}) {
-    if (profundidad < 0 || dir == 0 || !vistas.insert(dir).second) return;
+                         std::set<WalkVisit> &vistas, const WalkVisitor &ver,
+                         WalkResult &res, const CallSeed &seed = CallSeed{},
+                         const std::set<uint64_t> &frontera = {}) {
+    /* Una frontera no se cruza: se apunta y se vuelve.  Ver
+     * `WalkResult::fronteras`. */
+    if (frontera.count(dir) != 0) {
+        res.fronteras.insert(dir);
+        return;
+    }
+    /* La firma con la que se llega: de que argumento del llamante sale el
+     * primero de aqui, y si trae alguna direccion ya seguida.  Es lo que cambia
+     * lo que se puede derivar; ver `WalkVisit`. */
+    uint8_t sig = static_cast<uint8_t>(seed.arg_de[0] + 1);
+    for (int n = 0; n < isa::kArgRegs; ++n)
+        if (seed.arg[n].valid) sig |= 0x08;
+    if (profundidad < 0 || dir == 0 ||
+        !vistas.insert(WalkVisit{dir, sig}).second)
+        return;
 
     const uint8_t *code = reinterpret_cast<const uint8_t *>(dir);
     size_t restante = kWalkBytesMax;
@@ -1415,6 +1548,20 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
             limpio.rsp_known = rsp_known;
             for (int n = 0; n < isa::kStackArgs; ++n)
                 limpio.incoming[n] = table_state.incoming[n];
+            /* Lo que la convencion OBLIGA a devolver como estaba sigue valiendo.
+             * Es donde el compilador guarda lo que necesita despues de la
+             * llamada -- el puntero al proceso, sobre todo --, y olvidarlo hace
+             * que la procedencia se pierda en la primera llamada del manejador.
+             *
+             * No se conservan las BASES de tabla ni lo cargado de ellas: eso son
+             * datos que el llamado pudo invalidar aunque el registro sobreviva,
+             * y ahi lo barato es perderlo. */
+            for (int s = 0; s < 16; ++s) {
+                if (!isa::is_callee_saved(s)) continue;
+                limpio.arg[s] = table_state.arg[s];
+                limpio.addr[s] = table_state.addr[s];
+                limpio.origin[s] = table_state.origin[s];
+            }
             table_state = limpio;
             continue;
         }
@@ -1472,7 +1619,8 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
     cs_free(insn, 1);
 
     for (const auto &p : pendientes)
-        walk_handler(cs, p.first, profundidad - 1, vistas, ver, res, p.second);
+        walk_handler(cs, p.first, profundidad - 1, vistas, ver, res, p.second,
+                     frontera);
 }
 
 } // namespace tests

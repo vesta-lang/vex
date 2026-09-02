@@ -97,22 +97,28 @@
       "tabla": "extended",
       "indice": 14,
       "nombre": "div",
-      "clase": "runtime",
-      "motivo": "call r12"
+      "clase": "fixed",
+      "motivo": "el derivador seguia la llamada a throw_fatal -- el camino de FALLO -- y le atribuia lo que tocan la traza de pila y el runtime de C++. Del fuente (compute_with_flags + Op::flags): escribe SOLO las banderas (ZF, SF, CF, OF). Que pueda abortar lo dice VE_ABORT.",
+      "escribe": 1,
+      "lee": 0
     },
     {
       "tabla": "extended",
       "indice": 15,
       "nombre": "div",
-      "clase": "runtime",
-      "motivo": "call qword ptr [r10 + rax*8]"
+      "clase": "fixed",
+      "motivo": "el derivador seguia la llamada a throw_fatal -- el camino de FALLO -- y le atribuia lo que tocan la traza de pila y el runtime de C++. Del fuente (compute_with_flags + Op::flags): escribe SOLO las banderas (ZF, SF, CF, OF). Que pueda abortar lo dice VE_ABORT.",
+      "escribe": 1,
+      "lee": 0
     },
     {
       "tabla": "extended",
       "indice": 16,
       "nombre": "div",
-      "clase": "runtime",
-      "motivo": "call r12"
+      "clase": "fixed",
+      "motivo": "el derivador seguia la llamada a throw_fatal -- el camino de FALLO -- y le atribuia lo que tocan la traza de pila y el runtime de C++. Del fuente (compute_with_flags + Op::flags): escribe SOLO las banderas (ZF, SF, CF, OF). Que pueda abortar lo dice VE_ABORT.",
+      "escribe": 1,
+      "lee": 0
     },
     {
       "tabla": "extended",
@@ -175,22 +181,28 @@
       "tabla": "extended",
       "indice": 64,
       "nombre": "mod",
-      "clase": "runtime",
-      "motivo": "call r12"
+      "clase": "fixed",
+      "motivo": "el derivador seguia la llamada a throw_fatal -- el camino de FALLO -- y le atribuia lo que tocan la traza de pila y el runtime de C++. Del fuente (compute_with_flags + Op::flags): escribe SOLO las banderas (ZF, SF, CF, OF). Que pueda abortar lo dice VE_ABORT.",
+      "escribe": 1,
+      "lee": 0
     },
     {
       "tabla": "extended",
       "indice": 65,
       "nombre": "mod",
-      "clase": "runtime",
-      "motivo": "call qword ptr [r10 + rax*8]"
+      "clase": "fixed",
+      "motivo": "el derivador seguia la llamada a throw_fatal -- el camino de FALLO -- y le atribuia lo que tocan la traza de pila y el runtime de C++. Del fuente (compute_with_flags + Op::flags): escribe SOLO las banderas (ZF, SF, CF, OF). Que pueda abortar lo dice VE_ABORT.",
+      "escribe": 1,
+      "lee": 0
     },
     {
       "tabla": "extended",
       "indice": 66,
       "nombre": "mod",
-      "clase": "runtime",
-      "motivo": "call r12"
+      "clase": "fixed",
+      "motivo": "el derivador seguia la llamada a throw_fatal -- el camino de FALLO -- y le atribuia lo que tocan la traza de pila y el runtime de C++. Del fuente (compute_with_flags + Op::flags): escribe SOLO las banderas (ZF, SF, CF, OF). Que pueda abortar lo dice VE_ABORT.",
+      "escribe": 1,
+      "lee": 0
     },
     {
       "tabla": "extended",

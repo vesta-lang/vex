@@ -121,6 +121,24 @@ enum VmEffect : uint16_t {
     /// de un despacho dinamico).  No es "no se sabe": es "no se sabe todavia".
     /// Se resuelve al formar el paquete observandolo, con guarda y abandono.
     VE_RUNTIME = 1u << 12,
+    /**
+     * @brief Puede ABORTAR: el manejador llega a `throw_fatal`.
+     *
+     * Es una BARRERA, y por una razon distinta de la de `VE_CONTROL`: no es que
+     * cambie a donde se va, es que si aborta, lo que venga detras NO debe haber
+     * corrido.  Adelantar algo por encima de una division que puede lanzar hace
+     * que ese algo se ejecute en un programa que ya habia muerto.
+     *
+     * Existe porque no tenerlo salia carisimo por el otro lado: el derivador
+     * SEGUIA la llamada al manejador de errores -- se llega a el con el proceso
+     * como argumento, o sea con procedencia legitima -- y le atribuia a la
+     * instruccion todo lo que tocan la traza de pila, el formateo del mensaje y
+     * el runtime de C++.  `div` y `mod` salian escribiendo Y leyendo los cuatro
+     * campos, cuando lo unico que escriben son las BANDERAS.  Eso no es
+     * conservador: es declarar ocho efectos falsos que impiden cualquier
+     * reordenacion alrededor.
+     */
+    VE_ABORT = 1u << 13,
 };
 
 /**
@@ -251,7 +269,7 @@ extern const uint16_t kHotPrimary[256];
 extern const uint16_t kHotExtended[256];
 
 /// Desplazamiento del estrechamiento dentro de la palabra caliente.
-constexpr uint16_t kNarrowShift = 13;
+constexpr uint16_t kNarrowShift = 14;
 
 /// @return Los efectos de @p opcode, con el estrechamiento en los bits altos.
 inline uint16_t vm_hot(bool extended, uint8_t opcode) {

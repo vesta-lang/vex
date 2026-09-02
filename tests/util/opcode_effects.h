@@ -59,6 +59,7 @@
 #include "runtime/decode_instruction.h"
 #include "runtime/decode_table.h"
 #include "runtime/exec_instruction.h"
+#include "runtime/exception_runtime.h"
 #include "runtime/proceso_runtime.h"
 
 #include "handler_walk.h"
@@ -211,6 +212,28 @@ struct ImplicitEffects {
     /// un valor conservador es lo que hizo que `lea` estuviera sin modelar sin
     /// que nadie lo notara.
     std::set<std::string> unmodeled;
+    /// Accesos que caen en el rango de un campo vigilado pero cuya base NO se
+    /// pudo situar en nuestra estructura.  No se atribuyen -- serian efectos
+    /// inventados -- pero se cuentan: cada uno es procedencia que el recorrido
+    /// perdio, y cerrarlos hace el resultado mas fino, no mas correcto.
+    uint32_t ajenos = 0;
+    std::string ajeno_why; ///< el primero, para poder mirarlo
+    /**
+     * @brief El manejador puede ABORTAR: llega a `throw_fatal`.
+     *
+     * No es un efecto mas, es lo que hace innecesarios a varios.  `mod` divide,
+     * y dividir por cero llama a `throw_fatal(vm, ...)` -- con el proceso como
+     * primer argumento, o sea con procedencia legitima --.  A partir de ahi el
+     * recorrido entra en la traza de pila, el formateo del mensaje y el runtime
+     * de C++, y le atribuia a `mod` todo lo que toca el camino de FALLO: salia
+     * que escribe la pila, el marco y el contador de programa.
+     *
+     * No los escribe `mod`: los escribe LANZAR.  Y para lo que esto sirve --
+     * decidir que se puede mover -- un opcode que puede abortar es una BARRERA,
+     * que es mas fuerte que esos cuatro efectos y ademas cierto.  Asi que el
+     * recorrido se para ahi y lo apunta, en vez de seguir y contar lo ajeno.
+     */
+    bool can_abort = false;
     uint32_t tablas = 0; ///< despachos por tabla que se pudieron seguir
     /* La instruccion CONCRETA que produjo cada efecto, una por campo y por
      * direccion.
@@ -282,12 +305,38 @@ inline uint8_t operand_field_bit(const tests::Origin &o) {
     return static_cast<uint8_t>(1u << (field * 3 + part));
 }
 
+/**
+ * @brief Hasta donde se recorre: el camino de FALLO no es lo que hace el opcode.
+ *
+ * `throw_fatal` recibe el proceso como primer argumento, asi que llegar a el es
+ * legitimo y todo lo que hay dentro tiene procedencia buena.  Pero lo que hay
+ * dentro es la traza de pila, el formateo del mensaje y el runtime de C++, y
+ * atribuirselo al opcode es decir que una division escribe la pila, el marco y
+ * el contador de programa.  Los escribe LANZAR.
+ *
+ * Se para ahi y se apunta que el opcode PUEDE ABORTAR, que para decidir si algo
+ * se puede mover es mas fuerte que esos cuatro efectos -- un opcode que aborta
+ * es una barrera -- y ademas es cierto.
+ *
+ * Por PUNTERO A FUNCION, no por nombre: renombrar una es un error de
+ * compilacion, y un nombre mal escrito seria un filtro que no filtra nada.
+ */
+inline const std::set<uint64_t> &fatal_frontier() {
+    static const std::set<uint64_t> f = {
+        reinterpret_cast<uint64_t>(
+            reinterpret_cast<const void *>(&runtime::throw_fatal)),
+        reinterpret_cast<uint64_t>(
+            reinterpret_cast<const void *>(&runtime::throw_fatalf)),
+    };
+    return f;
+}
+
 inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
     ImplicitEffects out;
     if (handler == nullptr) return out;
 
     tests::WalkResult res;
-    std::set<uint64_t> vistas;
+    std::set<WalkVisit> vistas;
     /* Las ultimas instrucciones vistas.  Un acceso al banco cuyo indice no se
      * identifica no se explica con la instruccion en si: se explica con lo que
      * cargo el indice, que esta ANTES.  Sin eso, el diagnostico dice que no se
@@ -400,9 +449,64 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                 if (acc.disp <= 0) continue;
                 const size_t d = static_cast<size_t>(acc.disp);
 
+                /* --- Y que sea NUESTRA estructura ---------------------------
+                 *
+                 * El desplazamiento SOLO no basta.  `mod` divide, dividir por
+                 * cero lanza, y lanzar arrastra el runtime de C++ entero; ahi
+                 * dentro hay estructuras con campos en 0x40, 0x48, 0x50 y 0x58
+                 * como las hay en cualquier sitio.  Con el desplazamiento como
+                 * unico criterio, `mod` declaraba escribir la pila, el marco y
+                 * el contador de programa -- y hasta un `mov [rcx+0x42], ss`,
+                 * que es codigo del sistema, contaba como tocar la pila.
+                 *
+                 * Sobrar efectos no da un resultado incorrecto, pero impide
+                 * TODAS las reordenaciones alrededor, que es justo lo que se
+                 * quiere habilitar.  Un efecto de mas es una optimizacion de
+                 * menos.
+                 *
+                 * Se exige que la base venga del PRIMER argumento del
+                 * manejador -- el proceso --, siguiendolo a traves de las
+                 * llamadas con la semilla.  Lo que no se pueda situar se cuenta
+                 * aparte: no se atribuye, pero tampoco se pierde. */
+                const bool del_proceso =
+                    acc.base >= 0 &&
+                    (st.arg[acc.base] == 0 ||
+                     (st.addr[acc.base].valid && st.addr[acc.base].base == 0));
+
                 for (size_t k = 0; k < sizeof(kFields) / sizeof(kFields[0]);
                      ++k) {
                     if (d < kFields[k].ini || d >= kFields[k].fin) continue;
+                    if (!del_proceso) {
+                        /* Cae en el rango de un campo pero no se pudo situar en
+                         * nuestra estructura.
+                         *
+                         * NO se descarta, y la razon es la que manda aqui:
+                         * descartarlo QUITA efectos reales.  Se probo -- exigir
+                         * procedencia le quita a `push` la escritura de la pila
+                         * y a la ALU las banderas, porque la escritura vive en
+                         * un ayudante compartido al que el rastro no llega --.
+                         * Y sobrar un efecto cuesta una optimizacion, mientras
+                         * que faltar uno rompe el programa.
+                         *
+                         * Se atribuye, pues, y se CUENTA aparte.  Cada uno es o
+                         * bien procedencia que el recorrido perdio, o bien un
+                         * efecto que no es nuestro -- `mod` divide, dividir por
+                         * cero lanza, y ahi dentro hay estructuras con campos en
+                         * los mismos desplazamientos --.  Hasta poder
+                         * distinguirlos, se dice cuantos hay en vez de elegir
+                         * en silencio. */
+                        ++out.ajenos;
+                        if (out.ajeno_why.empty()) {
+                            char b[180];
+                            std::snprintf(b, sizeof(b),
+                                          "0x%llX: %s %s  (campo %s, base sin "
+                                          "procedencia)",
+                                          (unsigned long long)in.address,
+                                          in.mnemonic, in.op_str,
+                                          kFields[k].nombre);
+                            out.ajeno_why = b;
+                        }
+                    }
                     if (escribe) out.escribe |= (1u << k);
                     if (lee) out.lee |= (1u << k);
                     // La primera instruccion de cada clase, para poder mirarla.
@@ -416,11 +520,12 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                 }
             }
         },
-        res);
+        res, tests::CallSeed{}, fatal_frontier());
     out.completo = res.completo();
     out.sin_resolver = res.unresolved;
     out.tablas = res.tables_resolved;
     out.unmodeled = res.unmodeled;
+    out.can_abort = !res.fronteras.empty();
     return out;
 }
 

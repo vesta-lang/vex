@@ -171,13 +171,14 @@ int main(int argc, char **argv) {
                         "\"salta\": %s, \"implementada\": %s, "
                         "\"exacto\": %s, \"escribe\": %u, \"lee\": %u, "
                         "\"form_read\": %u, \"form_write\": %u, "
+                        "\"puede_abortar\": %s, "
                         "\"tablas_resueltas\": %u, \"motivo\": \"",
                         f.nombre.c_str(), f.tabla, f.indice, f.bytes,
                         f.modo.c_str(), f.salta ? "true" : "false",
                         f.implementada ? "true" : "false",
                         f.imp.completo ? "true" : "false", f.imp.escribe,
                         f.imp.lee, f.imp.form_read, f.imp.form_write,
-                        f.imp.tablas);
+                        f.imp.can_abort ? "true" : "false", f.imp.tablas);
             /* POR QUE se quedo corto.  Es la SEMILLA de la declaracion: lo que
              * se declare nace del diagnostico del analisis, no de lo que
              * alguien recuerde del manejador. */
@@ -264,6 +265,10 @@ int main(int argc, char **argv) {
                     std::printf("  forma    %u acceso(s) al banco SIN campo "
                                 "identificado\n           %s\n",
                                 f.imp.form_unknown, f.imp.form_why.c_str());
+                if (f.imp.ajenos != 0)
+                    std::printf("  ajenos   %u acceso(s) en el rango de un "
+                                "campo SIN procedencia\n           %s\n",
+                                f.imp.ajenos, f.imp.ajeno_why.c_str());
             }
             if (!f.imp.completo) {
                 std::printf("  [COTA INFERIOR] el recorrido se quedo aqui:\n");
