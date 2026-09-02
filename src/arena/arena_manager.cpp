@@ -112,8 +112,15 @@ ArenaManager::~ArenaManager() {
 uint64_t ArenaManager::create_arena(size_t size, MemPerm perms) {
     void *mem = allocate_memory(size, perms); // reservar memoria del SO
     if (!mem) {
-        VGC_CERR << "[ArenaManager] Error al asignar memoria\n"; // informar
-                                                                 // del fallo
+        /* CUANTO se pedia y CUANTO habia ya reservado.  Sin esas dos cifras
+         * el mensaje solo dice que no hubo memoria, que es lo unico que ya se
+         * sabia: no distingue "pidio una barbaridad de una vez" de "lleva
+         * reservando de a poco hasta llenar la maquina", y esos dos se
+         * arreglan de formas opuestas. */
+        VGC_CERR << "[ArenaManager] Error al asignar memoria: se pedian "
+                 << size << " bytes (" << (size / (1024 * 1024))
+                 << " MiB); ya habia " << total_allocated_bytes_
+                 << " bytes reservados en " << arenas.size() << " arenas\n";
         return 0; // ID 0 indica error
     }
 

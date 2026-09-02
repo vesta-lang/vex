@@ -49,6 +49,17 @@ vm_map_ptr VirtualMemory::map(uint64_t vaddr, size_t size, vm::MemPerm perms) {
     uint64_t id = arena_mgr.create_arena(total_size, perms);
     const Arena *arena =
         arena_mgr.get_arena(id); // obtener el bloque recien creado
+    if (arena == nullptr || arena->ptr == nullptr) {
+        /* Sin memoria no hay region, y seguir era desreferenciar `arena` para
+         * calcular la base de cada pagina: el fallo salia como una violacion
+         * de acceso dentro del bucle de abajo, que no dice nada de que lo que
+         * ocurrio fue que la reserva no cupo.  El gestor ya ha dicho cuanto se
+         * pedia; aqui se dice PARA QUE era. */
+        VGC_CERR << "[VirtualMemory] no se pudo mapear la region virtual ["
+                 << start << ", " << end << ") de " << total_size
+                 << " bytes: el gestor de arenas no dio memoria\n";
+        return vm_map_ptr{}; // raw = 0: no hay region
+    }
 
     // registrar una entrada TLB HOST por cada pagina del rango
     for (uint64_t page = start; page < end; page += 0x1000) {
@@ -119,6 +130,16 @@ void VirtualMemory::vm_to_host_memcpy(uint64_t dest_vaddr, const void *src_host,
             this->map(vaddr, 4096, vm::MemPerm::READ | vm::MemPerm::WRITE);
             host_dest =
                 this->tlb.get_real_host_ptr_of_vptr(vaddr); // releer tras mapeo
+            /* Y comprobar que el remedio funciono.  El nulo estaba PREVISTO
+             * -- por eso el `if` --, se intentaba arreglar y no se miraba si
+             * se habia arreglado: el `memcpy` de abajo escribia entonces en
+             * `nullptr + offset`. */
+            if (!host_dest) {
+                VGC_CERR << "[VirtualMemory] no se pudo mapear la pagina "
+                         << vaddr << " para copiar en ella; se abandona la "
+                         << "copia de " << size << " bytes\n";
+                return;
+            }
         }
 
         // calcular cuantos bytes caben en lo que resta de la pagina actual
@@ -161,6 +182,16 @@ void VirtualMemory::vm_to_host_memset(uint64_t dest_vaddr, int value,
             map(vaddr, 4096, vm::MemPerm::READ | vm::MemPerm::WRITE);
             host_dest =
                 tlb.get_real_host_ptr_of_vptr(vaddr); // releer tras mapeo
+            /* Y comprobar que el remedio funciono.  El nulo estaba PREVISTO
+             * -- por eso el `if` --, se intentaba arreglar y no se miraba si
+             * se habia arreglado: el `memset` de abajo escribia entonces en
+             * `nullptr + offset`. */
+            if (!host_dest) {
+                VGC_CERR << "[VirtualMemory] no se pudo mapear la pagina "
+                         << vaddr << " para rellenarla; se abandona el "
+                         << "relleno de " << size << " bytes\n";
+                return;
+            }
         }
 
         // calcular cuantos bytes rellenar en esta pagina

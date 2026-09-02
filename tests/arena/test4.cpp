@@ -19,7 +19,20 @@ int main() {
         0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7,
     };
 
-    vm::vm_map_ptr code = vm_mem.map(0x400000, 0x10000, vm::MemPerm::READ);
+    /* READ|WRITE, no READ a secas.
+     *
+     * `MemPerm::READ` baja a
+     * `PAGE_READONLY` en Windows y a `PROT_READ` en
+     * Linux, asi que el
+     * memset y el memcpy de mas abajo escribian en memoria
+     * de SOLO
+     * LECTURA y el sistema se llevaba el proceso por delante.  No
+     *
+     * fallaba el mapeo, que es legitimo: fallaba usarlo para lo contrario de
+
+     * * lo que se habia pedido. */
+    vm::vm_map_ptr code =
+        vm_mem.map(0x400000, 0x10000, vm::MemPerm::READ | vm::MemPerm::WRITE);
     vm_mem.vm_to_host_memset(0x400000, 0x33, 0x10000);
 
     const size_t BYTES_PER_LINE = 16;

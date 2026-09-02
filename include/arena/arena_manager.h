@@ -106,6 +106,25 @@ class ArenaManager {
     void free_all();
 
     /**
+     * @brief Numero de bloques vivos en el catalogo.
+     * @return Cuantas arenas hay reservadas ahora mismo.
+     *
+     * Observabilidad: el coste de la memoria no es solo cuantos BYTES se
+     * reservan, sino en CUANTAS reservas -- cada una es una llamada al sistema
+     * y, en Windows, consume 64 KiB de espacio de direcciones aunque pida 4.
+     * Sin esta cifra, medio giga en 120.000 reservas y medio giga en 8 se ven
+     * exactamente igual.
+     */
+    size_t arena_count() const noexcept { return arenas.size(); }
+
+    /**
+     * @brief Bytes totales reservados por las arenas vivas.
+     */
+    size_t total_allocated_bytes() const noexcept {
+        return total_allocated_bytes_;
+    }
+
+    /**
      * @brief Busca el ID de la arena cuyo puntero de host coincide con @p
      * host_ptr.
      *
