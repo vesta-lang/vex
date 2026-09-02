@@ -52,7 +52,12 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+/* La base de instrucciones del propio compilador.  Ver `insn_sem`: es lo que
+ * evita que aqui haya un SEGUNDO modelo de x86 escrito a mano. */
+#include "vx/asm/instr_db.h"
 
 /* Para preguntarle al sistema si una direccion se puede leer y si es codigo.
  * Sin esa pregunta no se puede seguir una tabla de despacho: una base mal
@@ -982,6 +987,44 @@ struct MemAccess {
 };
 
 /// @return Cuantos operandos de memoria tiene @p in.
+/**
+ * @brief Que hace esta instruccion, segun la BASE del compilador.
+ *
+ * Es la pieza que evita tener DOS modelos de x86 en el proyecto.  Antes esto
+ * era una regla escrita a mano aqui -- "el primer operando es el destino salvo
+ * en `cmp`, `test`, `push`, `call` y los saltos" --, que ademas hubo que
+ * inventar porque el desensamblador marcaba como escritura la FUENTE.  Una
+ * regla de ese tipo, ademas de ser solo de x86, es exactamente lo que el primer
+ * invariante del ASA prohibe: un hecho que ya tiene productor, redescubierto
+ * por su consumidor.
+ *
+ * La base sale de `arch-data`, cubre x86, ARM64, ARM32 y RISCV, y sabe cosas
+ * que la regla no sabia: que banderas concretas toca cada instruccion, si es una
+ * barrera, que estado del procesador lee y escribe, y cuanto tarda.
+ *
+ * Se cachea por el TEXTO de la instruccion porque el emparejador parsea la
+ * linea, y en un recorrido se repiten muchisimo: son millones de instrucciones
+ * y unas pocas miles de formas distintas.
+ *
+ * @return La semantica.  Si la base no supo emparejar la forma, viene con
+ *         `modeled = false`, y entonces quien pregunta asume lo peor -- que es
+ *         distinto de que la instruccion no haga nada.
+ */
+inline const vx::instr_db::AsmInsnSem &insn_sem(const cs_insn &in) {
+    static std::unordered_map<std::string, vx::instr_db::AsmInsnSem> cache;
+    std::string linea = in.mnemonic;
+    if (in.op_str[0] != '\0') {
+        linea += ' ';
+        linea += in.op_str;
+    }
+    auto it = cache.find(linea);
+    if (it != cache.end()) return it->second;
+    return cache
+        .emplace(linea, vx::instr_db::asm_insn_sem(vx::instr_db::Isa::X86,
+                                                   linea, /*ua_id=*/0))
+        .first->second;
+}
+
 inline int mem_access_count(const cs_insn &in) {
     if (in.detail == nullptr) return 0;
     int n = 0;
@@ -1022,24 +1065,34 @@ inline MemAccess mem_access(const cs_insn &in, int k) {
              op.mem.base == X86_REG_RBP || op.mem.base == X86_REG_EBP ||
              op.mem.base == X86_REG_RIP);
 
-        const char *mn = in.mnemonic;
-        if (std::strcmp(mn, "lea") == 0) {
-            /* `lea` no accede: calcula una direccion.  Pero si la de un campo se
-             * pasa a otro sitio, ese sitio puede leerlo y escribirlo, y puede
-             * que no se llegue a recorrer.  Se marca lo peor de los dos, y se
-             * deja dicho que era solo un calculo. */
+        /* Si accede, y en que direccion, lo dice la BASE DE INSTRUCCIONES del
+         * compilador -- no una regla escrita aqui.  Ver `insn_sem`. */
+        const vx::instr_db::AsmInsnSem &sem = insn_sem(in);
+        a.reads = sem.reads_mem;
+        a.writes = sem.writes_mem;
+        if (!sem.reads_mem && !sem.writes_mem) {
+            /* Hay operando con SINTAXIS de memoria y la base dice que no toca
+             * memoria: es una direccion GENERADA (`lea` y equivalentes).  Se
+             * calcula, no se accede.
+             *
+             * Para los efectos se marca lo peor de los dos: la direccion puede
+             * acabar en cualquier sitio y hacer cualquier cosa, y puede que ese
+             * sitio no se llegue a recorrer.  Pero se deja dicho que era solo un
+             * calculo, porque para saber QUE campo se escribe eso es veneno --
+             * atribuye las dos direcciones a la vez --.
+             *
+             * Antes esto era `strcmp(mn, "lea")`.  Ahora sale de la clase de
+             * operando `agen` de la base, que es la misma nocion y la tiene
+             * cada ISA. */
             a.reads = a.writes = true;
             a.address_only = true;
-        } else if (i == 0 && std::strcmp(mn, "cmp") != 0 &&
-                   std::strcmp(mn, "test") != 0 &&
-                   std::strcmp(mn, "push") != 0 &&
-                   std::strcmp(mn, "call") != 0 && mn[0] != 'j') {
-            // Destino: se escribe.  Y se lee tambien salvo que la instruccion se
-            // limite a poner un valor encima.
-            a.writes = true;
-            a.reads = (std::strncmp(mn, "mov", 3) != 0);
-        } else {
-            a.reads = true; // fuente, o instruccion que solo compara
+        } else if (!sem.modeled) {
+            /* La base no supo emparejar la forma.  Se asume lo peor PARA QUE EL
+             * RESULTADO SIGA SIENDO SANO mientras tanto, pero eso no es la
+             * respuesta: el recorrido lo apunta en `unmodeled` y quien lo use
+             * FALLA con la lista.  Un hueco de la base que se tapa con un valor
+             * conservador no se cierra nunca, porque nada parece roto. */
+            a.reads = a.writes = true;
         }
         break;
     }
@@ -1199,6 +1252,18 @@ struct WalkResult {
      * renuncia es trabajo pendiente, y sin la direccion no se sabe cual. */
     std::vector<std::string> unresolved;
 
+    /* Instrucciones que la BASE no supo emparejar a una forma.
+     *
+     * Cada una es un HUECO de nuestra propia base de instrucciones, encontrado
+     * en nuestro propio binario.  Asumir lo peor y seguir seria lo comodo, y es
+     * exactamente el modo de fallo que no se acepta aqui: el analisis parece
+     * funcionar, la respuesta sale conservadora, y nadie se entera de que la
+     * base no conoce media docena de instrucciones que el compilador emite todos
+     * los dias.  Asi estuvieron `lea` y los saltos condicionales.
+     *
+     * Se guarda el TEXTO, sin repetir, para que quien lo lea sepa que cerrar. */
+    std::set<std::string> unmodeled;
+
     /// true si lo recorrido es todo lo que se ejecuta.  Con `sin_seguir` o
     /// `truncado` el resultado es una COTA, no la verdad completa.
     bool completo() const { return sin_seguir == 0 && !truncado; }
@@ -1269,6 +1334,13 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
     while (cs_disasm_iter(cs, &code, &restante, &addr, insn)) {
         res.instrs++;
         hi = insn->address;
+        /* Lo primero: sabe la base que es esto?  Si no, es un hueco NUESTRO en
+         * nuestro propio binario, y se apunta para que alguien lo cierre.  Se
+         * guarda solo el mnemonico y la forma de los operandos -- el texto
+         * entero llevaria direcciones distintas en cada ejecucion y la lista no
+         * se podria comparar. */
+        if (!isa::insn_sem(*insn).modeled && res.unmodeled.size() < 64)
+            res.unmodeled.insert(insn->mnemonic);
         ver(*insn, table_state);
         /* Lo que esta instruccion dice de los registros, antes de mirar si es
          * una llamada: la `and` que acota el indice es una instruccion aparte,

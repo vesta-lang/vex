@@ -687,6 +687,35 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* --- Sabe NUESTRA base de instrucciones leer NUESTRO binario? --------
+     *
+     * Todo lo de arriba se apoya en que `asm_insn_sem` sepa que hace cada
+     * instruccion del anfitrion.  Cuando no lo sabe, el recorrido asume lo peor
+     * para que el resultado siga siendo sano -- pero eso NO es la respuesta, y
+     * dejarlo asi es el modo de fallo que este proyecto no acepta: el analisis
+     * parece funcionar, la respuesta sale conservadora, y nadie se entera de que
+     * la base no conoce instrucciones que el compilador emite a diario.
+     *
+     * Asi estuvieron `lea` -- en TODAS sus formas -- y los saltos condicionales,
+     * y no lo destapo nadie hasta que se le pregunto a la base por codigo
+     * compilado.  Cada linea de aqui es un hueco de la base, y se falla con la
+     * lista para que sea trabajo concreto y no una sospecha. */
+    std::set<std::string> sin_forma;
+    for (const OpcodeRow &f : rows)
+        for (const std::string &m : f.imp.unmodeled) sin_forma.insert(m);
+    if (!sin_forma.empty()) {
+        std::printf("\nLA BASE DE INSTRUCCIONES NO SABE MODELAR %d "
+                    "MNEMONICOS DE NUESTRO PROPIO BINARIO:\n",
+                    (int)sin_forma.size());
+        for (const std::string &m : sin_forma)
+            std::printf("  %s\n", m.c_str());
+        std::printf("\nMientras tanto se asume lo peor, asi que los efectos "
+                    "siguen siendo\ncorrectos -- pero de mas.  Se cierra "
+                    "anadiendo la forma en arch-data,\no ensenando al "
+                    "emparejador a alcanzarla (src/vx/asm/instr_db.cpp).\n");
+        return 1;
+    }
+
     std::printf("\nLa base de datos generada cuadra con el codigo (%d "
                 "instrucciones),\ny la tabla caliente dice lo mismo que "
                 "`VmInstr` en las 512 ranuras.\n",

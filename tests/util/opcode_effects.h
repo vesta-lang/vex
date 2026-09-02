@@ -49,6 +49,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -205,6 +206,11 @@ struct ImplicitEffects {
     uint32_t form_unknown = 0;
     /// El primero de ellos, para poder mirarlo.
     std::string form_why;
+    /// Instrucciones que la base del compilador NO supo emparejar.  Cada una es
+    /// un hueco de la base, y quien lea esto debe FALLAR, no seguir: taparlo con
+    /// un valor conservador es lo que hizo que `lea` estuviera sin modelar sin
+    /// que nadie lo notara.
+    std::set<std::string> unmodeled;
     uint32_t tablas = 0; ///< despachos por tabla que se pudieron seguir
     /* La instruccion CONCRETA que produjo cada efecto, una por campo y por
      * direccion.
@@ -414,6 +420,7 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
     out.completo = res.completo();
     out.sin_resolver = res.unresolved;
     out.tablas = res.tables_resolved;
+    out.unmodeled = res.unmodeled;
     return out;
 }
 
