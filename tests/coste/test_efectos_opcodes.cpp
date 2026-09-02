@@ -170,12 +170,14 @@ int main(int argc, char **argv) {
                         "\"indice\": %d, \"bytes\": %zu, \"modo\": \"%s\", "
                         "\"salta\": %s, \"implementada\": %s, "
                         "\"exacto\": %s, \"escribe\": %u, \"lee\": %u, "
+                        "\"form_read\": %u, \"form_write\": %u, "
                         "\"tablas_resueltas\": %u, \"motivo\": \"",
                         f.nombre.c_str(), f.tabla, f.indice, f.bytes,
                         f.modo.c_str(), f.salta ? "true" : "false",
                         f.implementada ? "true" : "false",
                         f.imp.completo ? "true" : "false", f.imp.escribe,
-                        f.imp.lee, f.imp.tablas);
+                        f.imp.lee, f.imp.form_read, f.imp.form_write,
+                        f.imp.tablas);
             /* POR QUE se quedo corto.  Es la SEMILLA de la declaracion: lo que
              * se declare nace del diagnostico del analisis, no de lo que
              * alguien recuerde del manejador. */

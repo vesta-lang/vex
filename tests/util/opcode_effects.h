@@ -146,6 +146,12 @@ struct Field {
 
 constexpr size_t kRegs = offsetof(runtime::ProcessVM, registers);
 
+/// Donde empieza el BANCO de registros dentro del proceso.  Es el
+/// desplazamiento con el que el manejador accede a `regs[campo]`, y lo que
+/// distingue ese acceso de cualquier otro.
+constexpr size_t kRegsOff =
+    kRegs + offsetof(runtime::context_registers_vm, regs);
+
 /* Los campos, por offset.  `regs[]` va entero como un solo rango: un acceso con
  * indice variable cae en cualquier parte de el, y no se puede saber en cual sin
  * ejecutar -- para eso esta la forma, que sale del desensamblador. */
@@ -170,6 +176,24 @@ struct ImplicitEffects {
     /// Donde se quedo el recorrido cuando no fue completo.  Sin esto, "no se
     /// sabe" no es accionable: no dice QUE cerrar.
     std::vector<std::string> sin_resolver;
+
+    /* --- La FORMA, derivada -------------------------------------------------
+     *
+     * Que campos del operando indexan un acceso al banco de registros, y en que
+     * direccion.  Un bit por (campo, parte):
+     *
+     *     0: reg1 entero    1: reg1 nibble bajo   2: reg1 nibble alto
+     *     3: reg2 entero    4: reg2 nibble bajo   5: reg2 nibble alto
+     *
+     * Sale del mismo recorrido que los efectos: el manejador hace
+     * `regs[campo]`, que en codigo maquina es un acceso con el banco de
+     * desplazamiento y el campo de indice.  La procedencia (`Origin`) dice CUAL
+     * de los dos campos lleva ese indice, que es lo que no se podia saber antes.
+     *
+     * Si sale 0 no significa "no toca registros": significa que el recorrido no
+     * lo vio, y hay que tratarlo como desconocido igual que los efectos. */
+    uint8_t form_read = 0;
+    uint8_t form_write = 0;
     uint32_t tablas = 0; ///< despachos por tabla que se pudieron seguir
     /* La instruccion CONCRETA que produjo cada efecto, una por campo y por
      * direccion.
@@ -194,6 +218,53 @@ struct ImplicitEffects {
  * Ante la duda marca el efecto.  Para decidir reordenaciones, sobrar un efecto
  * impide una optimizacion; faltar uno rompe el programa.
  */
+/**
+ * @brief De que campo del operando salio un indice, segun NUESTRA codificacion.
+ *
+ * El idioma de la ISA dice "este registro lleva los bits [shift, shift+width) de
+ * lo que se leyo en tal desplazamiento del segundo argumento".  Traducir eso a
+ * "el primer operando" o "el nibble alto del segundo" es cosa de aqui, que es
+ * quien conoce el formato: dos campos de registro de CUATRO bits metidos en un
+ * byte, uno en cada nibble.
+ *
+ * Es el reparto que hace que anadir otra arquitectura no obligue a repetir el
+ * formato de la VM en sus idiomas.
+ *
+ * @return El bit de `form_read`/`form_write`, o 0 si no es un campo conocido.
+ */
+inline uint8_t operand_field_bit(const tests::Origin &o) {
+    if (!o.valid || o.base != 1) return 0; // el 2o argumento es la instruccion
+
+    /* Cual de los dos campos, por su desplazamiento dentro de `DecodedInstr`. */
+    const size_t off_reg1 =
+        offsetof(runtime::DecodedInstr, data_instruction.reg_data.reg1);
+    const size_t off_reg2 =
+        offsetof(runtime::DecodedInstr, data_instruction.reg_data.reg2);
+    int field;
+    if (static_cast<size_t>(o.disp) == off_reg1)
+        field = 0;
+    else if (static_cast<size_t>(o.disp) == off_reg2)
+        field = 1;
+    else
+        return 0;
+
+    /* Y que parte de el.  Un campo de registro son CUATRO bits; el byte entero
+     * es el valor directo (convencion A) y cada nibble es un campo distinto
+     * (convencion B). */
+    constexpr uint8_t kRegFieldBits = 4;
+    int part;
+    if (o.width >= 8 && o.shift == 0)
+        part = 0; // el byte entero
+    else if (o.width == kRegFieldBits && o.shift == 0)
+        part = 1; // nibble bajo
+    else if (o.width == kRegFieldBits && o.shift == kRegFieldBits)
+        part = 2; // nibble alto
+    else
+        return 0; // un trozo que no es un campo: no se atribuye a ninguno
+
+    return static_cast<uint8_t>(1u << (field * 3 + part));
+}
+
 inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
     ImplicitEffects out;
     if (handler == nullptr) return out;
@@ -202,7 +273,7 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
     std::set<uint64_t> vistas;
     tests::walk_handler(
         cs, reinterpret_cast<uint64_t>(handler), 6, vistas,
-        [&out](const cs_insn &in, const tests::TableState &) {
+        [&out](const cs_insn &in, const tests::TableState &st) {
             /* Los accesos a memoria, ya interpretados por el idioma de la ISA.
              * Aqui no se sabe que es un operando ni si el destino va primero:
              * eso cambia con la arquitectura y vive en `isa::mem_access`.  Lo
@@ -231,6 +302,25 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                 const size_t d = static_cast<size_t>(acc.disp);
                 const bool escribe = acc.writes;
                 const bool lee = acc.reads;
+
+                /* --- La FORMA: un acceso al BANCO de registros --------------
+                 *
+                 * `regs[campo]` sale en codigo maquina como un acceso con el
+                 * banco de desplazamiento y el campo de indice.  Con la
+                 * procedencia del indice se sabe CUAL de los dos campos es, que
+                 * es lo que no se podia responder antes.
+                 *
+                 * Se exige ademas que la base sea el PRIMER argumento -- el
+                 * proceso --: un acceso con el mismo desplazamiento sobre otra
+                 * estructura no es el banco. */
+                if (d == kRegsOff && acc.index >= 0 && acc.base >= 0 &&
+                    st.arg[acc.base] == 0) {
+                    const uint8_t bit = operand_field_bit(st.origin[acc.index]);
+                    if (bit != 0) {
+                        if (escribe) out.form_write |= bit;
+                        if (lee) out.form_read |= bit;
+                    }
+                }
 
                 for (size_t k = 0; k < sizeof(kFields) / sizeof(kFields[0]);
                      ++k) {

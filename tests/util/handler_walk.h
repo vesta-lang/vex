@@ -340,9 +340,20 @@ inline int gpr_slot(unsigned reg) {
  * segundo.
  */
 struct Origin {
-    int base = -1;     ///< ranura del registro base; -1 = no se sabe
-    int64_t disp = 0;  ///< desplazamiento del acceso
-    uint8_t part = 0;  ///< 0 = el valor entero, 1 = nibble bajo, 2 = nibble alto
+    int base = -1;    ///< argumento del que salio; -1 = no se sabe
+    int64_t disp = 0; ///< desplazamiento dentro de ese argumento
+    /* Que BITS de lo que se leyo lleva ahora el registro.
+     *
+     * Se guarda como rango de bits y no como "nibble bajo / nibble alto" a
+     * proposito.  Un nibble es cosa de NUESTRA codificacion -- la convencion que
+     * mete dos registros de cuatro bits en un byte --, no de la arquitectura, y
+     * meterlo aqui obligaria a que cada ISA volviese a codificar el formato de
+     * la VM en sus propios idiomas.
+     *
+     * El idioma dice "ahora lleva los bits [shift, shift+width)"; que eso sea el
+     * primer o el segundo operando lo decide quien conoce la codificacion. */
+    uint8_t shift = 0; ///< primer bit
+    uint8_t width = 0; ///< cuantos bits; 0 = no se sabe
     bool valid = false;
 };
 
@@ -498,29 +509,49 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         if (d >= 0) {
             st.origin[d] = Origin{};
             st.arg[d] = -1;
-            if (b >= 0) {
-                st.origin[d].base = st.arg[b] >= 0 ? st.arg[b] : -1;
+            if (b >= 0 && st.arg[b] >= 0) {
+                st.origin[d].base = st.arg[b];
                 st.origin[d].disp = x.operands[1].mem.disp;
-                st.origin[d].part = 0;
-                st.origin[d].valid = (st.arg[b] >= 0);
+                st.origin[d].shift = 0;
+                /* Los bits que trae la carga.  Capstone da el tamano del
+                 * operando en bytes; se convierte a bits porque el rango es lo
+                 * que el dominio va a interpretar. */
+                st.origin[d].width =
+                    static_cast<uint8_t>(x.operands[1].size * 8);
+                st.origin[d].valid = true;
             }
         }
     }
-    /* `and REG, 0xF` y `shr REG, 4` sobre un valor con procedencia lo parten en
-     * nibbles.  Es como la convencion B mete dos registros en un byte, asi que
-     * sin esto la mitad de las formas quedarian sin identificar. */
+    /* Extraer un trozo de bits.  Lo que se apunta es el RANGO, no "el nibble
+     * bajo": cuantos bits caben en un campo es cosa de la codificacion de la VM,
+     * no de x86, y ponerlo aqui obligaria a cada ISA a repetirlo.
+     *
+     * `and REG, mask` con una mascara de bits bajos contiguos deja `n` bits.
+     * `shr REG, k` corre el rango k bits hacia arriba. */
     if (m == "and" && x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
-        x.operands[1].type == X86_OP_IMM && x.operands[1].imm == 0x0F) {
+        x.operands[1].type == X86_OP_IMM && x.operands[1].imm > 0) {
         const int d = gpr_slot(x.operands[0].reg);
-        if (d >= 0 && st.origin[d].valid && st.origin[d].part == 0)
-            st.origin[d].part = 1;
+        const uint64_t mask = static_cast<uint64_t>(x.operands[1].imm);
+        // Mascara de bits bajos contiguos: `mask + 1` es potencia de dos.
+        if (d >= 0 && st.origin[d].valid && (mask & (mask + 1)) == 0) {
+            uint8_t n = 0;
+            while ((mask >> n) != 0) ++n;
+            if (n < st.origin[d].width) st.origin[d].width = n;
+        }
     }
     if ((m == "shr" || m == "sar") && x.op_count == 2 &&
         x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_IMM &&
-        x.operands[1].imm == 4) {
+        x.operands[1].imm > 0 && x.operands[1].imm < 64) {
         const int d = gpr_slot(x.operands[0].reg);
-        if (d >= 0 && st.origin[d].valid && st.origin[d].part == 0)
-            st.origin[d].part = 2;
+        const uint8_t k = static_cast<uint8_t>(x.operands[1].imm);
+        if (d >= 0 && st.origin[d].valid) {
+            if (k < st.origin[d].width) {
+                st.origin[d].shift = static_cast<uint8_t>(st.origin[d].shift + k);
+                st.origin[d].width = static_cast<uint8_t>(st.origin[d].width - k);
+            } else {
+                st.origin[d] = Origin{}; // se lo llevo entero: ya no queda nada
+            }
+        }
     }
 
     // `lea REG, [rip+disp]`: la direccion absoluta ya es calculable aqui.
@@ -869,6 +900,11 @@ constexpr cs_mode kWalkMode = isa::kMode;
 
 /// El estado de registros que lleva el idioma en uso.
 using TableState = isa::TableState;
+
+/// De donde salio lo que lleva un registro, segun el idioma en uso.  Es un rango
+/// de BITS a proposito: que trozo corresponde a que campo lo decide quien conoce
+/// nuestra codificacion, no la ISA.
+using Origin = isa::Origin;
 
 /// Que se pudo ver del recorrido.
 struct WalkResult {
