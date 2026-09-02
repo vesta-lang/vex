@@ -109,6 +109,8 @@ uint64_t RawAllocator::alloc(size_t size) {
         // Stats.
         const size_t slab_size = SLAB_SIZES[class_idx];
         total_bytes_ += slab_size;
+        ++slab_live_count_;
+        slab_live_bytes_ += slab_size;
         stats_.alloc_count++;
         stats_.alloc_bytes += slab_size;
         if (total_bytes_ > stats_.peak_bytes) {
@@ -201,31 +203,53 @@ fallback_vm_alloc:
 bool RawAllocator::free(uint64_t ptr) {
     // ===== Slab fast path (Sprint mem-perf 2026-06-02) =====
     // Si ptr cae en algun chunk del slab, push al free list.
-    // Lookup via binary search sobre @c slab_chunks_sorted_ (O(log N)).
-    // Reemplaza el @c slab_payload_to_class_ unordered_map (~150 ns)
-    // por ~30 ns binary search en N_chunks tipicamente 1-100.
-    if (!slab_chunks_sorted_.empty() && ptr != 0) {
-        // upper_bound: primer chunk con base > ptr.  El candidato es
-        // el anterior (si existe), que tiene base <= ptr.
-        auto it = std::upper_bound(
-            slab_chunks_sorted_.begin(), slab_chunks_sorted_.end(), ptr,
-            [](uint64_t p, const SlabChunkInfo &c) { return p < c.base; });
-        if (it != slab_chunks_sorted_.begin()) {
-            --it;
-            if (ptr >= it->base && ptr < it->end) {
-                const uint8_t class_idx = it->class_idx;
-                // Push al free list: el slot mismo guarda el next ptr.
-                SlabFreeNode *node = reinterpret_cast<SlabFreeNode *>(ptr);
-                node->next = slab_free_list_[class_idx];
-                slab_free_list_[class_idx] = node;
-                // Stats.
-                const size_t slab_size = SLAB_SIZES[class_idx];
-                stats_.free_count++;
-                stats_.freed_bytes += slab_size;
-                total_bytes_ -= slab_size;
-                return true;
-            }
+    if (const SlabChunkInfo *chunk = slab_chunk_for(ptr)) {
+        const uint8_t class_idx = chunk->class_idx;
+        const size_t slab_size = SLAB_SIZES[class_idx];
+
+        /* (1) Que el puntero sea el PRINCIPIO de un slot.
+         *
+         * Bastaba con que cayera dentro del chunk, asi que un `free(p + 8)`
+         * -- de un bloque VIVO, ademas -- se aceptaba: el slot se encadenaba
+         * desplazado y el `next` de la lista pasaba a ser lo que el programa
+         * tuviera escrito ahi.  El `alloc` SIGUIENTE lo seguia y moria de
+         * violacion de acceso, lejos del `free` culpable.
+         *
+         * Los tamanos son potencias de dos, asi que comprobarlo es un AND. */
+        if (((ptr - chunk->base) & (slab_size - 1)) != 0) {
+            ++stats_.invalid_free_count;
+            return false;
         }
+
+        SlabFreeNode *node = reinterpret_cast<SlabFreeNode *>(ptr);
+        const uint64_t marca = SLAB_FREE_MARK ^ ptr;
+
+        /* (2) Que el slot no estuviera YA libre.
+         *
+         * El camino tradicional lo comprobaba buscando el puntero en el
+         * catalogo -- y la documentacion de esta funcion lo sigue prometiendo
+         * --, pero el camino rapido no miraba nada: un doble free encadenaba
+         * el nodo consigo mismo (`p->next = p`) y los DOS `alloc` siguientes
+         * devolvian la MISMA direccion, dos objetos vivos sobre la misma
+         * memoria y en silencio.  De paso se perdia la lista libre entera del
+         * chunk, porque el `next` que se sobrescribia era el que la
+         * enhebraba: 64 KiB fugados por cada doble free. */
+        if (node->free_mark == marca) {
+            ++stats_.double_free_count;
+            return false;
+        }
+
+        // Push al free list: el slot mismo guarda el next ptr.
+        node->next = slab_free_list_[class_idx];
+        node->free_mark = marca;
+        slab_free_list_[class_idx] = node;
+        // Stats.
+        stats_.free_count++;
+        stats_.freed_bytes += slab_size;
+        total_bytes_ -= slab_size;
+        --slab_live_count_;
+        slab_live_bytes_ -= slab_size;
+        return true;
     }
 
     // ===== Slow path: bloques de allocations_ tradicional =====
@@ -291,6 +315,26 @@ uint64_t RawAllocator::realloc(uint64_t ptr, size_t new_size) {
     if (new_size == 0) {
         free(ptr);
         return 0;
+    }
+
+    /* Un bloque del SLAB no esta en el catalogo: el camino rapido no registra
+     * nada.  Sin preguntar por el, el `find` de abajo fallaba y el bloque se
+     * trataba como ajeno -- o sea `return alloc(new_size)`: un bloque nuevo
+     * SIN copiar los datos y SIN soltar el viejo.  El contenido se perdia y el
+     * viejo se fugaba, y ninguna de las dos cosas daba error.
+     *
+     * Su tamano no hay que guardarlo en ningun sitio: es el de su clase. */
+    if (const SlabChunkInfo *chunk = slab_chunk_for(ptr)) {
+        const size_t old_size = SLAB_SIZES[chunk->class_idx];
+        const uint64_t nuevo = alloc(new_size);
+        if (nuevo == 0) return 0; // sin memoria: el viejo sigue intacto
+        std::memcpy(reinterpret_cast<void *>(nuevo),
+                    reinterpret_cast<const void *>(ptr),
+                    std::min(old_size, new_size));
+        /* `alloc` ya zerifica el bloque entero, asi que la cola de un bloque
+         * que crece queda a cero sin hacer nada mas. */
+        free(ptr);
+        return nuevo;
     }
 
     // Caso especial 2: ptr no registrado.  Tipico cuando el caller
@@ -370,6 +414,14 @@ void RawAllocator::free_all() {
     // descartar la tabla de tracking.  Si pasara al reves dejariamos
     // los bloques alocados sin tracking y serian un leak real.
     allocations_.clear();
+    /* Los del slab tambien se sueltan aqui, y tambien CUENTAN.  Se liberan
+     * desde siempre, pero no se sumaban a las estadisticas: un programa que
+     * reservara mil bloques pequenos y los dejara vivos hasta el final
+     * terminaba con `free_count` a cero, como si no hubiera soltado nada. */
+    stats_.free_count += slab_live_count_;
+    stats_.freed_bytes += slab_live_bytes_;
+    slab_live_count_ = 0;
+    slab_live_bytes_ = 0;
     // Sprint mem-loop-fix: tambien liberar todos los chunks del slab.
     slab_free_all();
     total_bytes_ = 0;

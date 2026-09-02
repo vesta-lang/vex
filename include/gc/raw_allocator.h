@@ -77,6 +77,7 @@
  * allocator; la sincronizacion externa la proporciona el planificador.
  */
 
+#include <algorithm>
 #include <cstdint>
 #include <cstddef>
 #include <unordered_map>
@@ -127,6 +128,14 @@ struct RawStats {
     uint64_t freed_bytes = 0;   ///< bytes liberados acumulados
     uint64_t realloc_count = 0; ///< llamadas a realloc() ejecutadas
     uint64_t peak_bytes = 0;    ///< maximo bytes vivos en cualquier instante
+
+    /* Los free RECHAZADOS, contados aparte de los buenos.  Un `free` que
+     * devuelve `false` no rompe nada -- ese es el objetivo -- pero significa
+     * que el programa tiene un error de gestion de memoria, y sin estas dos
+     * cifras el aviso se lo queda quien llamo y nadie mas se entera. */
+    uint64_t double_free_count = 0;  ///< frees de un bloque YA libre
+    uint64_t invalid_free_count = 0; ///< frees de una direccion que no es el
+                                     ///< principio de un slot
 };
 
 // =========================================================================
@@ -283,9 +292,12 @@ class RawAllocator {
 
     /**
      * @brief Numero de bloques activos (aun no liberados).
-     * @return Conteo de entradas en el mapa interno.
+     * @return Cuantos bloques hay vivos, sumando los DOS caminos: el
+     *         catalogo y el slab.
      */
-    size_t block_count() const { return allocations_.size(); }
+    size_t block_count() const {
+        return allocations_.size() + slab_live_count_;
+    }
 
     /**
      * @brief Referencia de solo lectura a las estadisticas acumuladas.
@@ -351,9 +363,23 @@ class RawAllocator {
      * La clave es el uint64_t retornado por alloc() / realloc().
      */
     std::unordered_map<uint64_t, AllocRecord> allocations_;
-
     size_t total_bytes_ =
-        0;           ///< bytes vivos actualmente (suma de AllocRecord::size)
+        0; ///< bytes vivos actualmente (los de los DOS caminos)
+
+    /* Los bloques vivos del SLAB, que no estan en `allocations_`.
+     *
+     * El camino rapido no registra nada en el catalogo -- ese es justo su
+     * ahorro --, asi que sin estas dos cifras el asignador no sabe cuantos
+     * bloques tiene vivos: `block_count()` devolvia el tamano del catalogo, o
+     * sea CERO para todo lo pequeno, y `free_all` no contaba lo que soltaba.
+     *
+     * Que la cuenta MIENTA es peor que no tenerla: la forma de ver una fuga es
+     * mirar si los bloques vivos bajan, y un cero constante parece que todo se
+     * libera siempre.  Cuestan un incremento en la misma linea de cache que
+     * `total_bytes_`, que ya se toca ahi al lado. */
+    size_t slab_live_count_ = 0; ///< slots del slab reservados ahora mismo
+    size_t slab_live_bytes_ = 0; ///< y sus bytes
+
     RawStats stats_; ///< contadores de uso (ver RawStats)
 
     // ---------------------------------------------------------------------
@@ -389,9 +415,29 @@ class RawAllocator {
     /// @brief Nodo del free list intrusivo (vive dentro del slot
     /// cuando esta libre).  Sobrescribe el payload del slot; en
     /// @c alloc se vuelve a usar como payload.  LIFO O(1).
+    ///
+    /// El segundo campo NO es parte de la lista: es la marca de "este slot
+    /// esta libre", y es lo que permite que @c free reconozca un doble free.
+    /// Vive DENTRO del slot a proposito, porque @c alloc zerifica el slot
+    /// entero (@c memset) y con eso la marca se borra sola al reservarlo --
+    /// sin tocar @c alloc, y sin tocar la copia que el JIT emite en linea, que
+    /// hace ese mismo @c memset.
     struct SlabFreeNode {
         SlabFreeNode *next;
+        uint64_t free_mark;
     };
+    /* La clase mas pequena mide 16 bytes, justo lo que ocupa el nodo. */
+    static_assert(sizeof(SlabFreeNode) <= 16,
+                  "el nodo del free list tiene que caber en el slot mas "
+                  "pequeno (SLAB_SIZES[0])");
+
+    /// @brief Semilla de la marca de slot libre.
+    ///
+    /// La marca es @c SLAB_FREE_MARK^direccion, no una constante: asi un
+    /// programa que casualmente guarde este valor en ese offset no hace que se
+    /// rechace un @c free legitimo, y ademas la marca de un slot no vale para
+    /// otro.
+    static constexpr uint64_t SLAB_FREE_MARK = 0xF2EE'D0'12'34'56'78ULL;
 
     /// @brief Free list por size class.  Cabeza LIFO; @c free push,
     /// @c alloc pop.  Inicialmente nullptr; @c slab_grow_class
@@ -448,6 +494,34 @@ class RawAllocator {
     /// @c free hace binary search para encontrar el chunk que
     /// contiene un ptr dado.
     std::vector<SlabChunkInfo> slab_chunks_sorted_;
+
+    /**
+     * @brief El chunk del slab que contiene @p ptr, o nullptr si no es del
+     *        slab.
+     *
+     * Busqueda binaria sobre @c slab_chunks_sorted_ (O(log N)).  Es la unica
+     * forma de saber si una direccion salio del camino rapido, porque ese
+     * camino NO registra nada en @c allocations_ -- y por eso todo el que
+     * reciba un puntero del usuario tiene que preguntar aqui primero.
+     *
+     * Lo tenia solo @c free, escrito dentro.  @c realloc no preguntaba, no
+     * encontraba el puntero en el catalogo y lo trataba como ajeno: reservaba
+     * uno nuevo, SIN copiar los datos y SIN soltar el viejo.
+     *
+     * @param ptr Direccion a localizar.
+     * @return El chunk que la contiene, o nullptr.
+     */
+    const SlabChunkInfo *slab_chunk_for(uint64_t ptr) const noexcept {
+        if (slab_chunks_sorted_.empty() || ptr == 0) return nullptr;
+        // upper_bound: primer chunk con base > ptr.  El candidato es el
+        // anterior (si existe), que tiene base <= ptr.
+        auto it = std::upper_bound(
+            slab_chunks_sorted_.begin(), slab_chunks_sorted_.end(), ptr,
+            [](uint64_t p, const SlabChunkInfo &c) { return p < c.base; });
+        if (it == slab_chunks_sorted_.begin()) return nullptr;
+        --it;
+        return (ptr >= it->base && ptr < it->end) ? &*it : nullptr;
+    }
 
     /// @brief Cache del env var @c VESTA_NO_SLAB para evitar
     /// @c getenv en el hot path del alloc.  Valor:
