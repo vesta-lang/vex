@@ -249,13 +249,26 @@ static void test_layout() {
     CHECK(sizeof(loader::ObjectHeader) == 24, "sizeof(ObjectHeader) == 24");
     CHECK(offsetof(loader::ObjectHeader, monitor_word) == 16,
           "offsetof(monitor_word) == 16");
+    /* El reparto del monitor_word es 48 bits de dueno + 16 de profundidad, y
 
-    // Verificar helpers monitor_make / monitor_owner / monitor_depth
-    uint64_t w = loader::monitor_make(0x12345678u, 0x9ABCDEF0u);
-    CHECK(loader::monitor_owner(w) == 0x12345678u,
-          "monitor_owner extrae bits 0-31");
-    CHECK(loader::monitor_depth(w) == 0x9ABCDEF0u,
-          "monitor_depth extrae bits 32-63");
+     * * no es arbitrario: el dueno es un pid CODIFICADO (scheduler<<32 |
+     * local),
+     * que ya ocupa 48.  El test comprobaba el reparto 32/32 de
+     * antes, y solo
+     * se notaba a medias -- la mitad del dueno seguia
+     * pasando porque el valor
+     * que usaba cabia en los dos repartos. */
+    const uint64_t owner = 0x1234ABCD5678ULL; // 48 bits, como un pid real
+    const uint32_t depth = 0xBEEFu;           // 16 bits
+    uint64_t w = loader::monitor_make(owner, depth);
+    CHECK(loader::monitor_owner(w) == owner, "monitor_owner extrae bits 0-47");
+    CHECK(loader::monitor_depth(w) == depth, "monitor_depth extrae bits 48-63");
+    // Los dos campos no se pisan: el maximo de cada uno deja intacto al otro.
+    uint64_t wmax = loader::monitor_make(loader::MONITOR_OWNER_MASK, 0xFFFFu);
+    CHECK(loader::monitor_owner(wmax) == loader::MONITOR_OWNER_MASK,
+          "dueno maximo (48 bits) intacto");
+    CHECK(loader::monitor_depth(wmax) == 0xFFFFu,
+          "profundidad maxima (65535) intacta");
 
     // Round-trip: empacar, desempacar, comparar
     uint64_t w2 = loader::monitor_make(loader::monitor_owner(w),
