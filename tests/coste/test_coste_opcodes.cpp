@@ -55,6 +55,9 @@
 
 #include "runtime/decode_instruction.h"
 #include "runtime/decode_table.h"
+
+#include "../util/handler_walk.h"
+#include "../util/report_out.h"
 #include "util/ansi.h"
 #include "vx/asm/instr_db.h"
 
@@ -65,11 +68,6 @@ using vx::instr_db::Isa;
 /// Hasta donde se sigue una cadena de llamadas antes de rendirse.  Sin tope,
 /// un handler que llama al runtime entero arrastraria medio binario.
 int g_profundidad = 6;
-
-/// Tope de bytes por funcion.  Es una red de seguridad: si el recorrido no
-/// encuentra el `ret` -- por datos entre codigo o por un salto que no se
-/// sigue -- se para aqui en vez de leer memoria ajena.
-constexpr size_t BYTES_MAX = 128 * 1024;
 
 /// Que se pudo decir del coste de un handler.
 enum class Certeza {
@@ -86,85 +84,19 @@ const char *nombre_certeza(Certeza c) {
     }
 }
 
+/// Lo recorrido de un handler: el texto asm que necesita `analyze_asm_cost`,
+/// mas los contadores que da el recorredor compartido
+/// (`tests/util/handler_walk.h`, que usa tambien `test_efectos_opcodes`).
 struct Handler {
     std::string cuerpo; ///< texto asm, para `analyze_asm_cost`.
-    uint32_t instrs = 0;
-    uint32_t saltos_atras = 0;
-    uint32_t saltos_adelante = 0;
-    uint32_t llamadas = 0;
-    bool truncado = false; ///< se llego al tope sin ver el final.
+    tests::WalkResult w;
+
+    uint32_t instrs() const { return w.instrs; }
 };
 
-/// Desensambla desde @p dir hasta el final de la funcion, siguiendo las
-/// llamadas hasta @p profundidad.
-///
-/// El final es un `ret`, o un `jmp` fuera del rango recorrido (tail call: el
-/// optimizador saca cuerpo comun a funciones aparte, y sin seguirlo se mide un
-/// stub de tres instrucciones en vez del trabajo).
-void recorrer(csh cs, uint64_t dir, int profundidad, Handler &h,
-              std::set<uint64_t> &vistas) {
-    if (profundidad < 0 || dir == 0 || !vistas.insert(dir).second) return;
-
-    const uint8_t *code = reinterpret_cast<const uint8_t *>(dir);
-    size_t restante = BYTES_MAX;
-    uint64_t addr = dir;
-    cs_insn *insn = cs_malloc(cs);
-    if (!insn) return;
-
-    const uint64_t lo = dir;
-    uint64_t hi = dir;
-    std::vector<uint64_t> pendientes; // llamadas a seguir despues
-
-    while (cs_disasm_iter(cs, &code, &restante, &addr, insn)) {
-        h.instrs++;
-        hi = insn->address;
-        h.cuerpo += insn->mnemonic;
-        if (insn->op_str[0]) {
-            h.cuerpo += ' ';
-            h.cuerpo += insn->op_str;
-        }
-        h.cuerpo += '\n';
-
-        const std::string m = insn->mnemonic;
-        // Destino inmediato del salto/llamada, si lo hay.  Un `jmp *%rax` no
-        // lo tiene, y eso ya es motivo para no prometer exactitud.
-        uint64_t destino = 0;
-        if (insn->op_str[0] == '0' && insn->op_str[1] == 'x')
-            destino = strtoull(insn->op_str + 2, nullptr, 16);
-
-        if (m == "ret" || m == "retq") break;
-        if (m == "call" || m == "callq") {
-            h.llamadas++;
-            if (destino) pendientes.push_back(destino);
-            continue;
-        }
-        if (m[0] == 'j') {
-            if (!destino) {
-                h.llamadas++; // salto indirecto: se trata como no seguible
-            } else if (destino <= insn->address && destino >= lo) {
-                h.saltos_atras++; // bucle dentro de la funcion
-            } else if (destino > hi && destino < lo + BYTES_MAX) {
-                h.saltos_adelante++; // `if` dentro de la funcion
-            } else if (m == "jmp") {
-                // Tail call: el cuerpo de verdad esta ahi.
-                pendientes.push_back(destino);
-                break;
-            }
-        }
-        if (h.instrs > 20000) {
-            h.truncado = true;
-            break;
-        }
-    }
-    cs_free(insn, 1);
-
-    for (uint64_t d : pendientes)
-        recorrer(cs, d, profundidad - 1, h, vistas);
-}
-
 Certeza certeza_de(const Handler &h) {
-    if (h.truncado || h.saltos_atras || h.llamadas) return Certeza::Cota;
-    if (h.saltos_adelante) return Certeza::Acotado;
+    if (h.w.truncado || h.w.saltos_atras || h.w.llamadas) return Certeza::Cota;
+    if (h.w.saltos_adelante) return Certeza::Acotado;
     return Certeza::Exacto;
 }
 
@@ -185,141 +117,24 @@ struct Fila {
     Certeza certeza = Certeza::Cota;
 };
 
-/// Salida acumulada en memoria y volcada de una vez.
-///
-/// El informe son ~5600 lineas (232 opcodes x 24 filas), y con `printf` eso
-/// es una llamada por linea: formateo, bloqueo del FILE* y descarga al
-/// terminal cada vez.  En Windows es el caso peor -- cada escritura a la
-/// consola cruza a la API del sistema -- y se notaba.
-///
-/// Aqui se compone todo en un `std::string` y se escribe con UN `fwrite`.
-/// Ademas los numeros se formatean a mano en vez de con `snprintf`: son dos
-/// enteros y un punto, y evitarlo quita otras ~17000 llamadas de formateo.
-/// Portable: solo `std::string` y `fwrite`, sin nada especifico del sistema.
-struct Salida {
-    std::string b;
-
-    Salida() { b.reserve(8u << 20); } // ~8 MB: cabe el informe entero
-
-    Salida &s(const char *t) {
-        b += t;
-        return *this;
-    }
-    Salida &s(const std::string &t) {
-        b += t;
-        return *this;
-    }
-    Salida &ch(char c) {
-        b += c;
-        return *this;
-    }
-    Salida &nl() {
-        b += '\n';
-        return *this;
-    }
-    Salida &rep(char c, int n) {
-        b.append(static_cast<size_t>(n < 0 ? 0 : n), c);
-        return *this;
-    }
-
-    /// Texto alineado a la IZQUIERDA en @p ancho.  Se rellena con espacios y
-    /// no se trunca por debajo: el color se anade FUERA, porque los codigos
-    /// ANSI no ocupan ancho visible y meterlos dentro descuadra la columna.
-    Salida &izq(const char *t, int ancho) {
-        int n = 0;
-        while (t[n]) {
-            b += t[n];
-            ++n;
-        }
-        return rep(' ', ancho - n);
-    }
-
-    /// Texto alineado a la DERECHA.  Hace falta para los rotulos de las
-    /// columnas numericas: si la cabecera se alinea a la izquierda y los datos
-    /// a la derecha, los titulos no caen sobre sus numeros -- y un rotulo mas
-    /// largo que su campo se come el del vecino.
-    Salida &der(const char *t, int ancho) {
-        int n = 0;
-        while (t[n])
-            ++n;
-        rep(' ', ancho - n);
-        return s(t);
-    }
-
-    /// Entero sin signo alineado a la DERECHA.
-    Salida &num(uint64_t v, int ancho) {
-        char tmp[24];
-        int n = 0;
-        do {
-            tmp[n++] = static_cast<char>('0' + v % 10);
-            v /= 10;
-        } while (v);
-        rep(' ', ancho - n);
-        while (n)
-            b += tmp[--n];
-        return *this;
-    }
-
-    /// Numero con UN decimal, alineado a la derecha.  Se redondea a la decima
-    /// mas cercana con enteros, sin pasar por la conversion de `printf`.
-    ///
-    /// OJO: no da siempre lo mismo que `%.1f`.  En los empates exactos esto
-    /// redondea hacia arriba y `printf` mira la representacion binaria del
-    /// double: `9.95` sale aqui `10.0` y por `printf` `9.9`, porque el `9.95`
-    /// que cabe en un double es un pelo menor.  Comprobado sobre once valores;
-    /// solo difieren los empates.
-    ///
-    /// Se deja asi a proposito -- redondear .5 hacia arriba es lo que espera
-    /// quien lee -- pero queda dicho para que nadie lo "arregle" al comparar
-    /// esta salida con una generada por `printf`, y porque el JSON lleva el
-    /// valor con toda su precision: la unica cifra redondeada es la del
-    /// terminal.
-    Salida &dec1(double v, int ancho) {
-        const bool neg = v < 0.0;
-        if (neg) v = -v;
-        const uint64_t escalado = static_cast<uint64_t>(v * 10.0 + 0.5);
-        const uint64_t ent = escalado / 10, frac = escalado % 10;
-        char tmp[24];
-        int n = 0;
-        uint64_t e = ent;
-        do {
-            tmp[n++] = static_cast<char>('0' + e % 10);
-            e /= 10;
-        } while (e);
-        rep(' ', ancho - n - 2 - (neg ? 1 : 0));
-        if (neg) b += '-';
-        while (n)
-            b += tmp[--n];
-        b += '.';
-        b += static_cast<char>('0' + frac);
-        return *this;
-    }
-
-    /// Vuelca y vacia.  Se llama una vez al final, o por tramos si hiciera
-    /// falta acotar la memoria.
-    void volcar(std::FILE *fp) {
-        if (!b.empty()) std::fwrite(b.data(), 1, b.size(), fp);
-        b.clear();
-    }
-};
-
 /// La ISA de ESTE binario.  Los handlers son el codigo maquina del propio
 /// interprete, asi que solo tiene sentido costearlos con la DB de la
 /// arquitectura en la que se compilo: no se puede medir codigo x86 con las
 /// latencias de ARM.
 #if defined(__aarch64__) || defined(_M_ARM64)
 constexpr Isa kIsa = Isa::ARM64;
-constexpr cs_arch kCsArch = CS_ARCH_ARM64;
-constexpr cs_mode kCsMode = CS_MODE_ARM;
 constexpr const char *kIsaNombre = "AArch64";
 #elif defined(__x86_64__) || defined(_M_X64)
 constexpr Isa kIsa = Isa::X86;
-constexpr cs_arch kCsArch = CS_ARCH_X86;
-constexpr cs_mode kCsMode = CS_MODE_64;
 constexpr const char *kIsaNombre = "x86-64";
 #else
 #error "ISA no soportada por el derivador de coste"
 #endif
+
+// El par (arquitectura, modo) de Capstone lo fija el recorredor compartido:
+// es el mismo dato para quien mide el coste y para quien deriva los efectos.
+constexpr cs_arch kCsArch = tests::kWalkArch;
+constexpr cs_mode kCsMode = tests::kWalkMode;
 
 } // namespace
 
@@ -411,9 +226,19 @@ int main(int argc, char **argv) {
                 fila.fn = par.first;
                 fila.compartida = reparto[par.first];
                 std::set<uint64_t> vistas;
-                recorrer(cs, reinterpret_cast<uint64_t>(par.first),
-                         g_profundidad, fila.h, vistas);
-                if (fila.h.instrs == 0) continue;
+                tests::walk_handler(
+                    cs, reinterpret_cast<uint64_t>(par.first), g_profundidad,
+                    vistas,
+                    [&fila](const cs_insn &in) {
+                        fila.h.cuerpo += in.mnemonic;
+                        if (in.op_str[0]) {
+                            fila.h.cuerpo += ' ';
+                            fila.h.cuerpo += in.op_str;
+                        }
+                        fila.h.cuerpo += '\n';
+                    },
+                    fila.h.w);
+                if (fila.h.instrs() == 0) continue;
                 for (uint32_t u : uarchs)
                     fila.coste.push_back(
                         vx::instr_db::analyze_asm_cost(kIsa, fila.h.cuerpo, u));
@@ -593,7 +418,7 @@ int main(int argc, char **argv) {
     // La parte pesada del informe va por el buffer.  Las cabeceras se quedan
     // en `printf` porque son treinta lineas y no compensa: lo que costaba eran
     // las ~5600 del bloque de opcodes.
-    Salida out;
+    tests::Salida out;
     std::vector<const Opcode *> orden;
     for (const auto &o : opcodes)
         orden.push_back(&o);
@@ -619,7 +444,7 @@ int main(int argc, char **argv) {
         if (o->de && o->de->certeza > c) c = o->de->certeza;
 
         out.s(B).izq(o->nombre.c_str(), 18).s(R);
-        out.s("  ").s(D).num(o->ex->h.instrs, 0).s(" instr exec").s(R);
+        out.s("  ").s(D).num(o->ex->h.instrs(), 0).s(" instr exec").s(R);
         if (o->de)
             out.s(D)
                 .s(", decode compartido por ")
@@ -788,15 +613,15 @@ int main(int argc, char **argv) {
         h["funcion_usada_por"] = f.opcode;
         h["grupo"] = f.grupo;
         h["opcodes_que_la_comparten"] = f.compartida;
-        h["instrucciones_maquina"] = f.h.instrs;
+        h["instrucciones_maquina"] = f.h.instrs();
         h["certeza"] = nombre_certeza(f.certeza);
         // El porque de la certeza, no solo la etiqueta: quien lea el JSON
         // dentro de un ano tiene que poder saber si la cota venia de un bucle
         // o de una llamada que no se siguio.
-        h["saltos_atras"] = f.h.saltos_atras;
-        h["saltos_adelante"] = f.h.saltos_adelante;
-        h["llamadas"] = f.h.llamadas;
-        h["truncado"] = f.h.truncado;
+        h["saltos_atras"] = f.h.w.saltos_atras;
+        h["saltos_adelante"] = f.h.w.saltos_adelante;
+        h["llamadas"] = f.h.w.llamadas;
+        h["truncado"] = f.h.w.truncado;
         for (size_t k = 0; k < uarchs.size(); ++k) {
             const auto &c = f.coste[k];
             nlohmann::json cu;
@@ -853,6 +678,23 @@ int main(int argc, char **argv) {
             cu["instrs"] = ce.instr_count + (cd ? cd->instr_count : 0u);
             cu["emparejadas"] = ce.matched + (cd ? cd->matched : 0u);
             cu["con_coste"] = ce.costed + (cd ? cd->costed : 0u);
+            /* Aqui NO va la presion por PUERTO, y no es un olvido.
+             *
+             * `AsmBlockCost` la trae calculada, y para el asm NATIVO si sirve
+             * --la usa `asm_diagram`--, porque ese codigo ES el que ejecuta la
+             * CPU.  Para una instruccion de la VM no aporta: la VM no tiene
+             * unidades de ejecucion propias, asi que lo que saldria son los
+             * puertos del ANFITRION, y esos no son el cuello.
+             *
+             * Medido: con paquetes el CPI es 0,207 --unas 4,8 instrucciones
+             * retiradas por ciclo, cerca del ancho de la maquina-- y
+             * `Bad Speculation` esta al 0%.  No hay parada que recuperar.  Lo
+             * que limita es el RECUENTO de instrucciones, no la competencia por
+             * una unidad, asi que planificar para repartir puertos afinaria
+             * algo que no aprieta.
+             *
+             * Si algun dia el perfil cambia y aparece una parada por puerto,
+             * el dato esta a una linea de distancia: `ce.port_pressure`. */
             oj["coste"].push_back(cu);
         }
         // Minimo, maximo y promedio.  En el terminal se pintan como tres filas

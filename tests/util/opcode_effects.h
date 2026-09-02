@@ -1,0 +1,387 @@
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
+ */
+
+/**
+ * @file tests/util/opcode_effects.h
+ * @brief Que toca cada opcode de la VM: la FORMA y los EFECTOS IMPLICITOS.
+ *
+ * Para que
+ * --------
+ * Sin saber que toca cada instruccion no se puede afirmar que dos son
+ * independientes, y sin eso no hay ni reordenacion dentro de un paquete ni
+ * vectorizacion.  Es el prerrequisito de las dos tecnicas que faltan.
+ *
+ * Esta aqui, y no dentro de un test, porque lo necesitan DOS: el que saca la
+ * tabla y la pagina de doc (`test_efectos_opcodes`) y el que mide cuanta
+ * independencia real hay dentro de los paquetes (`test_bundle_ilp`).  Con una
+ * copia en cada uno, la que no se toca se queda vieja en silencio.
+ *
+ * De donde sale cada mitad, y por que no del mismo sitio
+ * -----------------------------------------------------
+ *   - La FORMA (que registros nombra) tiene indice VARIABLE
+ *     (`regs[instr.reg1]`), asi que solo el formato lo sabe -> la da el
+ *     DESENSAMBLADOR, que es el unico que ya conocia el formato de los 232
+ *     opcodes: no se puede imprimir `r3` sin saber de que campo sale.
+ *   - Los EFECTOS IMPLICITOS (banderas, pila, marco, contador de programa)
+ *     estan en offsets CONSTANTES de `ProcessVM` -> los ve el analisis del
+ *     CODIGO MAQUINA del manejador.  Los offsets salen de `offsetof`, no a ojo.
+ *
+ * Nada de esto EJECUTA la instruccion.  Ejecutar con operandos inventados no
+ * mide, adivina: el union de operandos tiene ocho interpretaciones de los
+ * mismos 16 bytes y no hay relleno valido para todas a la vez -- salieron
+ * divisiones por cero, `dlopen("")` y un opcode que pidio 18 GB de una vez.
+ *
+ * Lo que NO sabe
+ * --------------
+ * Una fila con `complete == false` es COTA INFERIOR: queda una llamada
+ * indirecta que no se pudo seguir, asi que lo listado es cierto pero puede
+ * haber mas.  Quien decida REORDENAR tiene que tratarla como barrera; darla por
+ * completa es el fallo silencioso que este modelo existe para evitar.
+ */
+
+#ifndef VESTA_TESTS_OPCODE_EFFECTS_H
+#define VESTA_TESTS_OPCODE_EFFECTS_H
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+#include <vector>
+
+#include <capstone/capstone.h>
+
+#include "disasm/disasm.h"
+#include "runtime/decode_instruction.h"
+#include "runtime/decode_table.h"
+#include "runtime/exec_instruction.h"
+#include "runtime/proceso_runtime.h"
+
+#include "handler_walk.h"
+
+namespace tests {
+
+/* Bytes de operando de la instruccion de prueba.
+ *
+ * Cada byte lleva un par de nibbles DISTINTO: 0x21, 0x43, 0x65...  Todo nibble
+ * es un indice de registro valido (0-15), y que sean distintos importa -- si
+ * dos operandos cayeran en el mismo registro no se podria ver que son dos.
+ * `xchg` salia como `=r1 =r1` con un patron uniforme, y con este sale `=r1
+ * =r3`, que es lo que de verdad codifica. */
+inline uint8_t operand_byte(size_t k) {
+    const unsigned lo = static_cast<unsigned>((2 * k + 1) & 0x0F);
+    const unsigned hi = static_cast<unsigned>((2 * k + 2) & 0x0F);
+    return static_cast<uint8_t>((hi << 4) | lo);
+}
+
+/**
+ * @brief Instrucciones que TRANSFIEREN CONTROL.
+ *
+ * No se reordenan nunca, toquen los registros que toquen: moverlas cambia que
+ * se ejecuta despues.  Se marcan aparte porque sus operandos SI se derivan
+ * igual que los demas -- lo que no se puede es moverlas.
+ *
+ * DERIVADA del codigo: son los manejadores que escriben `registers.rip` o
+ * marcan `did_jump`.  La comparacion es por PUNTERO A FUNCION, no por indice de
+ * opcode: un indice mal puesto es un fallo silencioso, y renombrar un manejador
+ * con punteros es un error de compilacion.
+ */
+inline bool transfers_control(const runtime::InstrFormat &f) {
+    const auto e = f.exec;
+    return e == &runtime::exec_instr_callclosure ||
+           e == &runtime::exec_instr_callitf ||
+           e == &runtime::exec_instr_callm ||
+           e == &runtime::exec_instr_callrawclosure ||
+           e == &runtime::exec_instr_callsuper ||
+           e == &runtime::exec_instr_callvirt ||
+           e == &runtime::exec_instr_callvm ||
+           e == &runtime::exec_instr_callvmr ||
+           e == &runtime::exec_instr_cmpjmp ||
+           e == &runtime::exec_instr_cmpjmpu ||
+           e == &runtime::exec_instr_decjnz || e == &runtime::exec_instr_hlt ||
+           e == &runtime::exec_instr_jmp || e == &runtime::exec_instr_jmpr ||
+           e == &runtime::exec_instr_jrel ||
+           e == &runtime::exec_instr_jumptable ||
+           e == &runtime::exec_instr_loadmod ||
+           e == &runtime::exec_instr_proceed || e == &runtime::exec_instr_ret ||
+           e == &runtime::exec_instr_spawn ||
+           e == &runtime::exec_instr_spawn_on ||
+           e == &runtime::exec_instr_spawnargs ||
+           e == &runtime::exec_instr_swapctx ||
+           e == &runtime::exec_instr_tailcall ||
+           e == &runtime::exec_instr_typeswitch;
+}
+
+/* ---------------------------------------------------------------------------
+ * Efectos IMPLICITOS: los que no aparecen como operando.
+ *
+ *     cmp r1, r2   no escribe ningun registro... pero escribe las FLAGS
+ *     jne destino  no lee ningun registro...    pero las LEE
+ *     push r1      toca rsp sin nombrarlo
+ *
+ * Mirando solo los operandos, esas dos primeras parecen independientes, y
+ * reordenarlas cambia el programa.  Sin esto no se puede decidir que se puede
+ * mover dentro de un paquete.
+ *
+ * De donde salen: del CODIGO MAQUINA del manejador.  Es justo el reparto que
+ * hace falta, y no es casual:
+ *
+ *   - la FORMA (que registro) tiene indice VARIABLE (`regs[instr.reg1]`), asi
+ *     que solo el formato lo sabe -> la da el desensamblador;
+ *   - los efectos implicitos estan en offsets CONSTANTES dentro de `ProcessVM`
+ *     (`registers.flags`, `stack_pointer`...) -> los ve el analisis estatico.
+ *
+ * El offset se saca con `offsetof`, no a ojo: si alguien mueve un campo de
+ * sitio, esto sigue mirando donde toca.
+ * ------------------------------------------------------------------------- */
+
+/// Un campo del proceso que interesa vigilar, con el rango que ocupa.
+struct Field {
+    const char *nombre;
+    size_t ini, fin; ///< [ini, fin) dentro de `ProcessVM`
+};
+
+constexpr size_t kRegs = offsetof(runtime::ProcessVM, registers);
+
+/* Los campos, por offset.  `regs[]` va entero como un solo rango: un acceso con
+ * indice variable cae en cualquier parte de el, y no se puede saber en cual sin
+ * ejecutar -- para eso esta la forma, que sale del desensamblador. */
+const Field kFields[] = {
+    {"flags", kRegs + offsetof(runtime::context_registers_vm, flags),
+     kRegs + offsetof(runtime::context_registers_vm, flags) +
+         sizeof(((runtime::context_registers_vm *)nullptr)->flags)},
+    {"pila", kRegs + offsetof(runtime::context_registers_vm, stack_pointer),
+     kRegs + offsetof(runtime::context_registers_vm, stack_pointer) + 8},
+    {"marco", kRegs + offsetof(runtime::context_registers_vm, base_pointer),
+     kRegs + offsetof(runtime::context_registers_vm, base_pointer) + 8},
+    {"pc", kRegs + offsetof(runtime::context_registers_vm, rip),
+     kRegs + offsetof(runtime::context_registers_vm, rip) + 8},
+};
+
+/// Efectos observados en el codigo de un manejador.
+struct ImplicitEffects {
+    uint32_t escribe = 0; ///< bit i = escribe kFields[i]
+    uint32_t lee = 0;     ///< bit i = lee kFields[i]
+    bool completo =
+        true;            ///< false: habia llamadas indirectas, esto es una cota
+    /// Donde se quedo el recorrido cuando no fue completo.  Sin esto, "no se
+    /// sabe" no es accionable: no dice QUE cerrar.
+    std::vector<std::string> sin_resolver;
+    uint32_t tablas = 0; ///< despachos por tabla que se pudieron seguir
+    /* La instruccion CONCRETA que produjo cada efecto, una por campo y por
+     * direccion.
+     *
+     * El criterio es el desplazamiento, y el desplazamiento se puede parecer al
+     * de otra estructura cualquiera.  Sin poder mirar QUE instruccion lo dijo,
+     * un falso positivo y un efecto real son indistinguibles -- que es como
+     * `mov` acabo declarando que escribe las banderas cuando su propio codigo
+     * dice "MOV no modifica ningun flag". */
+    std::string prueba_w[4]; ///< la que escribe
+    std::string prueba_r[4]; ///< la que lee
+};
+
+/**
+ * @brief Que campos constantes del proceso toca este manejador.
+ *
+ * Se mira el DESPLAZAMIENTO de cada acceso a memoria.  No se sigue de donde
+ * sale el registro base -- eso seria analisis de flujo de datos --, pero los
+ * desplazamientos son lo bastante distintivos como para que un falso positivo
+ * sea improbable: son offsets concretos de una estructura de miles de bytes.
+ *
+ * Ante la duda marca el efecto.  Para decidir reordenaciones, sobrar un efecto
+ * impide una optimizacion; faltar uno rompe el programa.
+ */
+inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
+    ImplicitEffects out;
+    if (handler == nullptr) return out;
+
+    tests::WalkResult res;
+    std::set<uint64_t> vistas;
+    tests::walk_handler(
+        cs, reinterpret_cast<uint64_t>(handler), 6, vistas,
+        [&out](const cs_insn &in) {
+            if (in.detail == nullptr) return;
+            const cs_x86 &x = in.detail->x86;
+            for (uint8_t i = 0; i < x.op_count; ++i) {
+                const cs_x86_op &op = x.operands[i];
+                if (op.type != X86_OP_MEM) continue;
+                /* Un campo de `ProcessVM` NUNCA se alcanza por la pila: el
+                 * manejador recibe un PUNTERO, y el objeto vive en el monton.
+                 * Por `rsp`/`rbp` solo se llega a las variables locales del
+                 * propio manejador, y por `rip` a las globales.
+                 *
+                 * Sin este filtro el criterio es solo el desplazamiento, y los
+                 * campos vigilados caen en [0x40, 0x60) -- justo el rango de
+                 * los marcos de pila corrientes --, asi que cualquier
+                 * `mov [rsp+0x58], rax` se contaba como "escribe flags".  De
+                 * ahi salia que `mov` escribiera las banderas y que `not` no
+                 * las escribiera pero tocase el contador de programa.
+                 *
+                 * Si el compilador guarda el puntero en la pila, lo que hace
+                 * por `rsp` es LEER EL PUNTERO; el acceso al campo sigue siendo
+                 * por el registro donde lo deja, y ese si se mira. */
+                if (op.mem.base == X86_REG_RSP || op.mem.base == X86_REG_ESP ||
+                    op.mem.base == X86_REG_RBP || op.mem.base == X86_REG_EBP ||
+                    op.mem.base == X86_REG_RIP)
+                    continue;
+                const int64_t disp = op.mem.disp;
+                if (disp <= 0) continue;
+                const size_t d = static_cast<size_t>(disp);
+
+                /* Direccion del acceso: LEER o ESCRIBIR.
+                 *
+                 * NO se usa `op.access` de Capstone.  Se comprobo con la prueba
+                 * y marca como ESCRITURA el operando FUENTE: el veredicto
+                 * "`cmp` escribe las banderas" salia de un
+                 * `movzx r11d, byte ptr [rcx+0x58]`, que es una lectura, y el
+                 * de `enter` de un `mov rbx, qword ptr [rcx+0x40]`, tambien.
+                 * Con esa clasificacion "lee" y "escribe" significaban lo
+                 * mismo, y para reordenar es justo lo que hay que distinguir:
+                 * dos lecturas del mismo campo conmutan, una lectura y una
+                 * escritura no.
+                 *
+                 * La FORMA de x86 si es de fiar: el destino es el primer
+                 * operando.  De ahi salen los tres casos. */
+                const std::string mn = in.mnemonic;
+                bool escribe = false, lee = false;
+                if (mn == "lea") {
+                    /* `lea` no accede: calcula una direccion.  Pero si la de un
+                     * campo se pasa a otro sitio, ese sitio puede leerlo y
+                     * escribirlo, y puede que no se llegue a recorrer.  Se
+                     * marca lo peor de los dos. */
+                    escribe = lee = true;
+                } else if (i == 0 && mn != "cmp" && mn != "test" &&
+                           mn != "push" && mn != "call" && mn[0] != 'j') {
+                    // Destino: se escribe.  Y se lee tambien salvo que la
+                    // instruccion se limite a poner un valor encima.
+                    escribe = true;
+                    lee = (mn.compare(0, 3, "mov") != 0);
+                } else {
+                    lee = true; // fuente, o instruccion que solo compara
+                }
+
+                for (size_t k = 0; k < sizeof(kFields) / sizeof(kFields[0]);
+                     ++k) {
+                    if (d < kFields[k].ini || d >= kFields[k].fin) continue;
+                    if (escribe) out.escribe |= (1u << k);
+                    if (lee) out.lee |= (1u << k);
+                    // La primera instruccion de cada clase, para poder mirarla.
+                    char buf[160];
+                    std::snprintf(buf, sizeof(buf), "0x%llX: %s %s",
+                                  (unsigned long long)in.address, in.mnemonic,
+                                  in.op_str);
+                    if (escribe && out.prueba_w[k].empty())
+                        out.prueba_w[k] = buf;
+                    if (lee && out.prueba_r[k].empty()) out.prueba_r[k] = buf;
+                }
+            }
+        },
+        res);
+    out.completo = res.completo();
+    out.sin_resolver = res.unresolved;
+    out.tablas = res.tables_resolved;
+    return out;
+}
+
+struct OpcodeRow {
+    std::string nombre;
+    const char *tabla;
+    int indice;
+    std::string operandos; ///< texto del desensamblador, tal cual
+    std::string modo;      ///< REG / MEM / SIB / INMED / NONE
+    size_t bytes = 0;      ///< tamano de la instruccion
+    std::vector<disasm::RegOperand> regs;
+    bool salta = false;        ///< transfiere control: no se reordena nunca
+    bool implementada = false; ///< tiene exec y decode
+    ImplicitEffects imp;            ///< efectos que no son operandos
+};
+
+/**
+ * @brief Construye el modelo de los 242 opcodes con nombre.
+ *
+ * Abre y cierra su propio Capstone, con el DETALLE activado: sin
+ * `CS_OPT_DETAIL` las instrucciones vienen sin operandos y no se puede ver a
+ * que campo del proceso accede cada una, que es justo lo que se busca.
+ *
+ * @param from Indice global desde el que empezar (0..255 primaria,
+ *             256..511 extendida).  Sirve para acotar al depurar.
+ */
+inline std::vector<OpcodeRow> build_opcode_model(int from = 0) {
+    struct {
+        runtime::InstrFormat *t;
+        const char *nom;
+    } tablas[] = {
+        {runtime::decode_table_primary, "primary"},
+        {runtime::decode_table_extended, "extended"},
+    };
+
+    csh cs = 0;
+    const bool hay_cs = (cs_open(kWalkArch, kWalkMode, &cs) == CS_ERR_OK);
+    if (hay_cs) cs_option(cs, CS_OPT_DETAIL, CS_OPT_ON);
+
+    std::vector<OpcodeRow> rows;
+    for (auto &tb : tablas) {
+        const bool primaria = (tb.nom[0] == 'p');
+        const int base_tabla = primaria ? 0 : 0x100;
+        for (int idx = 0; idx < 0x100; ++idx) {
+            if (base_tabla + idx < from) continue;
+            const runtime::InstrFormat &fmt = tb.t[idx];
+            /* Basta con que la ranura tenga NOMBRE.  Antes se exigia tambien
+             * `exec`, y por eso las ranuras reservadas sin implementar
+             * --`edmw4`, `edmw6`, `loop`, `nop1`, `nop2`-- no salian, pese a
+             * que la cabecera de la pagina generada prometia listarlas con la
+             * nota "sin impl.".  La tabla dice que existen; que la VM las
+             * rechace es un dato de la fila, no motivo para esconderla. */
+            if (fmt.name == nullptr || !fmt.name[0]) continue;
+
+            /* Una instruccion de este opcode, y se desensambla.  `disasm_bytes`
+             * trabaja sobre un buffer: no hace falta VM, ni proceso, ni
+             * fichero, y no se ejecuta nada. */
+            uint8_t bytes[24];
+            for (size_t k = 0; k < sizeof(bytes); ++k)
+                bytes[k] = operand_byte(k);
+            if (primaria) {
+                bytes[0] = static_cast<uint8_t>(idx);
+            } else {
+                bytes[0] = 0x00; // prefijo de tabla extendida
+                bytes[1] = static_cast<uint8_t>(idx);
+            }
+
+            disasm::DisasmOptions opts;
+            opts.show_hex = false;
+            opts.use_color = false;
+            opts.stop_at_hlt = false;
+            opts.max_bytes = sizeof(bytes);
+            const auto res =
+                disasm::disasm_bytes(bytes, sizeof(bytes), 0, opts);
+
+            OpcodeRow f;
+            f.nombre = fmt.name;
+            f.tabla = tb.nom;
+            f.indice = idx;
+            f.salta = transfers_control(fmt);
+            f.modo = Assembly::Bytecode::AddressingMode_str(fmt.mode);
+            f.implementada = (fmt.exec != nullptr && fmt.decode != nullptr);
+            /* Sin `decode` no hay nada que desensamblar: la forma se queda en
+             * blanco y la fila vale solo para decir que la ranura existe. */
+            if (!res.empty()) {
+                f.operandos = res[0].operands;
+                f.regs = res[0].regs;
+                f.bytes = res[0].size;
+            }
+            if (hay_cs && fmt.exec != nullptr)
+                f.imp = implicit_effects_of(
+                    cs, reinterpret_cast<const void *>(fmt.exec));
+            rows.push_back(f);
+        }
+    }
+    if (hay_cs) cs_close(&cs);
+    return rows;
+}
+
+} // namespace tests
+
+#endif // VESTA_TESTS_OPCODE_EFFECTS_H
