@@ -43,6 +43,7 @@
 #include "util/fs_utils.h"
 #include <string>
 #include <vector>
+#include "../test_support.h"
 
 using namespace analysis::asa;
 
@@ -321,12 +322,13 @@ static void probar_volumen() {
 static void probar_por_disco() {
     const std::vector<uint8_t> bytes = fichero_de_muestra();
     /* Un nombre PROPIO de este test.
-         *
-         * Lo compartia con el otro test del fichero de hechos, y el
-         * lanzador los corre EN PARALELO: uno pisaba el fichero del otro
-         * y los dos fallaban a ratos.  Aislados pasaban siempre, que es
-         * la peor forma de fallar -- se echa la culpa al azar. */
-        const std::string ruta = "asa_hechos_prueba_robusto.bin";
+     *
+     * Lo compartia con el otro test del fichero de hechos, y el
+     * lanzador los corre EN PARALELO: uno pisaba el fichero del otro
+     * y los dos fallaban a ratos.  Aislados pasaban siempre, que es
+     * la peor forma de fallar -- se echa la culpa al azar. */
+    const std::string ruta =
+        vesta_test::fichero_unico("asa_hechos_prueba_robusto", ".bin");
     CHECK(::fs::write_file_atomic(ruta, bytes), "se escribe el fichero");
 
     FactStore d;

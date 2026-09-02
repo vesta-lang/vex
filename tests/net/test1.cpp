@@ -12,6 +12,8 @@
 
 #include "net/tcp_server.h"
 
+#include "../test_support.h"
+
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -19,7 +21,13 @@
 int main() {
     std::cout << "Starting TCP server test..." << std::endl;
 
-    TCPServer server(9000);
+    /* Puerto PROPIO de esta ejecucion.  Estaba fijo en 9000, igual que en
+     * tests/net/test2.cpp, y el lanzador corre los dos A LA VEZ: el segundo
+     * en llegar no podia enlazar.  Aislados pasaban los dos, que es la peor
+     * forma de fallar porque parece cosa del azar. */
+    const uint16_t port = vesta_test::puerto_unico();
+
+    TCPServer server(port);
 
     // Ejecutar el servidor en un hilo
     std::thread server_thread([&server]() {
@@ -29,10 +37,10 @@ int main() {
         }
     });
 
-    std::cout << "Server running on port 9000\n";
+    std::cout << "Server running on port " << port << "\n";
     std::cout << "Connect using:\n";
-    std::cout << "   telnet 127.0.0.1 9000\n";
-    std::cout << "   nc 127.0.0.1 9000\n\n";
+    std::cout << "   telnet 127.0.0.1 " << port << "\n";
+    std::cout << "   nc 127.0.0.1 " << port << "\n\n";
 
     // Mantener el servidor activo 30 segundos
     std::this_thread::sleep_for(std::chrono::seconds(30));

@@ -14,6 +14,8 @@
 #include "controller/tls_context.h"
 #include "controller/tls_connection.h"
 
+#include "../test_support.h"
+
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -118,7 +120,11 @@ int main() {
     TLSContext tls_ctx("server_cert.pem", "server_key.pem");
 
     // Servidor TLS
-    HelloTCPServer server(9000, &tls_ctx);
+    /* Puerto PROPIO de esta ejecucion: estaba fijo en 9000, el MISMO que
+     * tests/net/test1.cpp, y el lanzador corre los dos a la vez. */
+    const uint16_t port = vesta_test::puerto_unico();
+
+    HelloTCPServer server(port, &tls_ctx);
     if (!server.start()) {
         std::cerr << "Servidor falló\n";
         return 1;
@@ -127,9 +133,9 @@ int main() {
     // Clientes concurrentes
     std::vector<std::thread> clients;
     for (int i = 0; i < 5; i++) {
-        clients.emplace_back([i]() {
+        clients.emplace_back([i, port]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(200 * i));
-            run_client("127.0.0.1", 9000, i);
+            run_client("127.0.0.1", port, i);
         });
     }
 

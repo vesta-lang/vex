@@ -94,6 +94,16 @@ class TCPServer {
 
     std::vector<std::thread> threads; ///< Hilos de los clientes activos
 
+    /* El hilo que acepta conexiones.
+     *
+     * Estaba SUELTO (`.detach()`), asi que nadie podia esperarlo: `stop()`
+     * cerraba el socket y volvia, y el hilo seguia vivo tocando `threads` --
+     * un miembro de este objeto -- que para entonces podia estar ya destruido.
+     * Y el vector se destruia con hilos aun por unir, que es lo que abortaba
+     * el proceso con "terminate called without an active exception", despues
+     * de que el servidor hubiera hecho su trabajo bien. */
+    std::thread accept_thread;
+
   public:
     /**
      * @brief Construye el servidor TCP sin TLS en el puerto indicado.

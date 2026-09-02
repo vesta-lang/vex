@@ -42,6 +42,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include "../test_support.h"
 
 using namespace analysis::asa;
 
@@ -162,7 +163,8 @@ int main(int argc, char **argv) {
          * lanzador los corre EN PARALELO: uno pisaba el fichero del otro
          * y los dos fallaban a ratos.  Aislados pasaban siempre, que es
          * la peor forma de fallar -- se echa la culpa al azar. */
-        const std::string ruta = "asa_hechos_prueba_lnx.bin";
+        const std::string ruta =
+            vesta_test::fichero_unico("asa_hechos_prueba_lnx", ".bin");
         CHECK(::fs::write_file_atomic(ruta, bytes), "se escribe en disco");
         FactStore dd;
         const ReadResult rd = read_facts_file(ruta, 0xABCDEF0123456789ull, dd,

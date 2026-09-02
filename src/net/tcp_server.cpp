@@ -70,17 +70,27 @@ bool TCPServer::start() {
     running.store(true);
     std::cout << "[TCPServer] listening on port " << port << std::endl;
 
-    std::thread(&TCPServer::accept_loop, this).detach();
+    accept_thread = std::thread(&TCPServer::accept_loop, this);
     return true;
 }
 
 void TCPServer::stop() {
     if (!running.load()) return;
     running.store(false);
+    /* Cerrar el socket PRIMERO: es lo que desbloquea el `accept()` en el que
+     * esta parado el hilo de aceptacion, y sin eso el `join` de abajo no
+     * volveria nunca. */
     if (server_fd >= 0) {
         close_socket(server_fd);
         server_fd = -1;
     }
+
+    /* Y esperarlo.  Es la diferencia entre "he pedido que pare" y "ha
+     * parado": mientras ese hilo vive sigue tocando `threads`, que es un
+     * miembro de este objeto, asi que volver de aqui sin unirlo deja a alguien
+     * leyendo un objeto que el llamador cree ya terminado -- y si el que
+     * llamo fue el destructor, directamente destruido. */
+    if (accept_thread.joinable()) accept_thread.join();
 
 #ifdef _WIN32
     WSACleanup();
