@@ -354,7 +354,14 @@ static bool target_ver_cmp_(double have, const std::string &op,
 
 // Evalua un atomo simple (sin operadores logicos).  Reconoce las
 // formas `k:v` y `k OP version`.
-static bool target_atom_eval_(const std::string &atom) noexcept {
+//
+// @param desconocido Si no es nulo y el atomo pregunta por algo que no
+//        existe, se guarda ahi el atomo.  Sin esto, una errata evaluaba a
+//        FALSO como cualquier condicion que no se cumple, y el codigo bajo la
+//        marca desaparecia sin una palabra -- el error salia mas tarde, en
+//        otro sitio y diciendo otra cosa.
+static bool target_atom_eval_(const std::string &atom,
+                              std::string *desconocido = nullptr) noexcept {
     if (atom.empty()) return true;
     // Forma `clave OP version` (compiler / vm).  Buscar el operador
     // de comparacion.
@@ -389,7 +396,12 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
     }
     // Forma `clave:valor`.
     const size_t colon = atom.find(':');
-    if (colon == std::string::npos) return false;
+    if (colon == std::string::npos) {
+        /* Ni `clave:valor` ni `clave OP version`: no es una pregunta que este
+         * evaluador sepa contestar. */
+        if (desconocido != nullptr && desconocido->empty()) *desconocido = atom;
+        return false;
+    }
     std::string key = atom.substr(0, colon);
     std::string val = atom.substr(colon + 1);
     if (key == "os") {
@@ -453,6 +465,17 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
         if (val == "sin_libc") return g_cc_target_sin_libc;
         return val == g_cc_target_tier;
     }
+    /* Clave que no existe.  Se separa de "no se cumple" a proposito: son dos
+     * respuestas distintas y aqui compartian el mismo `false`.
+     *
+     * La lista de claves NO se repite aqui: se pregunta a la que ya tenia
+     * `contract_when`, que es la que valida los `when:` de los contratos.
+     * Tenerla dos veces es como empezo esto -- alli faltaba `tier` y aqui no,
+     * asi que la misma clave valia en una marca y no en un contrato. */
+    if (desconocido != nullptr && desconocido->empty() &&
+        std::find(cwhen::target_keys().begin(), cwhen::target_keys().end(),
+                  key) == cwhen::target_keys().end())
+        *desconocido = atom;
     return false;
 }
 
@@ -464,6 +487,9 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
 struct TargetExprParser {
     const std::string &s;
     size_t i = 0;
+    /// Primer atomo que la expresion pregunta y este evaluador no entiende.
+    /// Vacio si todos se entendieron -- que no es lo mismo que "se cumplen".
+    std::string desconocido;
     explicit TargetExprParser(const std::string &str) : s(str) {}
 
     void skip_ws() {
@@ -533,7 +559,7 @@ struct TargetExprParser {
             atom.erase(0, 1);
         while (!atom.empty() && std::isspace((unsigned char)atom.back()))
             atom.pop_back();
-        return target_atom_eval_(atom);
+        return target_atom_eval_(atom, &desconocido);
     }
 };
 
@@ -582,14 +608,23 @@ static std::string strip_mode_atoms_(const std::string &spec) {
     return out;
 }
 
-static bool target_matches_(const std::string &spec_in) noexcept {
+static bool target_matches_(const std::string &spec_in,
+                            std::string *desconocido = nullptr) noexcept {
     if (spec_in.empty()) return true;
     TargetExprParser p(spec_in);
-    return p.parse_or();
+    const bool casa = p.parse_or();
+    if (desconocido != nullptr) *desconocido = p.desconocido;
+    return casa;
 }
 
 bool target_expr_matches(const std::string &spec) noexcept {
     return target_matches_(spec);
+}
+
+std::string target_expr_unknown_atom(const std::string &spec) noexcept {
+    std::string desconocido;
+    (void)target_matches_(spec, &desconocido);
+    return desconocido;
 }
 
 //  M6.a L.3: aplica @c pending_visibility_ al nodo si soporta
@@ -2062,6 +2097,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 // condicion a proposito: el modulo depende del objetivo tanto
                 // si la variante casa como si no.
                 module_uses_target_ = true;
+                /* La posicion de la MARCA, guardada antes de consumirla: si
+                 * la expresion trae una errata, el error tiene que senalar el
+                 * @Target y no la declaracion de debajo. */
+                const SourceLoc loc_target = current_.loc;
                 // L.24: @Target("os:linux"|"arch:x86_64"|...).  Si la
                 // condicion NO matchea con los build tags actuales,
                 // marcamos top_target_skip para descartar la decl.
@@ -2135,10 +2174,20 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                         }
                     }
                 }
-                if (!spec_eval.empty() && !target_matches_(spec_eval)) {
+                std::string atomo_desconocido;
+                if (!spec_eval.empty() &&
+                    !target_matches_(spec_eval, &atomo_desconocido)) {
                     top_target_skip = true;
                     top_target_spec = spec;
                 }
+                /* Una errata en el @Target no es "no se cumple": es que no hay
+                 * objetivo que pueda cumplirlo, asi que lo de debajo se caeria
+                 * SIEMPRE y en silencio.  El error sale AQUI, donde esta la
+                 * errata, y no mas tarde donde alguien intente usar lo que
+                 * desaparecio. */
+                if (!atomo_desconocido.empty())
+                    diags_.diag(loc_target, DiagLevel::ERR, "VXP090",
+                                {atomo_desconocido});
             } else if (current_.kind == TokenKind::LPAREN) {
                 int depth = 0;
                 do {

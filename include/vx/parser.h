@@ -118,6 +118,16 @@ void get_aot_condcomp_tier(std::string &tier, bool &sin_libc) noexcept;
 /// atomos de target -- un solo evaluador de target para todo el compilador.
 bool target_expr_matches(const std::string &spec) noexcept;
 
+/// El primer atomo de @p spec por el que un @c @Target no puede preguntar, o
+/// vacio si la expresion entera se entiende -- que NO es lo mismo que "se
+/// cumple".
+///
+/// Existe porque las dos respuestas compartian el `false` de
+/// @ref target_expr_matches: una errata (`so:windows` por `os:windows`) se
+/// leia igual que una condicion que no se da, y el codigo bajo la marca
+/// desaparecia sin una palabra.
+std::string target_expr_unknown_atom(const std::string &spec) noexcept;
+
 /**
  * @class Parser
  * @brief Construye un AST a partir de los tokens producidos por @c Lexer.

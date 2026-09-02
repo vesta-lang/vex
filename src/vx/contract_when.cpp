@@ -157,9 +157,18 @@ bool atoms(const std::string &spec, std::vector<std::string> &out) {
 }
 
 const std::vector<std::string> &target_keys() {
-    // Las mismas de @Target.  `mode` lo fija la CLI (-m jit/vm/auto), `os` y
-    // `arch` el driver AOT cuando genera para otro target, `cpu` el cpuid.
-    static const std::vector<std::string> k = {"os", "arch", "cpu", "mode"};
+    /* LA lista de claves por las que se puede preguntar, y la unica.
+     *
+     * Decia "las mismas de @Target" y no lo eran: le faltaba `tier`, asi que
+     * un contrato `when: tier:sin_libc` se rechazaba por "clave desconocida"
+     * mientras la marca `@Target("tier:sin_libc")` lo aceptaba.  Dos sitios
+     * que saben lo mismo acaban sabiendolo distinto.
+     *
+     * `mode` lo fija la CLI (-m jit/vm/auto), `os` y `arch` el driver AOT
+     * cuando genera para otro objetivo, `cpu` el cpuid, y `tier` cuanto
+     * runtime hay debajo del binario nativo. */
+    static const std::vector<std::string> k = {"os", "arch", "cpu", "mode",
+                                               "tier"};
     return k;
 }
 
