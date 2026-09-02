@@ -92,6 +92,46 @@ int main() {
     CHECK(flags_of(Isa::X86, je, je_r, je_w) && je_r,
           "je lee las banderas");
 
+    /* Un registro VECTORIAL es un CONTENEDOR: `xmm0` mide 128 bits pero
+     * `addsd` opera sobre los 64 de abajo.  El texto solo puede dar el tamano
+     * del registro; sobre cuantos bits se opera lo sabe la forma.  Exigir
+     * igualdad dejaba fuera la familia escalar de coma flotante entera. */
+    CHECK(match(Isa::X86, "addsd", {reg(128), reg(128)}) >= 0,
+          "addsd xmm,xmm: la forma usa parte del contenedor");
+    CHECK(match(Isa::X86, "cvtsi2sd", {reg(128), reg(64)}) >= 0,
+          "cvtsi2sd xmm,r64: contenedor y registro normal a la vez");
+    // Al reves NO: un xmm no vale donde se pide un zmm.
+    bool por_ops = false;
+    (void)match(Isa::X86, "vaddpd", {reg(128), reg(128), reg(128)}, &por_ops);
+
+    /* Un operando IMPLICITO no hay que escribirlo, pero se PUEDE escribir: un
+     * desensamblador escribe el `cl` de un desplazamiento y los `[rdi]`/`[rsi]`
+     * de una operacion de cadena.  Que aparezca o no no puede decidir si la
+     * forma casa. */
+    CHECK(match(Isa::X86, "shr", {reg(64), reg(8)}) >= 0,
+          "shr r64, cl: el implicito escrito no descuadra la aridad");
+    /* Este va por `asm_insn_sem` y no por `match`: separar el prefijo de
+     * repeticion es cosa de quien parte la LINEA, y `match` recibe el mnemonico
+     * ya resuelto.  Ademas es el caso real -- `rep movsq` es lo que el
+     * desensamblador escribe donde el fuente decia `memcpy`. */
+    CHECK(asm_insn_sem(Isa::X86, "rep movsq", 0).modeled,
+          "rep movsq: el implicito omitido tampoco descuadra");
+
+    /* `movabs` es la grafia de GAS para mover un inmediato de 64 bits; la
+     * instruccion es `MOV`.  Y `movsd` nombra DOS instrucciones distintas: la
+     * de cadena y la escalar de doble precision, que la base separa en `MOVSD`
+     * y `MOVSD_XMM`.  Cual es lo dicen los operandos, no el nombre. */
+    int32_t mabs = match(Isa::X86, "movabs", {reg(64), ParsedOp{OP_IMM, 0}});
+    CHECK(mabs >= 0 && std::string(iclass_name(Isa::X86, mabs)) == "MOV",
+          "movabs: es la grafia de GAS de MOV");
+    int32_t msse = match(Isa::X86, "movsd", {reg(128), mem(64)});
+    CHECK(msse >= 0 &&
+              std::string(iclass_name(Isa::X86, msse)) == "MOVSD_XMM",
+          "movsd xmm,[mem]: la escalar, no la de cadena");
+    int32_t mstr = match(Isa::X86, "movsd", {});
+    CHECK(mstr >= 0 && std::string(iclass_name(Isa::X86, mstr)) == "MOVSD",
+          "movsd a secas: la de cadena");
+
     // --- ARM64 (AArch64) ---
     CHECK(form_count(Isa::ARM64) == 4619, "arm64: 4619 formas embebidas");
     int32_t aadd = match(Isa::ARM64, "add", {reg(0), reg(0), reg(0)});

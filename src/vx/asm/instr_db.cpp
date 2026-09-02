@@ -32,14 +32,31 @@ IsaData tables_for(Isa isa) {
     return {};
 }
 
-/// Operandos EXPLICITOS de una forma para puntuar (descarta implicit/suppressed
-/// y los operandos de flags, que el usuario no escribe).
-void explicit_ops(const IsaData &t, const DbForm &f,
-                  std::vector<const DbOperand *> &out) {
+/**
+ * @brief Operandos de una forma contra los que puntuar una linea.
+ *
+ * @param con_implicitos Incluir tambien los que la forma marca IMPLICITOS.
+ *
+ * "Implicito" quiere decir que la instruccion los usa sin que haga falta
+ * escribirlos -- el `cl` de `shr rax, cl`, el `[rdi]`/`[rsi]` de `movsq` --,
+ * pero NO que este prohibido escribirlos.  Un desensamblador los escribe casi
+ * siempre, porque su trabajo es que se vea lo que la instruccion hace.
+ *
+ * Descartarlos siempre hacia que la aridad no casara nunca en esas familias:
+ * dos operandos escritos contra uno declarado.  Se quedaban fuera todos los
+ * desplazamientos por `cl` y todas las operaciones de cadena, que en codigo
+ * compilado son `memcpy` y `memset`.
+ *
+ * Se prueba primero SIN ellos -- que es el caso normal, el de alguien que
+ * escribe asm a mano -- y solo si nada casa se reintenta con ellos.  Asi una
+ * forma que casa del todo nunca la desplaza otra que necesita la indulgencia.
+ */
+void form_ops(const IsaData &t, const DbForm &f, bool con_implicitos,
+              std::vector<const DbOperand *> &out) {
     out.clear();
     for (unsigned i = 0; i < f.ops_count; ++i) {
         const DbOperand &o = t.ops[f.ops_off + i];
-        if (o.flags & 0x0C) continue; // implicit(bit2) | suppressed(bit3)
+        if ((o.flags & 0x0C) && !con_implicitos) continue; // implicit|suppressed
         if (!op_kind_is_textual(o.kind)) continue;
         out.push_back(&o);
     }
@@ -62,8 +79,20 @@ int score_ops(const std::vector<ParsedOp> &user,
     if (user.size() > form.size()) return -1;
     int s = 0;
     if (user.size() < form.size()) {
-        for (size_t i = user.size(); i < form.size(); ++i)
-            if ((form[i]->flags & 0x10) == 0) return -1; // no era opcional
+        for (size_t i = user.size(); i < form.size(); ++i) {
+            /* Se puede dejar fuera lo OPCIONAL (bit4) y lo IMPLICITO (bit2/3).
+             *
+             * Lo implicito por definicion no hay que escribirlo: el `rcx` que
+             * consume un `rep movsq` esta en la instruccion se escriba o no.  Y
+             * quien lee una linea decide cuanto detalle pone -- un
+             * desensamblador escribe los `[rdi]`/`[rsi]` y se calla el `rcx` --,
+             * asi que exigir que aparezcan todos deja sin modelar la instruccion
+             * entera por un operando que nadie escribe nunca.
+             *
+             * Esto es la otra mitad de admitirlos cuando SI se escriben: entre
+             * las dos, que aparezcan o no deja de decidir si la forma casa. */
+            if ((form[i]->flags & 0x1C) == 0) return -1;
+        }
         s -= 1; // encajo, pero dejando cosas fuera
     }
     for (size_t i = 0; i < user.size(); ++i) {
@@ -99,7 +128,27 @@ int score_ops(const std::vector<ParsedOp> &user,
             continue; // ni una direccion ni un destino tienen ancho de acceso
         }
         if (u.width && fo.width) {
-            if (u.width != fo.width) return -1;
+            if (u.width != fo.width) {
+                /* Un registro VECTORIAL es un CONTENEDOR, y su nombre no dice
+                 * sobre cuantos bits opera la instruccion: `addsd xmm0, xmm1`
+                 * suma dos doubles -- 64 bits -- dentro de registros de 128.
+                 * El texto solo puede dar el tamano del registro; el de la
+                 * operacion lo sabe la forma.
+                 *
+                 * Exigir igualdad dejaba fuera la familia escalar de coma
+                 * flotante ENTERA: `addsd`, `mulsd`, `divss`, `cvtsi2sd`,
+                 * `ucomisd`, `sqrtsd`, `movd`... 27 mnemonicos que nuestro
+                 * propio compilador emite en cuanto el programa toca un float.
+                 *
+                 * Se acepta que la forma use PARTE del contenedor, nunca mas:
+                 * un `ymm0` no vale donde se pide algo de 512 bits.  Y puntua
+                 * por debajo del acierto exacto, para que entre dos formas gane
+                 * la que coincide del todo. */
+                const bool vectorial = u.kind == OP_REG && u.width >= 128;
+                if (!vectorial || fo.width > u.width) return -1;
+                s += 1;
+                continue;
+            }
             s += 2;
         } else {
             s += 1;
@@ -185,6 +234,20 @@ const DbIclassRange *find_iclass_escrito(const IsaData &t, Isa isa,
     if (up == "LOOPNZ") return find_iclass(t, "LOOPNE");
     if (const DbIclassRange *r = find_iclass(t, up + "_NEAR")) return r;
     if (const DbIclassRange *r = find_iclass(t, up + "_FAR")) return r;
+
+    /* `movabs` es la grafia de GAS -- y por tanto la del desensamblador -- para
+     * mover un inmediato de 64 bits.  No es un nombre de la ISA: la instruccion
+     * es `MOV`, y cual de sus formas es lo dicen los operandos. */
+    if (up == "MOVABS") return find_iclass(t, "MOV");
+
+    /* Una misma grafia para dos instrucciones DISTINTAS: `movsd` es a la vez
+     * mover una cadena de dobles-palabra y mover un escalar de doble precision
+     * entre registros vectoriales.  La base las separa -- `MOVSD` y
+     * `MOVSD_XMM` -- porque no comparten ni operandos ni efectos.
+     *
+     * Cual es se ve en los OPERANDOS, no en el nombre, asi que aqui se devuelve
+     * la de cadena (que es la que lleva la grafia pelada) y el emparejador
+     * prueba tambien la variante vectorial.  Ver `match`. */
 
     /* Condiciones: la raiz dice QUE hace (saltar, asignar, mover) y el resto
      * es la condicion, que es lo unico que cambia de nombre. */
@@ -508,15 +571,37 @@ int32_t match(Isa isa, const std::string &mnemonic,
         c = static_cast<char>(std::toupper((unsigned char)c));
     const DbIclassRange *r = find_iclass_escrito(t, isa, up);
     if (!r) return -1; // mnemonico no existe
+    /* Los rangos donde puede vivir esta grafia.
+     *
+     * Casi siempre es uno.  La excepcion son las grafias que la ISA reutiliza
+     * para instrucciones DISTINTAS: `movsd` es mover una cadena de
+     * dobles-palabra y tambien mover un escalar de doble precision entre
+     * registros vectoriales, y la base las separa en `MOVSD` y `MOVSD_XMM`
+     * porque no comparten ni operandos ni efectos.
+     *
+     * Cual de las dos es NO se puede decidir por el nombre -- por eso llegan
+     * aqui las dos --; lo dicen los operandos, que es justo lo que puntua el
+     * emparejador. */
+    const DbIclassRange *rangos[2] = {r, find_iclass(t, up + "_XMM")};
     int32_t best = -1;
     int best_s = -1;
     std::vector<const DbOperand *> fo;
-    for (uint32_t fid = r->first_fid; fid < r->first_fid + r->count; ++fid) {
-        explicit_ops(t, t.forms[fid], fo);
-        int s = score_ops(ops, fo);
-        if (s > best_s) {
-            best_s = s;
-            best = static_cast<int32_t>(fid);
+    /* Dos pasadas: la normal y, solo si ninguna forma caso, la indulgente que
+     * admite tener escritos los operandos implicitos.  El orden importa -- una
+     * forma que casa del todo no la puede desplazar otra que necesita la
+     * indulgencia --, y por eso no es una sola pasada con menos puntos. */
+    for (int pasada = 0; pasada < 2 && best < 0; ++pasada) {
+        for (const DbIclassRange *rango : rangos) {
+            if (rango == nullptr) continue;
+            for (uint32_t fid = rango->first_fid;
+                 fid < rango->first_fid + rango->count; ++fid) {
+                form_ops(t, t.forms[fid], /*con_implicitos=*/pasada == 1, fo);
+                int s = score_ops(ops, fo);
+                if (s > best_s) {
+                    best_s = s;
+                    best = static_cast<int32_t>(fid);
+                }
+            }
         }
     }
     /* El mnemonico existe: si nada caso por operandos, vale la primera del
