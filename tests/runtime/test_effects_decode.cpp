@@ -39,7 +39,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -121,13 +123,77 @@ std::string mascara(uint16_t m) {
 
 int main(int argc, char **argv) {
     bool listar = false;
+    bool familias = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--listar") == 0) {
             listar = true;
+        } else if (std::strcmp(argv[i], "--familias") == 0) {
+            familias = true;
         } else {
-            std::fprintf(stderr, "uso: test_effects_decode [--listar]\n");
+            std::fprintf(stderr,
+                         "uso: test_effects_decode [--listar] [--familias]\n");
             return 2;
         }
+    }
+
+    /* Las que faltan por declarar, agrupadas por FUNCION DE DECODIFICACION.
+     *
+     * Es el agrupamiento util: dos opcodes que comparten decoder comparten la
+     * disposicion de los campos, asi que comparten forma y se declaran de una
+     * vez.  211 sueltas no se atacan; una docena de familias si. */
+    if (familias) {
+        std::map<const void *, std::vector<std::string>> grupos;
+        for (int t = 0; t < 2; ++t) {
+            const bool ext = (t == 1);
+            for (int idx = 0; idx < 0x100; ++idx) {
+                uint8_t bytes[24];
+                for (size_t k = 0; k < sizeof(bytes); ++k)
+                    bytes[k] = operand_byte(k);
+                if (ext) {
+                    bytes[0] = 0x00;
+                    bytes[1] = static_cast<uint8_t>(idx);
+                } else {
+                    bytes[0] = static_cast<uint8_t>(idx);
+                }
+                runtime::DecodedInstr d;
+                if (!build(ext, idx, bytes, sizeof(bytes), d)) continue;
+                runtime::InstrEffects e;
+                if (runtime::probe_effects(d, e)) continue; // ya declarada
+
+                /* Se anota el texto del desensamblador: es lo que dice de un
+                 * vistazo cual es la forma, sin ir a leer el decoder. */
+                std::vector<disasm::RegOperand> regs;
+                disasm::DisasmOptions opts;
+                opts.show_hex = false;
+                opts.use_color = false;
+                opts.stop_at_hlt = false;
+                opts.max_bytes = sizeof(bytes);
+                const auto res =
+                    disasm::disasm_bytes(bytes, sizeof(bytes), 0, opts);
+                std::string texto = res.empty() ? "?" : res[0].operands;
+
+                char linea[160];
+                std::snprintf(linea, sizeof(linea), "%-16s %s 0x%02X   %s",
+                              d.metadata->name, ext ? "ext" : "pri", idx,
+                              texto.c_str());
+                grupos[reinterpret_cast<const void *>(d.metadata->decode)]
+                    .push_back(linea);
+            }
+        }
+        std::printf("Formas por declarar, agrupadas por decoder (%zu "
+                    "familias)\n\n",
+                    grupos.size());
+        std::vector<std::pair<size_t, const void *>> orden;
+        for (const auto &kv : grupos) orden.push_back({kv.second.size(), kv.first});
+        std::sort(orden.begin(), orden.end(),
+                  [](const auto &a, const auto &b) { return a.first > b.first; });
+        for (const auto &o : orden) {
+            std::printf("--- %zu instrucciones ---\n", o.first);
+            for (const std::string &s : grupos[o.second])
+                std::printf("  %s\n", s.c_str());
+            std::printf("\n");
+        }
+        return 0;
     }
 
     std::printf("Descodificador de efectos, contra el desensamblador\n\n");
