@@ -52,12 +52,22 @@ IsaData tables_for(Isa isa) {
  * forma que casa del todo nunca la desplaza otra que necesita la indulgencia.
  */
 void form_ops(const IsaData &t, const DbForm &f, bool con_implicitos,
-              std::vector<const DbOperand *> &out) {
+              std::vector<const DbOperand *> &out, bool con_no_textuales) {
     out.clear();
     for (unsigned i = 0; i < f.ops_count; ++i) {
         const DbOperand &o = t.ops[f.ops_off + i];
         if ((o.flags & 0x0C) && !con_implicitos) continue; // implicit|suppressed
-        if (!op_kind_is_textual(o.kind)) continue;
+        /* "No textual" quiere decir que no hace falta escribirlo, no que este
+         * prohibido.  Una CONDICION es un operando de la forma -- `CSET`
+         * declara destino y condicion -- y el desensamblador la escribe:
+         * `cset w10, eq`.  Descartarla siempre hacia que sobrara un token y la
+         * forma no casara nunca.
+         *
+         * Las banderas se quedan fuera igual: esas no se escriben JAMAS en una
+         * linea, y meterlas descuadraria la aridad por el otro lado. */
+        if (!op_kind_is_textual(o.kind) &&
+            !(con_no_textuales && o.kind != OP_FLAGS))
+            continue;
         out.push_back(&o);
     }
 }
@@ -130,11 +140,33 @@ int score_ops(const std::vector<ParsedOp> &user,
                 ++k;
             if (k > jf && k < form.size() &&
                 (form[k]->kind == OP_MEM || form[k]->kind == OP_AGEN)) {
+                /* Si la tirada absorbida incluia un DESPLAZAMIENTO, el texto
+                 * puede haberlo escrito FUERA de los corchetes: es el
+                 * post-indexado, `ldp x29, x30, [sp], #0x20`, que sale en el
+                 * epilogo de cada funcion que llama a otra.  El
+                 * desplazamiento es el MISMO que la forma ya declara -- el de
+                 * dentro y el de fuera no son dos --, asi que el token
+                 * siguiente se consume con el grupo en vez de sobrar. */
+                bool con_desp = false;
+                for (size_t q = jf; q < k; ++q)
+                    if (form[q]->kind == OP_IMM) con_desp = true;
                 s += 1;
                 ++iu;
                 jf = k + 1;
+                if (con_desp && iu < user.size() &&
+                    user[iu].kind == OP_IMM)
+                    ++iu;
                 continue;
             }
+        }
+        /* Un operando NO TEXTUAL casa con lo que sea que se haya escrito: no
+         * se parsean condiciones ni especificadores de desplazamiento, y la
+         * forma ya dice de que se trata.  Puntua lo minimo. */
+        if (!op_kind_is_textual(fo.kind)) {
+            s += 1;
+            ++iu;
+            ++jf;
+            continue;
         }
         if (u.kind != fo.kind && !agen_por_mem && !destino_por_imm) return -1;
         if (agen_por_mem || destino_por_imm) {
@@ -626,7 +658,8 @@ int32_t match(Isa isa, const std::string &mnemonic,
             if (rango == nullptr) continue;
             for (uint32_t fid = rango->first_fid;
                  fid < rango->first_fid + rango->count; ++fid) {
-                form_ops(t, t.forms[fid], /*con_implicitos=*/pasada >= 1, fo);
+                form_ops(t, t.forms[fid], /*con_implicitos=*/pasada >= 1, fo,
+                         /*con_no_textuales=*/pasada == 2);
                 int s = score_ops(ops, fo, /*agrupar_mem=*/pasada == 2);
                 if (s > best_s) {
                     best_s = s;
@@ -1153,6 +1186,41 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
     if (!split_asm_line(line, mnem, toks)) {
         s.form_id = -1; // label / vacia: no es instruccion
         return s;
+    }
+    /* `ret` a secas es `ret x30`.
+     *
+     * La sintaxis de ARM deja implicito el registro de retorno, pero la FORMA lo
+     * declara -- porque la codificacion siempre lo lleva --, asi que la linea
+     * escrita se quedaba con un operando de menos y `ret` salia sin modelar.  Y
+     * `ret` esta al final de cada funcion.
+     *
+     * Se completa aqui, que es donde ya vive lo que la sintaxis de cada
+     * arquitectura da por sabido -- al lado de los prefijos de repeticion de
+     * x86 --, y no relajando la regla de aridad: aflojarla para todos dejaria
+     * pasar formas a las que de verdad les falta un operando. */
+    if (isa == Isa::ARM64 && toks.empty()) {
+        std::string bajo = mnem;
+        for (char &c : bajo)
+            c = static_cast<char>(std::tolower((unsigned char)c));
+        if (bajo == "ret") toks.push_back("x30");
+    }
+    /* `fcmp d0, #0.0` compara contra CERO, y el cero no es un operando: es la
+     * forma.  La base declara una variante de un solo registro para eso, asi
+     * que el `#0.0` escrito sobraba y no casaba ninguna.
+     *
+     * Se quita aqui, con el resto de lo que la sintaxis de ARM da por sabido.
+     * No vale relajar la aridad: dejar sobrar tokens en general haria que una
+     * linea con un operando de mas casara con la forma equivocada. */
+    if (isa == Isa::ARM64 && toks.size() == 2) {
+        std::string bajo = mnem;
+        for (char &c : bajo)
+            c = static_cast<char>(std::tolower((unsigned char)c));
+        std::string ult = toks[1];
+        for (char &c : ult)
+            c = static_cast<char>(std::tolower((unsigned char)c));
+        if ((bajo == "fcmp" || bajo == "fcmpe") &&
+            (ult == "#0.0" || ult == "#0"))
+            toks.pop_back();
     }
     std::vector<ParsedOp> ops;
     ops.reserve(toks.size());

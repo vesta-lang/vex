@@ -161,6 +161,30 @@ int main() {
         // Y la agrupacion no se lleva por delante la forma directa.
         const AsmInsnSem l8 = asm_insn_sem(Isa::ARM64, "ldr x8, [x1]", 0);
         CHECK(l8.modeled && l8.reads_mem, "arm64: ldr de 64 bits sigue bien");
+
+        /* Lo que la sintaxis de ARM da por sabido y la forma SI declara.
+         *
+         * Las tres salen en cada funcion compilada, asi que sin ellas no se
+         * puede recorrer un manejador entero: `ret` deja implicito su registro
+         * de retorno, el post-indexado escribe el desplazamiento FUERA de los
+         * corchetes -- y es el mismo que la forma declara dentro --, y el cero
+         * de un `fcmp` no es un operando sino la forma. */
+        const AsmInsnSem rt = asm_insn_sem(Isa::ARM64, "ret", 0);
+        CHECK(rt.modeled && rt.barrier, "arm64: `ret` a secas es `ret x30`");
+        const AsmInsnSem pi =
+            asm_insn_sem(Isa::ARM64, "ldp x29, x30, [sp], #0x20", 0);
+        CHECK(pi.modeled && pi.reads_mem && pi.writes.size() == 2,
+              "arm64: post-indexado, con el desplazamiento fuera");
+        const AsmInsnSem pr =
+            asm_insn_sem(Isa::ARM64, "stp x29, x30, [sp, #-0x20]!", 0);
+        CHECK(pr.modeled && pr.writes_mem,
+              "arm64: pre-indexado, con el desplazamiento dentro");
+        const AsmInsnSem fz = asm_insn_sem(Isa::ARM64, "fcmp d0, #0.0", 0);
+        CHECK(fz.modeled && fz.writes_flags,
+              "arm64: fcmp contra cero -- el cero ES la forma");
+        const AsmInsnSem cs = asm_insn_sem(Isa::ARM64, "cset w10, eq", 0);
+        CHECK(cs.modeled && cs.reads_flags && !cs.writes.empty(),
+              "arm64: la condicion escrita, que la forma marca no textual");
     }
 
     // ldaxr (LL/SC) -> overlay ll_sc; dmb -> barrera.
