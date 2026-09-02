@@ -62,6 +62,36 @@ int main() {
     // mnemonico inexistente -> -1.
     CHECK(match(Isa::X86, "frobnicate", {}) < 0, "mnemonico inexistente -> -1");
 
+    /* --- Lo que el TEXTO no distingue y la FORMA si ----------------------
+     *
+     * Estas tres familias no casaban en NINGUNA de sus formas, y el motivo era
+     * el mismo: el emparejador exigia que el tipo de operando leido del texto
+     * fuera identico al de la forma, cuando hay tipos que se ESCRIBEN igual.
+     *
+     * Una direccion generada (`agen`) y un acceso a memoria son los dos
+     * `[base + indice*escala + desp]`; el destino de un salto es un numero o
+     * una etiqueta, igual que un inmediato.  Quien sabe la diferencia es la
+     * forma, no quien lee la linea.
+     *
+     * No se notaba porque nadie le preguntaba a la DB por codigo COMPILADO: el
+     * asm que escribe un programa Vesta rara vez lleva `lea`, y los saltos van
+     * a etiquetas propias.  En cuanto se le pregunta por lo que emite un
+     * compilador de C, `lea` es de las mas frecuentes -- y es la que lleva el
+     * calculo de direcciones, justo lo que hace falta para saber a que apunta
+     * un puntero. */
+    int32_t lea = match(Isa::X86, "lea", {reg(64), mem(0)});
+    CHECK(lea >= 0 && std::string(iclass_name(Isa::X86, lea)) == "LEA",
+          "lea reg64, [mem]: una direccion generada casa como memoria");
+    bool lm_r = false, lm_w = false;
+    CHECK(!memory_of(Isa::X86, lea, lm_r, lm_w) || (!lm_r && !lm_w),
+          "lea NO toca memoria: la calcula");
+
+    int32_t je = match(Isa::X86, "je", {ParsedOp{OP_IMM, 0}});
+    CHECK(je >= 0, "je <destino>: un destino de salto casa como inmediato");
+    bool je_r = false, je_w = false;
+    CHECK(flags_of(Isa::X86, je, je_r, je_w) && je_r,
+          "je lee las banderas");
+
     // --- ARM64 (AArch64) ---
     CHECK(form_count(Isa::ARM64) == 4619, "arm64: 4619 formas embebidas");
     int32_t aadd = match(Isa::ARM64, "add", {reg(0), reg(0), reg(0)});
@@ -206,8 +236,7 @@ int main() {
          * escritos, que es mas seguro Y mas preciso.  El test comprueba lo que
          * de verdad importa: que los implicitos ESTAN. */
         AsmInsnSem su = asm_insn_sem(Isa::X86, "mul rbx", (uint32_t)skl);
-        auto menciona = [](const std::vector<std::string> &v,
-                           const char *r) {
+        auto menciona = [](const std::vector<std::string> &v, const char *r) {
             for (const std::string &x : v)
                 if (x == r) return true;
             return false;

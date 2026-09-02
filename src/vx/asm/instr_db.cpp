@@ -69,7 +69,35 @@ int score_ops(const std::vector<ParsedOp> &user,
     for (size_t i = 0; i < user.size(); ++i) {
         const ParsedOp &u = user[i];
         const DbOperand &fo = *form[i];
-        if (u.kind != fo.kind) return -1;
+        /* Una direccion GENERADA (`agen`) y un acceso a memoria se escriben
+         * EXACTAMENTE igual: `[base + indice*escala + desp]`.  La diferencia no
+         * esta en el texto, esta en lo que la instruccion hace con el -- `lea`
+         * calcula la direccion y no toca memoria --, asi que quien la sabe es la
+         * FORMA, no el que lee la linea.
+         *
+         * Exigir tipo exacto dejaba `lea` sin emparejar en TODAS sus formas: el
+         * texto da `mem` y la forma pide `agen`.  Y `lea` es de las que mas sale
+         * en codigo compilado, ademas de ser la que lleva el calculo de
+         * direcciones -- justo lo que hace falta para saber a que apunta un
+         * puntero.  La DB tenia las 90 entradas `agen` desde el principio; lo
+         * que faltaba era que alguien las pudiera alcanzar.
+         *
+         * Puntua por debajo del acierto exacto para que, si existieran las dos
+         * formas, gane la que casa del todo. */
+        const bool agen_por_mem = u.kind == OP_MEM && fo.kind == OP_AGEN;
+        /* Y lo mismo con el DESTINO DE UN SALTO.  `je 0x7ff7` y `jmp .Lfin` se
+         * escriben como un numero o una etiqueta, que es lo que se lee como
+         * inmediato; la forma es la que sabe que ese inmediato es un destino,
+         * relativo (`relbr`) o absoluto (`absbr`).  Sin esto, ningun salto
+         * condicional se emparejaba, y son la mitad del flujo de control de
+         * cualquier funcion compilada. */
+        const bool destino_por_imm =
+            u.kind == OP_IMM && (fo.kind == OP_RELBR || fo.kind == OP_ABSBR);
+        if (u.kind != fo.kind && !agen_por_mem && !destino_por_imm) return -1;
+        if (agen_por_mem || destino_por_imm) {
+            s += 1;
+            continue; // ni una direccion ni un destino tienen ancho de acceso
+        }
         if (u.width && fo.width) {
             if (u.width != fo.width) return -1;
             s += 2;
@@ -1144,6 +1172,17 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
                 if (wr) s.writes_mem = true;
                 addr_regs(isa, toks[k],
                           s.reads); // los regs de direccion se leen
+            } else if (o.kind == OP_AGEN) {
+                /* Una direccion GENERADA no accede a memoria: se CALCULA.  Por
+                 * eso no toca `reads_mem`/`writes_mem` -- decir que si es lo que
+                 * convierte una `lea` en una barrera para todo lo que lea o
+                 * escriba memoria alrededor, cuando no estorba a nada.
+                 *
+                 * Lo que si hace es LEER los registros que entran en la cuenta.
+                 * Sin eso, una `lea rdx, [rcx + rax*8]` no declararia depender
+                 * de `rcx` ni de `rax`, y reordenar por delante de quien los
+                 * escribe daria OTRA direccion. */
+                addr_regs(isa, toks[k], s.reads);
             }
         }
     }
