@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
                 fila.grupo = par.second;
                 fila.fn = par.first;
                 fila.compartida = reparto[par.first];
-                std::set<uint64_t> vistas;
+                std::set<tests::WalkVisit> vistas;
                 tests::walk_handler(
                     cs, reinterpret_cast<uint64_t>(par.first), g_profundidad,
                     vistas,
