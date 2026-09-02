@@ -341,12 +341,65 @@ inline const std::set<uint64_t> &fatal_frontier() {
     return f;
 }
 
+/**
+ * @brief El rango de direcciones de NUESTRO modulo.
+ *
+ * Es la frontera de fuera del recorrido.  Lo que hay al otro lado -- la
+ * libreria estandar, las DLL del sistema -- no es lo que hace nuestra
+ * instruccion: recibe punteros a buffers y opera sobre ellos, sin tocar el
+ * proceso.
+ *
+ * Medido antes de ponerla: el 92,7% de las instrucciones recorridas estaban
+ * fuera (527.411 de 568.833), y 116 de los 164 sitios sin resolver tambien.
+ * Por esos huecos ajenos habia opcodes declarados como "los efectos dependen de
+ * la ejecucion" que no dependen de nada.
+ *
+ * Se pregunta al sistema por el modulo que contiene un manejador cualquiera, en
+ * vez de suponerlo: la direccion de carga cambia en cada arranque.
+ */
+inline void module_range(uint64_t &lo, uint64_t &hi) {
+    static uint64_t l = 0, h = 0;
+    if (h == 0) {
+#if defined(_WIN32)
+        MEMORY_BASIC_INFORMATION mbi;
+        const void *ancla =
+            reinterpret_cast<const void *>(&runtime::exec_instr_hlt);
+        if (VirtualQuery(ancla, &mbi, sizeof(mbi)) != 0) {
+            const uintptr_t base =
+                reinterpret_cast<uintptr_t>(mbi.AllocationBase);
+            const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(base);
+            if (dos->e_magic == IMAGE_DOS_SIGNATURE) {
+                const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS *>(
+                    base + static_cast<uintptr_t>(dos->e_lfanew));
+                l = base;
+                h = base + nt->OptionalHeader.SizeOfImage;
+            }
+        }
+#else
+        /* En POSIX el mapa lo publica el nucleo; sin el, `h` se queda en 0 y el
+         * recorrido no acota -- vuelve a lo de antes, que es correcto aunque
+         * caro, en vez de acotar mal. */
+        Dl_info info;
+        if (dladdr(reinterpret_cast<const void *>(&runtime::exec_instr_hlt),
+                   &info) != 0 &&
+            info.dli_fbase != nullptr) {
+            l = reinterpret_cast<uint64_t>(info.dli_fbase);
+            h = l + (1ull << 32); // sin tamano fiable: se acota por arriba
+        }
+#endif
+    }
+    lo = l;
+    hi = h;
+}
+
 inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
     ImplicitEffects out;
     if (handler == nullptr) return out;
 
     tests::WalkResult res;
     std::set<WalkVisit> vistas;
+    uint64_t ambito_lo = 0, ambito_hi = 0;
+    module_range(ambito_lo, ambito_hi);
     /* Las ultimas instrucciones vistas.  Un acceso al banco cuyo indice no se
      * identifica no se explica con la instruccion en si: se explica con lo que
      * cargo el indice, que esta ANTES.  Sin eso, el diagnostico dice que no se
@@ -559,7 +612,7 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                 }
             }
         },
-        res, tests::CallSeed{}, fatal_frontier());
+        res, tests::CallSeed{}, fatal_frontier(), ambito_lo, ambito_hi);
     out.completo = res.completo();
     out.sin_resolver = res.unresolved;
     out.tablas = res.tables_resolved;
