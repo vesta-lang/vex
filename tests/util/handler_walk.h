@@ -398,6 +398,24 @@ struct Origin {
      * primer o el segundo operando lo decide quien conoce la codificacion. */
     uint8_t shift = 0; ///< primer bit
     uint8_t width = 0; ///< cuantos bits; 0 = no se sabe
+    /* Lo que se le ha hecho al valor DESPUES de leerlo, como funcion afin:
+     * el registro lleva `(campo + pre_add) * scale`.
+     *
+     * Hace falta porque el compilador no siempre usa el modo de direccionamiento
+     * de la arquitectura.  Para indexar un banco de 64 bytes por registro la
+     * escala de un acceso indexado NO llega, asi que hace reduccion de fuerza y
+     * pliega la base del banco DENTRO del indice:
+     *
+     *     add r9, 4        ; el banco empieza en 4*64 = 0x100
+     *     shl r9, 6        ; x64
+     *     add r9, rax      ; + el proceso
+     *     ...  [r9]        ; y el acceso ya no lleva desplazamiento ninguno
+     *
+     * Buscando el desplazamiento del banco no se encuentra NADA, porque no
+     * aparece: `0x100` se convirtio en un `+4` antes de escalar.  Guardando la
+     * funcion afin, las dos formas se reconocen igual. */
+    int64_t pre_add = 0;
+    uint32_t scale = 1;
     bool valid = false;
 };
 
@@ -697,6 +715,17 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             if (n < st.origin[d].width) st.origin[d].width = n;
         }
     }
+    /* `add REG, imm` sobre un valor con procedencia: entra en la funcion afin.
+     * Es el `+4` de arriba, el que hace desaparecer el desplazamiento del
+     * banco. */
+    if (m == "add" && x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
+        x.operands[1].type == X86_OP_IMM) {
+        const int d = gpr_slot(x.operands[0].reg);
+        if (d >= 0 && st.origin[d].valid) {
+            st.origin[d].pre_add += x.operands[1].imm;
+            return;
+        }
+    }
     /* Un desplazamiento a la IZQUIERDA no selecciona bits: ESCALA.
      *
      * `shl rax, 6` sobre el numero de un registro vectorial lo convierte en un
@@ -709,9 +738,13 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
      * Se conserva tal cual: `Origin` dice QUE BITS del campo lleva el registro,
      * y escalar no cambia ninguno. */
     if ((m == "shl" || m == "sal") && x.op_count == 2 &&
-        x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_IMM) {
+        x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_IMM &&
+        x.operands[1].imm >= 0 && x.operands[1].imm < 32) {
         const int d = gpr_slot(x.operands[0].reg);
-        if (d >= 0 && st.origin[d].valid) return; // se conserva
+        if (d >= 0 && st.origin[d].valid) {
+            st.origin[d].scale <<= static_cast<unsigned>(x.operands[1].imm);
+            return; // el campo es el mismo, solo escalado
+        }
     }
     if ((m == "shr" || m == "sar") && x.op_count == 2 &&
         x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_IMM &&
@@ -825,6 +858,33 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         const int s = gpr_slot(x.operands[1].reg);
         if (d >= 0 && s >= 0 && !st.loaded[d].empty() && st.base[s] != 0)
             return; // se conserva lo cargado
+    }
+    /* `add REG, ARG` con una funcion afin acumulada: ya es una DIRECCION.
+     *
+     * Es el ultimo paso de la reduccion de fuerza -- sumar la base --, y aqui es
+     * donde `(campo + K) * S` mas el proceso se convierte en lo mismo que
+     * `[proceso + campo*S + K*S]`, que es la forma que el resto ya sabe leer. */
+    if (m == "add" && x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
+        x.operands[1].type == X86_OP_REG) {
+        const int d = gpr_slot(x.operands[0].reg);
+        const int b = gpr_slot(x.operands[1].reg);
+        if (d >= 0 && b >= 0 && st.arg[b] >= 0 && st.origin[d].valid &&
+            st.origin[d].scale > 1) {
+            AddrOrigin a;
+            a.base = st.arg[b];
+            a.disp = st.origin[d].pre_add *
+                     static_cast<int64_t>(st.origin[d].scale);
+            a.index = st.origin[d];
+            a.index.pre_add = 0;
+            a.index.scale = 1;
+            a.scale = static_cast<uint8_t>(
+                st.origin[d].scale > 255 ? 255 : st.origin[d].scale);
+            a.valid = true;
+            st.addr[d] = a;
+            st.origin[d] = Origin{};
+            st.arg[d] = -1;
+            return;
+        }
     }
     /* Copia entre registros: lo que se sabia del origen vale para el destino.
      *
