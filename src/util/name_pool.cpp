@@ -49,11 +49,6 @@ const std::string *intern_name(const std::string &name) {
     return &*pool().insert(name).first;
 }
 
-const std::string *empty_name() noexcept {
-    // Fuera del pozo a proposito: es el valor por defecto de toda posicion, y
-    // no debe costar ni un cerrojo ni una busqueda.
-    static const std::string empty;
-    return &empty;
-}
+// Definido en la cabecera (variable en linea): ver `empty_name`.
 
 } // namespace util

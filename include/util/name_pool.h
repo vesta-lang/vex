@@ -55,13 +55,26 @@ const std::string *intern_name(const std::string &name);
 /**
  * @brief El nombre vacio compartido.
  *
- * Va aparte de @c intern_name para que construir una posicion por defecto -- lo
- * que hace cada nodo del arbol antes de que nadie le diga de donde viene -- no
- * tenga que tocar el pozo ni su cerrojo.
+ * Variable EN LINEA y no un `static` dentro de la funcion: un estatico local se
+ * inicializa la primera vez que se pasa por el, asi que el compilador mete una
+ * comprobacion de guarda -- y ademas con cerrojo, por si dos hilos llegan a la
+ * vez -- en CADA llamada.  Y aqui se llama al construir cualquier nombre por
+ * defecto, que es lo que hace todo tipo sin nombre y toda posicion de fuente.
+ *
+ * Medido: costaba 15 millones de instrucciones, el 1 % de compilar.
+ */
+inline const std::string kEmptyName;
+
+/**
+ * @brief El nombre vacio compartido.
+ *
+ * Va aparte de @c intern_name para que construir un nombre por defecto -- lo
+ * que hace cada nodo antes de que nadie le diga como se llama -- no toque el
+ * pozo ni su cerrojo.
  *
  * @return Puntero a la cadena vacia compartida; nunca nulo.
  */
-const std::string *empty_name() noexcept;
+inline const std::string *empty_name() noexcept { return &kEmptyName; }
 
 } // namespace util
 
