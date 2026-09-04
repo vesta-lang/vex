@@ -116,7 +116,7 @@ std::string format_diags(const vx::Diagnostics &diags) {
             lvl = "warning";
         else if (d.level == vx::DiagLevel::NOTE)
             lvl = "note";
-        os << d.loc.file << ":" << d.loc.line << ":" << d.loc.column << ": "
+        os << d.loc.file() << ":" << d.loc.line << ":" << d.loc.column << ": "
            << lvl << ": " << d.message << "\n";
     }
     return os.str();

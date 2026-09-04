@@ -80,7 +80,7 @@ int main() {
     diag::set_language(en);
     Diagnostics diags;
     SourceLoc loc;
-    loc.file = "foo.vx";
+    loc.set_file("foo.vx");
     loc.line = 9;
     loc.column = 5;
     diags.diag(loc, DiagLevel::WARN, "VXA002", {".fin"});

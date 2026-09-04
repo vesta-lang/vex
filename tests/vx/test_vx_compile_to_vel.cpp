@@ -64,7 +64,7 @@ static void test_minimal_main_emits_vel() {
     if (!r.ok) {
         std::fprintf(stderr, "Diagnosticos:\n");
         for (auto &d : r.diagnostics.all()) {
-            std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file.c_str(),
+            std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file().c_str(),
                          d.loc.line, d.message.c_str());
         }
     }
@@ -103,7 +103,7 @@ static void test_factorial_recursive_emits_vel() {
     CompileResult r = compile_vx_source(src, "<fact>", opts);
     if (!r.ok) {
         for (auto &d : r.diagnostics.all()) {
-            std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file.c_str(),
+            std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file().c_str(),
                          d.loc.line, d.message.c_str());
         }
     }

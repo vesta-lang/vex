@@ -4949,12 +4949,85 @@ bool ir_pass_narrow_cmp(IrFunction &fn) {
     return changed;
 }
 
+namespace {
+
+/**
+ * @brief Que valor tiene cada constante, indexado por value-id.
+ *
+ * VECTOR PLANO y no tabla hash: la clave es un value-id, o sea un indice DENSO
+ * en @c IrFunction::values.  Una tabla hash paga un nodo del monton por entrada
+ * y una dispersion por consulta para indexar lo que ya es un indice, y los
+ * pases que la usan corren una vez por funcion y por vuelta del punto fijo --
+ * eran de lo que mas reservaba el compilador entero.
+ *
+ * Se conserva la interfaz `m[v] = x` de la tabla que sustituye a proposito: hay
+ * casi cuarenta sitios que escriben en ella, y cambiarlos uno a uno es cambiar
+ * cuarenta oportunidades de equivocarse por una.
+ */
+class ConstMap {
+  public:
+    /// @param n Cuantos valores tiene la funcion, para dimensionar de golpe.
+    explicit ConstMap(size_t n) : val_(n, 0), known_(n, 0) {}
+
+    /// Referencia asignable a la constante de un valor.
+    class Ref {
+      public:
+        Ref(ConstMap *m, IrValueId v) : m_(m), v_(v) {}
+        /// @brief Marca @c v como constante con este valor.
+        Ref &operator=(int64_t x) {
+            m_->set(v_, x);
+            return *this;
+        }
+
+      private:
+        ConstMap *m_;
+        IrValueId v_;
+    };
+
+    Ref operator[](IrValueId v) { return Ref(this, v); }
+
+    /**
+     * @brief El valor de @p v si es constante.
+     *
+     * El "si lo es" va aparte del valor porque sin eso no se distingue "vale
+     * cero" de "no se sabe".
+     *
+     * @param v   Valor.
+     * @param out Recibe la constante.
+     * @return @c true si @p v es constante.
+     */
+    bool get(IrValueId v, int64_t &out) const {
+        if (v >= static_cast<IrValueId>(known_.size()) || !known_[v])
+            return false;
+        out = val_[v];
+        return true;
+    }
+
+    /// @brief Apunta que @p v vale @p x.  Crece si el pase creo valores nuevos.
+    void set(IrValueId v, int64_t x) {
+        if (v == IR_NO_VALUE) return;
+        if (v >= static_cast<IrValueId>(val_.size())) {
+            val_.resize(static_cast<size_t>(v) + 1, 0);
+            known_.resize(static_cast<size_t>(v) + 1, 0);
+        }
+        val_[v] = x;
+        known_[v] = 1;
+    }
+
+  private:
+    std::vector<int64_t> val_;
+    std::vector<uint8_t> known_;
+};
+
+} // namespace
+
 bool ir_pass_simplify(IrFunction &fn) {
     bool changed = false;
 
     /* Pre-build: vid -> CONST imm (si lo es).  Evita el escaneo lineal
      * dentro del bucle principal. */
-    std::unordered_map<IrValueId, int64_t> const_vids;
+    const size_t n_values = fn.values.size();
+    ConstMap const_vids(n_values);
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
             if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE) {
@@ -4964,20 +5037,19 @@ bool ir_pass_simplify(IrFunction &fn) {
     }
     auto get_const = [&](IrValueId v, int64_t &out) -> bool {
         if (v == IR_NO_VALUE) return false;
-        auto it = const_vids.find(v);
-        if (it == const_vids.end()) return false;
-        out = it->second;
-        return true;
+        return const_vids.get(v, out);
     };
 
-    /* Mapa value -> instr definidora (para reescrituras estructurales
-     * op-sobre-op como fneg(fneg x)->x).  Se lee EN VIVO (def->op actual):
-     * simplify reescribe in-place sin redimensionar los vectores, asi que los
-     * punteros siguen validos y nunca se toma una op stale. */
-    std::unordered_map<IrValueId, IrInstr *> def_of;
+    /* Value -> instr definidora (para reescrituras estructurales op-sobre-op
+     * como fneg(fneg x)->x).  Se lee EN VIVO (def->op actual): simplify
+     * reescribe in-place sin redimensionar los vectores, asi que los punteros
+     * siguen validos y nunca se toma una op stale. */
+    std::vector<IrInstr *> def_of(n_values, nullptr);
     for (auto &bb : fn.blocks)
         for (auto &ins : bb.instrs)
-            if (ins.dst != IR_NO_VALUE) def_of[ins.dst] = &ins;
+            if (ins.dst != IR_NO_VALUE &&
+                ins.dst < static_cast<IrValueId>(n_values))
+                def_of[ins.dst] = &ins;
 
     for (auto &bb : fn.blocks) {
         for (auto &ins : bb.instrs) {
@@ -5274,11 +5346,14 @@ bool ir_pass_simplify(IrFunction &fn) {
                  * a 0.  fneg(fneg x)=x; fabs(fabs x)=fabs x; fabs(fneg x)=fabs
                  * x. */
                 if (ins.op == IrOp::FNEG || ins.op == IrOp::FABS) {
-                    auto dit = def_of.find(ins.operands[0]);
-                    if (dit != def_of.end() && dit->second != &ins &&
-                        !dit->second->operands.empty()) {
-                        const IrOp dop = dit->second->op;
-                        const IrValueId inner = dit->second->operands[0];
+                    const IrValueId src0 = ins.operands[0];
+                    IrInstr *def = (src0 < static_cast<IrValueId>(n_values))
+                                       ? def_of[src0]
+                                       : nullptr;
+                    if (def != nullptr && def != &ins &&
+                        !def->operands.empty()) {
+                        const IrOp dop = def->op;
+                        const IrValueId inner = def->operands[0];
                         if (ins.op == IrOp::FNEG && dop == IrOp::FNEG) {
                             rewrite_as_mov(ins, inner);
                             changed = true;
@@ -7135,34 +7210,51 @@ bool ir_pass_strength_reduction(IrFunction &fn) {
 bool ir_pass_reassoc(IrFunction &fn) {
     bool changed = false;
 
-    /* Build vid -> instr (defining instr) para reassoc lookups. */
+    /* Quien define cada valor, y cuales son constantes.
+     *
+     * VECTORES PLANOS, no tablas hash: la clave es un value-id, que es un
+     * indice DENSO en `fn.values` -- no un nombre --, asi que una tabla hash
+     * paga un nodo por entrada, una dispersion por consulta y punteros que
+     * seguir, para indexar lo que ya es un indice.  Este pase corre una vez por
+     * funcion y por vuelta del punto fijo, y era el que mas reservaba de todo
+     * el compilador. */
     struct DefInfo {
         IrBlockId bb;
         size_t idx;
     };
-    std::unordered_map<IrValueId, DefInfo> defs;
+    /// Centinela de @c DefInfo::idx: ese valor no lo define ninguna
+    /// instruccion (es un parametro, o no existe).
+    constexpr size_t kNoDef = static_cast<size_t>(-1);
+    std::vector<DefInfo> defs(fn.values.size(), DefInfo{0, kNoDef});
     for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         const auto &bb = fn.blocks[bi];
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
             const auto &ins = bb.instrs[i];
-            if (ins.dst != IR_NO_VALUE) {
+            if (ins.dst != IR_NO_VALUE &&
+                ins.dst < static_cast<IrValueId>(defs.size())) {
                 defs[ins.dst] = {static_cast<IrBlockId>(bi), i};
             }
         }
     }
-    std::unordered_map<IrValueId, int64_t> const_vids;
+    /* El valor de cada constante, y aparte SI lo es: sin la marca no se
+     * distingue "vale cero" de "no es constante". */
+    std::vector<int64_t> const_val(fn.values.size(), 0);
+    std::vector<uint8_t> value_is_const(fn.values.size(), 0);
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
-            if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE) {
-                const_vids[ins.dst] = static_cast<int64_t>(ins.imm);
+            if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE &&
+                ins.dst < static_cast<IrValueId>(const_val.size())) {
+                const_val[ins.dst] = static_cast<int64_t>(ins.imm);
+                value_is_const[ins.dst] = 1;
             }
         }
     }
 
     auto is_const = [&](IrValueId v, int64_t &out) -> bool {
-        auto it = const_vids.find(v);
-        if (it == const_vids.end()) return false;
-        out = it->second;
+        if (v >= static_cast<IrValueId>(value_is_const.size()) ||
+            !value_is_const[v])
+            return false;
+        out = const_val[v];
         return true;
     };
 
@@ -7178,7 +7270,13 @@ bool ir_pass_reassoc(IrFunction &fn) {
         // Se MUEVE: `IrValue` lleva su nombre, y copiarlo aqui reserva otra vez
         // la cadena que se acaba de construir dos lineas arriba.
         fn.values.push_back(std::move(v));
-        const_vids[new_id] = static_cast<int64_t>(imm);
+        /* Los vectores crecen A LA VEZ que `fn.values`: el id del nuevo valor
+         * es su tamanyo anterior, asi que anadir al final los mantiene
+         * alineados.  Si se desalinearan no habria ningun error -- se leeria el
+         * valor de OTRA constante. */
+        const_val.push_back(static_cast<int64_t>(imm));
+        value_is_const.push_back(1);
+        defs.push_back(DefInfo{0, kNoDef});
 
         IrInstr ci{};
         ci.op = IrOp::CONST;
@@ -7224,12 +7322,13 @@ bool ir_pass_reassoc(IrFunction &fn) {
                 std::swap(lhs, rhs);
             }
             if (!is_const(rhs, c2)) continue;
-            auto dit = defs.find(lhs);
-            if (dit == defs.end()) continue;
-            if (dit->second.bb >= fn.blocks.size()) continue;
-            const auto &inner_bb = fn.blocks[dit->second.bb];
-            if (dit->second.idx >= inner_bb.instrs.size()) continue;
-            const IrInstr &inner = inner_bb.instrs[dit->second.idx];
+            if (lhs >= static_cast<IrValueId>(defs.size())) continue;
+            const DefInfo &def = defs[lhs];
+            if (def.idx == kNoDef) continue;
+            if (def.bb >= fn.blocks.size()) continue;
+            const auto &inner_bb = fn.blocks[def.bb];
+            if (def.idx >= inner_bb.instrs.size()) continue;
+            const IrInstr &inner = inner_bb.instrs[def.idx];
             if (inner.op != ins.op || inner.operands.size() < 2) continue;
             int64_t c1 = 0;
             IrValueId x = inner.operands[0];
