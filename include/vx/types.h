@@ -415,7 +415,19 @@ inline bool operator!=(const char *a, const PooledName &b) { return b != a; }
  * cuando se almacenan miles de tipos juntos.
  */
 struct Type {
-    PrimitiveKind kind = PrimitiveKind::VOID;
+    /* ORDEN DE LOS CAMPOS: primero lo que ocupa ocho bytes o mas, y despues
+     * TODOS los escalares juntos.
+     *
+     * No es estetica.  Intercalados -- un `bool` entre dos punteros, un
+     * `uint16` al final --, el compilador rellena hasta la alineacion
+     * siguiente: eran 29 de 184 bytes en relleno.  Y un `Type` se copia
+     * constantemente, porque el comprobador de tipos lo devuelve por valor de
+     * cada expresion que mira.  Agrupados, la estructura baja a 160.
+     *
+     * Al anyadir un campo: si es escalar, va abajo con los escalares; si no,
+     * arriba.  Ponerlo donde caiga no da ningun error -- solo devuelve el
+     * relleno. */
+
     /// Nombre del struct (vacio para todo lo demas).  Se incluye aqui
     /// porque distinguir @c Punto de @c Color requiere el nombre, y
     /// porque el numero de structs por modulo es pequenyo (tipicamente
@@ -428,18 +440,6 @@ struct Type {
     /// va COMPARTIDO (@ref PooledName), asi que copiar un tipo no copia
     /// cadenas.
     PooledName struct_name;
-    /// @c true si esta referencia de clase (@c kind == CLASS) es GC-managed
-    /// (declarada como @c gc<X>): se aloca con @c vx_gc_alloc en vez de
-    /// @c calloc, no tiene cleanup RAII (el GC colecta, incl. ciclos), y su
-    /// slot se marca @c is_gc_object para los stackmaps precisos del GC.  El
-    /// resto (acceso a campos/metodos) es identico a una ref de clase normal.
-    bool gc_managed = false;
-    /// @c true si este tipo es un enum con VALOR entero (C-style,
-    /// `enum Op : u8 { ... }`).  @c kind es el tipo base (U8/U16/...)
-    /// y @c struct_name el nombre del enum, para resolver variantes y
-    /// distinguirlo de un entero plano.  El lowering lo trata como su
-    /// entero base en todos los sitios.
-    bool is_valued_enum = false;
     /// Tipo apuntado cuando @c kind == PTR o tipo de elemento cuando
     /// @c kind == ARRAY; nulo para todo lo demas.  Se usa @c shared_ptr
     /// porque @c Type debe ser copiable (el AST Type vive como valor en
@@ -450,9 +450,6 @@ struct Type {
     /// Segundo tipo para cuando @c kind == RESULT (V en @c pointee, E
     /// aqui).  No se usa para los demas kinds.
     std::shared_ptr<Type> pointee2;
-    /// Tamano del array cuando @c kind == ARRAY; 0 si es @c T[] (decay).
-    /// No se usa para los otros kinds.
-    uint32_t array_size = 0;
 
     /// Naturaleza del puntero cuando @c kind == PTR o ARRAY.
     /// false = puntero HOST (default; los datos viven en memoria del
@@ -492,6 +489,14 @@ struct Type {
     /// forma del tipo y NO entra en la igualdad estructural -- dos regiones del
     /// mismo tipo siguen siendo el mismo tipo aunque una sea observable.
     bool is_volatile = false;
+
+    /// Tamano del array cuando @c kind == ARRAY; 0 si es @c T[] (decay).
+    /// No se usa para los otros kinds.
+    ///
+    /// Va aqui, y no abajo con los demas escalares, porque justo detras de los
+    /// tres booleanos de arriba queda un hueco de relleno que este campo llena
+    /// exactamente.  Moverlo devuelve ocho bytes a la estructura.
+    uint32_t array_size = 0;
 
     /// Tipos de los parametros cuando @c kind == FUNCTION.  Vacio para
     /// los demas kinds.  La lista se materializa solo cuando se crea un
@@ -540,19 +545,6 @@ struct Type {
     /// unico que tiene es el tipo del puntero.
     uint64_t fn_param_by_ref_mask = 0;
 
-    /// Solo para @c kind == FUNCTION: distingue el LAMBDA/closure (false,
-    /// @c fn(...) -> R, fat-pointer de 16 bytes {fn_addr, env}) del PUNTERO
-    /// A FUNCION crudo estilo C (true, @c cfn(...) -> R, 8 bytes = solo la
-    /// direccion, llamada directa via CALLIND, sin env).  lambda != cfn.
-    bool fn_is_raw = false;
-
-    /// Solo para @c kind == FUNCTION: el ultimo parametro recoge los que
-    /// sobren.  En @c fn_params ese ultimo aparece ya como `T*` -- que es lo
-    /// que el cuerpo ve --, asi que el tipo del ELEMENTO se saca de su
-    /// @c pointee.  Forma parte del tipo: una funcion variadica y una que no lo
-    /// es NO son intercambiables, porque la llamada se monta distinto.
-    bool fn_is_variadic = false;
-
     /// Newtype nominal ID (typedef T name new).  0 = no es newtype
     /// (alias transparente clasico).  Cualquier valor > 0 identifica
     /// univocamente al newtype: dos Type con kinds/representacion
@@ -562,14 +554,6 @@ struct Type {
     /// Conservacion: cualquier copia de un Type preserva el ID;
     /// la representacion subyacente (kind, pointee, etc.) se mantiene
     /// para que el lowering y el ABI nativo no cambien.
-    uint32_t nominal_id = 0;
-
-    /// @c true si el newtype es @c @opaque: el usuario NO puede leer
-    /// los bits subyacentes (no hay cast implicito ni inicializacion
-    /// por literal).  Solo se puede construir/consumir via funciones
-    /// que lo manejen explicitamente.  Sin efecto si @c nominal_id == 0.
-    bool is_opaque = false;
-
     /// Nombre humano-legible del newtype (para mensajes de error e
     /// introspeccion).  Vacio si no es newtype.  Compartido: ver
     /// @ref PooledName.
@@ -602,6 +586,53 @@ struct Type {
     /// requirement.  Util para SIMD (16/32/64), DMA, GPU descriptors,
     /// protocolos de wire format con padding fijo.
     uint16_t align_override = 0;
+
+    /// El discriminador principal: de que clase es este tipo.
+    PrimitiveKind kind = PrimitiveKind::VOID;
+
+    /// @c true si esta referencia de clase (@c kind == CLASS) es GC-managed
+    /// (declarada como @c gc<X>): se aloca con @c vx_gc_alloc en vez de
+    /// @c calloc, no tiene cleanup RAII (el GC colecta, incl. ciclos), y su
+    /// slot se marca @c is_gc_object para los stackmaps precisos del GC.  El
+    /// resto (acceso a campos/metodos) es identico a una ref de clase normal.
+    bool gc_managed = false;
+
+    /// @c true si este tipo es un enum con VALOR entero (C-style,
+    /// `enum Op : u8 { ... }`).  @c kind es el tipo base (U8/U16/...)
+    /// y @c struct_name el nombre del enum, para resolver variantes y
+    /// distinguirlo de un entero plano.  El lowering lo trata como su
+    /// entero base en todos los sitios.
+    bool is_valued_enum = false;
+
+    /// Newtype nominal ID (typedef T name new).  0 = no es newtype
+    /// (alias transparente clasico).  Cualquier valor > 0 identifica
+    /// univocamente al newtype: dos Type con kinds/representacion
+    /// identicos pero distinto @c nominal_id son tipos DIFERENTES.
+    /// El ID se asigna en el type checker (counter global) cuando
+    /// se procesa la TypeAliasDecl con marca @c is_newtype.
+    /// Conservacion: cualquier copia de un Type preserva el ID;
+    /// la representacion subyacente (kind, pointee, etc.) se mantiene
+    /// para que el lowering y el ABI nativo no cambien.
+    uint32_t nominal_id = 0;
+
+    /// @c true si el newtype es @c @opaque: el usuario NO puede leer
+    /// los bits subyacentes (no hay cast implicito ni inicializacion
+    /// por literal).  Solo se puede construir/consumir via funciones
+    /// que lo manejen explicitamente.  Sin efecto si @c nominal_id == 0.
+    bool is_opaque = false;
+
+    /// Solo para @c kind == FUNCTION: distingue el LAMBDA/closure (false,
+    /// @c fn(...) -> R, fat-pointer de 16 bytes {fn_addr, env}) del PUNTERO
+    /// A FUNCION crudo estilo C (true, @c cfn(...) -> R, 8 bytes = solo la
+    /// direccion, llamada directa via CALLIND, sin env).  lambda != cfn.
+    bool fn_is_raw = false;
+
+    /// Solo para @c kind == FUNCTION: el ultimo parametro recoge los que
+    /// sobren.  En @c fn_params ese ultimo aparece ya como `T*` -- que es lo
+    /// que el cuerpo ve --, asi que el tipo del ELEMENTO se saca de su
+    /// @c pointee.  Forma parte del tipo: una funcion variadica y una que no lo
+    /// es NO son intercambiables, porque la llamada se monta distinto.
+    bool fn_is_variadic = false;
 
     Type() = default;
     explicit Type(PrimitiveKind k) : kind(k) {}
