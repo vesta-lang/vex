@@ -46,42 +46,66 @@ namespace {
 void report_giveups(const LoopIvBounds &out) {
     static const bool on = util::flag_on(util::FlagId::RangeStats);
     if (!on) return;
-    static std::atomic<long long> acotadas{0}, sin_forma{0}, no_contados{0};
+    static std::atomic<long long> acotadas{0}, no_contados{0}, sin_iv{0},
+        sin_init{0}, sin_limite{0}, guarda{0};
     acotadas += static_cast<long long>(out.bounds.size());
-    sin_forma += out.no_shape;
     no_contados += out.not_counted;
+    sin_iv += out.no_shape_iv;
+    sin_init += out.no_const_init;
+    sin_limite += out.no_const_bound;
+    guarda += out.guard_uncovered;
     static std::atomic<long long> n{0};
     if ((++n % 100) != 0) return;
-    const long long a = acotadas.load(), s = sin_forma.load(),
-                    c = no_contados.load();
-    const long long tot = a + s;
     std::fprintf(stderr,
-                 "[cotas-iv] acotadas=%lld | sin forma que despejar=%lld"
-                 " (%.1f%% de los contados) | no son bucles contados=%lld\n",
-                 a, s, tot ? 100.0 * s / tot : 0.0, c);
+                 "[cotas-iv] acotadas=%lld | induccion-no-reconocida=%lld"
+                 " | arranque-no-const=%lld | limite-no-const=%lld"
+                 " | guarda-no-cubierta=%lld | no-contados=%lld\n",
+                 acotadas.load(), sin_iv.load(), sin_init.load(),
+                 sin_limite.load(), guarda.load(), no_contados.load());
 }
 
-/// El valor CONSTANTE de @p v, si lo define un `CONST`.  Solo lo ESCRITO: si
-/// hubiera que preguntarle a los rangos, esto dependeria de ellos y ellos de
-/// esto.
+/**
+ * @brief El valor CONSTANTE de @p v: lo escrito, o lo que los rangos fijen.
+ *
+ * Empieza por el `CONST` escrito, que no cuesta nada y cubre el caso facil.
+ * Si no lo hay y se traen @p ranges, vale un rango de UN SOLO valor: un
+ * `[7,7]` dice lo mismo que un `7` escrito, y negarse a leerlo era lo que
+ * dejaba sin cota al 89 % de los bucles contados.
+ *
+ * Esto NO reabre el circulo, y la diferencia esta en QUIEN los trae: aqui no
+ * se piden rangos -- no se puede, son ellos los que reciben esto --, se usan
+ * los que el llamante YA tiene de una pasada anterior.  El orden lo impone
+ * quien llama (ver @c compute_ranges_ptr): rangos sin cotas, cotas con esos
+ * rangos, y rangos otra vez con las cotas.  Cada etapa solo estrecha, asi que
+ * el resultado sigue conteniendo al punto fijo real.
+ */
 bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
-              IrValueId v, int64_t &out) {
+              IrValueId v, int64_t &out, const RangeFacts *ranges) {
     if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
     const int db = (v < (IrValueId)def_block.size()) ? def_block[v] : -1;
-    if (db < 0 || (size_t)db >= fn.blocks.size()) return false;
-    for (const IrInstr &in : fn.blocks[db].instrs)
-        if (in.dst == v && in.op == IrOp::CONST) {
-            out = (int64_t)in.imm;
-            return true;
-        }
-    return false;
+    if (db >= 0 && (size_t)db < fn.blocks.size())
+        for (const IrInstr &in : fn.blocks[db].instrs)
+            if (in.dst == v && in.op == IrOp::CONST) {
+                out = (int64_t)in.imm;
+                return true;
+            }
+    if (ranges == nullptr) return false;
+    const ValueRange &r = ranges->at(v);
+    if (!r.es_constante()) return false;
+    /* Con signo: quien lo consume despeja con aritmetica con signo (`i +
+     * C < N`), y leer un extremo con el otro convenio da OTRO NUMERO. */
+    int64_t lo = 0, hi = 0;
+    if (!r.vista_con_signo(lo, hi) || lo != hi) return false;
+    out = lo;
+    return true;
 }
 
 } // namespace
 
 LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
                                     const IrFacts &facts,
-                                    const LoopFacts &loops) {
+                                    const LoopFacts &loops,
+                                    const RangeFacts *ranges) {
     LoopIvBounds out;
     if (loops.loop_count == 0) return out;
     /* Una por bucle como mucho, y son pocos: se reserva de una vez para no ir
@@ -105,11 +129,32 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
                    static_cast<ir::IrBlockId>(loops.header_block_of(b)));
     });
 
-    /// Lo ya establecido para @p v en esta misma pasada, si lo hay.
+    /**
+     * @brief Entre que dos numeros esta @p v: por esta pasada, o por rangos.
+     *
+     * Primero lo que este mismo analisis acaba de establecer -- el bucle de
+     * fuera en un recorrido triangular --, y si no lo que digan los rangos de
+     * una pasada anterior.
+     *
+     * NO hace falta que sea constante, y ese era el error de la primera
+     * version: se exigia un rango de UN SOLO valor y por eso no recuperaba
+     * nada.  Un limite que sea un parametro no vale un numero fijo, pero si
+     * esta acotado, y con el extremo que da MAS vueltas sale una cota de la
+     * variable que sigue conteniendo todos sus valores.  Es la misma regla que
+     * ya se aplicaba a lo establecido en la pasada; lo unico nuevo es de donde
+     * viene el intervalo.
+     */
     auto ya_acotado = [&](ir::IrValueId v, int64_t &lo, int64_t &hi) -> bool {
         for (const IvBound &c : out.bounds)
             if (c.value == v) return c.range.vista_con_signo(lo, hi);
-        return false;
+        if (ranges == nullptr) return false;
+        const ValueRange &r = ranges->at(v);
+        if (!r.acotada()) return false;
+        if (!r.vista_con_signo(lo, hi)) return false;
+        /* Viene de un RANGO, que es una sobre-aproximacion: la cota que salga
+         * de aqui vale para optimizar con guarda, no para acusar. */
+        out.any_inferred = true;
+        return true;
     };
 
     for (uint32_t L : orden) {
@@ -125,17 +170,32 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
         if (!detect_counted_iv(fn, facts.def_block, ls.header, ls.preheader,
                                ls.latch, iv)) {
             ++out.no_shape;
+            ++out.no_shape_iv;
             continue;
         }
         int64_t init = 0, bound = 0;
-        if (iv.stride <= 0 || !const_of(fn, facts.def_block, iv.init, init)) {
-            /* Sin el arranque ESCRITO no se despeja.  Es de proposito que no se
-             * pregunte a los rangos: son ellos los que van a recibir esto, y
-             * consultarlos aqui cerraria el circulo. */
+        bool has_init = iv.stride > 0 &&
+                        const_of(fn, facts.def_block, iv.init, init, ranges);
+        if (!has_init && iv.stride > 0) {
+            /* El arranque tampoco necesita ser un numero fijo: con el intervalo
+             * en el que esta basta, cogiendo el extremo que hace la cota MAS
+             * ANCHA -- el mas bajo si el bucle sube, el mas alto si baja --.
+             * Ese es el que la deja conteniendo todos los arranques posibles.
+             *
+             * Los rangos NO se piden aqui: los trae quien llama, de una pasada
+             * anterior hecha sin cotas.  Pedirlos cerraria el circulo. */
+            int64_t ilo = 0, ihi = 0;
+            if (ya_acotado(iv.init, ilo, ihi)) {
+                init = iv.dir == IvDir::Down ? ihi : ilo;
+                has_init = true;
+            }
+        }
+        if (!has_init) {
             ++out.no_shape;
+            ++out.no_const_init;
             continue;
         }
-        if (!const_of(fn, facts.def_block, iv.bound, bound)) {
+        if (!const_of(fn, facts.def_block, iv.bound, bound, ranges)) {
             /* El limite tambien vale si es una variable que este mismo
              * analisis ya acoto -- tipicamente la del bucle de fuera, que es
              * como se escribe un recorrido triangular.  Se coge el extremo que
@@ -144,6 +204,7 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
             int64_t blo = 0, bhi = 0;
             if (!ya_acotado(iv.bound, blo, bhi)) {
                 ++out.no_shape;
+                ++out.no_const_bound;
                 continue;
             }
             bound = iv.dir == IvDir::Down ? blo : bhi;
@@ -173,6 +234,7 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
             } else if (iv.cmp_op != IrOp::CMP_GE &&
                        iv.cmp_op != IrOp::CMP_UGE) {
                 ++out.no_shape; // guarda que este despeje no cubre
+                ++out.guard_uncovered;
                 continue;
             }
             if (__builtin_sub_overflow(extremo, iv.stride, &extremo)) continue;
@@ -186,6 +248,7 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
             } else if (iv.cmp_op != IrOp::CMP_LE &&
                        iv.cmp_op != IrOp::CMP_ULE) {
                 ++out.no_shape; // guarda que este despeje no cubre
+                ++out.guard_uncovered;
                 continue;
             }
             if (__builtin_add_overflow(extremo, iv.stride, &extremo)) continue;

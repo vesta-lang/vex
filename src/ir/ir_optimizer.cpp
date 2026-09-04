@@ -7247,11 +7247,62 @@ ir_pass_elide_narrow_norm(IrFunction &fn, const analysis::RangeFacts &ranges,
                         bb.instrs.end());
     return true;
 }
+/**
+ * @brief Corta los hechos del optimizador con lo que el ASA ya sabe.
+ *
+ * El optimizador se calculaba SUS rangos y no miraba los del ASA, que acota
+ * cinco veces mas valores.  Medido sobre el corpus, el ASA nunca los
+ * contradice, asi que cortar uno con otro no puede empeorar: los dos son
+ * sobre-aproximaciones correctas y la interseccion de dos correctas lo es.
+ *
+ * SOLO 64 BITS CON SIGNO, y no por prudencia sino por correccion.  Los rangos
+ * del ASA describen el VALOR segun su tipo; `ValueFacts` describe el REGISTRO
+ * de 64 bits, que es lo que exige `reg_exact` y de lo que dependen el puente
+ * rango->bits y el plegado de comparaciones.  En esta maquina no son lo mismo:
+ * escribir un `i32` NO limpia los bits altos -- de ahi que exista `loadz` --,
+ * asi que un rango del valor logico no dice nada del registro.  En 64 bits
+ * coinciden, y ahi la adopcion es sana.
+ *
+ * Lo que NO se toca son los KnownBits: el ASA no los produce, asi que `kz`/`ko`
+ * siguen saliendo de aqui.
+ */
+static void seed_facts_from_asa(const IrFunction &fn, FactsTable &facts) {
+    const analysis::IrFacts ir_facts = analysis::build_ir_facts(fn);
+    const std::shared_ptr<const analysis::RangeFacts> asa =
+        analysis::compute_ranges_ptr(fn, ir_facts);
+    const size_t n = std::min(fn.values.size(), asa->r.size());
+    for (IrValueId v = 0; v < static_cast<IrValueId>(n); ++v) {
+        if (fn.values[v].type != IrType::I64) continue;
+        const analysis::ValueRange &r = asa->r[v];
+        if (!r.acotada() || r.es_todo()) continue;
+        if (r.t.bits != 64 || r.t.sin_signo) continue;
+        int64_t lo = 0, hi = 0;
+        if (!r.vista_con_signo(lo, hi) || lo > hi) continue;
+        ValueFacts f = facts.get(v);
+        if (facts.have(v)) {
+            /* Interseccion: los dos valen a la vez.  Si se cruzaran seria un
+             * fallo de uno de los dos y no se puede elegir en silencio, asi
+             * que en ese caso se deja lo que habia. */
+            if (lo > f.hi || hi < f.lo) continue;
+            f.lo = std::max(f.lo, lo);
+            f.hi = std::min(f.hi, hi);
+        } else {
+            f.lo = lo;
+            f.hi = hi;
+        }
+        /* El registro ES el valor en 64 bits, que es justo lo que esta marca
+         * afirma; sin ella ningun consumidor lo mira. */
+        f.reg_exact = true;
+        facts.set(v, f);
+    }
+}
+
 bool ir_pass_valuefacts_consumers(IrFunction &fn) {
     // La tabla se REUTILIZA entre los tres consumidores y entre llamadas: es lo
     // que mas reservaba de todo el compilador.
     FactsTable &facts = facts_scratch();
     compute_value_facts_into(fn, facts);
+    seed_facts_from_asa(fn, facts);
     if (compare_ranges_on()) {
         /* Los dos analisis, sobre la MISMA funcion y el mismo momento.  Se
          * calculan los del ASA aqui aunque nadie los pida: es el precio de

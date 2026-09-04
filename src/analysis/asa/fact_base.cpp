@@ -31,6 +31,8 @@ namespace asa {
 const char *const kProducerStructure = "asa.structure";
 const char *const kProducerRanges = "asa.ranges";
 const char *const kProducerMemory = "asa.memory";
+const char *const kProducerEffects = "asa.effects";
+const char *const kProducerEscape = "asa.escape";
 const char *const kProducerLayout = "asa.layout";
 const char *const kProducerAsmFlow = "asa.asm_flow";
 const char *const kProducerBoundary = "asa.boundary";
@@ -39,6 +41,7 @@ const char *const kProducerBulkMemory = "asa.bulk_memory";
 const char *const kProducerBackend = "asa.backend";
 const char *const kProducerOverlays = "asa.overlays";
 const char *const kProducerDemandedBits = "asa.demanded_bits";
+const char *const kProducerParamContracts = "asa.param_contracts";
 const char *const kModuleUnit = "<module>";
 
 void register_asa_canonical_names() {
@@ -60,6 +63,9 @@ void register_asa_canonical_names() {
         register_canonical_name(kProducerBackend);
         register_canonical_name(kProducerOverlays);
         register_canonical_name(kProducerDemandedBits);
+        register_canonical_name(kProducerParamContracts);
+        register_canonical_name(kProducerEffects);
+        register_canonical_name(kProducerEscape);
         register_canonical_name(kModuleUnit);
         return true;
     }();
@@ -81,10 +87,18 @@ struct IvBoundsAnalysis {
 struct BoundaryAnalysis {
     static char ID;
 };
+struct EffectsSummaryAnalysis {
+    static char ID;
+};
+struct EscapeAnalysisId {
+    static char ID;
+};
 char MemoryAnalysis::ID = 0;
 char LoopsAnalysis::ID = 0;
 char IvBoundsAnalysis::ID = 0;
 char BoundaryAnalysis::ID = 0;
+char EffectsSummaryAnalysis::ID = 0;
+char EscapeAnalysisId::ID = 0;
 } // namespace
 
 FactBase::FactBase() {
@@ -183,15 +197,24 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {
         *manager_
              .get_or_compute<RangeAnalysis, std::shared_ptr<const RangeFacts>>(
                  key, [this, &fn]() {
-                     /* Con las cotas de induccion.  Es conocimiento que el
-                      * compilador YA tiene y que los rangos no pueden sacar
-                      * solos: la guarda de un bucle desenrollado compara `i +
-                      * 7`, y despejar la `i` con aritmetica que envuelve es
-                      * incorrecto. Sin esto, la variable del bucle valia todo
-                      * su tipo. */
+                     /* Con las cotas de induccion, que las saca el PROPIO
+                      * motor de rangos.  Es conocimiento que los rangos no
+                      * pueden deducir solos -- la guarda de un bucle
+                      * desenrollado compara `i + 7`, y despejar la `i` con
+                      * aritmetica que envuelve es incorrecto --, y sin ellas
+                      * la variable del bucle vale TODO SU TIPO.
+                      *
+                      * Antes se pasaban desde aqui, y eso las dejaba en su
+                      * version pobre: `compute_loop_iv_bounds` solo despeja
+                      * limites CONSTANTES ESCRITOS, y en un programa real eso
+                      * dejaba sin cota al 89 % de los bucles contados.  El
+                      * motor las saca ESCALONADAS -- rangos sin cotas, cotas
+                      * con esos rangos, rangos con las cotas --, que recupera
+                      * los limites que no son un literal sin cerrar el
+                      * circulo.  Pasarlas desde aqui SALTABA ese escalon. */
                      return compute_ranges_ptr(fn, structure(fn),
                                                RangeOptions{}, nullptr,
-                                               &iv_bounds(fn));
+                                               nullptr);
                  });
     if (fresh) {
         /* La certeza sale del propio analisis, no de quien pregunta: llegar a
@@ -264,6 +287,70 @@ const RangeSummaries &FactBase::boundary(const ir::IrModule &mod) {
              kProducerStructure);
     }
     return rs;
+}
+
+effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,
+                                           const char *stage) {
+    ++queries_;
+    /* La clave lleva el MOMENTO.  Sin el, el resumen que tomo el optimizador al
+     * empezar se le entregaria al comprobador de regiones despues de que el
+     * modulo haya cambiado: un resumen de codigo que ya no existe.  No falla --
+     * avisa de accesos que ya no estan, o deja de avisar de uno real. */
+    const std::string key =
+        std::string(kModuleUnit) + "@" + (stage != nullptr ? stage : "");
+    const bool fresh = !manager_.cached<EffectsSummaryAnalysis>(key);
+    if (fresh) ++computations_;
+    /* Se guarda por PUNTERO: el motor lleva dentro sus tablas y el resumen
+     * guarda referencias a ellas, asi que copiarlo al meterlo en la cache
+     * dejaria el resumen apuntando a las tablas de la copia vieja. */
+    const std::shared_ptr<effects::EffectAnalysis> &engine =
+        manager_.get_or_compute<EffectsSummaryAnalysis,
+                                std::shared_ptr<effects::EffectAnalysis>>(
+            key, [&mod]() {
+                auto e = std::make_shared<effects::EffectAnalysis>();
+                e->module_summary(mod); // deja el motor con sus tablas listas
+                return e;
+            });
+    if (fresh) {
+        /* Lo que sale de recorrer el grafo de llamadas entero es demostrado; lo
+         * que se queda a medias -- una nativa sin declarar, un puntero a
+         * funcion sin resolver -- lo dice el propio resumen en sus lagunas, y
+         * el sello no puede afirmar mas que el. */
+        mark(kProducerEffects, key, Certainty::Proven, kProducerStructure);
+    }
+    return *engine;
+}
+
+const std::unordered_map<std::string, EscapeInfo> &
+FactBase::escape(const ir::IrModule &mod) {
+    ++queries_;
+    const std::string key = kModuleUnit;
+    const bool fresh = !manager_.cached<EscapeAnalysisId>(key);
+    if (fresh) ++computations_;
+    /* La estructura y la memoria de cada funcion se piden POR LA BASE, no
+     * aparte: asi el punto fijo del escape reusa lo que ya haya y una
+     * invalidacion arrastra a los dos. */
+    const auto &res =
+        manager_.get_or_compute<EscapeAnalysisId,
+                                std::unordered_map<std::string, EscapeInfo>>(
+            key, [this, &mod]() {
+                auto facts_of =
+                    [this](const ir::IrFunction &f) -> const IrFacts & {
+                    return structure(f);
+                };
+                auto pt_of =
+                    [this](const ir::IrFunction &f) -> const PointsTo & {
+                    return memory(f);
+                };
+                return compute_escape_module(mod, facts_of, pt_of);
+            });
+    if (fresh) {
+        /* El punto fijo se cierra sobre el grafo de llamadas: un callee que no
+         * se ve captura TODO, que es la respuesta correcta sin su cuerpo.  Lo
+         * que sale de ahi esta demostrado. */
+        mark(kProducerEscape, key, Certainty::Proven, kProducerMemory);
+    }
+    return res;
 }
 
 void FactBase::invalidate(const ir::IrFunction &fn) {

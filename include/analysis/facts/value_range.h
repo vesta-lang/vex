@@ -690,6 +690,20 @@ struct RangeFacts {
     asa::UnknownReason reason = asa::UnknownReason::NotAsked;
     /// Codigo estable del caso exacto, del vocabulario de este dominio.
     const char *code = "";
+
+    /**
+     * @brief Alguna cota de bucle usada aqui esta INFERIDA, no demostrada.
+     *
+     * Viene de @c LoopIvBounds::any_inferred y significa lo mismo: parte de lo
+     * que se afirma se apoya en el extremo de un rango, que es una
+     * sobre-aproximacion y puede cubrir vueltas que no ocurren.
+     *
+     * Quien OPTIMICE puede usarlo -- con guarda, como cualquier especulacion
+     * --.  Quien ACUSE no: rechazar un programa exige una prueba, y esto no lo
+     * es.  Es la misma linea que separa @c Certainty::Proven de
+     * @c Certainty::Inferred, aplicada al sitio donde nace la diferencia.
+     */
+    bool bounds_inferred = false;
     /// Lo que se leyo para llegar hasta aqui.  Es lo que permite reusar estos
     /// hechos sin recalcularlos, y lo que impide reusarlos cuando no valen.
     DependenciasRango deps;

@@ -5162,7 +5162,7 @@ int main(int argc, char *argv[]) {
              * repetirse se arreglan de formas distintas. */
             // Los DOS analisis de rangos, comparados (`VESTA_RANGOS_COMPARAR`).
             // Callado si no se pide.
-            ir::rangos_comparados_informe();
+            ir::ranges_compared_report();
             const auto pases = ir::tiempos_de_pases();
             long long total_pases = 0;
             for (const auto &q : pases)

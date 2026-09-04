@@ -1677,6 +1677,37 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
     if (ivb == nullptr) {
         loops_propios = compute_loop_facts(fn);
         ivb_propias = compute_loop_iv_bounds(fn, facts, loops_propios);
+        /* Y si alguna cota se quedo sin despejar por no ser CONSTANTE ESCRITA,
+         * se vuelve a intentar CON RANGOS.  Ese es el escalon que rompe el
+         * circulo sin renunciar:
+         *
+         *     1. rangos SIN cotas          -- sobre-aproximacion correcta
+         *     2. cotas CON esos rangos     -- ya no hace falta el literal
+         *     3. rangos CON esas cotas     -- lo que se devuelve
+         *
+         * Cada etapa solo estrecha, asi que el resultado sigue conteniendo al
+         * punto fijo real: no es razonamiento circular, es orden.  Lo que no
+         * se puede es que las cotas PREGUNTEN a los rangos -- ahi si se
+         * morderian la cola --; aqui los reciben de una pasada ya terminada.
+         *
+         * La pasada de mas se paga SOLO cuando hay algo que recuperar, y eso
+         * NO es "hubo alguna renuncia": es que la renuncia sea de las que un
+         * rango arregla.  Que no se reconozca la induccion, o que la guarda
+         * sea de una forma que este despeje no cubre, no mejora por saber mas
+         * de los valores -- y lanzar ahi una pasada de rangos entera era pagar
+         * el doble por nada, medido. */
+        if (ivb_propias.no_const_init != 0 ||
+            ivb_propias.no_const_bound != 0) {
+            const RangeFacts sin_cotas =
+                calcular_rangos_impl(fn, facts, op, sum, nullptr);
+            LoopIvBounds mejores =
+                compute_loop_iv_bounds(fn, facts, loops_propios, &sin_cotas);
+            /* Solo si de verdad acota MAS.  Si no, se queda la primera:
+             * `const_of` con rangos nunca devuelve menos, pero el despeje de
+             * despues si puede caerse por otro sitio. */
+            if (mejores.bounds.size() > ivb_propias.bounds.size())
+                ivb_propias = std::move(mejores);
+        }
         ivb = &ivb_propias;
     }
     const uint64_t t = util::reloj::ahora();
@@ -1746,6 +1777,10 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
     }
 
     out.stats = m.stats;
+    /* Que parte de esto se apoya en una cota INFERIDA.  Viaja con el hecho
+     * porque de ella depende que puede hacer quien lo lea: optimizar si, con
+     * guarda; acusar no. */
+    out.bounds_inferred = ivb != nullptr && ivb->any_inferred;
     out.convergio = ok;
     if (!out.convergio) {
         /* Sin punto fijo no se sostiene nada DERIVADO -- lo que salia de

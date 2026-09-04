@@ -65,6 +65,43 @@ struct LoopIvBounds {
     uint32_t not_counted = 0;    ///< bucles que no son contados simples.
     uint32_t no_shape = 0; ///< contados, pero sin la forma que se despeja.
 
+    /* POR QUE no se despejo, separado en los cuatro casos reales.  @c no_shape
+     * los suma todos y sirve para "cuantos se escaparon"; para decidir QUE
+     * hacer hace falta cual, porque piden cosas opuestas:
+     *
+     *   - los dos primeros los arregla un RANGO: el arranque o el limite no es
+     *     un literal, pero puede estar fijado igual.  Quien tenga rangos de una
+     *     pasada previa los recupera (ver el parametro @c ranges de
+     *     @c compute_loop_iv_bounds);
+     *   - los dos ultimos NO: ni una induccion que no se reconoce ni una guarda
+     *     que este despeje no cubre mejoran por saber mas de los valores.
+     *     Lanzar ahi una pasada de rangos es pagar el doble por nada.
+     *
+     * Sumarlos en un contador hacia imposible distinguirlo, y eso ya costo una
+     * pasada de rangos entera que no recuperaba ni una cota. */
+    uint32_t no_shape_iv = 0;     ///< no se reconoce la induccion contada.
+    uint32_t no_const_init = 0;   ///< arranque que no se pudo fijar.
+    uint32_t no_const_bound = 0;  ///< limite que no se pudo fijar.
+    uint32_t guard_uncovered = 0; ///< guarda de una forma no cubierta.
+
+    /**
+     * @brief Alguna cota salio de un RANGO, no de un literal escrito.
+     *
+     * La diferencia no es de precision sino de CERTEZA, y de ella depende que
+     * puede hacer quien la consuma.  Una cota despejada de constantes escritas
+     * esta DEMOSTRADA: sobre ella se puede rechazar un programa.  Una sacada
+     * del extremo de un rango esta INFERIDA -- el rango es una
+     * sobre-aproximacion, asi que puede incluir vueltas que no ocurren --: con
+     * ella se puede optimizar dejando guarda, pero NO se puede acusar.
+     *
+     * Sin esta marca, el comprobador de limites rechazaba la cola de un bucle
+     * vectorizado (`187_vectorize_unary`): el acceso existe en el intermedio,
+     * esta guardado y no se ejecuta, pero al quedar la variable acotada el
+     * desplazamiento se fijaba en 56 sobre un objeto de 56 bytes y se acusaba
+     * un programa correcto.
+     */
+    bool any_inferred = false;
+
     bool empty() const { return bounds.empty(); }
 };
 
@@ -92,9 +129,23 @@ struct LoopIvBounds {
  * @param facts  def_of / def_block (para resolver las constantes).
  * @param loops  bucles de la funcion, ya detectados.
  */
+/**
+ * @param ranges Rangos de una pasada ANTERIOR, si se tienen.  Con ellos un
+ *               arranque o un limite que no sea un `CONST` escrito tambien se
+ *               despeja, siempre que los rangos lo fijen a un solo valor.  Sin
+ *               ellos el resultado sigue siendo correcto, solo mas pobre: en
+ *               un programa real se quedaba sin cota el 89 % de los bucles
+ *               contados, y una variable de bucle sin cota vale TODO SU TIPO.
+ *
+ *               No los pide este analisis -- no puede, son los rangos los que
+ *               reciben esto --: los trae quien llama, de una pasada previa
+ *               hecha sin cotas.  El escalonado es lo que rompe el circulo sin
+ *               renunciar, y cada etapa solo estrecha.
+ */
 LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
                                     const IrFacts &facts,
-                                    const LoopFacts &loops);
+                                    const LoopFacts &loops,
+                                    const RangeFacts *ranges = nullptr);
 
 } // namespace analysis
 

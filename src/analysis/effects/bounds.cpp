@@ -130,6 +130,24 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                            RelojLim::now() - t_calc)
                            .count();
         cerrar(us_rangos);
+        /* Si alguna cota de bucle esta INFERIDA, aqui no se acusa.
+         *
+         * Rechazar un programa es afirmar que el acceso se sale SIEMPRE, y eso
+         * exige una prueba.  Una cota sacada del extremo de un rango es una
+         * sobre-aproximacion: puede cubrir vueltas que el bucle no da, y
+         * entonces el acceso "que se sale" es de una vuelta que no ocurre.
+         *
+         * Paso de verdad con la cola de un bucle vectorizado
+         * (`187_vectorize_unary`): siete `f64`, indice de 0 a 6, y la cola
+         * dejaba en el intermedio un acceso guardado en el indice 7 que no se
+         * ejecuta.  Con la variable sin acotar nadie decia nada; al acotarla,
+         * el desplazamiento se fijaba en 56 sobre un objeto de 56 bytes y se
+         * rechazaba un programa correcto.
+         *
+         * Se pierde deteccion en esas funciones, y es lo correcto: un falso
+         * positivo que no deja compilar es peor que un aviso que falta, sobre
+         * todo cuando el que falta no era demostrable. */
+        if (rangos.bounds_inferred) continue;
         /* Se prestan al modelo de efectos: ya estan calculados aqui arriba, y
          * si no se los damos cada bloque de asm los recalcula recorriendo la
          * funcion entera.  Se retiran al acabar con esta funcion para que no

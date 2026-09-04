@@ -206,7 +206,7 @@ std::vector<TiempoPase> tiempos_de_pases();
  * solapan y cual es mas preciso, para poder decidir cual absorbe al otro con
  * datos en vez de con una suposicion.
  */
-void rangos_comparados_informe();
+void ranges_compared_report();
 
 /// Pone a cero el acumulador (una compilacion no debe heredar el reparto de
 /// otra: se llama al empezar cada @ref ir_optimize del modulo raiz).
