@@ -6835,6 +6835,160 @@ static bool ir_pass_elide_narrow_norm(IrFunction &fn,
         }
     }
 
+    /* Tercera regla: la que no se puede quitar, se HUNDE.
+     *
+     * `sum = sum + x` dentro de un bucle solo lo mira el `return` de despues,
+     * asi que su normalizacion no hace falta EN CADA VUELTA: basta una al
+     * salir.  Y no es un detalle de cuenta de instrucciones -- se vio en el
+     * codigo maquina: el `movslq` cae dentro de la cadena que el bucle
+     * arrastra, asi que cada vuelta espera a la anterior.  Por eso bajar de
+     * doce normalizaciones a tres no movio el tiempo y quitar ESTA si.
+     *
+     * Aqui no se borra: se MUEVE.  Se deja el valor sucio por donde solo lo
+     * tocan cuentas y phis, y se materializa la normalizacion justo delante
+     * de cada uno que de verdad lo mira.  Solo se hace si salen MENOS de las
+     * que se quitan -- si no, seria cambiar de sitio el mismo coste.
+     */
+    {
+        auto is_narrow_arith = [&](const IrInstr &in) {
+            return (in.op == IrOp::ADD || in.op == IrOp::SUB ||
+                    in.op == IrOp::MUL) &&
+                   in.dst != IR_NO_VALUE && in.dst < fn.values.size();
+        };
+        /* Que normalizacion tiene cada cuenta, tras las dos reglas de arriba. */
+        std::unordered_map<IrValueId, IrValueId> norm_of;
+        for (const auto &bb : fn.blocks)
+            for (const auto &in : bb.instrs)
+                if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
+                    in.dst != IR_NO_VALUE &&
+                    in.operands[0] < fn.values.size() &&
+                    fn.values[in.operands[0]].type == in.type)
+                    norm_of[in.operands[0]] = in.dst;
+
+        /* Las que sobreviven y se podrian hundir.  Una cuenta cuya
+         * normalizacion quito la regla del RANGO no entra: aquella probo que
+         * no puede salirse suponiendo operandos limpios. */
+        std::unordered_map<IrValueId, IrValueId> sink; // trunc -> su origen
+        for (const auto &bb : fn.blocks) {
+            for (const auto &ins : bb.instrs) {
+                if (ins.op != IrOp::TRUNC || ins.operands.size() != 1) continue;
+                if (ins.dst == IR_NO_VALUE) continue;
+                if (replace.count(ins.dst) != 0) continue;
+                const IrValueId src = ins.operands[0];
+                if (src >= fn.values.size()) continue;
+                if (fn.values[src].type != ins.type) continue;
+                sink[ins.dst] = src;
+            }
+        }
+        if (sink.empty()) goto fin_hundir;
+
+        {
+            /* Lo que quedaria sucio: el origen de cada una que se hunda, y lo
+             * que lo arrastre a traves de phis y de cuentas SIN normalizacion
+             * propia (las que la tienen, limpian). */
+            std::unordered_set<IrValueId> soiled;
+            for (const auto &kv : sink)
+                soiled.insert(kv.second);
+            bool grew = true;
+            while (grew) {
+                grew = false;
+                for (const auto &bb : fn.blocks) {
+                    for (const auto &in : bb.instrs) {
+                        if (in.dst == IR_NO_VALUE || in.dst >= fn.values.size())
+                            continue;
+                        if (in.op == IrOp::TRUNC) continue; // limpia
+                        const bool cleans =
+                            is_narrow_arith(in) && norm_of.count(in.dst) != 0 &&
+                            sink.count(norm_of[in.dst]) == 0 &&
+                            replace.count(norm_of[in.dst]) == 0;
+                        if (cleans) continue;
+                        bool any = false;
+                        for (IrValueId o : in.operands)
+                            if (soiled.count(o) != 0) any = true;
+                        for (const auto &pa : in.phi_args)
+                            if (soiled.count(pa.value) != 0) any = true;
+                        if (any && soiled.insert(in.dst).second) grew = true;
+                    }
+                }
+            }
+
+            /* La FRONTERA: los usos que de verdad miran el registro.  Se
+             * cuentan por (instruccion, ranura) porque en cada uno habra que
+             * poner una normalizacion. */
+            struct Punto {
+                uint32_t block = 0;
+                uint32_t idx = 0;
+                uint32_t slot = 0;
+                IrValueId value = 0;
+            };
+            std::vector<Punto> frontera;
+            bool imposible = false;
+            for (uint32_t bi = 0; bi < fn.blocks.size() && !imposible; ++bi) {
+                const auto &bb = fn.blocks[bi];
+                for (uint32_t ii = 0; ii < bb.instrs.size() && !imposible;
+                     ++ii) {
+                    const IrInstr &in = bb.instrs[ii];
+                    if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
+                        in.dst != IR_NO_VALUE &&
+                        sink.count(in.dst) != 0)
+                        continue; // la que se va
+                    const bool tolerates =
+                        is_narrow_arith(in) || in.op == IrOp::PHI;
+                    if (tolerates) continue;
+                    for (uint32_t s = 0; s < in.operands.size(); ++s) {
+                        const IrValueId o = in.operands[s];
+                        /* Tambien cuenta usar la normalizacion que SE VA: tras
+                         * quitarla, ese uso recibe el valor sin limpiar.  Sin
+                         * esto se hundia una que nadie volvia a poner, y el
+                         * valor salia sucio de la funcion. */
+                        if (soiled.count(o) == 0 && sink.count(o) == 0)
+                            continue;
+                        Punto p;
+                        p.block = bi;
+                        p.idx = ii;
+                        p.slot = s;
+                        p.value = o;
+                        frontera.push_back(p);
+                    }
+                    /* Delante de un phi no se puede meter nada -- van todos al
+                     * principio del bloque --, asi que si la suciedad llega
+                     * ahi se abandona el hundido entero. */
+                    for (const auto &pa : in.phi_args)
+                        if (soiled.count(pa.value) != 0 ||
+                            sink.count(pa.value) != 0)
+                            imposible = true;
+                }
+            }
+            /* Y solo si SALE A CUENTA.  Igualar no basta: mover por mover
+             * cambia el codigo sin ganar nada. */
+            if (imposible || frontera.size() >= sink.size()) goto fin_hundir;
+
+            for (const auto &kv : sink)
+                replace[kv.first] = kv.second;
+            /* De atras hacia delante dentro de cada bloque, para que insertar
+             * no mueva las posiciones que quedan por tratar. */
+            std::sort(frontera.begin(), frontera.end(),
+                      [](const Punto &a, const Punto &b) {
+                          if (a.block != b.block) return a.block > b.block;
+                          return a.idx > b.idx;
+                      });
+            for (const Punto &p : frontera) {
+                IrBlock &bb = fn.blocks[p.block];
+                const IrType t = fn.values[p.value].type;
+                const IrValueId nv = fn.new_value(t);
+                IrInstr tr{};
+                tr.op = IrOp::TRUNC;
+                tr.type = t;
+                tr.dst = nv;
+                tr.operands = {p.value};
+                tr.source_line = bb.instrs[p.idx].source_line;
+                bb.instrs.insert(bb.instrs.begin() + p.idx, std::move(tr));
+                bb.instrs[p.idx + 1].operands[p.slot] = nv;
+            }
+        }
+    fin_hundir:;
+    }
+
     if (replace.empty()) return false;
 
     /* Se sigue la CADENA, no un solo salto.  Una normalizacion puede caer
