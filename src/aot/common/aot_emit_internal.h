@@ -190,6 +190,10 @@ extern int g_aot_dbg_n;
 
 /* Hash SysV de ELF (para .hash / DT_HASH).  Usado por los dynexec 64/32
  * (aun en los emisores por-arch); definido en aot_emit_common.c. */
-unsigned long aot_elf_hash(const char *name);
+/* 32 bits FIJOS: el hash esta definido asi y se apoya en salirse por arriba.
+ * Con `unsigned long` salia distinto en Linux (64 bits) que en Windows (32), y
+ * la tabla `.hash` que emitiamos no la sabia recorrer el enlazador dinamico.
+ * Ver la nota completa en la definicion. */
+uint32_t aot_elf_hash(const char *name);
 
 #endif /* AOT_COMMON_AOT_EMIT_INTERNAL_H */

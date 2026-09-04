@@ -41,12 +41,25 @@ void aot_set_debug_symbols(const AotSym *syms, int n) {
 }
 
 /* Hash SysV de ELF (para .hash / DT_HASH).  Compartido por los dynexec 64/32.
+ *
+ * `uint32_t` y no `unsigned long`, y no es cosmetico: el hash esta DEFINIDO a
+ * 32 bits, y esta forma de escribirlo se apoya en que `h << 4` se salga por
+ * arriba.  Con `unsigned long` eso solo pasa donde mide 32 bits (Windows); en
+ * Linux mide 64, los bits por encima de 32 se acumulan y la mascara
+ * `0xf0000000` no los limpia nunca, asi que el hash sale DISTINTO.
+ *
+ * Lo que costaba: la tabla `.hash` la lee el enlazador dinamico del sistema,
+ * que calcula el hash de 32 bits del estandar.  Un Vesta construido en Linux
+ * emitia una tabla que ld.so no sabe recorrer -- y el sintoma no es un error
+ * del emisor, es un simbolo que "no existe" al cargar --.  Mismo fallo de
+ * fondo que el umbral del JIT: ancho que depende de la plataforma.  Ver la
+ * nota en `src/jit/auto_jit.cpp`.
  */
-unsigned long aot_elf_hash(const char *name) {
-    unsigned long h = 0, g;
+uint32_t aot_elf_hash(const char *name) {
+    uint32_t h = 0, g;
     while (*name) {
         h = (h << 4) + (unsigned char)*name++;
-        g = h & 0xf0000000UL;
+        g = h & 0xf0000000u;
         if (g) h ^= g >> 24;
         h &= ~g;
     }
