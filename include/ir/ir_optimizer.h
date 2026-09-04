@@ -269,16 +269,18 @@ struct CacheEfectosDce {
 };
 
 /**
- * @note Reconstruye los hechos y el points-to de la funcion en CADA llamada.
- *       Prestarselos ya calculados es SEGURO desde el sello de version, pero
- *       MEDIDO no compensa: sube el optimizador un 4 % porque lo que cuesta
- *       aqui no es el def-use sino el calculo de rangos que viene despues.  El
- *       detalle, con los numeros, esta en el cuerpo del pase.
+ * @note Si no se le prestan, reconstruye los hechos y el points-to de la
+ *       funcion en CADA llamada -- y el pase corre una vez por funcion y por
+ *       vuelta del punto fijo.  @p facts y @p pt permiten pasarle los que el
+ *       orquestador ya tiene cacheados; es SEGURO desde el sello de version
+ *       (@c IrFunction::version).  El detalle esta en el cuerpo del pase.
  */
 bool ir_pass_dce(IrFunction &fn,
                  const analysis::effects::NativeDecls *decls = nullptr,
                  const analysis::AsmBindingFacts *asm_bindings = nullptr,
-                 CacheEfectosDce *cache = nullptr);
+                 CacheEfectosDce *cache = nullptr,
+                 const analysis::IrFacts *facts = nullptr,
+                 const analysis::PointsTo *pt = nullptr);
 
 /**
  * @brief Elision comptime de UNWRAP cuando el operando es provably non-null

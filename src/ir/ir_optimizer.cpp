@@ -18,6 +18,7 @@
 
 #include "util/env_flags.h"
 #include "util/crono_tramo.h"
+#include "util/fnv.h" // dispersion de las claves de la CSE
 
 #include "util/reloj.h"
 
@@ -7174,7 +7175,9 @@ bool ir_pass_reassoc(IrFunction &fn) {
         v.name = "%ra" + std::to_string(new_id);
         v.is_const = true;
         v.const_val = imm;
-        fn.values.push_back(v);
+        // Se MUEVE: `IrValue` lleva su nombre, y copiarlo aqui reserva otra vez
+        // la cadena que se acaba de construir dos lineas arriba.
+        fn.values.push_back(std::move(v));
         const_vids[new_id] = static_cast<int64_t>(imm);
 
         IrInstr ci{};
@@ -7243,14 +7246,44 @@ bool ir_pass_reassoc(IrFunction &fn) {
             changed = true;
         }
     }
+    /* Las nuevas se INTERCALAN de una pasada, no una a una.
+     *
+     * Insertar en medio de un vector desplaza toda la cola, y aqui lo que se
+     * desplaza son `IrInstr`: cada uno arrastra su nombre de funcion y cuatro
+     * vectores.  Con K inserciones en un bloque de N instrucciones eso es K*N
+     * movimientos, y este pase era el que mas reservaba de todo el compilador
+     * -- el 38 % -- por esto.  Es el mismo modo de fallar que tenia el mapa de
+     * tramos del almacen de depuracion.
+     *
+     * Ahora se recorre el bloque UNA vez y se va tejiendo: cada instruccion
+     * nueva entra justo delante de la que le tocaba.  Ordenadas ASCENDENTE,
+     * que es el orden en el que se recorre. */
     std::sort(pending.begin(), pending.end(),
               [](const ReassocInsert &a, const ReassocInsert &b) {
-                  if (a.bb_idx != b.bb_idx) return a.bb_idx > b.bb_idx;
-                  return a.pos > b.pos;
+                  if (a.bb_idx != b.bb_idx) return a.bb_idx < b.bb_idx;
+                  return a.pos < b.pos;
               });
-    for (const auto &ins_req : pending) {
-        auto &bb = fn.blocks[ins_req.bb_idx];
-        bb.instrs.insert(bb.instrs.begin() + ins_req.pos, ins_req.instr);
+    size_t p = 0;
+    while (p < pending.size()) {
+        const size_t bi = pending[p].bb_idx;
+        size_t q = p;
+        while (q < pending.size() && pending[q].bb_idx == bi) ++q;
+
+        auto &bb = fn.blocks[bi];
+        std::vector<IrInstr> woven;
+        woven.reserve(bb.instrs.size() + (q - p));
+        size_t k = p;
+        for (size_t i = 0; i < bb.instrs.size(); ++i) {
+            // Las que van DELANTE de esta.  Es un `while` y no un `if` porque
+            // nada impide que a una misma posicion le toquen varias.
+            while (k < q && pending[k].pos == i)
+                woven.push_back(std::move(pending[k++].instr));
+            woven.push_back(std::move(bb.instrs[i]));
+        }
+        // Y lo que quedara pedido para el final del bloque.
+        while (k < q) woven.push_back(std::move(pending[k++].instr));
+        bb.instrs.swap(woven);
+        p = q;
     }
     return changed;
 }
@@ -7641,13 +7674,16 @@ static bool model_removable(const IrFunction &fn,
 
 bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
                  const analysis::AsmBindingFacts *asm_bindings,
-                 CacheEfectosDce *cache) {
+                 CacheEfectosDce *cache, const analysis::IrFacts *facts,
+                 const analysis::PointsTo *pt) {
     // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
     // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
     analysis::IrFacts fx_facts;
     analysis::PointsTo fx_pt;
-    const analysis::IrFacts &hechos = fx_facts;
-    const analysis::PointsTo &apunta_a = fx_pt;
+    /* Los prestados, si quien llama los tiene.  Se miran por referencia, y solo
+     * se construyen los de aqui cuando no hay quien los preste. */
+    const analysis::IrFacts &hechos = facts ? *facts : fx_facts;
+    const analysis::PointsTo &apunta_a = pt ? *pt : fx_pt;
     analysis::effects::EffectEnv fx_env;
     fx_env.decls = decls;
     /* Las ligaduras del asm, si quien llama las tiene cacheadas.  Sin esto el
@@ -7661,30 +7697,34 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
     fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
         CronoTramo crono__("  dce:hechos");
-        /* Los hechos y el points-to se reconstruyen en CADA llamada, y el pase
-         * corre una vez por funcion y por vuelta del punto fijo.
+        /* Los hechos y el points-to los PRESTA quien llama.  El pase corre una
+         * vez por funcion y por vuelta del punto fijo, y el orquestador ya
+         * tiene los de esa misma funcion y esa misma version, asi que
+         * reconstruirlos aqui era calcular dos veces lo mismo.  Aqui solo se
+         * construyen cuando no hay quien los preste: una llamada suelta, o un
+         * test.
          *
-         * INTENTADO DOS VECES Y DESCARTADO, y las dos por motivos distintos --
-         * conviene no repetirlas:
+         * HISTORIA, porque se intento dos veces y las dos se descarto:
          *
-         *   1. Prestarle los que el orquestador ya tiene cacheados
-         *      (`facts_of`/`pt_of`) daba FALLO DE SEGMENTACION en 3 de cada 6
-         *      ejecuciones.  `IrFacts::def_of` guarda PUNTEROS a instrucciones
-         * y los cacheados sobrevivian a mutaciones del IR.  Eso YA NO PASA: lo
-         * cerro el sello de version (`IrFunction::version` +
-         *      `AnalysisManager::get_or_compute_v`), con el que las mismas seis
-         *      ejecuciones dan cero fallos.
+         *   1. Prestarlos daba FALLO DE SEGMENTACION en 3 de cada 6
+         *      ejecuciones: `IrFacts::def_of` guarda PUNTEROS a instrucciones y
+         *      los cacheados sobrevivian a mutaciones del IR.  Lo cerro el
+         *      sello de version (`IrFunction::version` +
+         *      `get_or_compute_v`), con el que las mismas seis dan cero fallos.
          *
-         *   2. Aun siendo seguro, NO COMPENSA: prestarselos sube el optimizador
-         *      de 2.440-2.482 ms a 2.560-2.594 ms.  El motivo lo dijo este
-         * mismo tramo -- al prestarlos NO bajo --: lo que cuesta aqui no es el
-         *      def-use ni el points-to, es el calculo de rangos del guarda de
-         *      asm que viene despues.  Se pagaban dos consultas mas por llamada
-         *      para ahorrar algo que ya era barato.
+         *   2. Ya seguro, se midio que NO COMPENSABA: subia el optimizador de
+         *      2.440-2.482 ms a 2.560-2.594 ms, porque se pagaban dos consultas
+         *      al gestor por llamada para ahorrar algo que entonces era barato.
          *
-         * O sea: la via esta abierta y medida, y no vale la pena por ahora. */
-        fx_facts = analysis::build_ir_facts(fn);
-        fx_pt = analysis::compute_points_to(fn, fx_facts);
+         * Eso ha DEJADO DE SER CIERTO (medido el 2026-09-04, intercalado y en
+         * los dos ordenes: 491 -> 475 ms, 6 de 6 pares).  Lo que cambio no fue
+         * el gestor sino el precio de lo que se ahorra: `compute_points_to`
+         * llenaba DOS arrays de una entrada de 96 bytes por valor SSA -- uno de
+         * trabajo y otro de salida, con el mismo contenido -- y ahora llena
+         * uno.  Una medicion de rendimiento CADUCA cuando cambia lo que medía;
+         * volver a hacerla es mas barato que fiarse de ella. */
+        if (!facts) fx_facts = analysis::build_ir_facts(fn);
+        if (!pt) fx_pt = analysis::compute_points_to(fn, hechos);
         /* Cuantas veces se piden los rangos de una misma funcion.  El arreglo
          * del EffectEnv movio el coste de "una vez por bloque de asm" a "una
          * vez por pasada del DCE"; si esa cuenta es alta, lo que sobra es la
@@ -9267,17 +9307,92 @@ bool ir_pass_unreachable(IrFunction &fn) {
  * Esto evita el camino MOV+copy_prop que dejaba is_const stale.  La
  * IrValue del dup_vid queda huerfana (sin instr definidora), pero como
  * todos sus usos se substituyen, no se referencia mas. */
+namespace {
+
+/**
+ * @brief Lo que identifica a una constante: su tipo y su valor.
+ *
+ * Antes esto se escribia como TEXTO -- `"3:42"` -- construido con un
+ * `std::ostringstream` por instruccion.  Un flujo de la libreria estandar no es
+ * barato de crear: monta su configuracion regional, y eso hace un
+ * `dynamic_cast` por facet.  Medido con VTune, esos `dynamic_cast` eran 51
+ * millones de instrucciones -- y ninguno venia de codigo nuestro.
+ *
+ * Dos enteros no necesitan texto: se comparan tal cual, sin reservar nada y sin
+ * poder colisionar.
+ */
+struct ConstKey {
+    uint64_t imm = 0;
+    uint32_t type = 0;
+    bool operator==(const ConstKey &o) const noexcept {
+        return imm == o.imm && type == o.type;
+    }
+};
+
+/// Dispersion de @ref ConstKey.  La igualdad la decide `operator==`, asi que
+/// una colision aqui solo cuesta un sondeo mas: nunca funde dos constantes.
+struct ConstKeyHash {
+    size_t operator()(const ConstKey &k) const noexcept {
+        return static_cast<size_t>(util::fnv_mix(k.imm, k.type));
+    }
+};
+
+/// La clave de @p ins como constante.
+inline ConstKey const_key_of(const IrInstr &ins) {
+    ConstKey k;
+    k.imm = ins.imm;
+    k.type = static_cast<uint32_t>(ins.type);
+    return k;
+}
+
+/**
+ * @brief Arma una clave de texto sin `ostringstream`.
+ *
+ * Cuando la clave lleva de todo -- numeros, un nombre de funcion, marcas y una
+ * lista de operandos -- si hace falta texto.  Lo que no hace falta es un flujo
+ * de la libreria estandar: crear uno monta su configuracion regional, y eso
+ * cuesta un `dynamic_cast` por cada faceta que consulta.
+ *
+ * Aqui se anade a una cadena y ya.  Ademas se puede REUTILIZAR entre
+ * instrucciones (@ref clear), con lo que despues de las primeras vueltas ya no
+ * reserva.
+ */
+struct KeyBuilder {
+    std::string s;
+
+    /// @brief Vacia la clave conservando la memoria ya reservada.
+    void clear() noexcept { s.clear(); }
+
+    /// @brief Anade un numero en decimal.
+    void num(uint64_t v) {
+        char buf[20];
+        int n = 0;
+        do {
+            buf[n++] = static_cast<char>('0' + (v % 10));
+            v /= 10;
+        } while (v != 0);
+        while (n > 0) s += buf[--n];
+    }
+
+    /// @brief Anade el separador de campos.
+    void sep() { s += ':'; }
+    /// @brief Anade un caracter suelto.
+    void ch(char c) { s += c; }
+    /// @brief Anade texto.
+    void text(const std::string &t) { s += t; }
+};
+
+} // namespace
+
 bool ir_pass_const_cse_entry(IrFunction &fn) {
     if (fn.blocks.empty()) return false;
     /* Pase 1: en entry, recolectar el PRIMER vid por (type,imm) y registrar
      * duplicados subsiguientes -> subst (apuntan al primer vid). */
-    std::unordered_map<std::string, IrValueId> entry_const_table;
+    std::unordered_map<ConstKey, IrValueId, ConstKeyHash> entry_const_table;
     std::unordered_map<IrValueId, IrValueId> subst;
     for (const auto &ins : fn.blocks[0].instrs) {
         if (ins.op != IrOp::CONST || ins.dst == IR_NO_VALUE) continue;
-        std::ostringstream key;
-        key << static_cast<int>(ins.type) << ":" << ins.imm;
-        std::string k = key.str();
+        const ConstKey k = const_key_of(ins);
         auto it = entry_const_table.find(k);
         if (it == entry_const_table.end()) {
             entry_const_table[k] = ins.dst;
@@ -9292,9 +9407,7 @@ bool ir_pass_const_cse_entry(IrFunction &fn) {
     for (size_t bi = 1; bi < fn.blocks.size(); ++bi) {
         for (const auto &ins : fn.blocks[bi].instrs) {
             if (ins.op != IrOp::CONST || ins.dst == IR_NO_VALUE) continue;
-            std::ostringstream key;
-            key << static_cast<int>(ins.type) << ":" << ins.imm;
-            auto it = entry_const_table.find(key.str());
+            auto it = entry_const_table.find(const_key_of(ins));
             if (it != entry_const_table.end() && it->second != ins.dst) {
                 subst[ins.dst] = it->second;
             }
@@ -9378,15 +9491,13 @@ bool ir_pass_cse(IrFunction &fn) {
      * esta heuristica cubre el 95% de los casos reales.
      * ============================================================ */
     {
-        std::unordered_map<std::string, IrValueId> entry_const_table;
+        std::unordered_map<ConstKey, IrValueId, ConstKeyHash> entry_const_table;
         /* Pase 1: recolectar CONSTs en entry (bloque 0). */
         if (!fn.blocks.empty()) {
             for (const auto &ins : fn.blocks[0].instrs) {
                 if (ins.op != IrOp::CONST) continue;
                 if (ins.dst == IR_NO_VALUE) continue;
-                std::ostringstream key;
-                key << static_cast<int>(ins.type) << ":" << ins.imm;
-                std::string k = key.str();
+                const ConstKey k = const_key_of(ins);
                 if (!entry_const_table.count(k)) {
                     entry_const_table[k] = ins.dst;
                 }
@@ -9399,9 +9510,7 @@ bool ir_pass_cse(IrFunction &fn) {
                 for (auto &ins : fn.blocks[bi].instrs) {
                     if (ins.op != IrOp::CONST) continue;
                     if (ins.dst == IR_NO_VALUE) continue;
-                    std::ostringstream key;
-                    key << static_cast<int>(ins.type) << ":" << ins.imm;
-                    auto it = entry_const_table.find(key.str());
+                    auto it = entry_const_table.find(const_key_of(ins));
                     if (it != entry_const_table.end() &&
                         it->second != ins.dst) {
                         ins.op = IrOp::MOV;
@@ -9422,6 +9531,9 @@ bool ir_pass_cse(IrFunction &fn) {
 
     for (auto &bb : fn.blocks) {
         // Tabla: hash de (op, type, operands) -> IrValueId del primer calculo
+        /* UNO para todo el bloque, no uno por instruccion: se vacia y se vuelve
+         * a llenar, asi que despues de las primeras vueltas ya no reserva. */
+        KeyBuilder key;
         std::unordered_map<std::string, IrValueId> expr_table;
         // Mapa paralelo: clave -> bool (es memory-read?) para invalidar
         // rapido al ver side-effects.
@@ -9448,9 +9560,13 @@ bool ir_pass_cse(IrFunction &fn) {
              * SSA value por (type, imm).  Reduce el numero de slots
              * stack alocados y el output destino es mas limpio. */
             if (ins.op == IrOp::CONST) {
-                std::ostringstream key;
-                key << "C:" << static_cast<int>(ins.type) << ":" << ins.imm;
-                std::string k = key.str();
+                key.clear();
+                key.ch('C');
+                key.sep();
+                key.num(static_cast<uint64_t>(ins.type));
+                key.sep();
+                key.num(ins.imm);
+                const std::string &k = key.s;
                 auto it = expr_table.find(k);
                 if (it != expr_table.end()) {
                     subst[ins.dst] = it->second;
@@ -9475,9 +9591,14 @@ bool ir_pass_cse(IrFunction &fn) {
             // CALL-like ops (CALL, CALLN, etc).  Sin esto, dos LABEL_ADDR con
             // labels distintos se deduplican incorrectamente (handler_pc del
             // tryenter se mezcla con el name_addr del findclass, p.ej.).
-            std::ostringstream key;
-            key << static_cast<int>(ins.op) << ":" << static_cast<int>(ins.type)
-                << ":" << ins.imm << ":" << ins.func_name;
+            key.clear();
+            key.num(static_cast<uint64_t>(ins.op));
+            key.sep();
+            key.num(static_cast<uint64_t>(ins.type));
+            key.sep();
+            key.num(ins.imm);
+            key.sep();
+            key.text(ins.func_name);
             /* Y DE QUE MEMORIA es el resultado.  Dos instrucciones que se leen
              * igual pero producen una direccion de memorias distintas NO son la
              * misma expresion: quien use la superviviente decidira el acceso
@@ -9490,17 +9611,19 @@ bool ir_pass_cse(IrFunction &fn) {
              * porque el 1 pasa por una suma que si conserva la marca.  Lo mismo
              * vale para saber si es un objeto del recolector. */
             if (ins.dst < static_cast<IrValueId>(fn.values.size())) {
-                key << ":" << (fn.values[ins.dst].is_host_ptr ? 'h' : '-')
-                    << (fn.values[ins.dst].is_gc_object ? 'g' : '-');
+                key.sep();
+                key.ch(fn.values[ins.dst].is_host_ptr ? 'h' : '-');
+                key.ch(fn.values[ins.dst].is_gc_object ? 'g' : '-');
             }
             for (IrValueId op : ins.operands) {
                 // Resolver sustituciones previas en los operandos
                 IrValueId canonical = op;
                 while (subst.count(canonical))
                     canonical = subst[canonical];
-                key << ":" << canonical;
+                key.sep();
+                key.num(canonical);
             }
-            std::string k = key.str();
+            const std::string &k = key.s;
 
             auto it = expr_table.find(k);
             if (it != expr_table.end()) {
@@ -14140,8 +14263,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                     cache_efectos[fn.name].invalidar();
                     efectos_sucios = false; // queda refrescada en esta ronda
                 }
+                /* Con los hechos del gestor, no con unos suyos: son la MISMA
+                 * funcion y la misma version, asi que reconstruirlos aqui era
+                 * calcular dos veces lo mismo -- una vez por funcion y por
+                 * vuelta del punto fijo. */
                 APLICA_PRESERVA_EFECTOS(ir_pass_dce(
-                    fn, &decls_nativas, &asm_of(fn), &cache_efectos[fn.name]));
+                    fn, &decls_nativas, &asm_of(fn), &cache_efectos[fn.name],
+                    &facts_of(fn), &pt_of(fn)));
                 /* Punto seguro: terminado con esta funcion, ya no se va a usar
                  * ninguna referencia que diera el gestor.  Sin soltarlas, el
                  * respaldo que las mantiene vivas frente a una invalidacion
@@ -14238,9 +14366,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                         cache_efectos[fn.name].invalidar();
                         efectos_sucios = false;
                     }
-                    APLICA_PRESERVA_EFECTOS(
-                        ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
-                                    &cache_efectos[fn.name]));
+                    APLICA_PRESERVA_EFECTOS(ir_pass_dce(
+                        fn, &decls_nativas, &asm_of(fn),
+                        &cache_efectos[fn.name], &facts_of(fn), &pt_of(fn)));
                 }
 
                 if (level >= OptLevel::O3) {

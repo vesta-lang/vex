@@ -83,11 +83,21 @@ struct Resolver {
     const ir::IrFunction &fn;
     const IrFacts &facts;
     const RangeFacts *rangos = nullptr;
-    std::vector<PointsToEntry> memo;
+    /**
+     * @brief Donde se van memoizando las respuestas: EL PROPIO RESULTADO.
+     *
+     * No es una copia de trabajo.  Lo era, y entonces cada funcion pagaba DOS
+     * arrays de una entrada por valor SSA -- 96 bytes cada una --, las dos
+     * inicializadas y con el mismo contenido, mas una copia por valor al pasar
+     * de una a la otra.  Lo que se memoiza ES lo que se devuelve, asi que se
+     * memoiza donde se devuelve.
+     */
+    std::vector<PointsToEntry> &memo;
     std::vector<uint8_t> state; // 0=nuevo, 1=en-curso, 2=hecho
 
-    Resolver(const ir::IrFunction &f, const IrFacts &fc, const RangeFacts *rg)
-        : fn(f), facts(fc), rangos(rg) {
+    Resolver(const ir::IrFunction &f, const IrFacts &fc, const RangeFacts *rg,
+             std::vector<PointsToEntry> &dst)
+        : fn(f), facts(fc), rangos(rg), memo(dst) {
         const size_t n = facts.def_of.size();
         memo.assign(n, PointsToEntry{});
         state.assign(n, 0);
@@ -432,12 +442,47 @@ struct Resolver {
         return memo[v];
     }
 
+    /**
+     * @brief Promete el parametro @p pidx que su region no es la de otro?
+     *
+     * Da igual con CUAL de las tres formas se haya escrito -- `out`/`inout`,
+     * `borrow_mut<T>` o `unique<T>` --: el lowering las junta en el mismo eje
+     * porque son formas de escribir lo mismo, y aqui solo se pregunta por el
+     * eje.  Si se preguntara por la forma, cada consumidor tendria que conocer
+     * las tres, y el que se dejara una daria una respuesta peor sin avisar.
+     *
+     * @param pidx Indice del parametro en @c fn.params.
+     * @return true si lo promete.
+     */
+    bool declared_dir_of(int32_t pidx) const {
+        if (pidx < 0 ||
+            static_cast<size_t>(pidx) >= fn.param_contracts.size())
+            return false;
+        /* Se pregunta por lo APUNTADO, que es de lo que habla el aliasing: si
+         * dos parametros llevan a la misma REGION.  El nivel del puntero dice
+         * otra cosa -- si se puede reasignar --, y confundirlos daria una
+         * respuesta a una pregunta que nadie hizo. */
+        return fn.param_contracts[static_cast<size_t>(pidx)].pointee().has(
+            ir::IrParamClaim::ExclusiveCall);
+    }
+
     PointsToEntry compute(ir::IrValueId v) {
         // Parametro: memoria alcanzable desde el arg (points-to grueso).
         const int32_t pidx = facts.param_index(v);
-        if (pidx >= 0)
-            return PointsToEntry{K::ArgDerived, static_cast<uint32_t>(pidx), 0,
-                                 true};
+        if (pidx >= 0) {
+            PointsToEntry e{K::ArgDerived, static_cast<uint32_t>(pidx), 0, true};
+            /* Si el parametro DECLARA su direccion, dice lo que la funcion hace
+             * con lo apuntado -- y con ello que esa region es SUYA: no coincide
+             * con la de otro parametro declarado.
+             *
+             * Es lo unico que distingue aqui "se sabe que no coinciden" de "son
+             * dos indices distintos", y son cosas muy diferentes: la raiz de un
+             * parametro es un NOMBRE, no un objeto, asi que nada impide que el
+             * que llama pase la misma direccion dos veces.  Sin la marca, lo
+             * conservador; con ella, lo declarado. */
+            e.declared_dir = declared_dir_of(pidx);
+            return e;
+        }
 
         const ir::IrInstr *d = facts.def(v);
         /* Sin definicion dentro de la funcion: viene de fuera.  Quien lo pase
@@ -766,13 +811,16 @@ static RegionExtent extension_de(const ir::IrInstr &d, const IrFacts &facts) {
 
 PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
                            const RangeFacts *rangos) {
-    Resolver r(fn, facts, rangos);
     PointsTo out;
     const size_t n = facts.def_of.size();
-    out.loc.assign(n, PointsToEntry{});
+    // El resolvedor memoiza DENTRO de `out.loc`: la deja del tamano que toca y
+    // va escribiendo ahi.  Antes se llenaba un array aparte y se copiaba
+    // entrada a entrada, o sea el doble de memoria y el doble de trabajo para
+    // acabar con lo mismo dos veces.
+    Resolver r(fn, facts, rangos, out.loc);
     out.extent.assign(n, RegionExtent{});
     for (ir::IrValueId v = 0; v < static_cast<ir::IrValueId>(n); ++v) {
-        out.loc[v] = r.resolve(v);
+        r.resolve(v); // deja la respuesta en `out.loc[v]`
         // La extension se guarda en la RAIZ, que es de quien es propiedad.
         if (const ir::IrInstr *d = facts.def(v))
             out.extent[v] = extension_de(*d, facts);
@@ -788,9 +836,9 @@ AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width) {
         // Raiz conocida pero offset no probado -> objeto entero (width 0):
         // puede solapar cualquier acceso a la misma raiz, disjunto de otras
         // raices.
-        return AbstractLoc{e.kind, e.root, 0, 0};
+        return AbstractLoc{e.kind, e.root, 0, 0, e.declared_dir};
     }
-    return AbstractLoc{e.kind, e.root, e.off, width};
+    return AbstractLoc{e.kind, e.root, e.off, width, e.declared_dir};
 }
 
 std::vector<ir::IrValueId>
