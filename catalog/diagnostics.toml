@@ -1874,3 +1874,22 @@ es = "el argumento {0}"
 [VXP090]
 en = "'{0}' is not something a @Target can ask about: no target satisfies it, so everything under this mark would be silently dropped.  The keys are os, arch, cpu, mode, tier, and compiler/vm with a version comparison"
 es = "'{0}' no es algo por lo que un @Target pueda preguntar: ningun objetivo lo cumple, asi que todo lo que lleve esta marca se caeria sin decir nada.  Las claves son os, arch, cpu, mode, tier, y compiler/vm con comparacion de version"
+
+# --- lo que no cabe en el modo nativo (VXW924) ---
+#
+# El analisis existia y lo consumia UN solo sitio, el editor: el mismo codigo
+# recibia una respuesta si lo mirabas en el IDE y ninguna si pasabas el linter.
+#
+# Es un AVISO y no un error a proposito.  Un programa que solo se ejecuta
+# interpretado usa `malloc` con toda la razon del mundo; lo que el hecho dice es
+# "esto no cabe en un binario nativo sin runtime", y si eso importa o no lo sabe
+# quien escribe, no el compilador.  Por eso el mensaje da el MOTIVO, que es lo
+# accionable: no "esto no vale" sino "esto necesita X".
+#
+# Y SIN nombre de funcion, por lo mismo que el aviso de las operaciones de
+# bloque: tras el inline la misma operacion aparece en varias funciones, y
+# decir en cual es decir una de las copias.  La LINEA si es cierta.
+
+[VXW924]
+en = "this will not compile to a bare native binary: it needs {0}"
+es = "esto no compila a un binario nativo sin runtime: necesita {0}"

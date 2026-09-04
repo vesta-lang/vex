@@ -63,7 +63,7 @@ struct IvBound {
 struct LoopIvBounds {
     std::vector<IvBound> bounds; ///< ordenado por @c value.
     uint32_t not_counted = 0;    ///< bucles que no son contados simples.
-    uint32_t no_shape = 0;       ///< contados, pero sin la forma que se despeja.
+    uint32_t no_shape = 0; ///< contados, pero sin la forma que se despeja.
 
     bool empty() const { return bounds.empty(); }
 };

@@ -1239,7 +1239,7 @@ std::string Debugger::regs_to_json(runtime::ProcessVM *proc) {
     o << ",\"pc\":" << proc->registers.rip.raw();
     o << ",\"sp\":" << proc->registers.stack_pointer.raw();
     o << ",\"bp\":" << proc->registers.base_pointer.raw();
-    o << ",\"flags\":" << proc->registers.flags.raw;
+    o << ",\"flags\":" << proc->registers.flags.raw();
     // Tambien expongo PID y reductions actuales: utiles para el cliente
     // y caben de sobra en el mismo JSON.
     o << ",\"pid\":" << proc->pid.local_pid;
@@ -1984,12 +1984,12 @@ void Debugger::handle_command(const std::string &json_msg, int client_fd) {
         }
         const auto &fl = p->registers.flags;
         std::ostringstream d;
-        d << "{\"raw\":" << fl.raw
+        d << "{\"raw\":" << fl.raw()
           << ",\"sf\":" << static_cast<unsigned>(fl.bits.SF)
           << ",\"zf\":" << static_cast<unsigned>(fl.bits.ZF)
           << ",\"cf\":" << static_cast<unsigned>(fl.bits.CF)
           << ",\"of\":" << static_cast<unsigned>(fl.bits.OF)
-          << ",\"dm\":" << static_cast<unsigned>(fl.bits.DM) << "}";
+          << ",\"dm\":" << static_cast<unsigned>(fl.DM) << "}";
         ok_resp(d.str());
         break;
     }

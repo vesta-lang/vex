@@ -1115,12 +1115,12 @@ void Lowering::emit_native_str_make_writable(ir::IrValueId v_slot,
      * cadena corta no es propia -- no hay buffer -- y sin embargo se escribe
      * perfectamente.  Se mira el bit 6, que es el que dice prestado. */
     const ir::IrValueId v_off23 = emit_const(ir::IrType::I64, 23, source_line);
-    const ir::IrValueId v_b23 = emit_load_typed(
-        emit_ptr_add(v_slot, v_off23, source_line), ir::IrType::U8,
-        source_line);
+    const ir::IrValueId v_b23 =
+        emit_load_typed(emit_ptr_add(v_slot, v_off23, source_line),
+                        ir::IrType::U8, source_line);
     const ir::IrValueId v_seis = emit_const(ir::IrType::I64, 6, source_line);
-    const ir::IrValueId v_top2 = emit_ir_binop(
-        ir::IrOp::SHR, v_b23, v_seis, ir::IrType::I64, source_line);
+    const ir::IrValueId v_top2 = emit_ir_binop(ir::IrOp::SHR, v_b23, v_seis,
+                                               ir::IrType::I64, source_line);
     const ir::IrValueId v_tres = emit_const(ir::IrType::I64, 3, source_line);
     const ir::IrValueId v_prestado = emit_ir_binop(
         ir::IrOp::CMP_EQ, v_top2, v_tres, ir::IrType::BOOL, source_line);
@@ -1133,12 +1133,11 @@ void Lowering::emit_native_str_make_writable(ir::IrValueId v_slot,
     {
         // len y datos ANTES de tocar nada: se leen del slot prestado.
         const ir::IrValueId v_len = emit_native_str_len(v_slot, source_line);
-        const ir::IrValueId v_src = emit_native_str_data_ptr(v_slot,
-                                                             source_line);
-        const ir::IrValueId v_uno = emit_const(ir::IrType::I64, 1,
-                                               source_line);
-        const ir::IrValueId v_cap = emit_ir_binop(
-            ir::IrOp::ADD, v_len, v_uno, ir::IrType::I64, source_line);
+        const ir::IrValueId v_src =
+            emit_native_str_data_ptr(v_slot, source_line);
+        const ir::IrValueId v_uno = emit_const(ir::IrType::I64, 1, source_line);
+        const ir::IrValueId v_cap = emit_ir_binop(ir::IrOp::ADD, v_len, v_uno,
+                                                  ir::IrType::I64, source_line);
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_buf].is_host_ptr = true;
         {

@@ -55,6 +55,7 @@
 #include <vector>
 
 #include "bytecode/bytecode.h"
+#include "../util/gen_program.h" // programas propios si no dan ficheros
 #include "jit/auto_jit.h"
 #include "runtime/bundle.h"
 #include "runtime/decode_instruction.h"
@@ -62,7 +63,14 @@
 #include "runtime/proceso_runtime.h"
 #include "runtime/vm_registers.h"
 #include "runtime/exception_runtime.h" // build_stack_trace
+#include "util/ansi.h"
 #include "util/fnv.h"
+
+// La medida de independencia dentro del paquete.  Era un test aparte que
+// generaba LOS MISMOS programas, montaba LA MISMA arena y sacaba una tabla
+// igual: dos binarios para dos preguntas sobre un solo sujeto.  Aqui va la
+// validacion (que los paquetes no cambian el resultado) y detras el analisis.
+#include "../util/bundle_ilp.h"
 
 #include <csignal>
 #include <cstdlib>
@@ -282,9 +290,116 @@ void check(bool cond, const char *what, const char *bench) {
         ++g_pass;
     } else {
         ++g_fail;
-        std::printf("  FALLO  %-22s %s\n", bench, what);
+        std::printf("  %sFALLO%s  %-22s %s\n", ansi::c(ansi::BR_RED),
+                    ansi::c(ansi::RESET), bench, what);
     }
 }
+
+/// Color por PROPORCION: rojo lo que casi no pasa, verde lo que pasa mucho.
+/// Da la escala de un vistazo sin tener que dividir de cabeza.
+const char *heat(double frac) {
+    if (frac >= 0.60) return ansi::c(ansi::BR_GREEN);
+    if (frac >= 0.30) return ansi::c(ansi::GREEN);
+    if (frac >= 0.10) return ansi::c(ansi::BR_YELLOW);
+    if (frac > 0.0) return ansi::c(ansi::YELLOW);
+    return ansi::c(ansi::BR_BLACK);
+}
+
+/// Los abandonos son lo contrario: cuantos MENOS, mejor.
+const char *heat_bad(double frac) {
+    if (frac >= 0.20) return ansi::c(ansi::BR_RED);
+    if (frac >= 0.05) return ansi::c(ansi::YELLOW);
+    return ansi::c(ansi::BR_BLACK);
+}
+
+#if VM_BUNDLES
+/**
+ * @brief Que hay DENTRO de las caches al terminar una corrida.
+ *
+ * Tres niveles, de menos a mas detalle, porque son tres preguntas distintas:
+ *
+ *   1. el RESUMEN -- cuanto de la icache se usa, cuantas cabeceras sobreviven,
+ *      cuanto ocupa la region viva --, que dice si el mecanismo esta trabajando;
+ *   2. las CABECERAS con lo que cada paquete ha hecho (entradas, ejecutadas,
+ *      instrucciones por entrada, si se retiro), que es lo que explica POR QUE
+ *      un paquete concreto se comporto como se comporto;
+ *   3. el ENSAMBLADOR de una cabecera con las DIRECCIONES VIRTUALES, leido de
+ *      la memoria de la VM y pasado por el mismo desensamblador que
+ *      `--disasm-file`.  Es lo que se contrasta contra el programa cuando lo
+ *      que hay en la cache no cuadra con lo que deberia haber.
+ *
+ * Nada de esto cuenta durante la ejecucion: recorre las estructuras al
+ * pedirselo, o sea que el camino caliente no paga.
+ *
+ * @param proc  Proceso cuya cache se mira.  Tiene que seguir viva: despues de
+ *              `bundle_release` no hay nada que ver.
+ * @param name  Nombre del programa, para encabezar el volcado.
+ */
+void dump_caches(runtime::ProcessVM *proc, const char *name) {
+    const char *B = ansi::c(ansi::BOLD);
+    const char *D = ansi::c(ansi::DIM);
+    const char *R = ansi::c(ansi::RESET);
+
+    /* Las cifras se sacan de la propia icache.  `entries` y `executed` los
+     * mantiene la logica de retirada en TODAS las construcciones, no la
+     * telemetria, asi que esto sale con numeros de verdad aunque
+     * `VM_BUNDLE_STATS` este apagado. */
+    uint32_t heads = 0, retired = 0, occupied = 0;
+    uint64_t total_k = 0, total_entries = 0, total_exec = 0;
+    const runtime::Bundle *sample = nullptr;
+    for (uint32_t i = 0; i < runtime::ICACHE_SIZE; ++i) {
+        const runtime::DecodedInstr &e = proc->icache[i];
+        if (e.exec_cached != nullptr) ++occupied;
+        if (e.exec_cached != &runtime::exec_bundle) continue;
+        const runtime::Bundle *b = runtime::bundle_of(e);
+        if (b == nullptr) continue;
+        ++heads;
+        if (b->retired) ++retired;
+        total_k += b->k;
+        total_entries += b->entries;
+        total_exec += b->executed;
+        // La de MAS entradas es la interesante: es la que de verdad se ejecuta.
+        if (sample == nullptr || b->entries > sample->entries) sample = b;
+    }
+
+    std::fflush(stdout); // los volcados van por stderr; sin esto se entrelazan
+    std::fprintf(stderr, "\n%s--- caches de %s ---%s\n", B, name, R);
+    std::fprintf(stderr,
+                 "  icache: %s%u/%u%s ocupadas (%.1f%%), de ellas %s%u%s "
+                 "cabeceras de paquete (%s%u retiradas%s)\n",
+                 ansi::c(ansi::BR_CYAN), occupied,
+                 (unsigned)runtime::ICACHE_SIZE, R,
+                 100.0 * (double)occupied / (double)runtime::ICACHE_SIZE,
+                 ansi::c(ansi::BR_CYAN), heads, R,
+                 retired ? ansi::c(ansi::YELLOW) : D, retired, R);
+    if (heads != 0)
+        std::fprintf(stderr,
+                     "  paquetes vivos: k medio %s%.1f%s de %d, %llu entradas, "
+                     "%llu instrucciones -> %s%.1f por entrada%s (umbral %u)\n",
+                     ansi::c(ansi::BR_CYAN), (double)total_k / (double)heads, R,
+                     BUNDLE_MAX, (unsigned long long)total_entries,
+                     (unsigned long long)total_exec,
+                     total_entries && total_exec / total_entries >=
+                                          runtime::Bundle::MIN_PER_ENTRY
+                         ? ansi::c(ansi::BR_GREEN)
+                         : ansi::c(ansi::BR_RED),
+                     total_entries ? (double)total_exec / (double)total_entries
+                                   : 0.0,
+                     R, runtime::Bundle::MIN_PER_ENTRY);
+
+    // Nivel 1: el estado de la arena de doble region y el histograma.
+    runtime::bundle_dump(proc);
+    // Nivel 2: unas pocas cabeceras.  Con miles, listarlas todas es ilegible.
+    runtime::bundle_dump_heads(proc, 6, /*with_instructions=*/false);
+    // Nivel 3: el ensamblador de la mas usada, con sus direcciones virtuales.
+    if (sample != nullptr) {
+        std::fprintf(stderr, "\n%scabecera mas ejecutada, desensamblada:%s\n", B,
+                     R);
+        runtime::bundle_dump_one(proc, sample);
+    }
+    std::fflush(stderr);
+}
+#endif // VM_BUNDLES
 
 } // namespace
 
@@ -313,10 +428,28 @@ int main(int argc, char **argv) {
         else
             files.push_back(argv[i]);
     }
+    /* SIN ficheros, el test se genera los suyos y corre igual.
+     *
+     * Antes salia con codigo 2 pidiendo argumentos, y el lanzador de unitarios
+     * lo contaba -- correctamente -- como "pide argumentos, no es un fallo".
+     * O sea que este test, que es el que valida que los paquetes NO cambian el
+     * resultado, no lo ejecutaba nadie salvo a mano.  Es el mismo patron que
+     * dejo los veintiseis de `tests/aot/` meses sin correr.
+     *
+     * Los dos programas generados no son arbitrarios: uno cabe de sobra en la
+     * cache y el otro la desborda a proposito, que es lo que hace pasar por el
+     * RECOLECTOR.  Sin el segundo, la recoleccion no se ejecutaria nunca aqui. */
+    bool generados = false;
     if (files.empty()) {
-        std::fprintf(stderr, "uso: test_bundles <fichero.velb> [...] "
-                             "[--tope N]\n");
-        return 2;
+        files = tests::default_bundle_programs("test_bundles");
+        generados = true;
+        if (files.empty()) {
+            std::fprintf(stderr, "no se pudieron generar los programas\n");
+            return 1;
+        }
+        std::printf("Sin ficheros: se generan %zu programas propios "
+                    "(uno desborda la cache, para pasar por el recolector).\n",
+                    files.size());
     }
 
 #if !VM_BUNDLES
@@ -329,14 +462,77 @@ int main(int argc, char **argv) {
     jit::g_jit_threshold = UINT32_MAX;
     jit::g_pc_jit_active = false;
 
-    std::printf("Paquetes de instrucciones: BUNDLE_MAX=%d  telemetria=%s\n\n",
-                BUNDLE_MAX,
-                VM_BUNDLE_STATS ? "si"
-                                : "no (compila con "
-                                  "-DVM_BUNDLE_STATS=1)");
-    std::printf("%-22s %12s %10s %10s %9s %8s\n", "bench", "instr VM",
-                "formados", "ahorrados", "abandonos", "encadena", "igual?");
-    std::printf("%s\n", std::string(78, '-').c_str());
+    ansi::init();
+    const char *B = ansi::c(ansi::BOLD);
+    const char *D = ansi::c(ansi::DIM);
+    const char *R = ansi::c(ansi::RESET);
+
+    std::printf("%sPaquetes de instrucciones%s  BUNDLE_MAX=%s%d%s  "
+                "ICACHE_SIZE=%s%u%s  telemetria=%s%s%s\n",
+                B, R, ansi::c(ansi::BR_CYAN), BUNDLE_MAX, R,
+                ansi::c(ansi::BR_CYAN), (unsigned)runtime::ICACHE_SIZE, R,
+                VM_BUNDLE_STATS ? ansi::c(ansi::BR_GREEN)
+                                : ansi::c(ansi::BR_RED),
+                VM_BUNDLE_STATS ? "si" : "no (-DVM_BUNDLE_STATS=1)", R);
+
+    /* QUE SIGNIFICA CADA COLUMNA.  Sin esto la tabla son seis numeros sin
+     * nombre, y el que la lee dentro de tres meses no sabe si "ahorrados" es
+     * bueno que suba o que baje. */
+    std::printf("\n%sColumnas:%s\n", B, R);
+    std::printf(
+        "  %sprograma%s   el `.velb`.  Los generados dicen que CLASE de "
+        "instruccion llevan dentro.\n",
+        D, R);
+    std::printf("  %sinstr VM%s   instrucciones de VM ejecutadas.  Tiene que "
+                "salir IGUAL con y sin\n"
+                "             paquetes: si difiere, un paquete se salto una o "
+                "la ejecuto dos veces.\n",
+                D, R);
+    std::printf("  %spaquetes%s   cabeceras formadas.  Formar cuesta; lo que "
+                "compensa es entrar muchas\n"
+                "             veces en cada una, no formar muchas.\n",
+                D, R);
+    std::printf("  %sahorrados%s  despachos que el interprete NO hizo -- cada "
+                "instruccion de mas dentro\n"
+                "             de un paquete es un salto indirecto que se "
+                "evita.  ES LA CIFRA que\n"
+                "             dice si esto sirve: %% sobre las instrucciones "
+                "de VM.  Cuanto MAS, mejor.\n",
+                D, R);
+    std::printf("  %sabandonos%s  paquetes cortados a mitad (salto, bloqueo, "
+                "instruccion no apta).\n"
+                "             Cuanto MENOS, mejor: el trabajo de formar se "
+                "tiro.\n",
+                D, R);
+    std::printf("  %sreentra%s    veces que se volvio a entrar a una cabecera "
+                "ya formada.  Es lo que\n"
+                "             amortiza el coste de formarla.\n",
+                D, R);
+    std::printf("  %sidentico%s   si las dos corridas coinciden en instrucciones"
+                ", `rip` y los 16\n"
+                "             registros.  `si*` = las dos se cortaron en el "
+                "tope, no es concluyente.\n",
+                D, R);
+    std::printf("  %smotivo%s     por que PARO el arnes: `hlt` es que el "
+                "programa termino solo.\n"
+                "             Cualquier otra cosa dice que se corto antes, y "
+                "entonces lo validado\n"
+                "             es solo hasta ahi.\n\n",
+                D, R);
+
+    if (!VM_BUNDLE_STATS)
+        std::printf("  %s(sin telemetria las cuatro columnas de contadores "
+                    "salen `--`: no se han medido.  Para\n"
+                    "   tenerlas: cmake -DVESTA_BUNDLE_STATS=ON.  Lo que SI se "
+                    "ve sin ella es el volcado de\n"
+                    "   las caches de mas abajo, que lee las estructuras en vez "
+                    "de contar al ejecutar.)%s\n",
+                    ansi::c(ansi::YELLOW), R);
+
+    std::printf("\n%s%-28s %12s %9s %12s %10s %9s %9s  %s%s\n", B, "programa",
+                "instr VM", "paquetes", "ahorrados", "abandonos", "reentra",
+                "identico", "motivo", R);
+    std::printf("%s%s%s\n", D, std::string(108, '-').c_str(), R);
     // Sin esto, si algo revienta se pierde hasta la cabecera y no queda ni
     // rastro de por donde iba.
     std::fflush(stdout);
@@ -380,6 +576,14 @@ int main(int argc, char **argv) {
                         proc->bundle_stats.dispatches;
                 aborts = proc->bundle_stats.aborts;
                 turns = proc->bundle_stats.chained;
+                /* CONTENIDO de las caches, recien terminada la corrida y antes
+                 * de soltar la arena.  Aqui es el unico sitio donde se puede
+                 * ver: `bundle_release` la destruye.
+                 *
+                 * Y no depende de `VM_BUNDLE_STATS`: lo que se lee son las
+                 * propias estructuras -- la icache, las cabeceras vivas y lo
+                 * que cada paquete lleva dentro --, no contadores. */
+                dump_caches(proc, base(f));
             }
             runtime::bundle_release(proc);
         }
@@ -476,14 +680,68 @@ int main(int argc, char **argv) {
             check(mismos_regs, "distintos registros al terminar", b);
         }
 
-        std::printf("%-22s %12llu %10llu %10llu %9llu %9llu %7s\n", b,
-                    (unsigned long long)out[1].vm_instrs,
-                    (unsigned long long)formed, (unsigned long long)saved,
-                    (unsigned long long)aborts, (unsigned long long)turns,
-                    !mismo_n                     ? "NO"
-                    : cortado                    ? "si*"
-                    : (mismo_rip && mismos_regs) ? "si"
-                                                 : "NO");
+        /* La fila.  Los tres numeros que dicen algo van con escala de color:
+         * `ahorrados` sobre las instrucciones de VM (mas = mejor) y
+         * `abandonos` sobre los paquetes formados (menos = mejor). */
+        const double frac_saved =
+            out[1].vm_instrs ? (double)saved / (double)out[1].vm_instrs : 0.0;
+        const double frac_abort =
+            formed ? (double)aborts / (double)formed : 0.0;
+        const bool ok = mismo_n && (cortado || (mismo_rip && mismos_regs));
+
+        /* Los cuatro contadores vienen de la telemetria.  Sin ella NO son cero:
+         * es que nadie los ha contado, y escribir un cero ahi seria decir que
+         * los paquetes no hicieron nada cuando el volcado de la cache ensena lo
+         * contrario.  Se pone `--`, que es la respuesta honesta. */
+        char c_formed[24], c_saved[24], c_aborts[24], c_turns[24];
+        if (VM_BUNDLE_STATS) {
+            std::snprintf(c_formed, sizeof c_formed, "%llu",
+                          (unsigned long long)formed);
+            std::snprintf(c_saved, sizeof c_saved, "%llu",
+                          (unsigned long long)saved);
+            std::snprintf(c_aborts, sizeof c_aborts, "%llu",
+                          (unsigned long long)aborts);
+            std::snprintf(c_turns, sizeof c_turns, "%llu",
+                          (unsigned long long)turns);
+        } else {
+            std::strcpy(c_formed, "--");
+            std::strcpy(c_saved, "--");
+            std::strcpy(c_aborts, "--");
+            std::strcpy(c_turns, "--");
+        }
+
+        std::printf("%s%-28s%s %s%12llu%s %s%9s%s %s%12s%s %s%10s%s "
+                    "%s%9s%s %s%9s%s  %s%s%s\n",
+                    ansi::c(ansi::BR_CYAN), b, ansi::c(ansi::RESET),
+                    /* El recuento se toma del modo SIN paquetes: ahi cada
+                     * instruccion es un despacho, asi que es exacto.  El del
+                     * modo con paquetes solo lo es con telemetria -- lo que se
+                     * ejecuta DENTRO de un paquete no gasta despacho --, y
+                     * ponerlo daba 5.421 donde el programa hace 2,4 millones. */
+                    ansi::c(ansi::WHITE), (unsigned long long)out[0].vm_instrs,
+                    ansi::c(ansi::RESET),
+                    VM_BUNDLE_STATS ? heat(formed ? 1.0 : 0.0)
+                                    : ansi::c(ansi::BR_BLACK),
+                    c_formed, ansi::c(ansi::RESET),
+                    VM_BUNDLE_STATS ? heat(frac_saved)
+                                    : ansi::c(ansi::BR_BLACK),
+                    c_saved, ansi::c(ansi::RESET),
+                    VM_BUNDLE_STATS ? heat_bad(frac_abort)
+                                    : ansi::c(ansi::BR_BLACK),
+                    c_aborts, ansi::c(ansi::RESET),
+                    VM_BUNDLE_STATS ? heat(turns ? 1.0 : 0.0)
+                                    : ansi::c(ansi::BR_BLACK),
+                    c_turns, ansi::c(ansi::RESET),
+                    ok ? ansi::c(ansi::BR_GREEN) : ansi::c(ansi::BR_RED),
+                    !mismo_n ? "NO" : cortado ? "si*" : ok ? "si" : "NO",
+                    ansi::c(ansi::RESET),
+                    /* POR QUE paro.  Estaba en `Result::why` y no lo imprimia
+                     * nadie: el arnes se detenia y el motivo no salia por
+                     * ningun sitio, que es justo el fallo mudo que este
+                     * proyecto no admite. */
+                    ansi::c(ansi::DIM),
+                    out[1].why[0] != '\0' ? out[1].why : "tope",
+                    ansi::c(ansi::RESET));
         std::fflush(stdout);
 
         // Tiempo: ns por instruccion de VM en cada modo.  Es la unica cifra que
@@ -542,7 +800,21 @@ int main(int argc, char **argv) {
                     100.0 * (double)g_saved / (double)g_instrs,
                     (unsigned long long)g_aborts);
     }
-    std::printf("comprobaciones: %d pasaron, %d fallaron\n", g_pass, g_fail);
+    /* Aqui habia OTRO volcado de caches, que ademas volvia a cargar y ejecutar
+     * el ultimo programa solo para tener una arena que mirar.  Sobra desde que
+     * `dump_caches` sale por programa, justo cuando la arena todavia esta viva:
+     * eso ensena los siete casos en vez de uno, y sin ejecutar nada de mas. */
+
+    /* Y la segunda pregunta sobre los mismos programas: cuanta independencia
+     * hay DENTRO de un paquete, que es lo que decide si reordenar al formar
+     * daria algo.  Vuelve a ejecutarlos por su cuenta porque necesita la arena
+     * viva, y la de arriba ya se solto. */
+    tests::ilp_report(files, /*detalle=*/false, cap);
+
+    std::printf("\ncomprobaciones: %s%d pasaron%s, %s%d fallaron%s\n",
+                ansi::c(ansi::BR_GREEN), g_pass, ansi::c(ansi::RESET),
+                g_fail ? ansi::c(ansi::BR_RED) : ansi::c(ansi::BR_BLACK),
+                g_fail, ansi::c(ansi::RESET));
     return g_fail == 0 ? 0 : 1;
 #endif // VM_BUNDLES
 }

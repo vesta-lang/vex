@@ -141,11 +141,10 @@ void produce_fingerprint(Production &p) {
              * suelto, el consumidor filtra por el (el linter se calla si la
              * frontera es de la stdlib, que no la arregla el usuario) y el
              * texto lo pone el catalogo. */
-            p.say_unknown(function_subject(p, fn),
-                          UnknownReason::OpaqueBoundary,
-                          "fingerprint.effects_not_visible",
-                          kProducerFingerprint,
-                          p.store.intern(fp.opaque_callee));
+            p.say_unknown(
+                function_subject(p, fn), UnknownReason::OpaqueBoundary,
+                "fingerprint.effects_not_visible", kProducerFingerprint,
+                p.store.intern(fp.opaque_callee));
             continue;
         }
 

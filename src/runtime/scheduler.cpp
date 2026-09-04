@@ -29,11 +29,70 @@
 #include "runtime/runtime.h"
 #include "debug/debugger.h"
 #include "jit/interp_jit_bridge.h" // D.3-E: dispatch a jit_entry_fn al iniciar main
+#include "runtime/exec_instruction.h"
+#include "runtime/instr_db_vm.h"
+#include "util/env_flags.h"
+#include <algorithm>
+#include <vector>
 
 #include <csetjmp>
 #include <cstdio>
 
 namespace runtime {
+
+/* -- Que opcodes caen al camino LENTO ------------------------------------- */
+
+/// Cuenta por indice de despacho (`0x100 | opcode2` para los extendidos).
+static uint64_t g_slow_ops[512];
+
+/// Si se cuenta.  Se resuelve UNA vez: leer el entorno por instruccion seria
+/// medir el coste de medir.
+static const bool g_count_slow_ops = util::flag_on(util::FlagId::SlowOps);
+
+/**
+ * @brief Vuelca al terminar los opcodes que fueron por el camino lento.
+ *
+ * Sale ordenado de mas a menos, que es el orden en que conviene atacarlos: en
+ * el camino lento cada instruccion cuesta una llamada indirecta, y la tabla de
+ * rutas rapidas del interprete cubre unas treinta de casi doscientas cuarenta.
+ * Cuales de las otras merecen entrar no se puede razonar desde el codigo --
+ * depende de lo que EJECUTEN los programas --, y esta es la unica forma de
+ * saberlo sin adivinar.
+ */
+struct SlowOpsDump {
+    ~SlowOpsDump() {
+        if (!g_count_slow_ops) return;
+        struct Row {
+            unsigned idx;
+            uint64_t times;
+        };
+        std::vector<Row> rows;
+        uint64_t total = 0;
+        for (unsigned i = 0; i < 512; ++i)
+            if (g_slow_ops[i] != 0) {
+                rows.push_back({i, g_slow_ops[i]});
+                total += g_slow_ops[i];
+            }
+        if (rows.empty()) return;
+        std::sort(rows.begin(), rows.end(),
+                  [](const Row &a, const Row &b) { return a.times > b.times; });
+
+        std::fprintf(stderr,
+                     "\n[ops-lentas] %llu instrucciones por el camino lento "
+                     "(una llamada indirecta cada una)\n",
+                     (unsigned long long)total);
+        for (const Row &f : rows) {
+            const bool ext = (f.idx & 0x100) != 0;
+            const vm_isa::VmInstr *vi = vm_isa::vm_instr(ext, (uint8_t)(f.idx & 0xFF));
+            std::fprintf(stderr, "  %-18s %s0x%02X  %12llu  %5.1f%%\n",
+                         (vi != nullptr && vi->name != nullptr) ? vi->name
+                                                                  : "?",
+                         ext ? "ext " : "pri ", (unsigned)(f.idx & 0xFF),
+                         (unsigned long long)f.times,
+                         100.0 * (double)f.times / (double)total);
+        }
+    }
+} g_slow_ops_dump;
 
 /**
  * @brief Convierte en fallo del programa lo que capturo el sistema.
@@ -661,6 +720,49 @@ void Scheduler::run_loop() {
                     dispatch_table[0x100 | 0x05] = &&L_ADD_RR;
                     dispatch_table[0x100 | 0x08] = &&L_SUB_RR;
                     dispatch_table[0x100 | 0x11] = &&L_CMP_RR;
+                    /* Las variantes con INMEDIATO, que faltaban.  Un `adds
+                     * r2, 3` o un `cmps r1, 0` son de lo mas comun que hay --
+                     * todo contador de bucle pasa por ahi -- y sin entrada en
+                     * esta tabla caian a `L_SLOW`, que son DOS llamadas
+                     * indirectas: una al manejador y otra a traves de la tabla
+                     * por ancho de dentro. */
+                    dispatch_table[0x100 | 0x06] = &&L_ADD_RI;
+                    dispatch_table[0x100 | 0x09] = &&L_SUB_RI;
+                    dispatch_table[0x100 | 0x12] = &&L_CMP_RI;
+                    /* Pila y marco.  El orden con que se anaden sale de
+                     * `VESTA_SLOW_OPS=1` sobre el corpus, no de suponer cual
+                     * pesa mas. */
+                    /* El banco ZMM al completo: las quince.  Antes no habia
+                     * NINGUNA, asi que toda la coma flotante iba por llamada
+                     * indirecta. */
+                    dispatch_table[0x100 | 0xF0] = &&L_FMOV;
+                    /* Una entrada por operacion.  La eleccion de ISA y ancho
+                     * ya no se hace aqui: viaja en `exec_cached` desde el
+                     * descodificador, y asi la aprovecha tambien `exec_bundle`,
+                     * que no pasa por esta tabla. */
+                    dispatch_table[0x100 | 0xF1] = &&L_FADD;
+                    dispatch_table[0x100 | 0xF2] = &&L_FSUB;
+                    dispatch_table[0x100 | 0xF3] = &&L_FMUL;
+                    dispatch_table[0x100 | 0xF4] = &&L_FDIV;
+                    dispatch_table[0x100 | 0xF5] = &&L_FCMP;
+                    dispatch_table[0x100 | 0xF6] = &&L_FSQRT;
+                    dispatch_table[0x100 | 0xF7] = &&L_FABS;
+                    dispatch_table[0x100 | 0xF8] = &&L_FNEG;
+                    dispatch_table[0x100 | 0xF9] = &&L_FCVT;
+                    dispatch_table[0x100 | 0xFA] = &&L_FMOVI;
+                    dispatch_table[0x100 | 0xFB] = &&L_FLOAD;
+                    dispatch_table[0x100 | 0xFC] = &&L_FSTORE;
+                    dispatch_table[0x100 | 0x5C] = &&L_FEXTEND;
+                    dispatch_table[0x100 | 0x5D] = &&L_FNARROW;
+
+                    dispatch_table[0x100 | 0x16] = &&L_MOV_SIB;
+                    dispatch_table[0xC3] = &&L_RET; // tabla PRIMARIA
+                    dispatch_table[0x100 | 0x70] = &&L_FASTPUSH;
+                    dispatch_table[0x100 | 0x71] = &&L_FASTPOP;
+                    dispatch_table[0x12] = &&L_PUSH;  // tabla PRIMARIA
+                    dispatch_table[0x13] = &&L_POP;   // tabla PRIMARIA
+                    dispatch_table[0x28] = &&L_ENTER; // tabla PRIMARIA
+                    dispatch_table[0x29] = &&L_LEAVE; // tabla PRIMARIA
                     dispatch_table[0x100 | 0x17] = &&L_AND_RR;
                     dispatch_table[0x100 | 0x18] = &&L_OR_RR;
                     dispatch_table[0x100 | 0x19] = &&L_XOR_RR;
@@ -731,6 +833,81 @@ void Scheduler::run_loop() {
  * sobrecarga de la llamada (~1ns x N dispatches).
  * Sin LTO en MinGW el compilador no puede inlinear
  * decode_instruction automaticamente desde otra TU. */
+/* Compone las cuatro banderas y las escribe de UNA vez.
+ *
+ * Las rutas rapidas de aqui tienen su PROPIA copia del calculo de banderas --
+ * no pasan por `compute_with_flags` --, asi que arreglarlo alli no las tocaba:
+ * seguian haciendo cuatro asignaciones a campos de bits del mismo byte, o sea
+ * cuatro lee-modifica-escribe encadenados por instruccion.  La explicacion
+ * larga esta en `include/runtime/rflags.h`.
+ *
+ * Importa mas aqui que en ningun otro sitio: esto ES el bucle caliente, y el
+ * desglose de VTune dice que el interprete escalar esta limitado por el ANCHO
+ * DE EJECUCION (Core Bound 15,4%, 84,9% de los ciclos con 3+ puertos activos,
+ * cero ciclos parados).  Con la maquina saturada de trabajo util, lo unico que
+ * la acelera es emitir menos operaciones.
+ *
+ * @param res_   resultado de la operacion, de donde salen ZF y SF.
+ * @param extra_ bits CF/OF que aporte la operacion (0 si no toca ninguno). */
+#define FAST_FLAGS(res_, extra_)                                               \
+    do {                                                                       \
+        uint8_t _nf = ((res_) == 0) ? RF_ZF : 0;                               \
+        if ((int64_t)(res_) < 0) _nf |= RF_SF;                                 \
+        instance->registers.flags.arith = _nf | (uint8_t)(extra_);             \
+    } while (0)
+
+/**
+ * @brief Despacha la siguiente instruccion SIN releer el contador de programa.
+ *
+ * Casi todas las etiquetas terminan igual: calculan el PC siguiente, lo
+ * escriben y llaman a `NEXT_DISPATCH()`, que lo primero que hacia era volver a
+ * LEERLO de memoria.  Un almacen seguido de una carga a la misma direccion, y
+ * ademas en la cadena critica: la busqueda en la icache no puede empezar hasta
+ * que ese valor vuelve, o sea que se paga la latencia del reenvio de almacen a
+ * carga en CADA instruccion.
+ *
+ * Aqui el PC llega como argumento, ya en un registro.  El almacen se mantiene
+ * -- el `rip` arquitectonico tiene que ser correcto para el depurador y para
+ * cualquier fallo que ocurra dentro -- pero deja de estar en el camino.
+ *
+ * @param _npc El PC de la instruccion siguiente, ya calculado.
+ */
+#define NEXT_DISPATCH_PC(_npc)                                                 \
+    do {                                                                       \
+        if (__builtin_expect(--instance->reductions_remaining == 0, 0))        \
+            goto BATCH_END;                                                    \
+        DecodedInstr *_c = icache_lookup(instance, (_npc));                    \
+        if (__builtin_expect(                                                  \
+                _c != nullptr && instance->decoded_ptr != nullptr, 1)) {       \
+            instance->decoded_ptr = _c;                                        \
+        } else {                                                               \
+            decode_instruction(instance);                                      \
+        }                                                                      \
+        d = instance->decoded_ptr;                                             \
+        fl_inl = d->flags_info;                                                \
+        dispatch_idx = (fl_inl.is_not_extended == 0x00)                        \
+                           ? (0x100u | fl_inl.opcode_index)                    \
+                           : fl_inl.is_not_extended;                           \
+        goto *dispatch_table[dispatch_idx];                                    \
+    } while (0)
+
+/**
+ * @brief Avanza el PC por el tamano de la instruccion y despacha la siguiente.
+ *
+ * Es el cierre de casi todas las rutas rapidas, en una sola pieza: el PC nuevo
+ * se calcula UNA vez, se guarda y se pasa al despacho sin volver a leerlo.
+ */
+#define ADVANCE_AND_NEXT()                                                     \
+    do {                                                                       \
+        const uint64_t _npc =                                                  \
+            instance->registers.rip.raw() + fl_inl.size_instr;                 \
+        instance->registers.rip.qword(_npc);                                   \
+        ++profiler_instr_counter;                                              \
+        NEXT_DISPATCH_PC(_npc);                                                \
+    } while (0)
+
+/// Version que SI relee el `rip`.  La usan las etiquetas que saltan -- ahi el
+/// destino no lo pone esta macro, lo puso la instruccion.
 #define NEXT_DISPATCH()                                                        \
     do {                                                                       \
         if (__builtin_expect(--instance->reductions_remaining == 0, 0))        \
@@ -761,10 +938,7 @@ void Scheduler::run_loop() {
                 const uint8_t r2 = d->data_instruction.reg_data.reg2;
                 instance->registers.regs[r1].qword(
                     instance->registers.regs[r2].qword());
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             L_MOV_RI: {
@@ -774,87 +948,416 @@ void Scheduler::run_loop() {
                 const uint8_t r = d->data_instruction.inmmed_data.reg;
                 instance->registers.regs[r].qword(
                     d->data_instruction.inmmed_data.inmmed);
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             L_ADD_RR: {
                 if (fl_inl.mode != 3) goto L_SLOW;
                 auto &regs = instance->registers.regs;
-                auto &fl = instance->registers.flags.bits;
                 const uint8_t r1 = d->data_instruction.reg_data.reg1;
                 const uint8_t r2 = d->data_instruction.reg_data.reg2;
                 const uint64_t a = regs[r1].qword();
                 const uint64_t b = regs[r2].qword();
                 const uint64_t res = a + b;
                 regs[r1].qword(res);
-                fl.ZF = (res == 0);
-                fl.SF = (int64_t)res < 0;
+                uint8_t cf_of_bits = 0;
                 if (fl_inl._signed_instruct) {
-                    fl.OF = (((int64_t)a ^ (int64_t)res) &
-                             ((int64_t)b ^ (int64_t)res)) < 0;
-                    fl.CF = 0;
-                } else {
-                    fl.CF = res < a;
-                    fl.OF = 0;
+                    if ((((int64_t)a ^ (int64_t)res) &
+                         ((int64_t)b ^ (int64_t)res)) < 0)
+                        cf_of_bits = RF_OF;
+                } else if (res < a) {
+                    cf_of_bits = RF_CF;
                 }
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                FAST_FLAGS(res, cf_of_bits);
+                ADVANCE_AND_NEXT();
+            }
+
+            /* ADD con INMEDIATO.  No tenia ruta rapida, y es la forma mas
+             * comun que hay: todo contador de bucle y toda constante pasan por
+             * aqui.  Iba a `L_SLOW`, o sea DOS llamadas indirectas por
+             * instruccion -- una a `exec_instr_add_imm` y otra a traves de
+             * `add_imm_table[mode]` --, y el perfil lo enseñaba: 2,25 s solo en
+             * `exec_instr_add_imm`, con su hermana `sub_imm` en 2,45 s. */
+            L_ADD_RI: {
+                if (fl_inl.mode != 3 || fl_inl.direction != 0) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                const uint8_t r = d->data_instruction.inmmed_data.reg;
+                const uint64_t a = regs[r].qword();
+                const uint64_t b = d->data_instruction.inmmed_data.inmmed;
+                const uint64_t res = a + b;
+                regs[r].qword(res);
+                uint8_t cf_of_bits = 0;
+                if (fl_inl._signed_instruct) {
+                    if ((((int64_t)a ^ (int64_t)res) &
+                         ((int64_t)b ^ (int64_t)res)) < 0)
+                        cf_of_bits = RF_OF;
+                } else if (res < a) {
+                    cf_of_bits = RF_CF;
+                }
+                FAST_FLAGS(res, cf_of_bits);
+                ADVANCE_AND_NEXT();
             }
 
             L_SUB_RR: {
                 if (fl_inl.mode != 3) goto L_SLOW;
                 auto &regs = instance->registers.regs;
-                auto &fl = instance->registers.flags.bits;
                 const uint8_t r1 = d->data_instruction.reg_data.reg1;
                 const uint8_t r2 = d->data_instruction.reg_data.reg2;
                 const uint64_t a = regs[r1].qword();
                 const uint64_t b = regs[r2].qword();
                 const uint64_t res = a - b;
                 regs[r1].qword(res);
-                fl.ZF = (res == 0);
-                fl.SF = (int64_t)res < 0;
+                uint8_t cf_of_bits = 0;
                 if (fl_inl._signed_instruct) {
-                    fl.OF = (((int64_t)a ^ (int64_t)b) &
-                             ((int64_t)a ^ (int64_t)res)) < 0;
-                    fl.CF = 0;
-                } else {
-                    fl.CF = a < b;
-                    fl.OF = 0;
+                    if ((((int64_t)a ^ (int64_t)b) &
+                         ((int64_t)a ^ (int64_t)res)) < 0)
+                        cf_of_bits = RF_OF;
+                } else if (a < b) {
+                    cf_of_bits = RF_CF;
                 }
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                FAST_FLAGS(res, cf_of_bits);
+                ADVANCE_AND_NEXT();
+            }
+
+            /// SUB con inmediato.  Ver el comentario de @c L_ADD_RI.
+            L_SUB_RI: {
+                if (fl_inl.mode != 3 || fl_inl.direction != 0) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                const uint8_t r = d->data_instruction.inmmed_data.reg;
+                const uint64_t a = regs[r].qword();
+                const uint64_t b = d->data_instruction.inmmed_data.inmmed;
+                const uint64_t res = a - b;
+                regs[r].qword(res);
+                uint8_t cf_of_bits = 0;
+                if (fl_inl._signed_instruct) {
+                    if ((((int64_t)a ^ (int64_t)b) &
+                         ((int64_t)a ^ (int64_t)res)) < 0)
+                        cf_of_bits = RF_OF;
+                } else if (a < b) {
+                    cf_of_bits = RF_CF;
+                }
+                FAST_FLAGS(res, cf_of_bits);
+                ADVANCE_AND_NEXT();
             }
 
             L_CMP_RR: {
                 if (fl_inl.mode != 3) goto L_SLOW;
                 auto &regs = instance->registers.regs;
-                auto &fl = instance->registers.flags.bits;
                 const uint8_t r1 = d->data_instruction.reg_data.reg1;
                 const uint8_t r2 = d->data_instruction.reg_data.reg2;
                 const uint64_t a = regs[r1].qword();
                 const uint64_t b = regs[r2].qword();
-                const uint64_t res = a - b;
-                fl.ZF = (res == 0);
-                fl.SF = (int64_t)res < 0;
+                const uint64_t res = a - b; // no se escribe: solo compara
+                uint8_t cf_of_bits = 0;
                 if (fl_inl._signed_instruct) {
-                    fl.OF = (((int64_t)a ^ (int64_t)b) &
-                             ((int64_t)a ^ (int64_t)res)) < 0;
-                    fl.CF = 0;
-                } else {
-                    fl.CF = a < b;
-                    fl.OF = 0;
+                    if ((((int64_t)a ^ (int64_t)b) &
+                         ((int64_t)a ^ (int64_t)res)) < 0)
+                        cf_of_bits = RF_OF;
+                } else if (a < b) {
+                    cf_of_bits = RF_CF;
                 }
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
+                FAST_FLAGS(res, cf_of_bits);
+                ADVANCE_AND_NEXT();
+            }
+
+            /// CMP con inmediato.  Ver el comentario de @c L_ADD_RI.
+            L_CMP_RI: {
+                if (fl_inl.mode != 3 || fl_inl.direction != 0) goto L_SLOW;
+                auto &regs = instance->registers.regs;
+                const uint8_t r = d->data_instruction.inmmed_data.reg;
+                const uint64_t a = regs[r].qword();
+                const uint64_t b = d->data_instruction.inmmed_data.inmmed;
+                const uint64_t res = a - b;
+                uint8_t cf_of_bits = 0;
+                if (fl_inl._signed_instruct) {
+                    if ((((int64_t)a ^ (int64_t)b) &
+                         ((int64_t)a ^ (int64_t)res)) < 0)
+                        cf_of_bits = RF_OF;
+                } else if (a < b) {
+                    cf_of_bits = RF_CF;
+                }
+                FAST_FLAGS(res, cf_of_bits);
+                ADVANCE_AND_NEXT();
+            }
+
+            /* -- COMA FLOTANTE Y VECTORIAL ------------------------------
+             *
+             * LAS QUINCE tienen entrada en la tabla, no solo las calientes.
+             * Hasta ahora ninguna la tenia: el banco ZMM entero se despachaba
+             * por llamada indirecta, y el barrido de `test_mips` lo enseña --
+             * la fila `vector` va a 207 MIPS donde la entera va a 320.
+             *
+             * Se reparten en dos formas, y la razon es el codigo generado:
+             *
+             *   ESCALAR (`mode == 0`): el cuerpo es una suma de dos `double`,
+             *   asi que se mete AQUI entero y no queda ni llamada.
+             *
+             *   EMPAQUETADO (`mode > 0`) y las demas: el trabajo esta en
+             *   funciones marcadas `[[gnu::target("avx512")]]` y similares,
+             *   que por construccion NO se pueden meter en linea dentro de una
+             *   funcion generica -- el compilador tendria que emitir AVX-512
+             *   en codigo que corre en maquinas sin AVX-512.  Lo que si se
+             *   quita es la INDIRECCION: se llama al manejador por su nombre,
+             *   que es una llamada directa y predecible en vez de un salto por
+             *   puntero.
+             *
+             * Que esten todas importa mas alla de la velocidad de hoy: son la
+             * base sobre la que se van a construir super-instrucciones, y una
+             * super-instruccion que caiga al camino lento no compensa. */
+/* UNA etiqueta por operacion, no tres.
+ *
+ * Antes habia una por nivel de ISA porque la tabla de despacho era el sitio
+ * donde se elegia la variante.  Ya no: la eleccion -- por ISA Y por ancho --
+ * se hace al DESCODIFICAR y viaja dentro de `exec_cached`, con lo que aqui
+ * basta con llamarlo.  Es una indireccion, si, pero a cambio la funcion que
+ * responde tiene el ancho fijo: su cuerpo SIMD son una o dos operaciones
+ * rectas metidas en linea, sin bucle ni llamada interna.
+ *
+ * El caso ESCALAR se sigue metiendo aqui entero, que es el que no necesita
+ * llamada de ninguna clase.  Escribe con `write_*_keep`, preservando los
+ * bytes altos igual que hace el procesador. */
+#define FAST_FBIN(label, oper)                                                 \
+    label : {                                                                  \
+        if (fl_inl.mode != 0) { /* empaquetado: ya especializado */            \
+            d->exec_cached(instance, *d);                                      \
+            goto L_F_FIN;                                                      \
+        }                                                                      \
+        auto &zd = instance->registers.zmm[d->data_instruction.reg_data.reg1]; \
+        const auto &zs =                                                       \
+            instance->registers.zmm[d->data_instruction.reg_data.reg2];        \
+        if (fl_inl._signed_instruct)                                           \
+            zd.write_f32_keep(zd.read_f32() oper zs.read_f32());               \
+        else                                                                   \
+            zd.write_f64_keep(zd.read_f64() oper zs.read_f64());               \
+        goto L_F_FIN;                                                          \
+    }
+
+            FAST_FBIN(L_FADD, +)
+            FAST_FBIN(L_FSUB, -)
+            FAST_FBIN(L_FMUL, *)
+            FAST_FBIN(L_FDIV, /)
+#undef FAST_FBIN
+
+            /* FMOV se mete entero: las cuatro anchuras son una copia con
+             * relleno a cero, sin aritmetica ni deteccion de ISA. */
+            L_FMOV: {
+                auto &zd =
+                    instance->registers.zmm[d->data_instruction.reg_data.reg1];
+                const auto &zs =
+                    instance->registers.zmm[d->data_instruction.reg_data.reg2];
+                switch (fl_inl.mode) {
+                case 0: zd.write_f64(zs.read_f64()); break;
+                case 1: zd.write_xmm(zs.raw()); break;
+                case 2: zd.write_ymm(zs.raw()); break;
+                default: zd.write_zmm(zs.raw()); break;
+                }
+                goto L_F_FIN;
+            }
+
+/* El resto del banco ZMM: llamada DIRECTA, sin indireccion.  Meterlas en
+ * linea no compensaria -- `fcmp` tiene toda la casuistica de NaN de IEEE 754,
+ * `fload`/`fstore` pasan por la memoria de la VM, y las unarias empaquetadas
+ * vuelven a las funciones por ISA -- pero quitarles el salto por puntero si. */
+#define FAST_FDIRECTA(etiqueta, manejador)                                     \
+    etiqueta : {                                                               \
+        manejador(instance, *d);                                               \
+        goto L_F_FIN;                                                          \
+    }
+
+            FAST_FDIRECTA(L_FCMP, exec_instr_fcmp)
+            FAST_FDIRECTA(L_FSQRT, exec_instr_fsqrt)
+            FAST_FDIRECTA(L_FABS, exec_instr_fabs)
+            FAST_FDIRECTA(L_FNEG, exec_instr_fneg)
+            FAST_FDIRECTA(L_FCVT, exec_instr_fcvt)
+            FAST_FDIRECTA(L_FMOVI, exec_instr_fmovi)
+            FAST_FDIRECTA(L_FLOAD, exec_instr_fload)
+            FAST_FDIRECTA(L_FSTORE, exec_instr_fstore)
+            FAST_FDIRECTA(L_FEXTEND, exec_instr_fextend)
+            FAST_FDIRECTA(L_FNARROW, exec_instr_fnarrow)
+#undef FAST_FDIRECTA
+
+            /* Cierre comun.  Ninguna instruccion de coma flotante salta ni se
+             * bloquea -- `fcmp` deja banderas, nada mas --, asi que les vale
+             * el epilogo simple y no hace falta tocar el camino de eventos. */
+            L_F_FIN:
+            ADVANCE_AND_NEXT();
+
+            /* RET, en su forma simple.
+             *
+             * Sale en 61 de los 142 programas medidos, y a diferencia de
+             * `alloc` -- que tambien es frecuente -- aqui la indireccion SI
+             * pesa: un `ret` es una lectura de pila y dos escrituras de
+             * registro, asi que la llamada indirecta es una fraccion grande de
+             * lo que cuesta.  En `alloc` el coste esta en la reserva de monton
+             * (decenas de nanosegundos) y el despacho es ruido, por eso no
+             * tiene ruta rapida.
+             *
+             * Un RET que cierra un marco de POO hace mucho mas que saltar --
+             * restaura r1..r12, recorre la cadena de aspectos, suelta las
+             * reservas del marco y lo devuelve al pool --, y todo eso se queda
+             * donde estaba.  Aqui solo entra el RET de una llamada normal, que
+             * es el que se reconoce porque NO hay marco cuyo `frame_base`
+             * coincida con la pila actual. */
+            L_RET: {
+                const uint64_t rsp = instance->registers.stack_pointer.qword();
+                const loader::FrameHeader *frame = instance->frame_stack;
+                if (frame != nullptr && frame->frame_base == rsp + 8)
+                    goto L_SLOW; // cierra un marco de POO: no es este camino
+                const uint64_t ret_target = instance->vm_mem.read_u64_fast(rsp);
+                instance->registers.stack_pointer.qword(rsp + 8);
+                // SALTA: se escribe `rip` entero y NO se le suma el tamano de
+                // la instruccion, que es lo que hace `did_jump` en el lento.
+                instance->registers.rip.raw(ret_target);
                 ++profiler_instr_counter;
                 NEXT_DISPATCH();
+            }
+
+            /* MOV con direccionamiento SIB, de 64 bits.
+             *
+             * Es la instruccion que mas cae al camino lento con diferencia:
+             * `VESTA_SLOW_OPS=1` sobre el corpus la ve en los 156 programas y
+             * con 46.362 ejecuciones, el 41% de todo lo que queda ahi.  La
+             * tabla ya cubria `mov reg,reg` y `mov reg,imm`, pero no la forma
+             * con memoria, que es justo la que usa cualquier acceso a un campo
+             * o a un elemento de array.
+             *
+             * Solo el ancho de 64 bits: los demas pasan por una tabla por
+             * tamano y replicarla aqui seria duplicar un despacho entero para
+             * el caso menos frecuente.  La direccion se calcula con
+             * `sib_effective_addr`, la MISMA funcion que usa el manejador --
+             * por eso se movio a la cabecera. */
+            L_MOV_SIB: {
+                if (fl_inl.mode != 3) goto L_SLOW;
+                const uint8_t dst = d->data_instruction.mem_data.reg_final;
+                const uint64_t addr = sib_effective_addr(instance, *d);
+                auto &reg = instance->registers.regs[dst];
+                if (fl_inl._signed_instruct) {
+                    // MOVH: memoria del proceso ANFITRION, no la de la VM.
+                    if (fl_inl.direction == 0)
+                        reg.qword(*reinterpret_cast<const uint64_t *>(addr));
+                    else
+                        *reinterpret_cast<uint64_t *>(addr) = reg.raw();
+                } else {
+                    // MOV: memoria de la maquina virtual.
+                    if (fl_inl.direction == 0)
+                        reg.qword(instance->vm_mem.read_u64_fast(addr));
+                    else
+                        instance->vm_mem.write_u64_fast(addr, reg.raw());
+                }
+                ADVANCE_AND_NEXT();
+            }
+
+            /* -- PILA Y MARCO -------------------------------------------
+             *
+             * Salen de MEDIR, no de suponer: `VESTA_SLOW_OPS=1` sobre 142
+             * programas del corpus dice que `enter`/`leave` aparecen en 98 y
+             * 97 de ellos, y que `fastpush`/`fastpop` estan en 78 con veinte
+             * mil ejecuciones cada una -- envuelven CADA llamada nativa.
+             *
+             * Ninguna de las cinco salta ni se bloquea, asi que les vale el
+             * epilogo normal de ruta rapida y no hay que tocar el camino de
+             * eventos.  Las que SI saltan (`ret`, `callvm`) se quedan por
+             * ahora en el lento a proposito: su epilogo es otro. */
+            L_ENTER: {
+                const uint64_t frame_size =
+                    d->data_instruction.inmmed_data.inmmed;
+                const uint64_t rbp_value = instance->registers.base_pointer.raw();
+                // push rbp
+                const uint64_t rsp_after_push =
+                    instance->registers.stack_pointer.qword() - 8;
+                instance->vm_mem.write_u64_fast(rsp_after_push, rbp_value);
+                // mov rbp, rsp
+                instance->registers.base_pointer.raw(rsp_after_push);
+                // sub rsp, frame_size
+                const uint64_t new_rsp = rsp_after_push - frame_size;
+                instance->registers.stack_pointer.qword(new_rsp);
+                // Marca de agua de la pila: la usa el barrido conservativo del
+                // recolector para saber hasta donde mirar.
+                if (new_rsp < instance->stack_low_water)
+                    instance->stack_low_water = new_rsp;
+                ADVANCE_AND_NEXT();
+            }
+
+            L_LEAVE: {
+                // mov rsp, rbp  +  pop rbp
+                const uint64_t rsp_at_rbp =
+                    instance->registers.base_pointer.raw();
+                const uint64_t rbp_value =
+                    instance->vm_mem.read_u64_fast(rsp_at_rbp);
+                instance->registers.stack_pointer.qword(rsp_at_rbp + 8);
+                instance->registers.base_pointer.raw(rbp_value);
+                ADVANCE_AND_NEXT();
+            }
+
+            L_FASTPUSH: {
+                uint16_t mask = d->data_instruction.mask_data.mask;
+                if (mask == 0) goto L_SLOW; // no-op: que lo trate el lento
+                const int count =
+                    __builtin_popcount(static_cast<unsigned>(mask));
+                const uint64_t old_rsp =
+                    instance->registers.stack_pointer.qword();
+                const uint64_t new_rsp =
+                    old_rsp - static_cast<uint64_t>(count) * 8ULL;
+                instance->registers.stack_pointer.qword(new_rsp);
+                // r0 se empuja primero, o sea al desplazamiento MAS alto: se
+                // recorren los bits en ascendente y las ranuras en descendente.
+                uint64_t slot =
+                    new_rsp + static_cast<uint64_t>(count - 1) * 8ULL;
+                while (mask) {
+                    const int r = __builtin_ctz(static_cast<unsigned>(mask));
+                    instance->vm_mem.write_u64_fast(
+                        slot, instance->registers.regs[r].qword());
+                    slot -= 8;
+                    mask &= static_cast<uint16_t>(mask - 1);
+                }
+                ADVANCE_AND_NEXT();
+            }
+
+            L_FASTPOP: {
+                uint16_t mask = d->data_instruction.mask_data.mask;
+                if (mask == 0) goto L_SLOW;
+                const int count =
+                    __builtin_popcount(static_cast<unsigned>(mask));
+                const uint64_t rsp = instance->registers.stack_pointer.qword();
+                // Mismo recorrido que `fastpush`, leyendo en descendente: asi
+                // cada valor vuelve al registro del que salio.
+                uint64_t slot =
+                    rsp + static_cast<uint64_t>(count - 1) * 8ULL;
+                while (mask) {
+                    const int r = __builtin_ctz(static_cast<unsigned>(mask));
+                    instance->registers.regs[r].qword(
+                        instance->vm_mem.read_u64_fast(slot));
+                    slot -= 8;
+                    mask &= static_cast<uint16_t>(mask - 1);
+                }
+                instance->registers.stack_pointer.qword(
+                    rsp + static_cast<uint64_t>(count) * 8ULL);
+                ADVANCE_AND_NEXT();
+            }
+
+            /* `push`/`pop` SOLO en su caso comun: registro general de 64 bits.
+             * Un registro especial pasa por tablas de lectura/escritura por
+             * codigo, y un ancho menor de 8 por otra por tamano; replicar eso
+             * aqui seria duplicar dos despachos enteros para el caso raro. */
+            L_PUSH: {
+                if (fl_inl.reg_ext || fl_inl.mode != 3) goto L_SLOW;
+                const uint8_t r = d->data_instruction.reg_data.reg1;
+                const uint64_t rsp =
+                    instance->registers.stack_pointer.qword() - 8;
+                instance->registers.stack_pointer.qword(rsp);
+                instance->vm_mem.write_u64_fast(
+                    rsp, instance->registers.regs[r].qword());
+                ADVANCE_AND_NEXT();
+            }
+
+            L_POP: {
+                if (fl_inl.reg_ext || fl_inl.mode != 3) goto L_SLOW;
+                const uint8_t r = d->data_instruction.reg_data.reg1;
+                const uint64_t rsp = instance->registers.stack_pointer.qword();
+                instance->registers.regs[r].qword(
+                    instance->vm_mem.read_u64_fast(rsp));
+                instance->registers.stack_pointer.qword(rsp + 8);
+                ADVANCE_AND_NEXT();
             }
 
             L_AND_RR: {
@@ -865,14 +1368,8 @@ void Scheduler::run_loop() {
                 const uint8_t r2 = d->data_instruction.reg_data.reg2;
                 const uint64_t res = regs[r1].qword() & regs[r2].qword();
                 regs[r1].qword(res);
-                fl.ZF = (res == 0);
-                fl.SF = (int64_t)res < 0;
-                fl.CF = 0;
-                fl.OF = 0;
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                FAST_FLAGS(res, 0); // bitwise: ni acarreo ni desbordamiento
+                ADVANCE_AND_NEXT();
             }
 
             L_OR_RR: {
@@ -883,14 +1380,8 @@ void Scheduler::run_loop() {
                 const uint8_t r2 = d->data_instruction.reg_data.reg2;
                 const uint64_t res = regs[r1].qword() | regs[r2].qword();
                 regs[r1].qword(res);
-                fl.ZF = (res == 0);
-                fl.SF = (int64_t)res < 0;
-                fl.CF = 0;
-                fl.OF = 0;
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                FAST_FLAGS(res, 0); // bitwise: ni acarreo ni desbordamiento
+                ADVANCE_AND_NEXT();
             }
 
             L_XOR_RR: {
@@ -901,14 +1392,8 @@ void Scheduler::run_loop() {
                 const uint8_t r2 = d->data_instruction.reg_data.reg2;
                 const uint64_t res = regs[r1].qword() ^ regs[r2].qword();
                 regs[r1].qword(res);
-                fl.ZF = (res == 0);
-                fl.SF = (int64_t)res < 0;
-                fl.CF = 0;
-                fl.OF = 0;
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                FAST_FLAGS(res, 0); // bitwise: ni acarreo ni desbordamiento
+                ADVANCE_AND_NEXT();
             }
 
             L_CMPJMP_S:
@@ -1114,10 +1599,7 @@ void Scheduler::run_loop() {
                     break;
                 default: goto L_SLOW;
                 }
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             /* SHL/SHR/SAR reg,reg (mode=3, 64-bit): compute inline + flags
@@ -1144,10 +1626,7 @@ void Scheduler::run_loop() {
                     fl.CF = cf;
                     fl.OF = cf ^ (res >> 63);
                 }
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             L_SHR: {
@@ -1166,10 +1645,7 @@ void Scheduler::run_loop() {
                     fl.CF = (a >> (sh - 1)) & 1;
                 }
                 fl.OF = 0;
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             L_SAR: {
@@ -1189,10 +1665,7 @@ void Scheduler::run_loop() {
                     fl.CF = (a >> (sh - 1)) & 1;
                 }
                 fl.OF = 0;
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             /* SETCC r_dst, cond: escribe 0/1 segun la condicion.  reg1
@@ -1225,10 +1698,7 @@ void Scheduler::run_loop() {
                 default: taken = false; break;
                 }
                 regs[rdst].qword(taken ? 1 : 0);
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             /* SEXT r_dst, N: sign-extiende r_dst desde N bits (8/16/32) a 64.
@@ -1262,10 +1732,7 @@ void Scheduler::run_loop() {
                 }
                 }
                 regs[rdst].qword(res);
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             /* MLD/MST: carga/almacen UNIVERSAL (arrays, locales, campos).  Son
@@ -1295,9 +1762,28 @@ void Scheduler::run_loop() {
                 }
                 uint64_t val;
                 if (m.flags & 0x01) { // host
-                    val = 0;
-                    std::memcpy(&val, reinterpret_cast<const void *>(addr),
-                                m.width);
+                    /* Un `memcpy` de tamano VARIABLE no lo resuelve el
+                     * compilador: emite una llamada a la del CRT, y la de
+                     * Windows para copias diminutas es de lo peor que hay.
+                     * Aqui el ancho solo puede ser 1, 2, 4 u 8, asi que un
+                     * switch con cargas tipadas da UNA instruccion por caso.
+                     * La rama de memoria de la VM, justo debajo, ya lo hacia
+                     * asi -- esta se habia quedado atras. */
+                    switch (m.width) {
+                    case 1:
+                        val = *reinterpret_cast<const uint8_t *>(addr);
+                        break;
+                    case 2:
+                        val = *reinterpret_cast<const uint16_t *>(addr);
+                        break;
+                    case 4:
+                        val = *reinterpret_cast<const uint32_t *>(addr);
+                        break;
+                    case 8:
+                        val = *reinterpret_cast<const uint64_t *>(addr);
+                        break;
+                    default: goto L_SLOW; // ancho que no es potencia de dos
+                    }
                 } else {
                     switch (m.width) {
                     case 1: val = instance->vm_mem.read_u8(addr); break;
@@ -1324,10 +1810,7 @@ void Scheduler::run_loop() {
                     }
                 }
                 regs[m.reg].qword(val);
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             L_MST: {
@@ -1350,7 +1833,21 @@ void Scheduler::run_loop() {
                 }
                 const uint64_t val = regs[m.reg].qword();
                 if (m.flags & 0x01) { // host
-                    std::memcpy(reinterpret_cast<void *>(addr), &val, m.width);
+                    // Mismo motivo que en la carga: sin tamano constante, el
+                    // `memcpy` acaba siendo una llamada al del CRT.
+                    switch (m.width) {
+                    case 1:
+                        *reinterpret_cast<uint8_t *>(addr) = (uint8_t)val;
+                        break;
+                    case 2:
+                        *reinterpret_cast<uint16_t *>(addr) = (uint16_t)val;
+                        break;
+                    case 4:
+                        *reinterpret_cast<uint32_t *>(addr) = (uint32_t)val;
+                        break;
+                    case 8: *reinterpret_cast<uint64_t *>(addr) = val; break;
+                    default: goto L_SLOW;
+                    }
                 } else {
                     switch (m.width) {
                     case 1:
@@ -1368,14 +1865,22 @@ void Scheduler::run_loop() {
                     default: instance->vm_mem.write_u64_fast(addr, val); break;
                     }
                 }
-                instance->registers.rip.qword(instance->registers.rip.raw() +
-                                              fl_inl.size_instr);
-                ++profiler_instr_counter;
-                NEXT_DISPATCH();
+                ADVANCE_AND_NEXT();
             }
 
             /* ===================== SLOW PATH ===================== */
             L_SLOW: {
+                /* Que opcodes acaban aqui, cuando se pide.  Aqui es donde se
+                 * paga la llamada INDIRECTA, asi que esta cuenta es la lista
+                 * de candidatos a ruta rapida, ordenada por lo que de verdad
+                 * se ejecuta en vez de por lo que uno supone.
+                 *
+                 * El coste cuando esta apagado es una rama sobre un booleano
+                 * que ya esta en cache, y solo en el camino LENTO -- que por
+                 * definicion no es el que hay que cuidar. */
+                if (__builtin_expect(g_count_slow_ops, 0))
+                    ++g_slow_ops[dispatch_idx & 0x1FF];
+
                 vm_event evt;
                 if (__builtin_expect(d->exec_cached != nullptr, 1)) {
                     d->exec_cached(instance, *d);
@@ -2264,7 +2769,8 @@ void profiler_thread(Scheduler *scheduler) {
             now_instr - last_instr; // variacion desde la ultima muestra
         last_instr = now_instr;     // actualizar el ultimo valor
 
-        // IPS: profiler_instr_counter se incrementa cada 256 instrucciones
+        // IPS: el contador va de una en una, asi que el delta YA son
+        // instrucciones por segundo -- no lleva factor de escala.
         uint64_t ips = delta_instr;
 
         // calcular porcentaje de CPU usando el tiempo de ejecucion acumulado

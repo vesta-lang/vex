@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <fstream>
 #include <set>
 #include <map>
 #include <sstream>
@@ -28,6 +29,54 @@
 namespace analyze {
 
 namespace {
+
+/**
+ * @brief Cuantas lineas tiene el fichero que se esta mirando, o 0 si no se
+ *        pudo leer.
+ *
+ * Se lee UNA vez y se recuerda: el linter pregunta por cada hallazgo.
+ */
+size_t lineas_del_fichero(const std::string &ruta) {
+    static std::map<std::string, size_t> memo;
+    auto it = memo.find(ruta);
+    if (it != memo.end()) return it->second;
+    size_t n = 0;
+    std::ifstream f(ruta);
+    if (f.is_open()) {
+        std::string l;
+        while (std::getline(f, l))
+            ++n;
+    }
+    memo.emplace(ruta, n);
+    return n;
+}
+
+/**
+ * @brief Puede @p linea ser de verdad del fichero que se esta linteando?
+ *
+ * El modulo que recibe el linter esta FUSIONADO: dentro viene la stdlib y todo
+ * lo que se importe.  El intermedio guarda la linea de cada instruccion pero no
+ * de QUE FICHERO salio -- lo dice el propio @ref LintInput --, asi que un
+ * hallazgo en una funcion de la stdlib se atribuia al fichero del usuario, en
+ * una linea de otro sitio.
+ *
+ * Esto no lo adivina: lo COMPRUEBA.  Si el fichero tiene diez lineas y el
+ * hallazgo dice 138, ese hallazgo no es de aqui, y punto.  No cubre el caso de
+ * dos ficheros de tamano parecido -- para eso hace falta que el intermedio
+ * lleve el fichero de origen --, pero quita el grueso: medido sobre un programa
+ * de diez lineas que importa `std.memory`, los 45 avisos que salian apuntaban a
+ * las lineas 138 a 1177.  Ni uno existia.
+ *
+ * @return true si la linea cabe en el fichero, o si no se pudo leer (en la
+ *         duda, se dice: callar por no poder comprobarlo seria perder avisos
+ *         buenos).
+ */
+bool cabe_en_el_fichero(const LintInput &in, uint32_t linea) {
+    if (linea == 0) return true; // sin linea: se atribuye al fichero entero
+    const size_t total = lineas_del_fichero(in.file);
+    if (total == 0) return true; // no se pudo leer: no se descarta nada
+    return static_cast<size_t>(linea) <= total;
+}
 
 /// Vector plano: son pocas y se recorren enteras.  Function-local para no
 /// depender del orden de inicializacion estatica entre unidades de traduccion.
@@ -505,6 +554,58 @@ void family_bulk_by_hand(const LintInput &in, vx::Diagnostics &diags) {
     }
 }
 
+/**
+ * @brief Lo que no cabe en un binario nativo sin runtime, y por que.
+ *
+ * No calcula nada: el dominio `asa.backend` ya publica, por cada operacion que
+ * el objetivo `bare` no puede compilar, la funcion, la linea y el MOTIVO en
+ * texto.  Esto solo lo lee y lo dice.
+ *
+ * El hecho se pregunta con el ambito del NATIVO a proposito.  Es lo que hace
+ * que no sea ruido: un consumidor que preguntara desde el interprete no debe
+ * encontrarlo, porque ahi la operacion vale.  El eje `backend` del ambito
+ * llevaba tiempo en el vocabulario sin que casi nadie lo usara.
+ */
+void family_native_gap(const LintInput &in, vx::Diagnostics &diags) {
+    analysis::asa::Scope en_nativo = in.here;
+    en_nativo.backend = analysis::asa::kBackendAot;
+
+    /* Una vez por MOTIVO en todo el fichero, con la primera linea donde
+     * aparece.
+     *
+     * Ni por operacion ni por linea: la decision que el usuario toma es UNA
+     * por motivo -- "me importa que esto no vaya a nativo sin runtime?" --, y
+     * no cambia porque el motivo aparezca en veinte sitios.  Medido sobre
+     * `107_unique_lifo_move_chain.vx`: 40 avisos en 21 lineas, y solo TRES
+     * motivos distintos.  Repetirlo veinte veces no anade nada y tapa los
+     * otros dos.
+     *
+     * Tampoco por funcion, porque tras el inline la misma operacion aparece en
+     * varias: decir en cual es decir una de las copias. */
+    std::set<std::string> ya_dicho;
+    for (const ir::IrFunction &fn : in.mod.functions) {
+        if (fn.is_native || fn.blocks.empty()) continue;
+        for (const analysis::asa::Fact *h : in.facts.find_all(
+                 "backend.unsupported_op", fn.name.c_str(), en_nativo)) {
+            if (h->seal.certainty != analysis::asa::Certainty::Proven) continue;
+            const char *motivo = h->what.detail;
+            if (motivo == nullptr || *motivo == '\0') continue;
+            /* Que el hallazgo sea de ESTE fichero.
+             *
+             * El modulo viene fusionado con la stdlib, y el intermedio no
+             * guarda de que fichero salio cada funcion -- lo dice el propio
+             * `LintInput` --, asi que un hallazgo en `std.memory` se atribuia
+             * al fichero del usuario en una linea de otro sitio.  Medido sobre
+             * un programa de DIEZ lineas que importa `std.memory`: los avisos
+             * apuntaban a las lineas 138 a 1177.  Ni uno existia. */
+            if (!cabe_en_el_fichero(in, h->seal.origin.site)) continue;
+            vx::SourceLoc loc = where_is(in, fn.name);
+            if (h->seal.origin.site > 0) loc.line = h->seal.origin.site;
+            if (!ya_dicho.insert(motivo).second) continue;
+            diags.diag(loc, vx::DiagLevel::WARN, "VXW924", {motivo});
+        }
+    }
+}
 
 /* Lo que consulta cada familia.  Listas nombradas y no literales sueltos para
  * que se lean al lado de su familia y no haya que buscarlas. */
@@ -524,6 +625,7 @@ const char *const kNeedsMemoryAccess[] = {"asa.memory_access", nullptr};
  * bloque.  Uno solo: ese productor ya pide por su cuenta la forma del bucle y
  * los efectos de memoria al armar su hecho. */
 const char *const kNeedsBulkMemory[] = {"asa.bulk_memory", nullptr};
+const char *const kNeedsBackend[] = {"asa.backend", nullptr};
 
 void register_builtin_families() {
     /* El NOMBRE es vocabulario estable: es lo que se escribe en `vx.toml` para
@@ -553,6 +655,11 @@ void register_builtin_families() {
      * esta familia sea seis lineas. */
     register_lint_family("memory.bulk_by_hand", "VXW918", &family_bulk_by_hand,
                          kNeedsBulkMemory);
+    /* Lo que no cabe en un binario nativo.  El analisis existia y lo leia un
+     * solo consumidor, el editor: el mismo codigo tenia respuesta en el IDE y
+     * ninguna al pasar el linter. */
+    register_lint_family("modes.native_gap", "VXW924", &family_native_gap,
+                         kNeedsBackend);
 }
 
 /* NO hay familia "contrato que nadie comprueba", y no es un olvido: eso lo dice

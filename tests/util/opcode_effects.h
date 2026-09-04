@@ -49,6 +49,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -56,6 +57,7 @@
 #include <capstone/capstone.h>
 
 #include "disasm/disasm.h"
+#include "gc/gc_heap.h" // el contrato de `deref`, ver contract_frontier()
 #include "runtime/decode_instruction.h"
 #include "runtime/decode_table.h"
 #include "runtime/exec_instruction.h"
@@ -180,7 +182,33 @@ const Field kFields[] = {
      kRegs + offsetof(runtime::context_registers_vm, base_pointer) + 8},
     {"pc", kRegs + offsetof(runtime::context_registers_vm, rip),
      kRegs + offsetof(runtime::context_registers_vm, rip) + 8},
+    /* La MEMORIA de la VM.  El quinto campo, y hacia falta.
+     *
+     * Antes el bit de "toca memoria" no se derivaba: el generador lo deducia
+     * del MODO de direccionamiento del operando (`si el modo no es REG/INMED/
+     * NONE`), que es un proxy EQUIVOCADO -- dice como estan puestos los
+     * operandos, no si el manejador toca memoria --.  `mld`, `mst`, `loadz` y
+     * `loadzh` codifican en modo REG porque su direccion viaja en un registro,
+     * asi que salian marcadas como si no tocaran memoria: una carga y un
+     * almacen se podian intercambiar.  Reordenar dos que si dependian no da un
+     * error, da OTRO RESULTADO -- y lo dio, en `bench_array_sum`.
+     *
+     * Se vigila el OBJETO `vm_mem` dentro de `ProcessVM`: para llegar a la
+     * memoria de la VM hay que pasar por el, asi que leer cualquiera de sus
+     * campos -- el puntero de la arena, la cache de pagina, la TLB -- es la
+     * senal de que el manejador va a tocarla.  Es el mismo mecanismo que los
+     * otros cuatro, no uno nuevo. */
+    /// Indice de "memoria" dentro de @ref kFields.  Se nombra porque hay dos
+    /// caminos que lo atribuyen -- por desplazamiento, como los otros cuatro, y
+    /// por procedencia del puntero -- y el numero suelto en el segundo no
+    /// diria de que campo habla.
+    {"memoria", offsetof(runtime::ProcessVM, vm_mem),
+     offsetof(runtime::ProcessVM, vm_mem) +
+         sizeof(((runtime::ProcessVM *)nullptr)->vm_mem)},
 };
+
+/// Indice de "memoria" en @ref kFields, para los dos sitios que lo atribuyen.
+constexpr uint32_t kCampoMemoria = 4;
 
 /// Efectos observados en el codigo de un manejador.
 struct ImplicitEffects {
@@ -207,11 +235,15 @@ struct ImplicitEffects {
      *
      * Si sale 0 no significa "no toca registros": significa que el recorrido no
      * lo vio, y hay que tratarlo como desconocido igual que los efectos. */
-    uint8_t form_read = 0;
-    uint8_t form_write = 0;
+    /* Doce bits, no seis: a los dos campos de la forma REG se han sumado el
+     * tercer registro de la de MEMORIA y el de la forma con INMEDIATO.  Sin
+     * esos dos, ninguna instruccion con inmediato podia declarar que registro
+     * toca, y un registro que no se declara es uno que el reordenador no ve. */
+    uint16_t form_read = 0;
+    uint16_t form_write = 0;
     /// Lo mismo, pero sobre el banco VECTORIAL (`registers.zmm[]`).
-    uint8_t form_vec_read = 0;
-    uint8_t form_vec_write = 0;
+    uint16_t form_vec_read = 0;
+    uint16_t form_vec_write = 0;
     /// Accesos que caen en el banco pero cuyo campo NO se pudo identificar.
     /// Sin esto, "forma vacia" no distingue "no toca registros" de "no se supo
     /// de cual", que son cosas distintas y llevan a arreglos distintos.
@@ -257,8 +289,12 @@ struct ImplicitEffects {
      * un falso positivo y un efecto real son indistinguibles -- que es como
      * `mov` acabo declarando que escribe las banderas cuando su propio codigo
      * dice "MOV no modifica ningun flag". */
-    std::string prueba_w[4]; ///< la que escribe
-    std::string prueba_r[4]; ///< la que lee
+    /* UNA por campo vigilado, y son CINCO desde que la memoria es uno de ellos.
+     * Estaban dimensionadas a cuatro y el indice del quinto escribia fuera:
+     * corrupcion de pila, sin aviso, en un sitio que no tiene nada que ver.
+     * Se dimensionan desde `kFields` para que anadir otro no vuelva a hacerlo. */
+    std::string prueba_w[sizeof(kFields) / sizeof(kFields[0])]; ///< la que escribe
+    std::string prueba_r[sizeof(kFields) / sizeof(kFields[0])]; ///< la que lee
 };
 
 /**
@@ -286,19 +322,37 @@ struct ImplicitEffects {
  *
  * @return El bit de `form_read`/`form_write`, o 0 si no es un campo conocido.
  */
-inline uint8_t operand_field_bit(const tests::Origin &o) {
+inline uint16_t operand_field_bit(const tests::Origin &o) {
     if (!o.valid || o.base != 1) return 0; // el 2o argumento es la instruccion
 
-    /* Cual de los dos campos, por su desplazamiento dentro de `DecodedInstr`. */
+    /* Cual de los campos, por su desplazamiento dentro de `DecodedInstr`.
+     *
+     * Los CUATRO que hay, no dos.  La union de operandos empieza en el mismo
+     * sitio, asi que las formas se solapan: los bytes 0 y 1 son `reg1`/`reg2`
+     * de la forma REG y a la vez la base y el indice de la de MEMORIA; el 2 es
+     * el tercer registro de esa, y el 8 es el registro de la forma con
+     * INMEDIATO -- detras del inmediato de ocho bytes --.
+     *
+     * Solo estaban los dos primeros, y por eso 88 opcodes salian sin forma:
+     * ninguna instruccion con inmediato podia declarar que registro toca.  Un
+     * registro que no se declara es un registro que el reordenador no ve. */
     const size_t off_reg1 =
         offsetof(runtime::DecodedInstr, data_instruction.reg_data.reg1);
     const size_t off_reg2 =
         offsetof(runtime::DecodedInstr, data_instruction.reg_data.reg2);
+    const size_t off_reg3 =
+        offsetof(runtime::DecodedInstr, data_instruction.mem_data.reg_final);
+    const size_t off_regi =
+        offsetof(runtime::DecodedInstr, data_instruction.inmmed_data.reg);
     int field;
     if (static_cast<size_t>(o.disp) == off_reg1)
         field = 0;
     else if (static_cast<size_t>(o.disp) == off_reg2)
         field = 1;
+    else if (static_cast<size_t>(o.disp) == off_reg3)
+        field = 2;
+    else if (static_cast<size_t>(o.disp) == off_regi)
+        field = 3;
     else
         return 0;
 
@@ -316,7 +370,7 @@ inline uint8_t operand_field_bit(const tests::Origin &o) {
     else
         return 0; // un trozo que no es un campo: no se atribuye a ninguno
 
-    return static_cast<uint8_t>(1u << (field * 3 + part));
+    return static_cast<uint16_t>(1u << (field * 3 + part));
 }
 
 /**
@@ -342,6 +396,93 @@ inline const std::set<uint64_t> &fatal_frontier() {
         reinterpret_cast<uint64_t>(
             reinterpret_cast<const void *>(&runtime::throw_fatalf)),
     };
+    return f;
+}
+
+/**
+ * @brief Funciones NUESTRAS cuyo CONTRATO se declara en vez de derivarse.
+ *
+ * No es lo mismo que la frontera de fallos, aunque las dos paren el recorrido.
+ * Alli se para porque lo de dentro no es efecto de la instruccion; aqui se para
+ * porque lo de dentro NO SE PUEDE seguir -- y aun asi se sabe lo que hace,
+ * porque es codigo nuestro con una interfaz que hay que cumplir.
+ *
+ * El caso: `gc::GcHeap::deref` termina en una llamada VIRTUAL --
+ * `GcRootProvider::shared_lookup`, la ranura +0x50 de su vtabla -- para
+ * resolver un handle del monton COMPARTIDO.  El destino depende de que
+ * implementacion este instalada, asi que derivarlo es imposible.  Pero el
+ * contrato de esa interfaz si se conoce: resuelve un handle y devuelve el
+ * puntero a su carga.  Toca la memoria del GC y NADA MAS del proceso -- ni
+ * banderas, ni pila, ni marco, ni contador de programa --, y cambiar eso
+ * obligaria a cambiar la interfaz.
+ *
+ * Declararlo AQUI, una vez, es lo que evita declararlo DIECISEIS veces: por
+ * `deref` pasa todo el que desreferencia un handle -- las instrucciones de
+ * cadena, `gcderef`, `typeswitch`, los monitores --, y sin esto todas salian
+ * como "efectos desconocidos" y se volvian barreras permanentes.  Una barrera
+ * por opcode esconde la razon; un contrato en la frontera la deja escrita donde
+ * se cumple.
+ *
+ * @return Direccion -> efectos que aporta, en mascara de @ref kFields.
+ */
+inline const std::map<uint64_t, uint32_t> &contract_frontier() {
+/* Sacar la direccion de un metodo NO virtual es una extension de GCC, y con
+ * `-Wpedantic` es un error.  Se pide por puntero y no por nombre por lo mismo
+ * que la frontera de fallos: renombrar el metodo tiene que ser un error de
+ * compilacion, y un nombre mal escrito seria un filtro que no filtra nada. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#pragma GCC diagnostic ignored "-Wpmf-conversions"
+    static const std::map<uint64_t, uint32_t> f = {
+        {reinterpret_cast<uint64_t>(
+             reinterpret_cast<const void *>(&gc::GcHeap::deref)),
+         1u << kCampoMemoria},
+    };
+#pragma GCC diagnostic pop
+    return f;
+}
+
+/**
+ * @brief Las direcciones de funcion que se CONOCEN, ordenadas.
+ *
+ * Sirven para acotar donde acaba cada manejador: el siguiente inicio es una
+ * cota superior sel final del actual.  Sin ella el recorrido lineal no tiene
+ * forma de reconocer el final -- sigue mientras algun salto apunte mas alla --
+ * y en cuanto se pasa una vez, los saltos de la funcion de al lado lo arrastran
+ * sin fin, metiendo en la cuenta efectos que no son de esta instruccion.
+ *
+ * Salen de la tabla de despacho, que es la que las tiene: 242 manejadores.  No
+ * hace falta tabla de simbolos, que con MinGW no la hay.
+ */
+inline const std::vector<uint64_t> &known_function_starts() {
+    static const std::vector<uint64_t> v = [] {
+        std::vector<uint64_t> s;
+        for (int i = 0; i < 256; ++i) {
+            const runtime::InstrFormat &p = runtime::decode_table_primary[i];
+            const runtime::InstrFormat &e = runtime::decode_table_extended[i];
+            if (p.exec != nullptr)
+                s.push_back(reinterpret_cast<uint64_t>(
+                    reinterpret_cast<const void *>(p.exec)));
+            if (e.exec != nullptr)
+                s.push_back(reinterpret_cast<uint64_t>(
+                    reinterpret_cast<const void *>(e.exec)));
+        }
+        for (uint64_t f : fatal_frontier()) s.push_back(f);
+        for (const auto &kv : contract_frontier()) s.push_back(kv.first);
+        std::sort(s.begin(), s.end());
+        s.erase(std::unique(s.begin(), s.end()), s.end());
+        return s;
+    }();
+    return v;
+}
+
+/// Las dos fronteras juntas, que es lo que el recorrido necesita para parar.
+inline const std::set<uint64_t> &all_frontiers() {
+    static const std::set<uint64_t> f = [] {
+        std::set<uint64_t> s = fatal_frontier();
+        for (const auto &kv : contract_frontier()) s.insert(kv.first);
+        return s;
+    }();
     return f;
 }
 
@@ -409,9 +550,73 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
      * cargo el indice, que esta ANTES.  Sin eso, el diagnostico dice que no se
      * supo pero no que hay que cerrar. */
     std::vector<std::string> previas;
+
+    /* --- Atribucion por CAMINO, no por funcion ------------------------------
+     *
+     * Un manejador no es un bloque: tiene el camino normal y, detras del
+     * epilogo, el bloque FRIO que construye el error y lanza.  Lo que ese
+     * bloque toca NO es efecto de la instruccion -- si lanza, el programa no
+     * continua --, y atribuirselo es declarar efectos que no ocurren.
+     *
+     * Se veia en los numeros: al empezar a recorrer mas alla del primer `ret`,
+     * los opcodes que escriben la pila pasaron de 26 a 131 y los que escriben
+     * el contador de programa de 41 a 130.  `add r5, imm` acababa declarando
+     * que escribe pila, marco y pc cuando solo toca las banderas, y con eso
+     * casi todo choca con casi todo: el reordenador se queda sin nada que
+     * mover.  Es lo mismo que ya documenta `VE_ABORT` para `div` y `mod`, pero
+     * por CAMINO en vez de por funcion, porque el bloque frio vive dentro de
+     * funciones que por lo demas son normales.
+     *
+     * Como: lo que se ve se acumula en una region aparte.  Una region empieza
+     * detras de un `ret` -- ahi no se cae de largo, se llega saltando -- y se
+     * cierra al empezar la siguiente.  Si en ella hubo una llamada a la
+     * frontera de fallos, se TIRA entera y solo queda "puede abortar"; si no,
+     * se suma a lo demas.
+     *
+     * El descarte es del lado seguro por el mismo motivo que el resto: lo que
+     * se descarta es lo que nunca llega a observarse. */
+    ImplicitEffects region;      ///< lo visto desde el ultimo `ret`
+    bool region_aborta = false;  ///< ...y si acaba lanzando
+    bool anterior_fue_ret = false;
+    /// Suma la region a lo bueno, o la tira si acabo lanzando.
+    auto cerrar_region = [&out, &region, &region_aborta]() {
+        if (region_aborta) {
+            out.can_abort = true;
+        } else {
+            out.escribe |= region.escribe;
+            out.lee |= region.lee;
+            out.form_read |= region.form_read;
+            out.form_write |= region.form_write;
+            out.form_vec_read |= region.form_vec_read;
+            out.form_vec_write |= region.form_vec_write;
+            out.form_unknown += region.form_unknown;
+            if (out.form_why.empty()) out.form_why = region.form_why;
+            out.ajenos += region.ajenos;
+            if (out.ajeno_why.empty()) out.ajeno_why = region.ajeno_why;
+        }
+        region = ImplicitEffects{};
+        region_aborta = false;
+    };
+
     tests::walk_handler(
         cs, reinterpret_cast<uint64_t>(handler), 6, vistas,
-        [&out, &previas](const cs_insn &in, const tests::TableState &st) {
+        [&region, &region_aborta, &anterior_fue_ret, &cerrar_region,
+         &previas](const cs_insn &in, const tests::TableState &st) {
+            // Cambio de region: detras de un `ret` empieza otro camino.
+            if (anterior_fue_ret) cerrar_region();
+            anterior_fue_ret = tests::isa::is_return(in);
+            /* Y si esta region llama a la frontera de fallos, es la del error:
+             * se marcara para tirarla al cerrarla.  Se mira el destino
+             * INMEDIATO, que es como se llama a `throw_fatal`. */
+            if (tests::isa::is_call(in)) {
+                const uint64_t d = tests::isa::branch_target(in);
+                if (d != 0 && fatal_frontier().count(d) != 0)
+                    region_aborta = true;
+            }
+            // A partir de aqui, `out` es la REGION.  El nombre se conserva para
+            // no reescribir el cuerpo entero, que es largo y no cambia.
+            ImplicitEffects &out = region;
+            (void)out;
             /* Los accesos a memoria, ya interpretados por el idioma de la ISA.
              * Aqui no se sabe que es un operando ni si el destino va primero:
              * eso cambia con la arquitectura y vive en `isa::mem_access`.  Lo
@@ -453,6 +658,24 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                 const bool escribe = acc.writes;
                 const bool lee = acc.reads;
 
+                /* --- LA MEMORIA DE LA VM, por el puntero -------------------
+                 *
+                 * El quinto campo no se alcanza por desplazamiento como los
+                 * otros cuatro: a la memoria de la VM se llega sacando un
+                 * puntero del objeto `vm_mem` y accediendo POR EL, y ahi el
+                 * desplazamiento ya no dice nada.  Lo que lo delata es la
+                 * PROCEDENCIA del registro base, que el recorredor arrastra
+                 * desde la region marcada.
+                 *
+                 * Va antes que el filtro de desplazamiento porque estos accesos
+                 * caen donde sea: son la memoria del programa, no un campo. */
+                if (acc.base >= 0 && st.mem_ptr[acc.base]) {
+                    const uint32_t bit = 1u << kCampoMemoria;
+                    if (escribe) out.escribe |= bit;
+                    if (lee) out.lee |= bit;
+                    continue; // ya atribuido; no es un campo vigilado
+                }
+
                 /* --- La FORMA: un acceso al BANCO de registros --------------
                  *
                  * Va ANTES del filtro de desplazamiento porque el caso mas
@@ -481,16 +704,44 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                         bool vec;
                     } kBancos[2] = {{kRegsOff, kRegSize, false},
                                     {kZmmOff, kZmmSize, true}};
+                    /* El desplazamiento EFECTIVO, contando lo que el compilador
+                     * pliega dentro del indice.
+                     *
+                     * Para indexar un banco de 8 bytes por registro le vale la
+                     * escala del modo de direccionamiento, y entonces el
+                     * desplazamiento aparece tal cual: `lea 0x60(%rcx,%r10,8)`.
+                     * Pero el compilador tambien puede sumar la base AL INDICE
+                     * antes de escalar -- `lea 0xc(%r8),%eax` y luego
+                     * `lea (%rcx,%rax,8)` --, y ahi el 0x60 no aparece por
+                     * ningun lado: es 12 * 8.
+                     *
+                     * Buscando solo el desplazamiento se reconocia la primera
+                     * forma y no la segunda, y como el compilador usa la
+                     * segunda justo para el DESTINO, las escrituras se perdian:
+                     * de 232 instrucciones solo 35 declaraban escribir en el
+                     * banco.  Y una escritura que falta es exactamente el
+                     * reorden que rompe.
+                     *
+                     * `Origin` ya guardaba `pre_add` y `scale` para esto; lo
+                     * que faltaba era mirarlos aqui. */
+                    auto disp_efectivo = [](int64_t disp, const tests::Origin &o,
+                                            uint8_t escala) -> int64_t {
+                        if (!o.valid) return disp;
+                        return disp + (int64_t)o.pre_add * (int64_t)escala;
+                    };
+
                     bool caso1 = false, caso2 = false, es_vec = false;
                     for (const auto &b : kBancos) {
-                        if (acc.disp == static_cast<int64_t>(b.off) &&
-                            acc.index >= 0 && st.arg[acc.base] == 0) {
+                        const int64_t off = static_cast<int64_t>(b.off);
+                        if (acc.index >= 0 && st.arg[acc.base] == 0 &&
+                            disp_efectivo(acc.disp, st.origin[acc.index],
+                                          acc.scale) == off) {
                             caso1 = true;
                             es_vec = b.vec;
                             break;
                         }
                         if (a.valid && a.base == 0 &&
-                            a.disp == static_cast<int64_t>(b.off) &&
+                            disp_efectivo(a.disp, a.index, a.scale) == off &&
                             acc.disp >= 0 &&
                             (static_cast<size_t>(acc.disp) < b.tam ||
                              acc.index >= 0)) {
@@ -505,7 +756,7 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                      * pudo plegar el compilador -- con un banco de 64 bytes por
                      * registro la escala del acceso NO llega, asi que calcula la
                      * base una vez y multiplica el indice aparte. */
-                    uint8_t bit = 0;
+                    uint16_t bit = 0; // doce partes: no cabe en un byte
                     if (caso1)
                         bit = operand_field_bit(st.origin[acc.index]);
                     else if (caso2) {
@@ -514,8 +765,10 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                             bit = operand_field_bit(st.origin[acc.index]);
                     }
                     if (bit != 0) {
-                        uint8_t &w = es_vec ? out.form_vec_write : out.form_write;
-                        uint8_t &r = es_vec ? out.form_vec_read : out.form_read;
+                        uint16_t &w =
+                            es_vec ? out.form_vec_write : out.form_write;
+                        uint16_t &r =
+                            es_vec ? out.form_vec_read : out.form_read;
                         if (escribe) w |= bit;
                         if (lee) r |= bit;
                     } else if (caso1 || caso2) {
@@ -602,6 +855,27 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                                           kFields[k].nombre);
                             out.ajeno_why = b;
                         }
+                        /* Y NO se atribuye.
+                         *
+                         * Antes si, con el argumento de que sobrar un efecto es
+                         * el lado seguro.  Lo era mientras el recorrido veia
+                         * poco: se paraba en el primer `ret`, y estos accesos
+                         * eran una rareza.  Recorriendo el manejador entero se
+                         * volvieron la norma -- los opcodes que escriben la
+                         * pila pasaron de 26 a 131 --, y un efecto que sobra
+                         * impide TODA reordenacion a su alrededor.  Con ciento
+                         * treinta opcodes declarando que escriben pila, marco y
+                         * contador de programa no queda nada que mover: la
+                         * tabla deja de ser util aunque siga siendo segura.
+                         *
+                         * Se puede exigir procedencia porque ahora se sigue: un
+                         * `mov` entre registros la copia, un `lea` dentro de un
+                         * argumento la conserva y la semilla la lleva al otro
+                         * lado de una llamada.  Cuando aun asi no llega, la
+                         * respuesta honesta es "no se sabe de quien es este
+                         * acceso" -- que se cuenta en `ajenos` -- y no
+                         * "entonces es de todos". */
+                        continue;
                     }
                     if (escribe) out.escribe |= (1u << k);
                     if (lee) out.lee |= (1u << k);
@@ -616,13 +890,40 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                 }
             }
         },
-        res, tests::CallSeed{}, fatal_frontier(), ambito_lo, ambito_hi);
+        res, tests::CallSeed{}, all_frontiers(), ambito_lo, ambito_hi,
+        /* El objeto de memoria de la VM, dentro del PRIMER argumento (el
+         * proceso).  Lo que se lea de ahi es un puntero a la memoria de la VM,
+         * y el recorredor arrastra esa marca por copias y sumas.
+         *
+         * Sin esto, `loadz` y compania -- que sacan el puntero y acceden POR EL
+         * -- salian como si no tocaran memoria, y reordenar una carga con un
+         * almacen no da un error: da otro resultado. */
+        tests::TaintRegion{
+            0, (int64_t)offsetof(runtime::ProcessVM, vm_mem),
+            (int64_t)(offsetof(runtime::ProcessVM, vm_mem) +
+                      sizeof(((runtime::ProcessVM *)nullptr)->vm_mem))},
+        &known_function_starts());
     out.completo = res.completo();
     out.sin_resolver = res.unresolved;
     out.sin_resolver_fn = res.unresolved_fn;
     out.tablas = res.tables_resolved;
     out.unmodeled = res.unmodeled;
-    out.can_abort = !res.fronteras.empty();
+    /* ABORTAR es solo la frontera de FALLOS.  Con las dos mezcladas, cualquier
+     * instruccion que desreferencie un handle saldria declarada como que puede
+     * lanzar, que es falso y ademas la convierte en barrera. */
+    // La ultima region no la cierra nadie: el recorrido termina sin un `ret`
+    // detras que la remate.  Sin esto se perderia entera.
+    cerrar_region();
+
+    for (uint64_t f : res.fronteras)
+        if (fatal_frontier().count(f) != 0) out.can_abort = true;
+    /* Y de la frontera de CONTRATO se toman los efectos declarados: lo que hay
+     * al otro lado no se puede seguir, pero si se sabe. */
+    for (uint64_t f : res.fronteras) {
+        const auto it = contract_frontier().find(f);
+        if (it == contract_frontier().end()) continue;
+        out.lee |= it->second;
+    }
     return out;
 }
 

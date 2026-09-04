@@ -213,10 +213,9 @@ bool SemanticEffects::operator==(const SemanticEffects &o) const {
            may_trap == o.may_trap && may_throw == o.may_throw &&
            may_panic == o.may_panic && may_allocate == o.may_allocate &&
            may_block == o.may_block && may_io == o.may_io &&
-           throw_origin == o.throw_origin &&
-           panic_origin == o.panic_origin &&
-           trap_kinds == o.trap_kinds &&
-           determinism == o.determinism && tags == o.tags;
+           throw_origin == o.throw_origin && panic_origin == o.panic_origin &&
+           trap_kinds == o.trap_kinds && determinism == o.determinism &&
+           tags == o.tags;
 }
 
 SemanticEffects SemanticEffects::none() {
@@ -307,9 +306,10 @@ SemanticEffects seq(const SemanticEffects &a, const SemanticEffects &b) {
                                                         : ir::UnwindOrigin::Any;
     /* Y los fallos se SUMAN, salvo que alguno no acote: un conjunto vacio vale
      * por todos, asi que absorbe. */
-    r.trap_kinds = (a.trap_kinds == ir::TRAP_NONE || b.trap_kinds == ir::TRAP_NONE)
-                       ? ir::TRAP_NONE
-                       : static_cast<ir::TrapKinds>(a.trap_kinds | b.trap_kinds);
+    r.trap_kinds =
+        (a.trap_kinds == ir::TRAP_NONE || b.trap_kinds == ir::TRAP_NONE)
+            ? ir::TRAP_NONE
+            : static_cast<ir::TrapKinds>(a.trap_kinds | b.trap_kinds);
     r.may_io = a.may_io || b.may_io;
     r.determinism = a.determinism;
     r.determinism.unite(b.determinism);
@@ -346,9 +346,10 @@ SemanticEffects join(const SemanticEffects &a, const SemanticEffects &b) {
                                                         : ir::UnwindOrigin::Any;
     /* Y los fallos se SUMAN, salvo que alguno no acote: un conjunto vacio vale
      * por todos, asi que absorbe. */
-    r.trap_kinds = (a.trap_kinds == ir::TRAP_NONE || b.trap_kinds == ir::TRAP_NONE)
-                       ? ir::TRAP_NONE
-                       : static_cast<ir::TrapKinds>(a.trap_kinds | b.trap_kinds);
+    r.trap_kinds =
+        (a.trap_kinds == ir::TRAP_NONE || b.trap_kinds == ir::TRAP_NONE)
+            ? ir::TRAP_NONE
+            : static_cast<ir::TrapKinds>(a.trap_kinds | b.trap_kinds);
     r.may_io = a.may_io || b.may_io;
     r.determinism = a.determinism;
     r.determinism.unite(b.determinism);

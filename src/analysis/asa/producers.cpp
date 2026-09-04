@@ -905,6 +905,10 @@ void register_builtin_producers() {
      * disparaba no habia forma de saber si es que no lo vio o es que decidio
      * no tocarlo -- y las quince razones para no verlo no las contaba nadie. */
     register_bulk_memory_producer();
+    /* Y el que dice que NO cabe en cada modo de ejecucion.  El analisis existia
+     * desde hace tiempo y lo consumia un solo sitio, el editor: la misma
+     * pregunta tenia dos respuestas segun quien la hiciera. */
+    register_backend_producer();
 }
 
 } // namespace

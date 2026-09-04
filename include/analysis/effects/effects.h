@@ -306,8 +306,8 @@ struct SemanticEffects {
     /// nativo llama al hook de panico y no vuelve.  Con una sola senal, decir
     /// "no lanza" en nativo se leia como "no aborta".
     bool may_panic = false;
-    bool may_allocate = false;  ///< aloca heap (GC/raw/newobj/closure-GC).
-    bool may_block = false;     ///< puede bloquear (await/monenter/msgrecv).
+    bool may_allocate = false; ///< aloca heap (GC/raw/newobj/closure-GC).
+    bool may_block = false;    ///< puede bloquear (await/monenter/msgrecv).
     /**
      * @brief De QUIEN es lo que sale, cuando sale por lanzar o por abortar.
      *

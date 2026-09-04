@@ -74,7 +74,7 @@ static void gc_finalizer_call_bytecode(ProcessVM *p, uint64_t entry_vaddr,
     const uint64_t saved_rip = p->registers.rip.raw();
     const uint64_t saved_rsp = p->registers.stack_pointer.qword();
     const uint64_t saved_rbp = p->registers.base_pointer.raw();
-    const uint64_t saved_flags = p->registers.flags.raw;
+    const uint64_t saved_flags = p->registers.flags.raw();
     auto *saved_frame_stack = p->frame_stack;
     auto *saved_decoded_ptr = p->decoded_ptr;
     uint64_t saved_regs[16];
@@ -116,7 +116,7 @@ static void gc_finalizer_call_bytecode(ProcessVM *p, uint64_t entry_vaddr,
     p->registers.rip.qword(saved_rip);
     p->registers.stack_pointer.qword(saved_rsp);
     p->registers.base_pointer.raw(saved_rbp);
-    p->registers.flags.raw = saved_flags;
+    p->registers.flags.set_raw(saved_flags);
     p->frame_stack =
         saved_frame_stack; // por si el deleter dejo frames colgando
     for (int i = 0; i < 16; ++i)

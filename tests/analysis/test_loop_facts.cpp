@@ -98,7 +98,8 @@ static void counted_loop_before_optimizing() {
     ir::IrFunction fn;
     fn.name = "counted";
     // %0 init(0)  %1 phi  %2 mov(%1)  %3 const(64)  %4 cmp  %5 add(%2,1)
-    for (int i = 0; i < 7; ++i) fn.values.push_back({});
+    for (int i = 0; i < 7; ++i)
+        fn.values.push_back({});
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
         IrInstr in;
@@ -163,7 +164,8 @@ static void counted_loop_before_optimizing() {
     const LoopFacts lf = compute_loop_facts(fn);
     CHECK(lf.loop_count == 1, "no se detecto el bucle");
 
-    const analysis::LoopStructure st = analysis::detect_loop_structure(fn, lf, 0);
+    const analysis::LoopStructure st =
+        analysis::detect_loop_structure(fn, lf, 0);
     CHECK(st.valid,
           "una copia y una constante en la cabecera NO descalifican el bucle");
     if (!st.valid) return;
@@ -203,7 +205,8 @@ static void constant_trip_loop_is_not_linear() {
 
     ir::IrFunction fn;
     fn.name = "counted";
-    for (int i = 0; i < 7; ++i) fn.values.push_back({});
+    for (int i = 0; i < 7; ++i)
+        fn.values.push_back({});
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
         IrInstr in;
@@ -286,16 +289,16 @@ static void constant_trip_loop_is_not_linear() {
           "hay hecho que publicar");
     store.add(std::move(f));
 
-    const analyze::CostResult con_hechos = analyze::analyze_function(
-        fn, &store, analysis::asa::kStagePreOpt);
+    const analyze::CostResult con_hechos =
+        analyze::analyze_function(fn, &store, analysis::asa::kStagePreOpt);
     CHECK(con_hechos.max_loop_depth == 0,
           "con las vueltas demostradas constantes, NO cuenta como profundidad");
 
     /* Y preguntando por OTRO momento no se ve: el hecho habla de los ids de su
      * codigo, no de los de este.  Que no case es lo correcto -- lo peligroso
      * seria que casara. */
-    const analyze::CostResult otro_momento = analyze::analyze_function(
-        fn, &store, analysis::asa::kStagePostOpt);
+    const analyze::CostResult otro_momento =
+        analyze::analyze_function(fn, &store, analysis::asa::kStagePostOpt);
     CHECK(otro_momento.max_loop_depth == sin_hechos.max_loop_depth,
           "un hecho de otro momento no se aplica a este codigo");
 }
@@ -317,7 +320,8 @@ static void an_accumulator_does_not_hide_the_iv() {
 
     ir::IrFunction fn;
     fn.name = "with_acc";
-    for (int i = 0; i < 10; ++i) fn.values.push_back({});
+    for (int i = 0; i < 10; ++i)
+        fn.values.push_back({});
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
         IrInstr in;
@@ -385,7 +389,8 @@ static void an_accumulator_does_not_hide_the_iv() {
 
     const analysis::IrFacts facts = analysis::build_ir_facts(fn);
     const LoopFacts lf = compute_loop_facts(fn);
-    const analysis::LoopStructure st = analysis::detect_loop_structure(fn, lf, 0);
+    const analysis::LoopStructure st =
+        analysis::detect_loop_structure(fn, lf, 0);
     CHECK(st.valid, "la forma se reconoce con dos phis");
     if (!st.valid) return;
 
@@ -427,7 +432,8 @@ static void an_outer_loop_is_recognized_too() {
      * 5=cte 1 | 6=cte 0 (init j) | 7=phi j | 8=cte 16 | 9=cmp j<16 | 10=j+1 */
     ir::IrFunction fn;
     fn.name = "anidado";
-    for (int i = 0; i < 11; ++i) fn.values.push_back({});
+    for (int i = 0; i < 11; ++i)
+        fn.values.push_back({});
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
         IrInstr in;
@@ -510,8 +516,8 @@ static void an_outer_loop_is_recognized_too() {
         outer_latch.instrs.push_back(br(1));
     }
 
-    fn.blocks = {entry, outer, inner, inner_body, outer_latch,
-                 block(5, "exit", ret())};
+    fn.blocks = {entry,      outer,       inner,
+                 inner_body, outer_latch, block(5, "exit", ret())};
     fn.blocks[0].succs = {1};
     fn.blocks[1].succs = {2, 5};
     fn.blocks[2].succs = {3, 4};
@@ -606,7 +612,8 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
      * 10=j+1 */
     ir::IrFunction fn;
     fn.name = "mixto";
-    for (int i = 0; i < 11; ++i) fn.values.push_back({});
+    for (int i = 0; i < 11; ++i)
+        fn.values.push_back({});
     fn.params.push_back(8);
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
@@ -687,8 +694,8 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
         outer_latch.instrs.push_back(br(1));
     }
 
-    fn.blocks = {entry, outer, inner, inner_body, outer_latch,
-                 block(5, "exit", ret())};
+    fn.blocks = {entry,      outer,       inner,
+                 inner_body, outer_latch, block(5, "exit", ret())};
     fn.blocks[0].succs = {1};
     fn.blocks[1].succs = {2, 5};
     fn.blocks[2].succs = {3, 4};
@@ -747,7 +754,8 @@ static void a_multiplying_loop_is_logarithmic() {
     auto construir = [](IrOp op, uint64_t k) {
         ir::IrFunction fn;
         fn.name = "geo";
-        for (int i = 0; i < 6; ++i) fn.values.push_back({});
+        for (int i = 0; i < 6; ++i)
+            fn.values.push_back({});
         fn.params.push_back(2);
 
         auto val = [](IrOp o, ir::IrValueId dst, IrType t) {
@@ -856,8 +864,8 @@ static void a_multiplying_loop_is_logarithmic() {
     const analyze::CostResult sin_hechos = analyze::analyze_function(por_mul);
     CHECK(sin_hechos.big_o == analyze::CostClass::O_N,
           "sin el hecho, un bucle es un bucle: lineal");
-    const analyze::CostResult con_hechos = analyze::analyze_function(
-        por_mul, &store, analysis::asa::kStagePreOpt);
+    const analyze::CostResult con_hechos =
+        analyze::analyze_function(por_mul, &store, analysis::asa::kStagePreOpt);
     CHECK(con_hechos.big_o == analyze::CostClass::O_LOGN,
           "con el hecho, LOGARITMICO -- otra clase, no otra constante");
 }
@@ -885,7 +893,8 @@ static void a_counting_down_loop_is_counted_too() {
     auto construir = [](IrOp cmp_op, int64_t I, uint64_t S) {
         ir::IrFunction fn;
         fn.name = "cuenta_atras";
-        for (int i = 0; i < 6; ++i) fn.values.push_back({});
+        for (int i = 0; i < 6; ++i)
+            fn.values.push_back({});
 
         auto val = [](IrOp o, ir::IrValueId dst, IrType t) {
             IrInstr in;
@@ -1007,8 +1016,8 @@ static void a_counting_down_loop_is_counted_too() {
                                             analysis::asa::Source::Static, f),
               "hay hecho que publicar");
         store.add(std::move(f));
-        const analyze::CostResult r = analyze::analyze_function(
-            fn, &store, analysis::asa::kStagePreOpt);
+        const analyze::CostResult r =
+            analyze::analyze_function(fn, &store, analysis::asa::kStagePreOpt);
         CHECK(r.max_loop_depth == 0, "y el coste es constante, no lineal");
     }
 }
@@ -1037,7 +1046,8 @@ static void the_cost_asks_for_the_reason_not_the_code() {
      * | 5=cte 1 */
     ir::IrFunction fn;
     fn.name = "opaco";
-    for (int i = 0; i < 6; ++i) fn.values.push_back({});
+    for (int i = 0; i < 6; ++i)
+        fn.values.push_back({});
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
         IrInstr in;
@@ -1110,8 +1120,7 @@ static void the_cost_asks_for_the_reason_not_the_code() {
     f.about.function = store.intern(fn.name);
     f.about.id = h;
     f.seal.certainty = analysis::asa::Certainty::Unknown;
-    f.seal.unknown_reason =
-        analysis::asa::UnknownReason::ShapeNotRecognized;
+    f.seal.unknown_reason = analysis::asa::UnknownReason::ShapeNotRecognized;
     f.seal.origin.producer = analysis::asa::kProducerLoops;
     f.scope.stage = analysis::asa::kStagePreOpt;
     store.add(std::move(f));
@@ -1169,7 +1178,8 @@ static void an_early_exit_still_leaves_the_loop_bounded() {
      * 6=cte 7 | 7=cmp de la salida */
     ir::IrFunction fn;
     fn.name = "con_salida";
-    for (int i = 0; i < 8; ++i) fn.values.push_back({});
+    for (int i = 0; i < 8; ++i)
+        fn.values.push_back({});
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
         IrInstr in;
@@ -1310,7 +1320,8 @@ static void a_do_while_is_counted_with_one_more_turn() {
      * 5=cmp i+1<24 */
     ir::IrFunction fn;
     fn.name = "cuenta_atras_no";
-    for (int i = 0; i < 6; ++i) fn.values.push_back({});
+    for (int i = 0; i < 6; ++i)
+        fn.values.push_back({});
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
         IrInstr in;
@@ -1412,7 +1423,8 @@ static void a_self_loop_is_counted_too() {
      * 6=cte 24 | 7=cmp */
     ir::IrFunction fn;
     fn.name = "un_bloque";
-    for (int i = 0; i < 8; ++i) fn.values.push_back({});
+    for (int i = 0; i < 8; ++i)
+        fn.values.push_back({});
 
     auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
         IrInstr in;

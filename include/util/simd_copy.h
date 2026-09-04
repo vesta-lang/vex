@@ -202,14 +202,61 @@ inline void copy_avx512(uint8_t *__restrict dst, const uint8_t *__restrict src,
  * @param src Puntero origen  (memoria host).
  * @param len Numero de bytes a copiar.
  */
+/**
+ * @brief Copia de MENOS de 16 bytes sin llamar a nadie.
+ *
+ * `std::memcpy` con un tamano VARIABLE es una llamada a la biblioteca del
+ * sistema, y la de Windows no despacha por capacidad de la CPU: se queda en el
+ * camino escalar y ademas cuesta la llamada.  Para uno, dos, cuatro u ocho
+ * bytes -- que es el tamano de una carga o un almacenamiento de la VM, o sea el
+ * caso comun con diferencia -- eso es todo coste y ningun trabajo.
+ *
+ * La tecnica es la de BLOQUES SOLAPADOS: dos accesos del mayor ancho que quepa,
+ * uno al principio y otro al final, cubren cualquier longitud de su rango sin
+ * bucle y sin ramas por byte.  Se solapan en el medio, y eso da igual: se
+ * escribe dos veces el mismo dato.
+ *
+ * Sin bucle, sin llamada y sin registros vectoriales que montar.
+ */
+inline void copy_small(uint8_t *__restrict d, const uint8_t *__restrict s,
+                       size_t n) noexcept {
+    if (n >= 8) {
+        uint64_t a, b;
+        std::memcpy(&a, s, 8);
+        std::memcpy(&b, s + n - 8, 8);
+        std::memcpy(d, &a, 8);
+        std::memcpy(d + n - 8, &b, 8);
+        return;
+    }
+    if (n >= 4) {
+        uint32_t a, b;
+        std::memcpy(&a, s, 4);
+        std::memcpy(&b, s + n - 4, 4);
+        std::memcpy(d, &a, 4);
+        std::memcpy(d + n - 4, &b, 4);
+        return;
+    }
+    if (n >= 2) {
+        uint16_t a, b;
+        std::memcpy(&a, s, 2);
+        std::memcpy(&b, s + n - 2, 2);
+        std::memcpy(d, &a, 2);
+        std::memcpy(d + n - 2, &b, 2);
+        return;
+    }
+    if (n == 1) *d = *s;
+}
+
 inline void fast_copy(void *__restrict dst, const void *__restrict src,
                       size_t len) {
     if (len == 0) return;
 
-    // umbral minimo para activar SIMD: copias pequenas no se benefician del
-    // overhead
+    /* Por debajo de 16 bytes no compensan los registros vectoriales, pero
+     * tampoco una llamada a la biblioteca: se copia aqui mismo.  Ver
+     * `copy_small`. */
     if (len < 16) {
-        std::memcpy(dst, src, len);
+        copy_small(static_cast<uint8_t *>(dst),
+                   static_cast<const uint8_t *>(src), len);
         return;
     }
 

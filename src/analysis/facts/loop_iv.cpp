@@ -47,7 +47,9 @@ bool is_gt_cmp(IrOp op) {
  * JUSTO en el limite: `i != 32` avanzando de tres en tres no para nunca (o
  * para dando la vuelta al tipo, que es peor).  Reconocer la forma no es
  * afirmar que termine. */
-bool is_ne_cmp(IrOp op) { return op == IrOp::CMP_NE; }
+bool is_ne_cmp(IrOp op) {
+    return op == IrOp::CMP_NE;
+}
 
 // Resuelve el valor CONSTANTE de @p v (la CONST que lo define en su bloque).
 bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
@@ -200,8 +202,8 @@ bool chain_sub_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
  */
 static bool detect_iv_impl(const ir::IrFunction &fn,
                            const std::vector<int> &def_block, IrBlockId header,
-                           IrBlockId preheader, IrBlockId latch, bool admite_baja,
-                           LoopIV &out) {
+                           IrBlockId preheader, IrBlockId latch,
+                           bool admite_baja, LoopIV &out) {
     out.phi_index = -1;
     if (header == (IrBlockId)IR_NO_BLOCK || header >= fn.blocks.size())
         return false;
@@ -219,8 +221,7 @@ static bool detect_iv_impl(const ir::IrFunction &fn,
      * del cuerpo.  El cuerpo corre una vez mas que veces se cumple la
      * guarda -- se entra sin preguntar --, y eso vale mire lo que mire la
      * comparacion. */
-    const bool rotado =
-        hins.back().op != IrOp::BR_COND || latch == header;
+    const bool rotado = hins.back().op != IrOp::BR_COND || latch == header;
     const IrBlockId G = (rotado && latch != header) ? latch : header;
     if (G == (IrBlockId)IR_NO_BLOCK || G >= fn.blocks.size()) return false;
     const auto &gins = fn.blocks[G].instrs;

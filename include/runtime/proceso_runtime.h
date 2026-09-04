@@ -300,6 +300,25 @@ typedef struct DecodedInstr {
 } DecodedInstr;
 
 /**
+ * @brief El tamano de `DecodedInstr` esta VIGILADO, y no por gusto.
+ *
+ * Cada proceso lleva `icache[ICACHE_SIZE]` de estas, o sea 4096 copias: un
+ * byte de mas aqui son 4 KB de mas POR PROCESO, y hoy la tabla ya ocupa
+ * 256 KB.  Sin esta guarda, anadir un campo hace crecer la huella de todos los
+ * procesos sin que nada lo diga -- y eso no se nota al compilar ni al probar:
+ * se nota el dia que alguien lanza muchos procesos.
+ *
+ * Si esto salta, la pregunta NO es "subo el numero".  Es: cabe el campo nuevo
+ * en los huecos que ya hay, o de verdad hace falta pagar 4 KB por proceso.
+ * `flags_info` en concreto tiene sitio de sobra -- usa 27 de sus 32 bits.
+ *
+ * Se pone en 64 porque son 64 los que mide hoy, no porque 64 sea sagrado.
+ */
+static_assert(sizeof(DecodedInstr) == 64,
+              "DecodedInstr dimensiona la icache: 4096 copias por proceso.  "
+              "Ver el comentario de arriba antes de cambiar el numero.");
+
+/**
  * @brief Codigos de error que puede almacenar un hilo de proceso virtual.
  *
  * El campo err_thread de ProcessVM guarda el ultimo error ocurrido.
@@ -338,8 +357,56 @@ typedef enum state_err_thread {
  * @brief Numero de entradas de la cache de instrucciones descodificadas.
  *
  * Debe ser potencia de dos para que icache_index() pueda usar una mascara AND.
+ *
+ * SE PUEDE CAMBIAR AL CONFIGURAR (`-DVESTA_ICACHE_SIZE=N`), y hasta ahora no se
+ * podia: era un `constexpr` fijo mientras @ref ICACHE_WAYS si era ajustable,
+ * asi que de las dos variables de la icache solo una se podia medir.  Y es la
+ * otra la que manda en el caso que duele -- un bloque recto mas largo que la
+ * tabla falla SIEMPRE, por muchas vias que tenga.
+ *
+ * MISMA DISCIPLINA que los interruptores de paquetes de mas abajo, y por la
+ * misma razon: esto dimensiona un array DENTRO de `ProcessVM`.  Definirlo para
+ * unas unidades de traduccion y no para otras da dos `ProcessVM` de tamanos
+ * distintos, que no es un error de compilacion ni de enlazado -- es corrupcion
+ * en ejecucion.  Se pone en la configuracion del proyecto, para TODOS los
+ * objetivos, o no se pone.
+ *
+ * Lo que cuesta subirlo: cada entrada es un `DecodedInstr` de 64 bytes, asi
+ * que la tabla ocupa `ICACHE_SIZE * 64` bytes **por PROCESO**.  Con 4096
+ * entradas son 256 KB, y esa es la variable a vigilar -- no la velocidad --
+ * el dia que haya muchos procesos ligeros a la vez.
+ *
+ * POR QUE 4096 Y NO 1024.  Con 1024 entradas, cualquier bloque de codigo
+ * RECTO mas largo que la tabla falla en TODAS sus instrucciones, y un fallo
+ * cuesta redescodificar (entre 15 y 25 veces mas que ejecutar).  Medido con
+ * `test_mips --pico`, que barre longitudes:
+ *
+ *                 1024 rectas       1024 entradas   4096 entradas
+ *   memoria + paquetes                    2 MIPS         308 MIPS
+ *   memoria + escalar                    24                263
+ *   alu     + escalar                    105                293
+ *   anchos  + escalar                     76                182
+ *
+ * Los 2 MIPS no son una errata: ahi coinciden el fallo en todas y que
+ * `bundle_try_form` cuelga del camino de fallo, con lo que cada instruccion
+ * paga hasta `BUNDLE_MAX` descodificaciones por adelantado que no se amortizan
+ * nunca.
+ *
+ * Y el TECHO no se mueve (377 MIPS con 1024, 376 con 4096): subirlo no le
+ * quita nada al caso corto, que es donde se temia el precio.  Lo unico que
+ * cambia es donde cae el precipicio -- ahora en 4096 en vez de en 1024 --, asi
+ * que sigue existiendo; ver `tests/runtime/test_mips.cpp`, que tiene un caso a
+ * cada lado a proposito.
  */
-static constexpr uint32_t ICACHE_SIZE = 1024;
+/* El MANDO y el NOMBRE van separados a proposito.  El mando es el macro, que
+ * es lo unico que se puede fijar desde la linea de configuracion; el nombre
+ * sigue siendo una constante de verdad dentro del espacio de nombres, porque
+ * hay codigo que la usa cualificada (`runtime::ICACHE_SIZE`) y un macro ahi
+ * expande a `runtime::4096`, que no compila. */
+#ifndef VESTA_ICACHE_SIZE
+#define VESTA_ICACHE_SIZE 4096
+#endif
+static constexpr uint32_t ICACHE_SIZE = VESTA_ICACHE_SIZE;
 
 /**
  * @brief Vias (asociatividad) de la icache.  1 = mapeo directo, como siempre.
@@ -353,8 +420,14 @@ static constexpr uint32_t ICACHE_SIZE = 1024;
  * obliga a redescodificar, que cuesta entre 15 y 25 veces mas que ejecutar.
  *
  * La misma simulacion dice que 2 vias quitan el 36% de esos conflictos SIN
- * cambiar la huella de memoria (importa: la tabla son 64 KB y no cabe en una
- * L1 de 32, asi que crecerla mueve una segunda variable).
+ * cambiar la huella de memoria.
+ *
+ * OJO: esas cifras se midieron con @ref ICACHE_SIZE en 1024, que era el valor
+ * de entonces.  Hoy son 4096, asi que la tabla es cuatro veces mas grande y
+ * los conflictos que contaba esa simulacion han bajado -- cuanto, no se sabe:
+ * habria que volver a pasar `tests/coste/test_icache_conflictos.cpp`.  El
+ * argumento a favor de dos vias sigue en pie, pero su TAMANO ya no es el que
+ * dice el parrafo de arriba.
  *
  * Se queda en 1 POR DEFECTO: con este valor el codigo generado es el de
  * siempre.  Ponerlo a 2 es el experimento, y hay que MEDIRLO con el banco
@@ -388,16 +461,50 @@ static_assert((ICACHE_SETS & (ICACHE_SETS - 1)) == 0,
               "ICACHE_SETS debe ser potencia de dos");
 
 /**
- * @brief Conjunto de la icache al que va una direccion PC.
+ * @brief Si el indice de la icache DISPERSA la direccion antes de recortarla.
  *
- * Mascara AND, valida porque ICACHE_SETS es potencia de dos.  Con una via
- * esto es exactamente el indice de siempre.
+ * 0 = mascara pelada, el comportamiento de siempre.  1 = se pliegan bits altos
+ * con un XOR antes de la mascara.
+ *
+ * POR QUE EXISTE.  Una mascara pelada es maximamente vulnerable a los pasos
+ * REGULARES, que es justo lo que produce este interprete.  Medido con
+ * `VESTA_CACHE_DUMP=1` sobre un tramo recto de 8192 instrucciones: las
+ * cabeceras de paquete caen cada ~160 bytes, y como `gcd(160, 4096) = 32` solo
+ * alcanzan 128 indices distintos para 256 cabeceras.  Dos por ranura, mapeo
+ * directo, **conflicto del 100% con la cache ocupada al 9,4%**.  No es
+ * capacidad: es que el indice tira 256 cosas sobre 128 sitios.
+ *
+ * Y no se arregla con vias: `ICACHE_SETS = ICACHE_SIZE / ICACHE_WAYS`, asi que
+ * pasar a 2 vias PARTE los conjuntos por la mitad y el paso vuelve a colisionar
+ * igual -- medido, 74,6 -> 57,5 MIPS, peor que antes por el coste de buscar en
+ * dos vias.
+ *
+ * El XOR mezcla bits que el paso no toca, con lo que un patron regular deja de
+ * serlo.  Cuesta dos operaciones en el camino caliente, y por eso va detras de
+ * un mando: hay que poder medir si compensa en vez de suponerlo.
+ */
+#ifndef ICACHE_HASH
+#define ICACHE_HASH 0
+#endif
+
+/**
+ * @brief Conjunto de la icache al que va una direccion PC.
  *
  * @param pc Direccion del contador de programa de la instruccion.
  * @return   Conjunto (0 .. ICACHE_SETS-1).
  */
-inline uint32_t icache_index(uint64_t pc) {
+[[gnu::always_inline]] inline uint32_t icache_index(uint64_t pc) {
+#if ICACHE_HASH
+    /* Se pliegan dos tramos altos sobre el bajo.  Los desplazamientos no son
+     * redondos a proposito: con 12 y 21 los bits que aporta cada uno no se
+     * solapan con los que el paso regular deja fijos. */
+    const uint64_t mezclado = pc ^ (pc >> 12) ^ (pc >> 21);
+    return static_cast<uint32_t>(mezclado & (ICACHE_SETS - 1));
+#else
+    // Mascara pelada, valida porque ICACHE_SETS es potencia de dos.  Con una
+    // via esto es exactamente el indice de siempre.
     return static_cast<uint32_t>(pc & (ICACHE_SETS - 1));
+#endif
 }
 
 /**
@@ -693,6 +800,43 @@ class ProcessVM {
     /// APAGADO por defecto: hasta que este medido, el binario que se entrega se
     /// comporta exactamente como antes.  Encenderlo es esta linea.
     bool bundles_on = false;
+
+    /// Si al formar un paquete se REORDENA su contenido.
+    ///
+    /// Va aparte de `bundles_on` porque son dos preguntas: formar paquetes
+    /// ahorra despachos, reordenar dentro busca fusion, independencia y
+    /// localidad.  Medirlas juntas no dice cual aporta que.
+    ///
+    /// Es un campo del PROCESO y no solo la variable de entorno
+    /// `VESTA_NO_BUNDLE_REORDER` porque esa se lee una vez: con ella no se
+    /// pueden medir los tres modos -- escalar, paquetes, paquetes+reorden -- en
+    /// la misma ejecucion, que es justo lo que hace comparable la medida.  La
+    /// variable sigue mandando para apagarlo todo desde fuera.
+    ///
+    /// Se mira donde `bundles_on`: en el fallo de icache, nunca en el hot path.
+    bool bundle_reorder_on = true;
+
+    /**
+     * @brief Anidamiento actual en paquetes.  Cero = no hay ninguno en curso.
+     *
+     * CUENTA, no es un booleano, porque se anida: una instruccion de dentro de
+     * un paquete puede provocar un fallo de icache que forme otro.
+     *
+     * Es lo que hace segura la recoleccion de la cache: mientras sea distinta
+     * de cero hay un `Bundle*` en manos de alguien y no se puede ni copiar ni
+     * reiniciar nada.
+     */
+    uint32_t bundle_depth = 0;
+
+    /**
+     * @brief Hay una region esperando a reiniciarse.
+     *
+     * Va AQUI y no en la arena a proposito: se mira al salir de CADA paquete,
+     * o sea en camino caliente, y asi es una lectura de memoria que ya se esta
+     * tocando en vez de una indireccion mas.  Casi siempre es false y la rama
+     * se predice sola.
+     */
+    bool bundle_needs_grace = false;
 #endif
 
 #if VM_BUNDLES
@@ -708,7 +852,22 @@ class ProcessVM {
     /// cambie lo que se mide, y eso se cumple igual.
     struct {
         uint64_t formed, not_formed, dispatches, instrs_in_bundles, aborts,
-            flushes, shrinks, chained;
+            flushes, shrinks, chained, collects;
+        /// Instrucciones que el planificador movio de sitio al formar.  Se
+        /// cuenta en UNIDADES, no en veces: lo que interesa es cuanto se
+        /// reordena, no cuantos paquetes se tocaron.
+        uint64_t reordered;
+        /// Paquetes que quedaron distintos.  Con la de arriba da cuanto se
+        /// mueve POR paquete, que es lo que dice si el planificador esta
+        /// haciendo algo o rozando.
+        uint64_t reorder_bundles;
+        /// Veces que cada criterio DECIDIO la eleccion, en el orden de
+        /// `CriterionId`.  Es lo unico que contesta "por que se movio": con el
+        /// total solo se sabe que se movio.
+        uint64_t reorder_wins[4];
+        /// Candidatas que se puntuaron.  El denominador: sin el, "fusion gano
+        /// 20 veces" no dice si fue de 20 ocasiones o de 20.000.
+        uint64_t reorder_choices;
     } bundle_stats = {};
 #endif
 

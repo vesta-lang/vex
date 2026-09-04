@@ -203,8 +203,7 @@ struct Production {
      * el usuario no escribio nada.  Una linea de fuente no la renumera nadie.
      */
     void say_unknown(Subject about, UnknownReason reason, const char *code,
-                     const char *domain, const char *detail,
-                     uint32_t site = 0);
+                     const char *domain, const char *detail, uint32_t site = 0);
 };
 
 /// Un dominio que sabe convertir su analisis en hechos.
@@ -278,6 +277,9 @@ void register_definite_store_producer();
  */
 void register_bulk_memory_producer();
 
+/// Da de alta el dominio que dice que operaciones no caben en un backend.
+void register_backend_producer();
+
 /**
  * @brief Da de alta el dominio `asa.memory_access`.
  *
@@ -328,9 +330,10 @@ void register_use_def_producer();
  *               eje viene a impedir.
  * @return El resumen de los dominios que de verdad corrieron.
  */
-std::vector<ProductionSummary>
-produce(const ir::IrModule &mod, FactStore &store,
-        const std::vector<const char *> &wanted, const char *stage);
+std::vector<ProductionSummary> produce(const ir::IrModule &mod,
+                                       FactStore &store,
+                                       const std::vector<const char *> &wanted,
+                                       const char *stage);
 
 } // namespace asa
 } // namespace analysis

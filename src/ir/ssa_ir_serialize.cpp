@@ -1146,10 +1146,10 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
                          (fx.nondeterministic ? 16u : 0u) |
                          (fx.comptime ? 32u : 0u) | (fx.may_panic ? 64u : 0u) |
                          (fx.allocates ? 128u : 0u)));
-        write_u8(out, uint8_t((fx.may_block ? 1u : 0u) |
-                              (fx.may_trap ? 2u : 0u) |
-                              (uint8_t(fx.throw_origin) << 2) |
-                              (uint8_t(fx.panic_origin) << 4)));
+        write_u8(out,
+                 uint8_t((fx.may_block ? 1u : 0u) | (fx.may_trap ? 2u : 0u) |
+                         (uint8_t(fx.throw_origin) << 2) |
+                         (uint8_t(fx.panic_origin) << 4)));
         write_u16(out, fx.trap_kinds);
         write_u16(out, fx.reads_world);
         write_u16(out, fx.writes_world);

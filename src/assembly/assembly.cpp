@@ -152,7 +152,8 @@ bool assemble_file(const std::string &file, const std::string &arch_name,
         std::string ln = asm_code.substr(ini, i - ini);
         ini = i + 1;
         const size_t p = ln.find_first_not_of(" \t\r");
-        if (p != std::string::npos && ln[p] != ';' && ln[p] != '#') ++con_codigo;
+        if (p != std::string::npos && ln[p] != ';' && ln[p] != '#')
+            ++con_codigo;
     }
 
     /* Keystone puede decir que todo fue bien y devolver CERO instrucciones

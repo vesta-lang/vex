@@ -51,11 +51,16 @@
  * Lo que hay y lo que NO
  * ---------------------
  * Estan los efectos IMPLICITOS --los que la instruccion no nombra en ningun
- * operando: banderas, pila, marco, contador de programa-- y el coste completo.
- * NO esta la FORMA (que registros nombra), y no por olvido: su indice es
- * VARIABLE (`regs[instr.reg1]`), asi que depende de los BYTES de cada
- * instruccion concreta y no cabe en una tabla por opcode.  Esa mitad la da el
- * desensamblador al FORMAR el paquete, que es el 0,57% de las ejecuciones.
+ * operando: banderas, pila, marco, contador de programa--, el coste completo y
+ * la FORMA.
+ *
+ * La forma no dice QUE registro se toca --su indice es VARIABLE
+ * (`regs[instr.reg1]`) y sale de los bytes de cada instruccion concreta-- sino
+ * de QUE CAMPO del operando sale ese indice y en que direccion.  Eso si es
+ * propiedad del opcode y si cabe en una tabla, y es la mitad que faltaba: con
+ * los efectos solos, `add r2, 3` y `add r3, 1` son indistinguibles y no se
+ * puede afirmar que no chocan.  Antes esta mitad habia que sacarla del
+ * DESENSAMBLADOR, que al formar un paquete de 32 es carisimo.
  *
  * De donde sale
  * -------------
@@ -291,6 +296,73 @@ extern const VmInstr kExtended[256];
 extern const uint16_t kHotPrimary[256];
 extern const uint16_t kHotExtended[256];
 
+/**
+ * @brief La FORMA: que campos del operando indexan el banco de registros.
+ *
+ * Los efectos dicen que toca una instruccion SIN nombrarlo (banderas, pila,
+ * marco, pc).  Esto dice lo otro: que registros nombra y en que direccion.
+ * Hacen falta los dos para afirmar que dos instrucciones son independientes --
+ * con los efectos solos, `add r2, 3` y `add r3, 1` parecen iguales y no se
+ * puede decir que no chocan.
+ *
+ * Un bit por (campo, parte), en cada byte:
+ *
+ *     0: reg1 entero    1: reg1 nibble bajo   2: reg1 nibble alto
+ *     3: reg2 entero    4: reg2 nibble bajo   5: reg2 nibble alto
+ *
+ * Empaquetado: byte 0 = lee del banco general, byte 1 = escribe en el general,
+ * byte 2 = lee del vectorial, byte 3 = escribe en el vectorial.
+ *
+ * CERO NO ES "no toca registros": es que el recorrido no lo vio, igual que en
+ * los efectos.  Quien reordene tiene que tratarlo como desconocido, no como
+ * vacio -- confundirlos es exactamente el fallo que da otro resultado.
+ */
+extern const uint32_t kFormPrimary[256];
+extern const uint32_t kFormExtended[256];
+
+/**
+ * @brief Opcodes cuyos campos vienen DECLARADOS, no derivados.
+ *
+ * 1 = los cuatro campos de esta fila los puso una declaracion `fixed` y
+ * SUSTITUYEN a lo que el recorrido vio, porque lo que el recorrido ve ahi esta
+ * mal: `div` y `mod` llegan al camino de fallo, y por el se les atribuian los
+ * efectos de construir la traza y formatear el mensaje.
+ *
+ * Existe para que la comprobacion de la tabla no acuse un estrechamiento hecho
+ * a proposito.  Su regla es "la tabla no puede saber MENOS que el derivador" --
+ * un efecto real que la tabla no declare es el fallo silencioso que todo esto
+ * previene --, y una declaracion `fixed` es exactamente la excepcion: alguien
+ * dijo, mirando el fuente, que lo derivado sobra.  Sin esta marca la
+ * comprobacion falla siempre sobre esas filas y deja de guardar las demas.
+ */
+extern const uint8_t kFixedPrimary[256];
+extern const uint8_t kFixedExtended[256];
+
+/// Bits de la forma dentro de cada byte de @ref kFormPrimary.
+enum VmForm : uint8_t {
+    VF_REG1 = 1u << 0,    ///< reg1 entero
+    VF_REG1_LO = 1u << 1, ///< nibble bajo de reg1
+    VF_REG1_HI = 1u << 2, ///< nibble alto de reg1
+    VF_REG2 = 1u << 3,    ///< reg2 entero
+    VF_REG2_LO = 1u << 4, ///< nibble bajo de reg2
+    VF_REG2_HI = 1u << 5, ///< nibble alto de reg2
+};
+
+/// @return La forma empaquetada de @p opcode.
+inline uint32_t vm_form(bool extended, uint8_t opcode) {
+    return extended ? kFormExtended[opcode] : kFormPrimary[opcode];
+}
+
+/// Los cuatro bytes de @ref vm_form, por separado.
+inline uint8_t vm_form_read(uint32_t f) { return (uint8_t)(f & 0xFF); }
+inline uint8_t vm_form_write(uint32_t f) { return (uint8_t)((f >> 8) & 0xFF); }
+inline uint8_t vm_form_vec_read(uint32_t f) {
+    return (uint8_t)((f >> 16) & 0xFF);
+}
+inline uint8_t vm_form_vec_write(uint32_t f) {
+    return (uint8_t)((f >> 24) & 0xFF);
+}
+
 /// Desplazamiento del estrechamiento dentro de la palabra caliente.
 constexpr uint16_t kNarrowShift = 15;
 
@@ -332,12 +404,34 @@ inline bool vm_cost_measured(const VmInstr *v, uint8_t isa) {
 }
 
 /// @return true si se puede REORDENAR alrededor de esta instruccion.
-/// Exige las tres cosas: que exista, que no transfiera control y que sus
-/// efectos sean EXACTOS.  Ante cualquier duda, false.
-inline bool vm_instr_movable(const VmInstr *v) {
-    if (v == nullptr) return false;
+/// Exige que exista, que sus efectos sean EXACTOS y que no sea ninguna de las
+/// cuatro barreras.  Ante cualquier duda, false.
+inline bool vm_instr_movable(uint16_t effects) {
     const uint16_t need = VE_IMPL | VE_EXACT;
-    return (v->effects & need) == need && (v->effects & VE_CONTROL) == 0;
+    if ((effects & need) != need) return false;
+    /* Las CUATRO barreras, y cada una por su motivo:
+     *
+     *   VE_CONTROL  cambia a donde se va: mover algo a su alrededor lo saca de
+     *               su camino.
+     *   VE_ABORT    si aborta, lo de detras NO debe haber corrido.  Adelantar
+     *               algo por encima de una division que puede lanzar lo ejecuta
+     *               en un programa que ya habia muerto.
+     *   VE_RUNTIME  los efectos dependen de un destino que solo existe al
+     *               ejecutar: aqui todavia no se sabe que toca.
+     *   VE_FOREIGN  puede salir a codigo ajeno, cuyos efectos no son derivables
+     *               ni observandolo.
+     *
+     * `VE_ABORT`, `VE_RUNTIME` y `VE_FOREIGN` faltaban, y las tres estan
+     * documentadas como barrera en su propio comentario mas arriba: la puerta
+     * decia que si a instrucciones que el resto del fichero declara
+     * inmovibles. */
+    const uint16_t barreras = VE_CONTROL | VE_ABORT | VE_RUNTIME | VE_FOREIGN;
+    return (effects & barreras) == 0;
+}
+
+/// Misma pregunta desde la fila completa, para quien ya la tiene a mano.
+inline bool vm_instr_movable(const VmInstr *v) {
+    return v != nullptr && vm_instr_movable(v->effects);
 }
 
 } // namespace vm_isa

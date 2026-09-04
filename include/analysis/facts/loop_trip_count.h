@@ -17,8 +17,8 @@
 #ifndef ANALYSIS_FACTS_LOOP_TRIP_COUNT_H
 #define ANALYSIS_FACTS_LOOP_TRIP_COUNT_H
 
-#include "analysis/asa/fact.h"      // UnknownReason/Certainty: que se sabe y como
-#include "analysis/facts/loop_iv.h" // LoopIV (descriptor del IV)
+#include "analysis/asa/fact.h" // UnknownReason/Certainty: que se sabe y como
+#include "analysis/facts/loop_iv.h"     // LoopIV (descriptor del IV)
 #include "analysis/facts/value_range.h" // RangeFacts: la SEGUNDA fuente
 #include "ir/ssa_ir.h"
 

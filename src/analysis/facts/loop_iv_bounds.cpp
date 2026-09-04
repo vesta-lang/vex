@@ -62,7 +62,8 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
      * Y esto NO es preguntar a los rangos -- seguirian mordiendose la cola --:
      * es apoyarse en lo que este mismo analisis acaba de establecer. */
     std::vector<uint32_t> orden(loops.loop_count);
-    for (uint32_t L = 0; L < loops.loop_count; ++L) orden[L] = L;
+    for (uint32_t L = 0; L < loops.loop_count; ++L)
+        orden[L] = L;
     std::sort(orden.begin(), orden.end(), [&](uint32_t a, uint32_t b) {
         return loops.depth_of(
                    static_cast<ir::IrBlockId>(loops.header_block_of(a))) <
@@ -169,10 +170,9 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
      * orden, asi que asi los dos van a la par y la busqueda no retrocede.
      * Dos bucles no comparten variable -- cada PHI es de su cabecera --, asi
      * que no hay repetidos que unir. */
-    std::sort(out.bounds.begin(), out.bounds.end(),
-              [](const IvBound &a, const IvBound &b) {
-                  return a.value < b.value;
-              });
+    std::sort(
+        out.bounds.begin(), out.bounds.end(),
+        [](const IvBound &a, const IvBound &b) { return a.value < b.value; });
     return out;
 }
 

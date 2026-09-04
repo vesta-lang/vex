@@ -226,7 +226,7 @@ void VirtualMemory::vm_to_host_memset(uint64_t dest_vaddr, int value,
  * @param dst   Buffer del host donde se almacenan los bytes leidos.
  * @param size  Numero de bytes a leer.
  */
-void VirtualMemory::read_bytes(uint64_t vaddr, void *dst, size_t size) {
+void VirtualMemory::read_bytes_slow(uint64_t vaddr, void *dst, size_t size) {
     uint8_t *out =
         static_cast<uint8_t *>(dst); // cursor de escritura en el buffer destino
 
@@ -300,7 +300,8 @@ void VirtualMemory::read_bytes(uint64_t vaddr, void *dst, size_t size) {
  * @param src   Buffer del host con los datos a escribir.
  * @param size  Numero de bytes a escribir.
  */
-void VirtualMemory::write_bytes(uint64_t vaddr, const void *src, size_t size) {
+void VirtualMemory::write_bytes_slow(uint64_t vaddr, const void *src,
+                                     size_t size) {
     const uint8_t *in = static_cast<const uint8_t *>(
         src); // cursor de lectura en el buffer fuente
 

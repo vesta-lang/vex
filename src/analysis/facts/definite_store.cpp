@@ -78,7 +78,8 @@ DefiniteStoreFacts compute_definite_store(const ir::IrFunction &fn,
             for (const ir::IrInstr &ins : bb.instrs) {
                 if (ins.op != ir::IrOp::MOV && ins.op != ir::IrOp::BITCAST)
                     continue;
-                if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) continue;
+                if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty())
+                    continue;
                 const ir::IrValueId src = ins.operands[0];
                 if (src >= is_alias.size() || ins.dst >= is_alias.size())
                     continue;
@@ -144,7 +145,8 @@ DefiniteStoreFacts compute_definite_store(const ir::IrFunction &fn,
                 for (ir::IrBlockId p : fn.blocks[b].preds)
                     if (p < n && !out_[p]) in_ = 0u;
                 // Un bloque sin predecesores al que no se llega no dice nada;
-                // uno al que si se llega y no los tiene es la entrada, ya vista.
+                // uno al que si se llega y no los tiene es la entrada, ya
+                // vista.
                 if (fn.blocks[b].preds.empty()) in_ = 0u;
             }
             const uint8_t nuevo = (in_ || writes[b]) ? 1u : 0u;

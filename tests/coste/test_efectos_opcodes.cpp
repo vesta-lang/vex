@@ -193,6 +193,11 @@ int main(int argc, char **argv) {
                         "\"salta\": %s, \"implementada\": %s, "
                         "\"exacto\": %s, \"escribe\": %u, \"lee\": %u, "
                         "\"form_read\": %u, \"form_write\": %u, "
+                        // El banco VECTORIAL va aparte del general: una
+                        // instruccion de coma flotante no choca con una de
+                        // enteros, y mezclarlos en un solo campo obligaria a
+                        // ordenarlas entre si sin motivo.
+                        "\"form_vec_read\": %u, \"form_vec_write\": %u, "
                         "\"puede_abortar\": %s, "
                         "\"tablas_resueltas\": %u, \"motivo\": \"",
                         f.nombre.c_str(), f.tabla, f.indice, f.bytes,
@@ -200,6 +205,7 @@ int main(int argc, char **argv) {
                         f.implementada ? "true" : "false",
                         f.imp.completo ? "true" : "false", f.imp.escribe,
                         f.imp.lee, f.imp.form_read, f.imp.form_write,
+                        f.imp.form_vec_read, f.imp.form_vec_write,
                         f.imp.can_abort ? "true" : "false", f.imp.tablas);
             /* POR QUE se quedo corto.  Es la SEMILLA de la declaracion: lo que
              * se declare nace del diagnostico del analisis, no de lo que
@@ -272,11 +278,18 @@ int main(int argc, char **argv) {
              * "que registros usa" en vez de "que toca sin nombrarlo" --, y
              * porque su forma de quedarse corta es distinta. */
             {
-                static const char *kParts[6] = {"reg1",     "reg1.bajo",
-                                                "reg1.alto", "reg2",
-                                                "reg2.bajo", "reg2.alto"};
+                /* Los CUATRO campos por tres partes.  `reg3` es el tercer
+                 * registro de la forma de memoria y `regi` el de la forma con
+                 * inmediato; sin esos dos, ninguna instruccion con inmediato
+                 * podia declarar que registro toca. */
+                static const char *kParts[12] = {
+                    "reg1", "reg1.bajo", "reg1.alto",
+                    "reg2", "reg2.bajo", "reg2.alto",
+                    "reg3", "reg3.bajo", "reg3.alto",
+                    "regi", "regi.bajo", "regi.alto"};
+                constexpr int kNumParts = 12;
                 std::string lee, esc;
-                for (int b = 0; b < 6; ++b) {
+                for (int b = 0; b < kNumParts; ++b) {
                     if (f.imp.form_read >> b & 1)
                         lee += std::string(lee.empty() ? "" : " ") + kParts[b];
                     if (f.imp.form_write >> b & 1)
@@ -286,7 +299,7 @@ int main(int argc, char **argv) {
                     std::printf("  forma    lee=[%s] escribe=[%s]\n",
                                 lee.c_str(), esc.c_str());
                 std::string vlee, vesc;
-                for (int b = 0; b < 6; ++b) {
+                for (int b = 0; b < kNumParts; ++b) {
                     if (f.imp.form_vec_read >> b & 1)
                         vlee += std::string(vlee.empty() ? "" : " ") + kParts[b];
                     if (f.imp.form_vec_write >> b & 1)
@@ -646,6 +659,18 @@ int main(int argc, char **argv) {
         if (f.imp.completo && f.implementada)
             esperado |= runtime::vm_isa::VE_EXACT;
         if (f.salta) esperado |= runtime::vm_isa::VE_CONTROL;
+        /* TOCA MEMORIA: de los dos sitios, igual que en el generador.
+         *
+         * El DERIVADO -- el manejador llega a `proc->vm_mem`, que es el quinto
+         * campo vigilado -- y, ademas, el modo de direccionamiento.  Aqui solo
+         * estaba el modo, que es un proxy equivocado: dice como estan puestos
+         * los operandos, no si se toca memoria.
+         *
+         * Los dos calculos tienen que decir lo mismo, y son dos copias: si
+         * divergen, esta comprobacion falla senalando una diferencia que no
+         * existe en el codigo sino entre ella y el generador. */
+        if ((f.imp.escribe | f.imp.lee) & (1u << tests::kCampoMemoria))
+            esperado |= runtime::vm_isa::VE_MEMORY;
         if (f.modo != "REG" && f.modo != "INMED" && f.modo != "NONE")
             esperado |= runtime::vm_isa::VE_MEMORY;
         if (f.implementada) esperado |= runtime::vm_isa::VE_IMPL;
@@ -664,12 +689,38 @@ int main(int argc, char **argv) {
         const uint16_t campos_der = static_cast<uint16_t>(esperado & 0x00FF);
         const uint16_t campos_tab =
             static_cast<uint16_t>((v.name ? v.effects : 0) & 0x00FF);
-        const uint16_t marcas_der = static_cast<uint16_t>(esperado & 0x0F00);
+        /* `VE_MEMORY` sale del bloque de las marcas y se comprueba por
+         * INCLUSION, como los campos.
+         *
+         * Ya no es estructural: se deriva -- el manejador toca `vm_mem` -- y
+         * ademas sale del modo de direccionamiento, asi que la tabla puede
+         * saber que una instruccion toca memoria cuando este recorrido no lo
+         * ha visto.  Pasa de verdad: `fastpush` y `fastpop` se derivan tocando
+         * la pila y la memoria en el build de PROFILE y nada en el de RELEASE,
+         * porque el marco de pila cambia el codigo y con el lo que el rastreo
+         * de procedencia alcanza.  El de Profile es el bueno -- esas dos
+         * empujan y sacan registros --, asi que la tabla se genera desde ahi.
+         *
+         * Exigir igualdad hacia fallar la comprobacion en Release por una
+         * diferencia que no es un error: la tabla sabe MAS.  Lo que sigue sin
+         * poder es saber menos, y eso se comprueba igual. */
+        constexpr uint16_t kMemBit = runtime::vm_isa::VE_MEMORY;
+        const uint16_t marcas_der =
+            static_cast<uint16_t>(esperado & 0x0F00 & ~kMemBit);
         const uint16_t marcas_tab =
-            static_cast<uint16_t>((v.name ? v.effects : 0) & 0x0F00);
-        const bool corta = (campos_der & ~campos_tab) != 0;
+            static_cast<uint16_t>((v.name ? v.effects : 0) & 0x0F00 & ~kMemBit);
+        const bool mem_corta = (esperado & kMemBit) != 0 &&
+                               ((v.name ? v.effects : 0) & kMemBit) == 0;
+        /* Salvo cuando los campos vienen DECLARADOS: ahi la tabla sabe menos a
+         * proposito, porque alguien miro el fuente y dijo que lo derivado
+         * sobra.  Es el caso de `div` y `mod`, a los que el recorrido les
+         * atribuye los efectos de construir la traza y formatear el mensaje por
+         * llegar al camino de fallo. */
+        const bool declarado = ext ? runtime::vm_isa::kFixedExtended[f.indice & 0xFF]
+                                   : runtime::vm_isa::kFixedPrimary[f.indice & 0xFF];
+        const bool corta = !declarado && (campos_der & ~campos_tab) != 0;
 
-        if (v.name == nullptr || f.nombre != v.name || corta ||
+        if (v.name == nullptr || f.nombre != v.name || corta || mem_corta ||
             marcas_der != marcas_tab) {
             if (discrepan == 0)
                 std::printf("\nLA BASE DE DATOS GENERADA NO CUADRA CON EL "

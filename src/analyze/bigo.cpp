@@ -468,8 +468,7 @@ CostResult analyze_function(const ir::IrFunction &fn,
     std::vector<ir::IrBlockId> headers;
     headers.reserve(lf.loop_count);
     for (uint32_t L = 0; L < lf.loop_count; ++L)
-        headers.push_back(
-            static_cast<ir::IrBlockId>(lf.header_block_of(L)));
+        headers.push_back(static_cast<ir::IrBlockId>(lf.header_block_of(L)));
     const BoundedLoops bounded = ask_bounded_loops(fn, facts, stage);
 
     /* La profundidad que manda es la del bucle mas caro, y "mas caro" no es

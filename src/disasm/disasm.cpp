@@ -328,6 +328,17 @@ static std::string fmt_ext_operands(uint8_t opc,
             const bool host = (ctrl & 0x80) != 0;
             const bool has_index = (ctrl & 0x08) != 0;
             const bool sign_ext = (basef & 0x20) != 0;
+            /* BANCO del registro que se carga o se guarda.  `mld`/`mst` sirven
+             * a los dos: con este bit el destino es `zmm[N]`, sin el es
+             * `regs[N]`.  Ver `exec_instr_mld` (flag 0x10 ya decodificado).
+             *
+             * Sin mirarlo, el desensamblador nombraba `r10` donde la
+             * instruccion escribe `f10`, y eso no es solo un texto equivocado:
+             * quien deriva dependencias de aqui -- el reordenador de paquetes
+             * -- veia la escritura en el banco que NO es, no encontraba la
+             * dependencia real y movia instrucciones que si dependian.  Daba
+             * otro resultado en `bench_array_sum`. */
+            const bool fp_bank = (basef & 0x80) != 0;
             char bs[8];
             if (base == 16)
                 snprintf(bs, sizeof(bs), "rbp");
@@ -347,14 +358,15 @@ static std::string fmt_ext_operands(uint8_t opc,
             // `h` a secas se pasaba por alto.  La diferencia entre tocar
             // memoria de la VM y un puntero del host merece leerse.
             const char *mark = host ? "host" : "vm";
+            const char rb = fp_bank ? 'f' : 'r';
             if (opc == 0x90)
-                snprintf(buf, sizeof(buf), "r%u, %s[%s] (%u bytes%s)", reg,
+                snprintf(buf, sizeof(buf), "%c%u, %s[%s] (%u bytes%s)", rb, reg,
                          mark, addr, width, sign_ext ? ", con signo" : "");
             else
-                snprintf(buf, sizeof(buf), "%s[%s], r%u (%u bytes)", mark, addr,
-                         reg, width);
+                snprintf(buf, sizeof(buf), "%s[%s], %c%u (%u bytes)", mark, addr,
+                         rb, reg, width);
             // mld escribe el registro y lee la direccion; mst al reves.
-            anota(out, reg, opc == 0x90);
+            anota(out, reg, opc == 0x90, fp_bank);
             if (base < 16) anota(out, base, false);
             if (has_index) anota(out, index, false);
         } else if (opc == 0x1F || opc == 0x1E) {
@@ -865,6 +877,40 @@ void print_instruction(std::ostream &out, const DisasmResult &instr,
     out << instr.operands << "\n";
 }
 
+/**
+ * @brief Pasa la condicion del OPERANDO al mnemonico, que es donde vive.
+ *
+ * `jmp.jne 0x...` es UN mnemonico con sufijo, no un `jmp` cuyo primer operando
+ * sea `jne`: asi se escribe en el `.vel` y asi lo lee el ensamblador.  Salia
+ * partido porque quien formatea los operandos no puede tocar el mnemonico --
+ * devuelve una cadena --, y el resultado era `jmp      jne 0x...`, que ademas
+ * de leerse mal no se puede copiar a un fuente.
+ *
+ * Vale para las tres formas condicionales: `jmp.cc`, `cmpjmp.cc` y
+ * `cmpjmpu.cc`.  En el `jmp` incondicional la tabla repite `jmp` como
+ * condicion, y ahi solo se quita.
+ *
+ * @param r Resultado a normalizar en el sitio.
+ */
+static void merge_cond_into_mnemonic(DisasmResult &r) {
+    const bool is_jmp = (r.mnemonic == "jmp");
+    const bool is_cmpjmp = (r.mnemonic == "cmpjmp" || r.mnemonic == "cmpjmpu");
+    if (!is_jmp && !is_cmpjmp) return;
+
+    // En `jmp` la condicion abre los operandos; en `cmpjmp` va tras los dos
+    // registros, o sea detras del ultimo ", ".
+    const size_t start = is_jmp ? 0 : (r.operands.rfind(", j") + 2);
+    if (!is_jmp && r.operands.rfind(", j") == std::string::npos) return;
+    if (start >= r.operands.size() || r.operands[start] != 'j') return;
+
+    const size_t sp = r.operands.find(' ', start);
+    if (sp == std::string::npos) return;
+    const std::string cond = r.operands.substr(start, sp - start);
+    // `jmp jmp` es el incondicional: no se le pone sufijo.
+    if (!(is_jmp && cond == "jmp")) r.mnemonic += "." + cond;
+    r.operands = r.operands.substr(0, start) + r.operands.substr(sp + 1);
+}
+
 std::vector<DisasmResult> disasm_bytes(const uint8_t *data, size_t len,
                                        uint64_t base_addr,
                                        const DisasmOptions &opts) {
@@ -930,6 +976,7 @@ std::vector<DisasmResult> disasm_bytes(const uint8_t *data, size_t len,
         r.mnemonic = fmt->name;
         r.operands = ext ? fmt_ext_operands(opc, fmt, raw, isz, d, &r.regs)
                          : fmt_primary_operands(opc, fmt, raw, d, &r.regs);
+        merge_cond_into_mnemonic(r);
         if (opts.show_hex)
             r.hex = build_hex_string(raw, isz,
                                      opts.use_color && ansi::is_enabled());
@@ -1072,6 +1119,7 @@ void disasm_velb(const std::string &file, std::ostream &out,
         r.mnemonic = fmt->name;
         r.operands = ext ? fmt_ext_operands(opc, fmt, raw, isz, d, &r.regs)
                          : fmt_primary_operands(opc, fmt, raw, d, &r.regs);
+        merge_cond_into_mnemonic(r);
         if (opts.show_hex) r.hex = build_hex_string(raw, isz, col);
 
         print_instruction(out, r, opts);

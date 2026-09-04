@@ -159,7 +159,8 @@ bool precedes_type(TokenKind k);
  * necesitaria igual el dia que el tipo pase a ser columna propia (ver la nota
  * en @c align.cpp), y entonces la lista de calificadores tiene que ser UNA: con
  * dos copias, el dia que se anada uno se anadiria a una y la otra lo colocaria
- * mal, que es un fallo mudo -- sale bien formateado y en el sitio equivocado --.
+ * mal, que es un fallo mudo -- sale bien formateado y en el sitio equivocado
+ * --.
  */
 size_t skip_decl_qualifiers(const std::vector<Piece> &pieces, size_t i);
 

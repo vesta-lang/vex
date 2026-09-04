@@ -7,7 +7,8 @@
 
 /**
  * @file analysis/asa/observed.h
- * @brief Lo que un PASE observa al transformar, dicho en el vocabulario del ASA.
+ * @brief Lo que un PASE observa al transformar, dicho en el vocabulario del
+ * ASA.
  *
  * Un pase del optimizador sabe cosas que no estan ni antes ni despues de el:
  * el desenrollador SABE cuantas vueltas da un bucle justo antes de deshacerlo,
@@ -50,7 +51,8 @@ namespace asa {
  * con el segundo solo elegir.  Y la certeza la trae @p trip, no la pone quien
  * publica.
  *
- * @param store  Para internar el nombre de la funcion (el sujeto lo referencia).
+ * @param store  Para internar el nombre de la funcion (el sujeto lo
+ * referencia).
  * @param fn     Funcion a la que pertenece el bucle.
  * @param header Bloque cabecera del bucle: es el sujeto del hecho.
  * @param trip   Lo que el analisis averiguo, con su certeza dentro.

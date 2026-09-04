@@ -142,7 +142,8 @@ int main() {
         fn.blocks = {entry};
 
         const IrFacts f = build_ir_facts(fn);
-        CHECK(f.def_block[0] == -1, "un parametro no puede tener bloque de def");
+        CHECK(f.def_block[0] == -1,
+              "un parametro no puede tener bloque de def");
         CHECK(f.def(0) == nullptr, "un parametro no puede tener instr de def");
         CHECK(f.param_index(0) == 0, "%0 deberia ser el parametro 0");
         CHECK(f.def_block[1] == 0, "%1 no se define en el bloque 0");
@@ -163,6 +164,7 @@ int main() {
             CHECK(f.def_block[v] == -1, "valor sin definicion no vale -1");
     }
 
-    std::printf("\n=== def_block: %d checks, %d fallos ===\n", g_checks, g_fail);
+    std::printf("\n=== def_block: %d checks, %d fallos ===\n", g_checks,
+                g_fail);
     return g_fail == 0 ? 0 : 1;
 }

@@ -157,8 +157,8 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
     const bool has_bound = exact_value_of(iv.bound, bound_v);
 
     if (has_init && has_bound) {
-        int64_t t = trips_between(init_v, bound_v, iv.cmp_offset, iv.stride,
-                                  iv.cmp_op);
+        int64_t t =
+            trips_between(init_v, bound_v, iv.cmp_offset, iv.stride, iv.cmp_op);
         /* La vuelta de MAS del bucle rotado: el cuerpo se ejecuta antes de la
          * primera comprobacion, asi que da una vuelta mas que veces se cumple
          * la guarda.  Es el error clasico de esta forma, y por eso se hace
@@ -195,9 +195,8 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
      * Las vueltas crecen cuando el inicio es lo menor posible y el limite lo
      * mayor posible, asi que la cota sale de esos dos extremos. */
     int64_t init_lo = 0, init_hi = 0, bound_lo = 0, bound_hi = 0;
-    const bool init_bounded = has_init
-                                  ? (init_lo = init_hi = init_v, true)
-                                  : range_of(iv.init, init_lo, init_hi);
+    const bool init_bounded = has_init ? (init_lo = init_hi = init_v, true)
+                                       : range_of(iv.init, init_lo, init_hi);
     const bool bound_bounded = has_bound
                                    ? (bound_lo = bound_hi = bound_v, true)
                                    : range_of(iv.bound, bound_lo, bound_hi);
@@ -210,8 +209,8 @@ LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
         const bool baja = iv.dir == IvDir::Down;
         const int64_t desde = baja ? init_hi : init_lo;
         const int64_t hasta = baja ? bound_lo : bound_hi;
-        int64_t t = trips_between(desde, hasta, iv.cmp_offset, iv.stride,
-                                  iv.cmp_op);
+        int64_t t =
+            trips_between(desde, hasta, iv.cmp_offset, iv.stride, iv.cmp_op);
         if (t >= 0 && iv.guard_at_latch) { // la vuelta de mas, ver arriba
             if (__builtin_add_overflow(t, (int64_t)1, &t)) t = -1;
         }

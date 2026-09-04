@@ -75,7 +75,7 @@ void form_ops(const IsaData &t, const DbForm &f, bool con_implicitos,
 /// Puntua los operandos del usuario contra los de la forma; -1 si no casan.
 int score_ops(const std::vector<ParsedOp> &user,
               const std::vector<const DbOperand *> &form,
-              bool agrupar_mem = false) {
+              bool agrupar_mem = false, bool imm_in_mnemonic = false) {
     /* Se pueden OMITIR los operandos opcionales del final.
      *
      * `ADDS <Wd>, <Wn>, <Wm>{, <shift> #<amount>}` declara cinco operandos y un
@@ -213,8 +213,18 @@ int score_ops(const std::vector<ParsedOp> &user,
      * un `rep movsq` esta en la instruccion se escriba o no --, y quien lee una
      * linea decide cuanto detalle pone.  Exigir que aparezcan todos dejaba sin
      * modelar la instruccion entera por un operando que nadie escribe nunca. */
-    for (size_t k = jf; k < form.size(); ++k)
+    for (size_t k = jf; k < form.size(); ++k) {
+        /* Y tambien vale si el INMEDIATO va dentro del nombre.
+         *
+         * La comparacion SIMD lleva el predicado en un inmediato de 3 bits, y
+         * el desensamblador lo pliega en el mnemonico: `cmpsd xmm0, xmm1, 6` se
+         * imprime `cmpnlesd xmm0, xmm1`.  La forma declara tres operandos y el
+         * texto escribe dos, asi que sin esto no casa ninguna y la instruccion
+         * queda sin modelar -- el emparejador no la reconoce por un operando
+         * que, en esa grafia, no se puede escribir. */
+        if (imm_in_mnemonic && form[k]->kind == OP_IMM) continue;
         if ((form[k]->flags & 0x1C) == 0) return -1;
+    }
     if (iu < user.size()) return -1; // sobran operandos ESCRITOS
     if (jf < form.size()) s -= 1;    // encajo, pero dejando cosas fuera
     return s;
@@ -252,6 +262,41 @@ const char *cond_canonica_x86(const std::string &c) {
     };
     for (const auto &a : alias)
         if (c == a.first) return a.second;
+    return nullptr;
+}
+
+/**
+ * @brief Es @p up una comparacion SIMD con el PREDICADO plegado en el nombre?
+ *
+ * La comparacion SIMD de x86 lleva el predicado en un inmediato de 3 bits, y el
+ * desensamblador lo mete dentro del mnemonico: `cmpsd xmm0, xmm1, 6` se imprime
+ * `cmpnlesd xmm0, xmm1`.  Eso son pseudo-mnemonicos del ensamblador, no clases
+ * de la ISA -- la base guarda la familia con el predicado como operando --, y
+ * tiene dos consecuencias que hay que tratar juntas: el nombre no se encuentra,
+ * y cuando se encuentra sobra un operando en la forma.  Por eso lo pregunta
+ * tanto la busqueda de clase como el emparejador, y por eso esta aqui una vez.
+ *
+ * @param up Mnemonico en mayusculas.
+ * @return La familia de la base (`CMPSD_XMM`, `CMPSS`, ...), o nullptr.
+ */
+const char *simd_cmp_folded_predicate(const std::string &up) {
+    // Los ocho predicados del inmediato de 3 bits.
+    static const char *const kPreds[] = {"EQ",  "LT",  "LE",  "UNORD",
+                                         "NEQ", "NLT", "NLE", "ORD"};
+    static const std::pair<const char *, const char *> kSuffixes[] = {
+        {"SD", "CMPSD_XMM"}, {"SS", "CMPSS"},
+        {"PD", "CMPPD"},     {"PS", "CMPPS"},
+    };
+    if (up.size() <= 5 || up.compare(0, 3, "CMP") != 0) return nullptr;
+    for (const auto &suf : kSuffixes) {
+        const size_t suffix_len = std::strlen(suf.first);
+        if (up.size() <= 3 + suffix_len) continue;
+        if (up.compare(up.size() - suffix_len, suffix_len, suf.first) != 0)
+            continue;
+        const std::string pred = up.substr(3, up.size() - 3 - suffix_len);
+        for (const char *p : kPreds)
+            if (pred == p) return suf.second;
+    }
     return nullptr;
 }
 
@@ -308,6 +353,29 @@ const DbIclassRange *find_iclass_escrito(const IsaData &t, Isa isa,
      * codificacion y los ensambladores aceptan los dos nombres.  La base guarda
      * uno. */
     if (up == "SAL") return find_iclass(t, "SHL");
+
+    /* La comparacion SIMD lleva el predicado en un INMEDIATO, y el
+     * desensamblador lo pliega dentro del nombre: `cmpsd xmm0, xmm1, 6` sale
+     * como `cmpnlesd`.  Son pseudo-mnemonicos del ensamblador, no clases de la
+     * ISA -- la base guarda `CMPSD_XMM`, `CMPSS`, `CMPPD` y `CMPPS`, con el
+     * predicado como operando --, asi que se le quita el nombre de la condicion
+     * y se pregunta por la familia.
+     *
+     * Los ocho predicados son los del inmediato de 3 bits.  `cmpsd` a secas ya
+     * lo encuentra la busqueda exacta de arriba, asi que aqui solo estan las
+     * formas con condicion pegada. */
+    if (const char *fam = simd_cmp_folded_predicate(up))
+        return find_iclass(t, fam);
+
+    /* `fucompi` es la grafia del desensamblador para "comparar y sacar de la
+     * pila": la base la nombra `FUCOMIP`, con la P del pop al final.  Es la
+     * misma instruccion, no dos. */
+    if (up == "FUCOMPI") return find_iclass(t, "FUCOMIP");
+    if (up == "FCOMPI") return find_iclass(t, "FCOMIP");
+
+    /* `wait` y `fwait` son la MISMA instruccion -- el mismo byte, 0x9B --: el
+     * ensamblador acepta los dos nombres y la base guarda el de la fuente. */
+    if (up == "WAIT") return find_iclass(t, "FWAIT");
 
     /* Una misma grafia para dos instrucciones DISTINTAS: `movsd` es a la vez
      * mover una cadena de dobles-palabra y mover un escalar de doble precision
@@ -652,6 +720,9 @@ int32_t match(Isa isa, const std::string &mnemonic,
      * aqui las dos --; lo dicen los operandos, que es justo lo que puntua el
      * emparejador. */
     const DbIclassRange *rangos[2] = {r, find_iclass(t, up + "_XMM")};
+    /* Lleva el mnemonico el PREDICADO dentro?  Entonces el inmediato que la
+     * forma declara no esta escrito y no puede estarlo.  Ver `score_ops`. */
+    const bool predicate_in_mnemonic = simd_cmp_folded_predicate(up) != nullptr;
     int32_t best = -1;
     int best_s = -1;
     std::vector<const DbOperand *> fo;
@@ -666,7 +737,8 @@ int32_t match(Isa isa, const std::string &mnemonic,
                  fid < rango->first_fid + rango->count; ++fid) {
                 form_ops(t, t.forms[fid], /*con_implicitos=*/pasada >= 1, fo,
                          /*con_no_textuales=*/pasada == 2);
-                int s = score_ops(ops, fo, /*agrupar_mem=*/pasada == 2);
+                int s = score_ops(ops, fo, /*agrupar_mem=*/pasada == 2,
+                                  /*imm_in_mnemonic=*/predicate_in_mnemonic);
                 if (s > best_s) {
                     best_s = s;
                     best = static_cast<int32_t>(fid);

@@ -406,8 +406,8 @@ void compose_fingerprints(
             panics_t = panics_t || f.panics;
             /* Con el modulo delante, las nativas dejan de ser un motivo de
              * impureza POR SI SOLAS: son aristas del grafo como cualquier otra
-             * y se resuelven abajo, consultando lo declarado.  Sin modulo se usa
-             * el eje conservador, que es el de siempre.
+             * y se resuelven abajo, consultando lo declarado.  Sin modulo se
+             * usa el eje conservador, que es el de siempre.
              *
              * La seguridad no depende de esta eleccion: una nativa sin declarar
              * pone `known` en falso mas abajo, y `pure` exige las dos cosas. */

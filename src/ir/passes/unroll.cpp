@@ -427,10 +427,9 @@ bool ir_pass_unroll(IrFunction &fn, int factor,
     if (facts != nullptr) {
         for (const LoopInfo &li : eligible) {
             analysis::asa::Fact f;
-            if (analysis::asa::loop_trip_fact(
-                    *facts, fn, li.st.header, li.trip,
-                    analysis::asa::kStageDuringOpt,
-                    analysis::asa::Source::Static, f))
+            if (analysis::asa::loop_trip_fact(*facts, fn, li.st.header, li.trip,
+                                              analysis::asa::kStageDuringOpt,
+                                              analysis::asa::Source::Static, f))
                 facts->add(std::move(f));
         }
     }

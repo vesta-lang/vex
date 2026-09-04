@@ -42,18 +42,23 @@
 
 /* Sprint D.6 (2026-06-03): profile counters runtime. */
 #include "runtime/profile.h"
+#include "util/reloj.h"
 #include "vesta_rt/public.h"
 
 #include <time.h>
 
-/* Helper local de timing para el JIT path.  Duplicado de @c now_ns en
- * decode_instruction.cpp (no expuesto en header); medir con CLOCK_MONOTONIC
- * para que cuente wall time real del JIT execution.  Solo se invoca cuando
- * @c has_hooks esta activo (modo --stats), zero overhead sin profiler. */
-static inline uint64_t jit_now_ns() {
-    timespec ts{};
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+/* Timing del camino JIT.  Mismo reloj que el interprete (@ref util::reloj), y
+ * a proposito: `time_jit` y `time_exec` se SUMAN para repartir el tiempo entre
+ * los dos motores, y dos relojes distintos hacen que ese reparto no cuadre.
+ *
+ * Leia `CLOCK_MONOTONIC`, que en Windows salta de 100 en 100 ns -- mas que lo
+ * que dura un metodo corto ya compilado.  Solo se invoca con @c has_hooks
+ * activo (modo --stats): sin perfilador no se lee ni una vez. */
+static inline uint64_t jit_now_ticks() { return util::reloj::ahora(); }
+
+/// Nanosegundos desde @p t0.  Se convierte la DIFERENCIA, no cada lectura.
+static inline uint64_t jit_elapsed_ns(uint64_t t0) {
+    return (uint64_t)util::reloj::a_ns(util::reloj::ahora() - t0);
 }
 
 namespace runtime {
@@ -521,9 +526,9 @@ void exec_instr_callvirt(ProcessVM *vm, const DecodedInstr &instr) {
             // aqui (el interp dispatch loop nunca entra a JIT code).
             // Sin este timing, los stats de wall-time son incorrectos.
             const bool measuring = vm->scheduler.has_hooks;
-            const uint64_t t0 = measuring ? jit_now_ns() : 0;
+            const uint64_t t0 = measuring ? jit_now_ticks() : 0;
             (void)jit::enter_jit(fn, reinterpret_cast<vrt_proc *>(vm));
-            if (measuring) vm->scheduler.time_jit += jit_now_ns() - t0;
+            if (measuring) vm->scheduler.time_jit += jit_elapsed_ns(t0);
             if (vm->registers.rip.raw() == pre_rip) {
                 // Sin redirect: avanzar normalmente a ret_addr.
                 vm->registers.rip.qword(ret_addr);
@@ -542,9 +547,9 @@ void exec_instr_callvirt(ProcessVM *vm, const DecodedInstr &instr) {
             jit::JitFn fn = reinterpret_cast<jit::JitFn>(method->jit_code);
             const uint64_t pre_rip = vm->registers.rip.raw();
             const bool measuring = vm->scheduler.has_hooks;
-            const uint64_t t0 = measuring ? jit_now_ns() : 0;
+            const uint64_t t0 = measuring ? jit_now_ticks() : 0;
             (void)jit::enter_jit(fn, reinterpret_cast<vrt_proc *>(vm));
-            if (measuring) vm->scheduler.time_jit += jit_now_ns() - t0;
+            if (measuring) vm->scheduler.time_jit += jit_elapsed_ns(t0);
             if (vm->registers.rip.raw() == pre_rip) {
                 vm->registers.rip.qword(ret_addr);
             }

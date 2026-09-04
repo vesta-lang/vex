@@ -266,6 +266,27 @@ struct ZmmRegister {
         __builtin_memset(data + 8, 0, 56);
     }
 
+    /**
+     * @brief Escribe el escalar double SIN tocar los bytes [8..63].
+     *
+     * Es lo que usa la ARITMETICA escalar (`fadd`, `fsub`, `fmul`, `fdiv`), y
+     * coincide con lo que hace el procesador: `ADDSD` de x86 escribe los ocho
+     * bytes bajos y PRESERVA el resto del registro.  Solo `fmov` zerifica, que
+     * es lo documentado para el.
+     *
+     * Antes toda escritura escalar zerificaba, y salia caro por partida doble:
+     * `ZmmRegister::write_f64` aparecia como simbolo propio con el 11% del
+     * banco de coma flotante, y el `memset` de 56 bytes chocaba con la lectura
+     * de la instruccion siguiente -- Machine Clears al 11,5%, medido con VTune
+     * y descartadas las asistencias de coma flotante, que salian a cero.
+     *
+     * `always_inline` porque son ocho bytes: sin el, GCC decidia por tamano y
+     * dejaba una llamada donde tiene que haber un store.
+     */
+    [[gnu::always_inline]] inline void write_f64_keep(double v) {
+        __builtin_memcpy(data, &v, 8);
+    }
+
     /** @brief Lee el escalar float (IEEE 754 f32) de los bytes [0..3]. */
     [[nodiscard]] float read_f32() const {
         float v;
@@ -277,6 +298,12 @@ struct ZmmRegister {
     void write_f32(float v) {
         __builtin_memcpy(data, &v, 4);
         __builtin_memset(data + 4, 0, 60);
+    }
+
+    /// @brief Escribe el escalar float SIN tocar los bytes [4..63].
+    ///        Ver @ref write_f64_keep para el porque.
+    [[gnu::always_inline]] inline void write_f32_keep(float v) {
+        __builtin_memcpy(data, &v, 4);
     }
 
     /** @brief Lee 128 bits (XMM) al buffer @p dst (>= 16 bytes). */

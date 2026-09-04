@@ -82,8 +82,7 @@ void produce_value_shape(Production &p) {
             s.kind = Subject::Kind::Function;
             s.function = p.store.intern(fn.name);
             p.say_unknown(s, UnknownReason::NothingToSay, "value_shape.none",
-                          kProducerValueShape,
-                          "");
+                          kProducerValueShape, "");
             continue;
         }
 

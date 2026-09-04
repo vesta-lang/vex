@@ -270,7 +270,7 @@ class WorkspaceIndex {
     void erase_uri_entries(const std::string &uri);
 
     std::vector<std::string> roots_; ///< Raices del workspace (fs paths).
-    bool built_ = false; ///< true tras la primera construccion.
+    bool built_ = false;             ///< true tras la primera construccion.
     /**
      * @brief Protege la construccion del indice, que ahora piden VARIOS hilos.
      *

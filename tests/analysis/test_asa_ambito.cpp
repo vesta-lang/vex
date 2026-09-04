@@ -152,7 +152,8 @@ static void stage_is_an_axis_too() {
     Scope during;
     during.stage = kStageDuringOpt;
 
-    CHECK(pre.holds_in(pre), "lo de antes de optimizar vale antes de optimizar");
+    CHECK(pre.holds_in(pre),
+          "lo de antes de optimizar vale antes de optimizar");
     CHECK(!pre.holds_in(post), "y NO vale despues");
     CHECK(!post.holds_in(pre), "ni al reves");
     CHECK(!pre.holds_in(during), "ni en medio: son tres, no dos");

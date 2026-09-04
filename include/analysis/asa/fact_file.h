@@ -255,8 +255,8 @@ struct ReadResult {
      * dejo pasar que el fichero se duplicara solo en cada compilacion.
      */
     uint32_t duplicates = 0;
-    uint32_t corrupt = 0;      ///< registros cuya suma no cuadra.
-    uint32_t lost_proofs = 0;  ///< apoyos en hechos que no se cargaron.
+    uint32_t corrupt = 0;     ///< registros cuya suma no cuadra.
+    uint32_t lost_proofs = 0; ///< apoyos en hechos que no se cargaron.
 };
 
 /**

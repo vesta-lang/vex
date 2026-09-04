@@ -4123,7 +4123,8 @@ CompileResult compile_vx_project(
          * que es la mayoria. */
         if (wants_stage_(opts, analysis::asa::kStagePreOpt) &&
             (!opts.asa_domains.empty() || opts.asa_all_domains)) {
-            /* Vacio hacia la puerta = TODOS, que es lo que pide quien vuelca. */
+            /* Vacio hacia la puerta = TODOS, que es lo que pide quien vuelca.
+             */
             const std::vector<const char *> asa_wanted =
                 opts.asa_all_domains ? std::vector<const char *>{}
                                      : opts.asa_domains;
@@ -4534,10 +4535,9 @@ CompileResult compile_vx_project(
          * `contains` de aqui no veia lo que ya estaba en un paquete. */
         const std::string vxdbg_dir =
             opts.vxdbg_dir.empty() ? default_vxdbg_dir() : opts.vxdbg_dir;
-        vxdbg::PackNodeStore store(
-            vxdbg_dir,
-            std::unique_ptr<vxdbg::NodeStore>(
-                new vxdbg::FileNodeStore(vxdbg_dir)));
+        vxdbg::PackNodeStore store(vxdbg_dir,
+                                   std::unique_ptr<vxdbg::NodeStore>(
+                                       new vxdbg::FileNodeStore(vxdbg_dir)));
         vxdbg::ContentHash h;
         if (!map.symbols.empty() && vxdbg::store_node(store, map, h))
             res.vxdbg_artifact_map = h;

@@ -35,6 +35,53 @@
  *   - OF (bit 3): bandera de desbordamiento con signo.
  *   - DM (bit 4): bandera de modo distribuido.
  */
+/**
+ * @defgroup RF_bits Posiciones de las banderas ARITMETICAS dentro de `arith`
+ * @brief Las cuatro que produce una operacion, para poder componerlas en un
+ *        registro y escribirlas de una sola vez.
+ * @{
+ */
+enum : uint8_t {
+    RF_SF = 1u << 0, ///< signo
+    RF_ZF = 1u << 1, ///< cero
+    RF_CF = 1u << 2, ///< acarreo
+    RF_OF = 1u << 3, ///< desbordamiento con signo
+};
+/** @} */
+
+/**
+ * @brief Registro de banderas de la maquina virtual.
+ *
+ * POR QUE DM VIVE APARTE, que es lo unico raro de esta estructura.
+ *
+ * Las cuatro banderas ARITMETICAS comparten un byte (@c arith) y el modo
+ * distribuido NO esta con ellas, aunque en el valor observable de `raw` siga
+ * ocupando el bit 4 como siempre.
+ *
+ * Antes las cinco estaban en el mismo campo de bits, y eso tenia un precio que
+ * no se veia leyendo el codigo: `flags.bits.ZF = x` sobre un campo de bits no
+ * es una escritura, es un LEE-MODIFICA-ESCRIBE del byte entero.  Cada
+ * operacion ALU hacia CUATRO, una por bandera, y las cuatro sobre la misma
+ * direccion -- o sea encadenadas por el reenvio de almacen a carga, cada una
+ * esperando a la anterior.  Medido con VTune sobre `test_mips`: 6,73 s de unos
+ * 25, el 27% del interprete, calculando banderas de `adds` y `subs`.
+ *
+ * Y habia una segunda consecuencia, peor que la lentitud.  El derivador de
+ * efectos camina el codigo maquina de los manejadores, ve ese lee-modifica-
+ * escribe y concluye -- correctamente, a su nivel -- que `add` LEE las
+ * banderas.  La tabla generada marcaba `add`, `sub`, `xor`, `adds3`... con
+ * `VE_R_FLAGS`, que semanticamente es falso: un `add` no lee banderas.  Como
+ * esa tabla es de donde sale si dos instrucciones son independientes, cada par
+ * de operaciones aritmeticas parecia dependiente entre si por las banderas, y
+ * eso es justo lo que impide reordenar al formar un paquete.
+ *
+ * Con DM fuera, una operacion aritmetica escribe `arith` de una vez y sin
+ * leerlo: un store puro, sin cadena de dependencias y sin lectura que el
+ * derivador pueda ver.
+ *
+ * El valor de `raw` NO cambia: se recompone con DM en el bit 4, porque el
+ * bytecode lo expone como registro especial (RFLAGS) y ahi si es ABI.
+ */
 typedef struct RFlags_t {
     union {
         struct {
@@ -43,13 +90,27 @@ typedef struct RFlags_t {
             uint8_t CF : 1; ///< Bandera de acarreo: 1 si hubo carry o borrow
             uint8_t OF : 1; ///< Bandera de desbordamiento: 1 si hubo overflow
                             ///< con signo
-            uint8_t DM : 1; ///< Bandera de modo distribuido: 1 activa semantica
-                            ///< distribuida
-        } bits;             ///< Acceso individual a cada bandera
+        } bits;             ///< Acceso individual a cada bandera aritmetica
 
-        uint64_t raw; ///< Acceso directo al valor entero de 64 bits de todas
-                      ///< las banderas
+        uint8_t arith; ///< Las cuatro de golpe.  Escribirlo es un store PURO.
     };
+
+    /// Modo distribuido: 1 activa semantica distribuida.  Fuera del byte
+    /// aritmetico a proposito (ver la explicacion de arriba).  Nadie lo
+    /// escribe hoy; se lee en `movc`, en el volcado del proceso y en el
+    /// depurador.
+    uint8_t DM;
+
+    /// @brief Valor observable de 64 bits.  SF=0, ZF=1, CF=2, OF=3, DM=4.
+    uint64_t raw() const {
+        return (uint64_t)arith | ((uint64_t)(DM & 1u) << 4);
+    }
+
+    /// @brief Fija las banderas desde el valor observable de 64 bits.
+    void set_raw(uint64_t v) {
+        arith = (uint8_t)(v & 0x0Fu);
+        DM = (uint8_t)((v >> 4) & 1u);
+    }
 } RFlags_t;
 
 /**

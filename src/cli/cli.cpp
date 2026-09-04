@@ -503,9 +503,12 @@ static void command_run(const std::string &args) {
             if (show_stats) {
                 double elapsed_ms =
                     std::chrono::duration<double, std::milli>(t1 - t0).count();
+                /* Sin factor de escala: el contador se incrementa una vez por
+                 * instruccion retirada.  Llevaba un `* 256` que salia de un
+                 * comentario equivocado en su declaracion. */
                 uint64_t total_instr = 0;
                 for (auto &sched : vm->schedulers)
-                    total_instr += sched->profiler_instr_counter * 256ULL;
+                    total_instr += sched->profiler_instr_counter;
                 double mips = (elapsed_ms > 0)
                                   ? (total_instr / 1e6) / (elapsed_ms / 1000.0)
                                   : 0.0;
@@ -523,7 +526,7 @@ static void command_run(const std::string &args) {
                 for (size_t i = 0; i < vm->schedulers.size(); ++i) {
                     auto &sched = *vm->schedulers[i];
                     ss << "    [sched " << i << "]"
-                       << "  instr=" << (sched.profiler_instr_counter * 256ULL)
+                       << "  instr=" << sched.profiler_instr_counter
                        << "  time_exec=" << sched.time_exec << " ns\n";
                 }
                 vesta::scout() << ss.str();
@@ -1414,7 +1417,7 @@ static void command_schedtop(const std::string &args) {
             if (!first_frame) {
                 for (size_t i = 0; i < n; ++i) {
                     uint64_t di =
-                        curr_instr[i] - prev_instr[i]; // ticks de 256 instruc
+                        curr_instr[i] - prev_instr[i]; // instrucciones, 1 a 1
                     uint64_t dt =
                         curr_time[i] - prev_time[i]; // ns en exec en ~500ms
                     ips[i] = (double)di * 256.0;

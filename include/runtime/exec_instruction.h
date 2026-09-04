@@ -177,7 +177,7 @@ static uint64_t read_rsp(ProcessVM *vm) {
     return vm->registers.stack_pointer.raw();
 } ///< Lee RSP
 static uint64_t read_rflags(ProcessVM *vm) {
-    return vm->registers.flags.raw;
+    return vm->registers.flags.raw();
 } ///< Lee RFLAGS
 
 /**
@@ -278,7 +278,7 @@ static void write_rsp(ProcessVM *vm, uint64_t v) {
     vm->registers.stack_pointer.raw(v);
 } ///< Escribe RSP
 static void write_rflags(ProcessVM *vm, uint64_t v) {
-    vm->registers.flags.raw = v;
+    vm->registers.flags.set_raw(v);
 } ///< Escribe RFLAGS
 
 /**
@@ -407,6 +407,33 @@ void exec_instr_div_sib(ProcessVM *vm, const DecodedInstr &instr);
 void exec_instr_cmp_sib(ProcessVM *vm, const DecodedInstr &instr);
 /** @brief Ejecuta MOV con acceso a memoria SIB. */
 void exec_instr_mov_sib(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
+ * @brief Direccion efectiva de un operando de memoria codificado SIB.
+ *
+ * Codificacion del campo `scale`: bit 2 = hay indice, bits 1-0 = desplazamiento
+ *   0 -> indice * 1     2 -> indice * 4
+ *   1 -> indice * 2     3 -> indice * 8
+ *
+ * EN LA CABECERA a proposito: la usan el manejador (`exec_instruction_alu.cpp`)
+ * y la ruta rapida del interprete (`scheduler.cpp`), y tiene que ser la MISMA
+ * cuenta en los dos.  Copiada en dos sitios, el dia que difieran no daria un
+ * error de compilacion -- daria otra direccion, que es mucho peor.
+ *
+ * @param vm    Proceso que ejecuta.
+ * @param instr Instruccion descodificada, con sus campos `mem_data`.
+ * @return      La direccion efectiva, de 64 bits.
+ */
+inline uint64_t sib_effective_addr(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint64_t base =
+        vm->registers.regs[instr.data_instruction.mem_data.reg_base].raw();
+    // bit 2 del campo `scale` dice si hay registro de indice
+    if (((instr.data_instruction.mem_data.scale >> 2) & 1) == 0) return base;
+    const uint64_t index =
+        vm->registers.regs[instr.data_instruction.mem_data.reg_index].raw();
+    const uint8_t scale = instr.data_instruction.mem_data.scale & 0x3;
+    return base + (index << scale); // base + indice * (1 << escala)
+}
 /** @brief Ejecuta MOVC: movimiento entre registro y memoria virtual o del host.
  */
 void exec_instr_movc_mem(ProcessVM *vm, const DecodedInstr &instr);
@@ -1878,6 +1905,70 @@ void exec_instr_fmov(ProcessVM *vm, const DecodedInstr &instr);
 
 /** @brief FADD: suma flotante (escalar o packed); reg1 += reg2. */
 void exec_instr_fadd(ProcessVM *vm, const DecodedInstr &instr);
+
+/**
+ * @defgroup fbin_isa Binarias de coma flotante, una variante por ISA
+ * @brief El manejador COMPLETO compilado para un nivel de ISA concreto.
+ *
+ * Cada una lleva `[[gnu::target(...)]]`, con lo que el cuerpo SIMD se mete en
+ * linea dentro de ella y no queda ninguna llamada.  Cual usar se decide UNA
+ * vez -- con @ref float_isa_level, al construir la tabla de despacho del
+ * interprete --, no en cada instruccion.  Ver la explicacion larga junto a
+ * `DEF_FBIN_ISA` en `src/runtime/exec_instruction_float.cpp`.
+ * @{
+ */
+/* Escalares: no dependen del nivel de ISA. */
+void exec_instr_fadd_s(ProcessVM *vm, const DecodedInstr &instr);
+void exec_instr_fsub_s(ProcessVM *vm, const DecodedInstr &instr);
+void exec_instr_fmul_s(ProcessVM *vm, const DecodedInstr &instr);
+void exec_instr_fdiv_s(ProcessVM *vm, const DecodedInstr &instr);
+
+/* Empaquetadas: por nivel de ISA (sse2/avx/avx512) Y por ancho (x=128,
+ * y=256, z=512 bits).  Fijar tambien el ancho es lo que convierte el bucle
+ * SIMD en operaciones rectas. */
+#define VESTA_DECL_FBIN_ISA(suffix)                                            \
+    void exec_instr_fadd_##suffix##_x(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fadd_##suffix##_y(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fadd_##suffix##_z(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fsub_##suffix##_x(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fsub_##suffix##_y(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fsub_##suffix##_z(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fmul_##suffix##_x(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fmul_##suffix##_y(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fmul_##suffix##_z(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fdiv_##suffix##_x(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fdiv_##suffix##_y(ProcessVM *, const DecodedInstr &);      \
+    void exec_instr_fdiv_##suffix##_z(ProcessVM *, const DecodedInstr &);
+
+VESTA_DECL_FBIN_ISA(sse2)
+VESTA_DECL_FBIN_ISA(avx)
+VESTA_DECL_FBIN_ISA(avx512)
+#undef VESTA_DECL_FBIN_ISA
+
+/// @brief Nivel de ISA de coma flotante de esta maquina: 0=SSE2, 1=AVX,
+///        2=AVX-512.  Se detecta una vez y se cachea.
+int float_isa_level();
+
+/**
+ * @brief Manejador ya especializado para la ISA de esta maquina, si lo hay.
+ *
+ * Se llama al DESCODIFICAR, y lo que devuelve se guarda en
+ * @c DecodedInstr::exec_cached.  Asi la especializacion la aprovechan TODOS
+ * los consumidores -- el camino lento del interprete y tambien `exec_bundle`,
+ * que no pasa por la tabla de rutas rapidas -- sin que ninguno tenga que
+ * saber que existe.
+ *
+ * Se llama DESPUES de descodificar, no antes: hace falta el `mode`, que es de
+ * donde sale el ancho, y ese lo rellena el decodificador.
+ *
+ * @param opcode2 Opcode de la tabla extendida.
+ * @param mode    Ancho del operando (0=escalar, 1=128, 2=256, 3=512 bits).
+ * @return El manejador especializado, o @c nullptr si esa instruccion no tiene
+ *         variantes (y entonces se deja el generico).
+ */
+void (*float_exec_specialized(uint8_t opcode2, uint8_t mode))(
+    ProcessVM *, const DecodedInstr &);
+/** @} */
 
 /** @brief FSUB: resta flotante; reg1 -= reg2. */
 void exec_instr_fsub(ProcessVM *vm, const DecodedInstr &instr);

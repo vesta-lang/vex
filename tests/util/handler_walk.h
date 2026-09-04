@@ -148,11 +148,26 @@ namespace tests {
 /// leer memoria ajena.
 constexpr size_t kWalkBytesMax = 128 * 1024;
 
-/// Tope de instrucciones recorridas por manejador.  Se probo a subirlo a
-/// 200.000 y NO cambio ni un opcode: la truncacion no era la causa de los
-/// huecos, era un diagnostico mio que llamaba "truncado" a un salto indirecto
-/// sin registrar.  Se deja donde estaba.
-constexpr uint32_t kWalkInstrMax = 20000;
+/* Tope de instrucciones recorridas por manejador.
+ *
+ * Estuvo en 20.000 con una nota que decia que subirlo a 200.000 no cambiaba ni
+ * un opcode.  Era CIERTO entonces y dejo de serlo: el recorrido se paraba en el
+ * primer `ret`, asi que no llegaba ni de lejos al tope y la medicion solo decia
+ * que el limite no apretaba.  Al dejar de cortar ahi -- media funcion se
+ * quedaba sin mirar y aun asi se declaraba EXACTA -- el tope pasa a ser el que
+ * manda.
+ *
+ * Medido de nuevo, ahora que si aprieta:
+ *
+ *     20.000  ->  126 exactas en  ~1 s
+ *    100.000  ->  183 exactas en 7,4 s
+ *    400.000  ->  192 exactas en 12,7 s
+ *
+ * Se queda en 400.000.  Esto corre al REGENERAR la base de datos, no en cada
+ * compilacion, asi que doce segundos a cambio de 66 opcodes que dejan de estar
+ * declarados como desconocidos es un cambio bueno.
+ */
+constexpr uint32_t kWalkInstrMax = 400000;
 
 #if !defined(_WIN32)
 /**
@@ -440,6 +455,30 @@ struct AddrOrigin {
     bool valid = false;
 };
 
+/**
+ * @brief Un rango DENTRO de un argumento cuyo contenido es un PUNTERO a
+ *        memoria que al dominio le interesa seguir.
+ *
+ * El recorredor no sabe que estructura es -- eso es del dominio --, solo que
+ * "lo que se lea de aqui es un puntero a algo que quiero marcar" y que la marca
+ * se arrastra por copias y aritmetica de punteros.
+ *
+ * Existe porque sin ella hay accesos a memoria que NO se ven.  El manejador de
+ * `loadz` hace `vm->vm_mem.read_u8(addr)`: lo que se mira es el objeto de
+ * memoria, se saca de el un puntero y se accede POR ESE PUNTERO.  Mirando solo
+ * el desplazamiento del acceso final no cae en ningun campo vigilado, asi que
+ * el opcode salia como si no tocara memoria -- y con eso una carga y un almacen
+ * se podian intercambiar al reordenar, que no da un error: da otro resultado.
+ */
+struct TaintRegion {
+    int arg = -1;     ///< que argumento (0 = el primero); -1 = sin rango
+    int64_t lo = 0;   ///< desplazamiento inicial dentro de el
+    int64_t hi = 0;   ///< y final (excluido)
+    bool contains(int base, int64_t disp) const {
+        return arg >= 0 && base == arg && disp >= lo && disp < hi;
+    }
+};
+
 /// Cuantas ranuras del area de argumentos se siguen.  Ocho por ocho bytes son
 /// 64, de sobra para cualquier manejador: el que mas argumentos pasa usa cinco.
 constexpr int kStackArgs = 8;
@@ -484,6 +523,64 @@ struct TableState {
     int pending_cmp_reg = -1;
     int64_t pending_cmp_imm = 0;
     std::vector<uint64_t> loaded[16];
+    /* Por que NO se pudo leer la tabla al cargar en este registro.
+     *
+     * El fallo y quien lo sufre estan separados: la tabla se lee en el
+     * `mov rax, [base+idx*8]` y quien se queda sin destinos es el `jmp rax` de
+     * dos instrucciones despues.  Sin arrastrar la razon, ese salto se apunta
+     * como "indirecto" a secas y el informe no dice QUE cerrar -- que es lo
+     * mismo que no decir nada. */
+    const char *load_fail[16] = {};
+
+    /**
+     * @brief Procedencias GUARDADAS EN LA PILA por el propio manejador.
+     *
+     * No son los argumentos que se pasan -- eso es `incoming` --, sino los
+     * DERRAMES: el compilador se queda sin registros, guarda un valor en su
+     * marco y lo recarga mas tarde.  Entre medias, la procedencia se perdia.
+     *
+     * Costaba justo las ESCRITURAS al banco de registros, que es la mitad que
+     * importa.  El patron es este, y sale en la ALU entera:
+     *
+     *     movzx r8d, byte ptr [rdx+8]   ; el campo reg1
+     *     mov   [rsp+0x20], r8d         ; ...a la pila
+     *     ...
+     *     movsxd rax, [rbp+0x38]        ; ...y de vuelta, ya sin procedencia
+     *     mov   [r10+rax*8+0x60], r8b   ; escribe regs[reg1] -- y no se sabia
+     *
+     * De 232 instrucciones solo 35 declaraban escribir en el banco por esto.
+     */
+    struct Spill {
+        bool used = false;
+        bool from_rbp = false; ///< la ranura se nombro por el marco, no por rsp
+        int64_t off = 0;       ///< desplazamiento, ya normalizado
+        Origin o;
+    };
+    /// Dieciseis basta: un manejador no derrama mas.  Array fijo, no un mapa:
+    /// esto se consulta por cada acceso a la pila del recorrido.
+    static constexpr int kSpills = 16;
+    Spill spill[kSpills];
+
+    /* Donde quedo `rbp` respecto a la entrada de la funcion.
+     *
+     * Con MARCO DE PILA -- que es lo que trae el build de Profile, del que se
+     * deriva -- una funcion lee sus argumentos y sus locales por `rbp`, no por
+     * `rsp`.  El recorrido solo entendia `[rsp+d]`, asi que en cuanto el
+     * compilador ponia marco, los argumentos que llegan por la pila dejaban de
+     * verse: es donde viaja el CAMPO del operando hasta el ayudante que escribe
+     * en el banco, y por eso las escrituras no se derivaban.
+     *
+     * Se apunta al ver `mov rbp, rsp` o `lea rbp, N(rsp)`, que es como se
+     * establece.  Con esto, `[rbp+d]` se normaliza a lo mismo que `[rsp+d]`. */
+    int64_t rbp_delta = 0;
+    bool rbp_known = false;
+
+    /// El rango cuyo contenido hay que marcar.  Lo pone el dominio al arrancar
+    /// el recorrido; el recorredor solo lo propaga.
+    TaintRegion taint;
+    /// bit i = el registro i lleva un puntero salido de @ref taint.  Un acceso
+    /// con esa base es un acceso a la memoria del dominio.
+    bool mem_ptr[16] = {};
 };
 
 /**
@@ -493,16 +590,57 @@ struct TableState {
  * cargar-y-saltar--, para que la condicion de "esto es una tabla" sea UNA y no
  * dos que se separen con el tiempo.
  *
- * @return Cuantas entradas se leyeron; 0 si no hay base, no hay cota, o lo
- *         leido no apunta a codigo.
+ * Y DICE POR QUE renuncia.  Devolvia 0 por seis motivos distintos -- sin base
+ * rastreada, sin cota, cota absurda, tabla ilegible, entradas que no son
+ * codigo -- y el llamante no podia distinguirlos: el informe acababa diciendo
+ * "no se sabe" sin decir QUE cerrar, que es un analisis que parece funcionar.
+ * `porque` sale con la razon exacta.
+ *
+ * @param mem      Operando de memoria que direcciona la tabla.
+ * @param st       Estado rastreado de los registros.
+ * @param out      Destinos leidos, si los hay.
+ * @param relative Entradas de 32 bits relativas a la tabla (tabla de `switch`).
+ * @param porque   Si no es nulo, recibe la razon de renunciar.
+ * @return Cuantas entradas se leyeron; 0 si no se pudo.
  */
 inline uint32_t read_dispatch_entries(const cs_x86_op &mem,
                                       const TableState &st,
                                       std::vector<uint64_t> &out,
-                                      bool relative = false) {
+                                      bool relative = false,
+                                      const char **porque = nullptr) {
+    auto rendirse = [&](const char *r) -> uint32_t {
+        if (porque != nullptr) *porque = r;
+        return 0;
+    };
     const int b = gpr_slot(mem.mem.base);
     const int k = gpr_slot(mem.mem.index);
-    if (b < 0 || k < 0) return 0;
+    if (b < 0) return rendirse("la base no es un registro general");
+
+    /* SIN INDICE no es una tabla: es UNA entrada.
+     *
+     * `call qword ptr [rax + 0x68]` es un puntero a funcion guardado en un
+     * campo, no un despacho por indice.  Si la base se conoce, el destino no
+     * hay que acotarlo -- se LEE, y es uno solo --.  Rechazarlo por "no hay
+     * indice" dejaba sin resolver un idioma que esta completamente
+     * determinado.
+     *
+     * Si la base no se conoce sigue sin resolverse, que es el caso de un
+     * puntero sacado de un objeto que solo existe al ejecutar. */
+    if (k < 0) {
+        const uint64_t solo = st.base[b];
+        if (solo == 0) return rendirse("no se rastreo la base del puntero");
+        const uint64_t donde = solo + (uint64_t)mem.mem.disp;
+        if (!is_readable_addr(donde))
+            return rendirse("el puntero no se puede leer en esa direccion");
+        uint64_t target = 0;
+        std::memcpy(&target, reinterpret_cast<const void *>(donde),
+                    sizeof(target));
+        if (!is_code_addr(target))
+            return rendirse("lo que hay en ese campo no apunta a codigo");
+        out.push_back(target);
+        return 1;
+    }
+
     const uint64_t base = st.base[b];
     int64_t mask = st.mask[k];
     /* Sin mascara explicita, la cota puede salir del ANCHO del valor.
@@ -523,16 +661,18 @@ inline uint32_t read_dispatch_entries(const cs_x86_op &mem,
         st.origin[k].width < 16)
         mask = (static_cast<int64_t>(1) << st.origin[k].width) - 1;
     // Sin base no hay donde mirar; sin cota no hay tamano demostrable.
-    if (base == 0 || mask <= 0) return 0;
+    if (base == 0) return rendirse("no se rastreo la base de la tabla");
+    if (mask <= 0) return rendirse("el indice no esta acotado (ni mascara ni ancho)");
     const uint64_t count = static_cast<uint64_t>(mask) + 1;
-    if (count > kWalkTableMax) return 0;
+    if (count > kWalkTableMax)
+        return rendirse("la cota del indice es demasiado grande para ser una tabla");
     const uint64_t scale = mem.mem.scale > 0
                                ? static_cast<uint64_t>(mem.mem.scale)
                                : sizeof(uint64_t);
     const uint64_t table = base + static_cast<uint64_t>(mem.mem.disp);
     if (!is_readable_addr(table) ||
         !is_readable_addr(table + count * scale - 1))
-        return 0;
+        return rendirse("la tabla no se puede leer en esa direccion");
     uint32_t done = 0;
     for (uint64_t e = 0; e < count; ++e) {
         uint64_t target = 0;
@@ -557,6 +697,8 @@ inline uint32_t read_dispatch_entries(const cs_x86_op &mem,
         out.push_back(target);
         ++done;
     }
+    if (done == 0)
+        return rendirse("ninguna entrada de la tabla apunta a codigo");
     return done;
 }
 
@@ -596,6 +738,29 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             st.rsp_known = false; // toca el puntero de otra forma
     }
 
+    /* ESTABLECER el marco: `mov rbp, rsp` o `lea rbp, N(rsp)`.
+     *
+     * A partir de aqui `[rbp+d]` es una direccion fija de este marco, y se
+     * puede traducir a lo mismo que `[rsp+d]`.  Cualquier otra escritura sobre
+     * `rbp` lo invalida: un marco que ya no es el que se apunto lleva a leer
+     * OTRA ranura, y eso atribuye el campo equivocado. */
+    if (x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
+        x.operands[0].reg == X86_REG_RBP) {
+        if (st.rsp_known && m == "mov" && x.operands[1].type == X86_OP_REG &&
+            x.operands[1].reg == X86_REG_RSP) {
+            st.rbp_delta = st.rsp_delta;
+            st.rbp_known = true;
+        } else if (st.rsp_known && m == "lea" &&
+                   x.operands[1].type == X86_OP_MEM &&
+                   x.operands[1].mem.base == X86_REG_RSP &&
+                   x.operands[1].mem.index == X86_REG_INVALID) {
+            st.rbp_delta = st.rsp_delta + x.operands[1].mem.disp;
+            st.rbp_known = true;
+        } else {
+            st.rbp_known = false;
+        }
+    }
+
     /* Guardar un valor en el area de argumentos SALIENTES.  Va antes que nada
      * porque el destino es la pila, y el resto del seguimiento la descarta. */
     if (m == "mov" && x.op_count == 2 && x.operands[0].type == X86_OP_MEM &&
@@ -607,16 +772,87 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         if (s >= 0 && off >= 0 && (off % 8) == 0 && off / 8 < kStackArgs)
             st.outgoing[off / 8] = st.origin[s];
     }
-    /* Y leer uno de los que dejo el LLAMANTE.  La ranura N del llamante se ve
-     * aqui en `[rsp + N + 8 + reservado]`: los ocho son la direccion de retorno
-     * que el `call` apilo. */
+
+    /* DERRAME a la pila: guardar en el marco propio un valor con procedencia.
+     *
+     * Es lo mismo que lo de arriba pero sin la restriccion de ser un argumento
+     * saliente: cualquier desplazamiento, y tambien por `rbp`.  Se apunta para
+     * poder recuperarlo al recargarlo, que es donde se perdian las escrituras
+     * al banco.  Ver `TableState::Spill`. */
+    if (m == "mov" && x.op_count == 2 && x.operands[0].type == X86_OP_MEM &&
+        x.operands[0].mem.index == X86_REG_INVALID &&
+        (x.operands[0].mem.base == X86_REG_RSP ||
+         x.operands[0].mem.base == X86_REG_RBP) &&
+        x.operands[1].type == X86_OP_REG) {
+        const int s = gpr_slot(x.operands[1].reg);
+        const bool por_marco = (x.operands[0].mem.base == X86_REG_RBP);
+        // Por `rsp` hay que normalizar: el desplazamiento depende de cuanto se
+        // ha movido el puntero, y eso el recorrido ya lo sigue.
+        if (s >= 0 && st.origin[s].valid && (por_marco || st.rsp_known)) {
+            const int64_t off = x.operands[0].mem.disp +
+                                (por_marco ? 0 : st.rsp_delta);
+            int libre = -1;
+            for (int i = 0; i < TableState::kSpills; ++i) {
+                if (st.spill[i].used && st.spill[i].from_rbp == por_marco &&
+                    st.spill[i].off == off) {
+                    libre = i;
+                    break;
+                }
+                if (!st.spill[i].used && libre < 0) libre = i;
+            }
+            if (libre >= 0) {
+                st.spill[libre].used = true;
+                st.spill[libre].from_rbp = por_marco;
+                st.spill[libre].off = off;
+                st.spill[libre].o = st.origin[s];
+            }
+        }
+    }
+    /* Y RECARGARLO.  Sin esto el registro vuelve sin procedencia y el acceso
+     * que hace con el se queda sin atribuir. */
     if ((m == "mov" || m == "movzx" || m == "movsx" || m == "movsxd") &&
         x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
         x.operands[1].type == X86_OP_MEM &&
-        x.operands[1].mem.base == X86_REG_RSP &&
-        x.operands[1].mem.index == X86_REG_INVALID && st.rsp_known) {
+        x.operands[1].mem.index == X86_REG_INVALID &&
+        (x.operands[1].mem.base == X86_REG_RSP ||
+         x.operands[1].mem.base == X86_REG_RBP)) {
         const int d = gpr_slot(x.operands[0].reg);
-        const int64_t n = x.operands[1].mem.disp + st.rsp_delta - 8;
+        const bool por_marco = (x.operands[1].mem.base == X86_REG_RBP);
+        if (d >= 0 && (por_marco || st.rsp_known)) {
+            const int64_t off = x.operands[1].mem.disp +
+                                (por_marco ? 0 : st.rsp_delta);
+            for (int i = 0; i < TableState::kSpills; ++i)
+                if (st.spill[i].used && st.spill[i].from_rbp == por_marco &&
+                    st.spill[i].off == off) {
+                    st.origin[d] = st.spill[i].o;
+                    st.arg[d] = -1;
+                    st.base[d] = 0;
+                    st.mask[d] = 0;
+                    st.loaded[d].clear();
+                    st.addr[d] = AddrOrigin{};
+                    return;
+                }
+        }
+    }
+    /* Y leer uno de los que dejo el LLAMANTE.  La ranura N del llamante se ve
+     * aqui en `[rsp + N + 8 + reservado]`: los ocho son la direccion de retorno
+     * que el `call` apilo. */
+    /* Y tambien por el MARCO, que es como se leen en cuanto el compilador lo
+     * establece: `[rbp+d]` es la misma direccion que `[rsp + d + (rbp-rsp)]`.
+     * Sin esta mitad, con marco de pila no se leia ningun argumento de la pila
+     * -- y por ahi viaja el CAMPO del operando hasta el ayudante que escribe en
+     * el banco --. */
+    const bool por_rsp = (x.operands[1].mem.base == X86_REG_RSP);
+    const bool por_rbp = (x.operands[1].mem.base == X86_REG_RBP);
+    if ((m == "mov" || m == "movzx" || m == "movsx" || m == "movsxd") &&
+        x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
+        x.operands[1].type == X86_OP_MEM &&
+        (por_rsp || por_rbp) &&
+        x.operands[1].mem.index == X86_REG_INVALID &&
+        ((por_rsp && st.rsp_known) || (por_rbp && st.rbp_known))) {
+        const int d = gpr_slot(x.operands[0].reg);
+        const int64_t base_delta = por_rbp ? st.rbp_delta : st.rsp_delta;
+        const int64_t n = x.operands[1].mem.disp + base_delta - 8;
         if (d >= 0 && n >= 0 && (n % 8) == 0 && n / 8 < kStackArgs &&
             st.incoming[n / 8].valid) {
             st.origin[d] = st.incoming[n / 8];
@@ -687,6 +923,18 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         if (d >= 0) {
             st.origin[d] = Origin{};
             st.arg[d] = -1;
+            /* LO QUE SE CARGA DE LA REGION MARCADA es un puntero a la memoria
+             * del dominio, y el registro se queda con la marca.  Si no, la
+             * pierde: lo que hubiera antes en ese registro ya no esta. */
+            st.mem_ptr[d] =
+                (b >= 0 && st.arg[b] >= 0 &&
+                 st.taint.contains(st.arg[b], x.operands[1].mem.disp)) ||
+                /* Y tambien si se carga LEYENDO POR un puntero que ya estaba
+                 * marcado: una estructura de memoria lleva punteros dentro
+                 * (la arena, la cache de pagina, la tabla de traduccion), y
+                 * seguir solo el primer salto perderia justo los accesos que
+                 * se hacen por el segundo. */
+                (b >= 0 && st.mem_ptr[b]);
             if (b >= 0 && st.arg[b] >= 0) {
                 st.origin[d].base = st.arg[b];
                 st.origin[d].disp = x.operands[1].mem.disp;
@@ -788,6 +1036,21 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             st.base[d] = in.address + in.size + x.operands[1].mem.disp;
             st.mask[d] = 0;
             st.loaded[d].clear();
+            /* Una direccion relativa al codigo es una GLOBAL nuestra -- una
+             * tabla, `std::cerr` --, no un puntero a la region marcada.  Sin
+             * borrarlo aqui la marca se quedaba pegada al registro y hacia
+             * pasar por "nuestro" al primer argumento de cualquier llamada
+             * posterior, que es justo lo que impedia descartar el camino de
+             * diagnostico.
+             *
+             * Y con ella, TODA la procedencia anterior: el registro ya no lleva
+             * lo que llevaba.  Salir de aqui sin borrarla dejaba una direccion
+             * rancia que la semilla de la siguiente llamada seguia dando por
+             * buena. */
+            st.mem_ptr[d] = false;
+            st.origin[d] = Origin{};
+            st.arg[d] = -1;
+            st.addr[d] = AddrOrigin{};
         }
         return;
     }
@@ -804,6 +1067,19 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         x.operands[1].mem.base != X86_REG_RIP) {
         const int d = gpr_slot(x.operands[0].reg);
         const int b = gpr_slot(x.operands[1].mem.base);
+        /* La DIRECCION de la region marcada tambien lleva la marca, no solo lo
+         * que se lee de ella.  Es la forma normal en que un manejador llega a
+         * la memoria: `lea rcx, [proc + 0x40670]` y una llamada al ayudante que
+         * hace el acceso.  Sin esto, `loadz` y `loadzh` salian sin tocar
+         * memoria.
+         *
+         * Y sumarle un desplazamiento a un puntero ya marcado sigue apuntando
+         * dentro. */
+        if (d >= 0)
+            st.mem_ptr[d] =
+                (b >= 0 && st.mem_ptr[b]) ||
+                (b >= 0 && st.arg[b] >= 0 &&
+                 st.taint.contains(st.arg[b], x.operands[1].mem.disp));
         if (d >= 0) {
             AddrOrigin a;
             if (b >= 0 && st.arg[b] >= 0) {
@@ -823,7 +1099,27 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             }
             st.addr[d] = a;
             /* Un `lea` no lee memoria, asi que el registro no lleva ningun
-             * valor de ningun campo: solo una direccion. */
+             * valor de ningun campo: solo una direccion.
+             *
+             * SALVO cuando el `lea` se usa como ARITMETICA, que es lo que hace
+             * el compilador constantemente: `lea 0xc(%r8),%eax` con `r8`
+             * llevando un campo del operando no calcula una direccion, calcula
+             * `campo + 12`.  Es la misma operacion que `add reg, imm`, que si
+             * se sigue -- suma a `pre_add` --, y no seguirla aqui costaba las
+             * ESCRITURAS: el compilador pliega la base del banco dentro del
+             * indice justo para el destino (`(reg1 + 12) * 8` = `regs[reg1]`),
+             * asi que de 232 instrucciones solo 35 declaraban escribir en el
+             * banco.  Una escritura que falta es el reorden que rompe. */
+            if (b >= 0 && st.origin[b].valid &&
+                x.operands[1].mem.index == X86_REG_INVALID) {
+                st.origin[d] = st.origin[b];
+                st.origin[d].pre_add += x.operands[1].mem.disp;
+                st.arg[d] = -1;
+                st.base[d] = 0;
+                st.mask[d] = 0;
+                st.loaded[d].clear();
+                return;
+            }
             st.origin[d] = Origin{};
             st.arg[d] = -1;
             st.base[d] = 0;
@@ -840,6 +1136,12 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             st.base[d] = static_cast<uint64_t>(x.operands[1].imm);
             st.mask[d] = 0;
             st.loaded[d].clear();
+            // Una constante no apunta a nuestra region ni viene de ningun
+            // campo: la procedencia anterior del registro se pierde entera.
+            st.mem_ptr[d] = false;
+            st.origin[d] = Origin{};
+            st.arg[d] = -1;
+            st.addr[d] = AddrOrigin{};
         }
         return;
     }
@@ -858,10 +1160,19 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         const int d = gpr_slot(x.operands[0].reg);
         if (d >= 0) {
             std::vector<uint64_t> targets;
-            read_dispatch_entries(x.operands[1], st, targets, m == "movsxd");
+            const char *porque = nullptr;
+            read_dispatch_entries(x.operands[1], st, targets, m == "movsxd",
+                                  &porque);
             st.base[d] = 0;
             st.mask[d] = 0;
             st.loaded[d] = std::move(targets);
+            st.load_fail[d] = st.loaded[d].empty() ? porque : nullptr;
+            /* Lo cargado sigue siendo un puntero a la region si se leyo POR uno
+             * de ella; si no, el registro deja de llevarla. */
+            {
+                const int b = gpr_slot(x.operands[1].mem.base);
+                st.mem_ptr[d] = (b >= 0 && st.mem_ptr[b]);
+            }
         }
         return;
     }
@@ -923,6 +1234,11 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             st.origin[d] = st.origin[s];
             st.arg[d] = st.arg[s];
             st.addr[d] = st.addr[s];
+            // Y si lo que se copia es un puntero a la region marcada, lo sigue
+            // siendo: el compilador mueve el puntero del proceso a un registro
+            // preservado nada mas entrar, y sin esto la marca se quedaba en el
+            // registro de la convencion.
+            st.mem_ptr[d] = st.mem_ptr[s];
         }
         return;
     }
@@ -949,12 +1265,46 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
     if (cs_regs_access(cs, &in, read_regs, &n_read, written_regs, &n_written) !=
         0)
         return;
+    /* `mov REG, REG` y las sumas COPIAN la marca de puntero antes de que la
+     * invalidacion de abajo la borre: si el destino se queda con lo que llevaba
+     * la fuente, se queda tambien con lo que era.
+     *
+     * Se mira aqui, en el ultimo sitio, para no repetirlo en cada rama de
+     * arriba y para que valga tambien para las formas que ninguna de ellas
+     * reconoce: cualquier instruccion de dos registros que escriba el primero
+     * y lea el segundo mueve o combina el valor, y en los dos casos el destino
+     * puede seguir apuntando a la region. */
+    bool hereda = false;
+    int copia_dst = -1;
+    if (x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
+        x.operands[1].type == X86_OP_REG) {
+        // Un `mov REG, REG` ya salio por su rama, que copia la marca con el
+        // resto del valor.  Aqui quedan las que COMBINAN dos registros: si uno
+        // apuntaba a la region, el resultado puede seguir apuntando dentro.
+        const int d = gpr_slot(x.operands[0].reg);
+        const int s = gpr_slot(x.operands[1].reg);
+        if (d >= 0 && s >= 0 && st.mem_ptr[s]) {
+            hereda = true;
+            copia_dst = d;
+        }
+    } else if (x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
+               x.operands[1].type == X86_OP_IMM) {
+        // Sumarle o restarle una constante a un puntero lo deja apuntando
+        // dentro; cualquier otra cosa con un inmediato ya no es un puntero.
+        const int d = gpr_slot(x.operands[0].reg);
+        if (d >= 0 && st.mem_ptr[d] && (m == "add" || m == "sub")) {
+            hereda = true;
+            copia_dst = d;
+        }
+    }
+
     for (uint8_t i = 0; i < n_written; ++i) {
         const int d = gpr_slot(written_regs[i]);
         if (d >= 0) {
             st.base[d] = 0;
             st.mask[d] = 0;
             st.loaded[d].clear();
+            st.mem_ptr[d] = (hereda && d == copia_dst);
             /* La procedencia tambien se pierde.  Un registro que ya no lleva lo
              * que se leyo del campo no puede seguir diciendo que lo lleva: eso
              * atribuiria un acceso al operando equivocado, que es peor que no
@@ -1013,13 +1363,15 @@ inline uint64_t indirect_call_target(const cs_insn &in) {
  *         contando como no seguida.
  */
 inline uint32_t resolve_dispatch_table(const cs_insn &in, const TableState &st,
-                                       std::vector<uint64_t> &out) {
+                                       std::vector<uint64_t> &out,
+                                       const char **porque = nullptr) {
     if (in.detail == nullptr) return 0;
     const cs_x86 &x = in.detail->x86;
     for (uint8_t i = 0; i < x.op_count; ++i) {
         const cs_x86_op &op = x.operands[i];
         if (op.type == X86_OP_MEM) {
-            const uint32_t n = read_dispatch_entries(op, st, out);
+            const uint32_t n =
+                read_dispatch_entries(op, st, out, /*relative=*/false, porque);
             if (n > 0) return n;
         } else if (op.type == X86_OP_REG) {
             // `jmp rax` tras `mov rax, [tabla+idx*8]`: los destinos ya se
@@ -1030,6 +1382,10 @@ inline uint32_t resolve_dispatch_table(const cs_insn &in, const TableState &st,
                     out.push_back(t);
                 return static_cast<uint32_t>(st.loaded[r].size());
             }
+            // Sin destinos: si fue porque la tabla no se pudo leer al cargar,
+            // esa es la razon que hay que dar, no "salto indirecto".
+            if (r >= 0 && porque != nullptr && st.load_fail[r] != nullptr)
+                *porque = st.load_fail[r];
         }
     }
     return 0;
@@ -1294,6 +1650,10 @@ struct CallSeed {
      * declarando que escribe la pila, el marco y el contador de programa.
      */
     int arg_de[kArgRegs] = {-1, -1, -1, -1};
+    /// Que argumentos suyos llevan un puntero a la region marcada.  Sin esto,
+    /// el ayudante que recibe `&vm_mem` y hace el acceso no sabria que lo que
+    /// toca es la memoria del dominio: la marca se quedaria en el llamante.
+    bool arg_mem[kArgRegs] = {};
     bool any = false; ///< hay algo que sembrar; si no, ni se mira
     /**
      * @brief Esta semilla viene de una LLAMADA, no de la raiz.
@@ -1322,6 +1682,9 @@ inline CallSeed capture_call_seed(const TableState &st) {
         // Y si lo que va ahi es un argumento MIO tal cual, cual.
         s.arg_de[n] = st.arg[slot];
         if (s.arg_de[n] >= 0) s.any = true;
+        // Y si lleva un puntero a la region marcada.
+        s.arg_mem[n] = st.mem_ptr[slot];
+        if (s.arg_mem[n]) s.any = true;
     }
     for (int n = 0; n < kStackArgs; ++n) {
         s.stack[n] = st.outgoing[n];
@@ -1342,6 +1705,9 @@ inline void apply_call_seed(TableState &st, const CallSeed &s) {
          * puso, y cuando no se sabe queda -1, que es "no se" -- no "el
          * proceso". */
         if (s.from_call) st.arg[slot] = s.arg_de[n];
+        // Y si el llamante puso ahi un puntero a la region marcada, el
+        // ayudante empieza sabiendolo: el acceso lo hace EL.
+        if (s.arg_mem[n]) st.mem_ptr[slot] = true;
     }
     for (int n = 0; n < kStackArgs; ++n) st.incoming[n] = s.stack[n];
 }
@@ -1386,6 +1752,9 @@ constexpr cs_mode kWalkMode = isa::kMode;
 
 /// El estado de registros que lleva el idioma en uso.
 using TableState = isa::TableState;
+/// El rango que el dominio quiere seguir.  Lo declara quien conoce la
+/// estructura; el recorredor solo propaga la marca.
+using TaintRegion = isa::TaintRegion;
 
 /// De donde salio lo que lleva un registro, segun el idioma en uso.  Es un rango
 /// de BITS a proposito: que trozo corresponde a que campo lo decide quien conoce
@@ -1433,6 +1802,10 @@ struct WalkResult {
     /// aparte: aunque la llamada se siga, el coste deja de ser exacto porque no
     /// se sabe cuantas veces se ejecuta lo de dentro.
     uint32_t llamadas = 0;
+    /// Indirectas a las que no llega NADA nuestro: no pueden tocar el estado
+    /// que se deriva, asi que no lo hacen desconocido.  Se cuentan para poder
+    /// mirarlas -- "no hace falta saberlo" no es lo mismo que "no se sabe".
+    uint32_t sin_seguir_ajenas = 0;
     uint32_t sin_seguir = 0; ///< llamadas/saltos INDIRECTOS: hay codigo que no
                              ///< se ha mirado
     bool truncado = false;   ///< se llego al tope sin ver el final
@@ -1521,7 +1894,9 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                          std::set<WalkVisit> &vistas, const WalkVisitor &ver,
                          WalkResult &res, const CallSeed &seed = CallSeed{},
                          const std::set<uint64_t> &frontera = {},
-                         uint64_t ambito_lo = 0, uint64_t ambito_hi = 0) {
+                         uint64_t ambito_lo = 0, uint64_t ambito_hi = 0,
+                         const TaintRegion &taint = TaintRegion{},
+                         const std::vector<uint64_t> *inicios = nullptr) {
     /* Una frontera no se cruza: se apunta y se vuelve.  Ver
      * `WalkResult::fronteras`. */
     if (frontera.count(dir) != 0) {
@@ -1576,17 +1951,103 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
      * no sabe de ramas, y por eso una base equivocada se descarta al comprobar
      * que sus entradas no apuntan a codigo. */
     TableState table_state;
+
+    /* DONDE ACABA esta funcion, si se puede saber.
+     *
+     * El recorrido es lineal y no tiene forma de reconocer el final: sigue
+     * mientras haya un salto que apunte mas alla, y en cuanto se pasa una vez
+     * del final real, los saltos de la funcion de al lado empujan la cota y ya
+     * no para.  Eso mete en la cuenta efectos que no son de esta instruccion --
+     * los opcodes que escribian la pila pasaron de 26 a 131 -- y agota el
+     * presupuesto de instrucciones.
+     *
+     * El final se saca de las direcciones de las funciones que SI se conocen:
+     * las 242 de la tabla de despacho.  El siguiente inicio despues de esta es
+     * una cota superior segura de donde acaba.  No hace falta tabla de simbolos
+     * -- que en MinGW no hay --: los punteros ya los tenemos. */
+    uint64_t fin_funcion = 0;
+    if (inicios != nullptr) {
+        const auto it = std::upper_bound(inicios->begin(), inicios->end(), dir);
+        if (it != inicios->end()) fin_funcion = *it;
+    }
+
+    /* --- Instantaneas en las ramas ------------------------------------------
+     *
+     * El recorrido es lineal, y eso producia un falso negativo caro.  El patron
+     * es este, y lo emite el compilador constantemente (`exec_instr_add_imm`):
+     *
+     *     and  eax, 0x3               ; <- LA COTA del indice
+     *     je   .otro                  ; <- salta por encima del bloque de al lado
+     *     ...
+     *     mov  rax, [r10+rax*8]       ; <- machaca eax... en el camino QUE NO SE TOMA
+     *     jmp  rax                    ; <- y ese camino se va por aqui
+     *   .otro:
+     *     cltq
+     *     call qword ptr [r10+rax*8]  ; <- aqui la cota SIGUE viva de verdad
+     *
+     * Pasando de largo se llega a la llamada con la cota perdida, y el opcode
+     * queda declarado "depende de la ejecucion" cuando la cota estaba escrita
+     * ocho instrucciones antes.  Le costaba la exactitud a `add`, `sub`, `mul`,
+     * `div` y `cmp` con inmediato -- las mas ejecutadas que hay.
+     *
+     * La regla es estrecha a proposito: se guarda el estado al ver una rama
+     * condicional y se restaura al LLEGAR a su destino, pero SOLO si la
+     * instruccion anterior transfirio el control incondicionalmente.  Eso
+     * significa que por el camino de al lado no se llega, asi que el estado
+     * lineal que traemos no describe este sitio: es basura, y el de la rama es
+     * el unico predecesor conocido.  Donde si se puede caer de largo no se toca
+     * nada, que es lo que evita mezclar dos caminos sin unirlos como es debido.
+     *
+     * En el peor caso se restaura una base que no era, y eso ya esta cubierto:
+     * las entradas que no apuntan a codigo se descartan, y atribuir un efecto
+     * de mas es el lado seguro. */
+    struct Snapshot {
+        uint64_t target = 0;
+        TableState state;
+    };
+    std::vector<Snapshot> snapshots;
+    constexpr size_t kMaxSnapshots = 32; // un manejador no tiene mas ramas
+    bool prev_was_uncond = false;        // la anterior transfirio el control
+    /// La direccion mas lejana a la que salta algo de esta funcion.  Es lo que
+    /// permite saber que detras de un `ret` todavia hay codigo suyo.
+    uint64_t max_alcanzable = 0;
+
     /* Los argumentos, sembrados con la convencion de la ISA.  Es lo que permite
      * saber que un `[rdx+0x8]` es "un campo del SEGUNDO argumento" y no una
      * carga cualquiera. */
+    // El rango que el dominio quiere seguir.  Va ANTES de sembrar para que la
+    // primera carga que lo toque ya lo vea puesto.
+    table_state.taint = taint;
     isa::seed_args(table_state);
     /* Y encima, lo que el llamante puso ahi.  Sin esto un ayudante ve "arg1 es
      * un puntero" y nada mas; con esto ve "arg1 es &regs[el primer campo]". */
     isa::apply_call_seed(table_state, seed);
 
     while (cs_disasm_iter(cs, &code, &restante, &addr, insn)) {
+        // Se acabo la funcion: lo que sigue es de otra, y sus efectos no son de
+        // esta instruccion.
+        if (fin_funcion != 0 && insn->address >= fin_funcion) break;
         res.instrs++;
         hi = insn->address;
+        /* Llegamos a un destino de rama y por el camino de al lado no se podia
+         * llegar?  Entonces el estado lineal que traemos es de otro bloque: se
+         * recupera el que habia al saltar, que es el unico predecesor real. */
+        if (prev_was_uncond) {
+            for (const Snapshot &s : snapshots)
+                if (s.target == insn->address) {
+                    table_state = s.state;
+                    break;
+                }
+        }
+        /* El RELLENO no hace alcanzable un bloque.  El compilador alinea el
+         * destino de la rama y mete `nop`/`int3` entre el salto de cola y la
+         * etiqueta; contarlos como "aqui se cae de largo" tiraba la instantanea
+         * justo en el caso que existe para arreglar, porque el destino real
+         * cae DETRAS del relleno. */
+        const bool es_relleno = std::strncmp(insn->mnemonic, "nop", 3) == 0 ||
+                                std::strcmp(insn->mnemonic, "int3") == 0;
+        if (!es_relleno)
+            prev_was_uncond = isa::is_tail_jump(*insn) || isa::is_return(*insn);
         /* Lo primero: sabe la base que es esto?  Si no, es un hueco NUESTRO en
          * nuestro propio binario, y se apunta para que alguien lo cierre.  Se
          * guarda solo el mnemonico y la forma de los operandos -- el texto
@@ -1599,6 +2060,18 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
          * una llamada: la `and` que acota el indice es una instruccion aparte,
          * y sin apuntarla no habria con que resolver la tabla. */
         isa::track_table_state(cs, *insn, table_state);
+        /* Rama condicional: se apunta el estado de AQUI para el destino.  Va
+         * despues de `track_table_state` a proposito -- lo que la rama ve es lo
+         * que dejo la instruccion anterior, ella misma incluida. */
+        if (isa::is_jump(*insn) && !isa::is_tail_jump(*insn) &&
+            snapshots.size() < kMaxSnapshots) {
+            if (const uint64_t t = isa::branch_target(*insn)) {
+                Snapshot s;
+                s.target = t;
+                s.state = table_state;
+                snapshots.push_back(std::move(s));
+            }
+        }
         {
             char pb[160];
             std::snprintf(pb, sizeof(pb), "0x%llX: %s %s",
@@ -1611,8 +2084,46 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
         // Destino inmediato del salto o la llamada, si lo hay.  Un salto por
         // registro no lo tiene, y eso ya es motivo para no prometer exactitud.
         const uint64_t destino = isa::branch_target(*insn);
+        /* El destino ALCANZABLE mas lejano visto hasta aqui.  Es lo que dice si
+         * detras de un `ret` queda codigo de esta misma funcion.
+         *
+         * Solo SALTOS.  El destino de una `call` es OTRA funcion, y contarlo
+         * hacia que el recorrido siguiera mas alla del final de esta: se le
+         * atribuian a cada opcode los efectos del codigo de al lado y la
+         * exactitud se desplomaba de 213 a 93. */
+        if (isa::is_jump(*insn) && destino > insn->address &&
+            destino < lo + kWalkBytesMax && destino > max_alcanzable)
+            max_alcanzable = destino;
 
-        if (isa::is_return(*insn)) break;
+        /* Un `ret` NO termina la funcion: termina UN camino.
+         *
+         * Antes se cortaba aqui, y con eso un manejador que devuelve pronto
+         * quedaba analizado a medias -- pero declarado EXACTO, que es peor que
+         * declararlo desconocido: afirma que se sabe todo lo que toca cuando no
+         * se ha mirado la mitad --.  `exec_instr_loadz` es exactamente eso: la
+         * rama del puntero del ANFITRION sale por un `ret` y detras, sin mirar,
+         * esta la de la memoria de la VM.  El opcode salia sin declarar que toca
+         * memoria, y reordenar una carga con un almacen no da un error: da otro
+         * resultado.
+         *
+         * Se sigue mientras haya un salto de ESTA funcion que apunte mas alla:
+         * eso es codigo alcanzable, y quien lo alcanza esta dentro.  Cuando no
+         * queda ninguno, se acabo de verdad. */
+        if (isa::is_return(*insn)) {
+            if (insn->address + insn->size > max_alcanzable) break;
+            /* Y con un ALCANCE acotado.  Seguir tras un `ret` puede desbocarse:
+             * si en algun momento se pasa del final real de la funcion, los
+             * saltos del codigo de al lado empujan la cota y ya no se para
+             * nunca -- el recorrido se comia los 128 KB del tope y el opcode
+             * salia "truncado por tamano", que ademas es un motivo que no era
+             * el suyo --.  Ningun manejador de esta VM se acerca a 8 KB. */
+            constexpr uint64_t kResumeSpan = 8 * 1024;
+            if (insn->address - lo > kResumeSpan) break;
+            // Detras de un `ret` no se cae: lo que siga es destino de un salto,
+            // y su estado es el que se guardo al saltar.
+            prev_was_uncond = true;
+            continue;
+        }
         if (isa::is_call(*insn)) {
             res.llamadas++;
             /* Lo que va en los argumentos AHORA, antes de que la llamada
@@ -1620,6 +2131,7 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
              * se sabe que llevaba ninguno. */
             const CallSeed sub = isa::capture_call_seed(table_state);
             std::vector<uint64_t> destinos;
+            const char *motivo_tabla = nullptr; ///< por que no se resolvio
             if (destino) {
                 destinos.push_back(destino);
             } else if (const uint64_t ext = isa::indirect_call_target(*insn)) {
@@ -1629,25 +2141,53 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                 destinos.push_back(ext);
                 res.tables_resolved++;
             } else if (const uint32_t n = isa::resolve_dispatch_table(
-                           *insn, table_state, destinos)) {
+                           *insn, table_state, destinos, &motivo_tabla)) {
                 // Despacho por tabla: los destinos SI se conocen, asi que esto
                 // deja de ser un agujero.  Es el caso de la familia ALU.
                 res.tables_resolved++;
                 (void)n;
+            } else if (!sub.any) {
+                /* Indirecta a la que NO LE LLEGA NADA NUESTRO.
+                 *
+                 * Ningun argumento lleva procedencia de este proceso -- ni el
+                 * puntero, ni una direccion sacada de el, ni un valor leido de
+                 * sus campos --, asi que lo que haya al otro lado no puede
+                 * tocar el estado que se esta derivando: no tiene por donde
+                 * llegar a el.  Contarla como "no se sabe" declara desconocido
+                 * un opcode por culpa de codigo que demostrablemente no le
+                 * afecta.
+                 *
+                 * Es lo que pasaba al dejar de cortar el recorrido en el primer
+                 * `ret`: la rama de FALLO de la memoria hace `VGC_CERR << ...`,
+                 * y dentro de iostream hay una llamada por vtable
+                 * (`std::__ostream_insert` -> `streambuf::xsputn`) que no se
+                 * puede resolver.  Con eso, 80 opcodes -- `loadz` y media ALU
+                 * entre ellos -- pasaban a "efectos desconocidos" por un
+                 * mensaje de diagnostico.
+                 *
+                 * Se cuenta aparte para poder mirarlo: no es lo mismo "no se
+                 * sabe" que "no hace falta saberlo". */
+                res.sin_seguir_ajenas++;
             } else {
                 res.sin_seguir++; // llamada indirecta: no se ve el destino
                 if (res.unresolved.size() < 8) {
                     /* Se guardan tambien las instrucciones de ANTES.  El
                      * destino de un `call rax` no esta en el `call`: esta en lo
                      * que cargo `rax`, y sin verlo la renuncia no es
-                     * accionable -- dice que no se sabe, no que cerrar. */
+                     * accionable -- dice que no se sabe, no que cerrar.
+                     *
+                     * Y la RAZON por la que la tabla no se resolvio, que es lo
+                     * que dice cual de los cinco motivos hay que cerrar. */
                     std::string ctx;
                     for (const std::string &p : previas) ctx += "\n      " + p;
                     char b[160];
                     std::snprintf(b, sizeof(b), "0x%llX: %s %s",
                                   (unsigned long long)insn->address,
                                   insn->mnemonic, insn->op_str);
-                    res.unresolved.push_back(std::string(b) + ctx);
+                    std::string linea(b);
+                    if (motivo_tabla != nullptr)
+                        linea += "  [tabla: " + std::string(motivo_tabla) + "]";
+                    res.unresolved.push_back(linea + ctx);
                     res.unresolved_fn.push_back(dir);
                 }
 }
@@ -1692,6 +2232,7 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
              * se toma igual que en un `call`. */
             const CallSeed sub = isa::capture_call_seed(table_state);
             std::vector<uint64_t> destinos;
+            const char *motivo_salto = nullptr; ///< por que no se resolvio
             if (!destino) {
                 res.llamadas++; // salto indirecto: se trata como no seguible
                 if (const uint64_t ext = isa::indirect_call_target(*insn)) {
@@ -1702,9 +2243,22 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                     destinos.push_back(ext);
                     res.tables_resolved++;
                 } else if (const uint32_t n = resolve_dispatch_table(
-                        *insn, table_state, destinos)) {
+                        *insn, table_state, destinos, &motivo_salto)) {
                     res.tables_resolved++;
                     (void)n;
+                } else if (!sub.any) {
+                /* Salto de cola al que no le llega NADA nuestro: mismo
+                 * argumento que en la llamada indirecta.  Sin procedencia por
+                 * donde alcanzar nuestro estado, lo que haya al otro lado no
+                 * puede tocarlo, asi que no vuelve desconocido al opcode.
+                 *
+                 * Es el caso que quedaba vivo: el camino de FALLO de la memoria
+                 * hace `VGC_CERR << ...`, y dentro de libstdc++
+                 * `std::ctype<char>::widen` termina en un `jmp` por vtable.  La
+                 * regla estaba puesta en el `call` y no aqui, asi que 87
+                 * opcodes -- `loadz` y media ALU -- seguian declarados
+                 * desconocidos por un mensaje de diagnostico. */
+                res.sin_seguir_ajenas++;
                 } else {
                 res.sin_seguir++;
                 if (res.unresolved.size() < 8) {
@@ -1718,7 +2272,10 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                     std::snprintf(b, sizeof(b), "0x%llX: %s %s",
                                   (unsigned long long)insn->address,
                                   insn->mnemonic, insn->op_str);
-                    res.unresolved.push_back(std::string(b) + ctx);
+                    std::string linea(b);
+                    if (motivo_salto != nullptr)
+                        linea += "  [tabla: " + std::string(motivo_salto) + "]";
+                    res.unresolved.push_back(linea + ctx);
                     res.unresolved_fn.push_back(dir);
                 }
                 }
@@ -1741,8 +2298,10 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
     cs_free(insn, 1);
 
     for (const auto &p : pendientes)
+        // El rango marcado viaja a los ayudantes: un manejador saca el puntero
+        // y se lo PASA, asi que el acceso de verdad ocurre alli.
         walk_handler(cs, p.first, profundidad - 1, vistas, ver, res, p.second,
-                     frontera, ambito_lo, ambito_hi);
+                     frontera, ambito_lo, ambito_hi, taint, inicios);
 }
 
 } // namespace tests

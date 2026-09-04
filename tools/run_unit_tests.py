@@ -53,6 +53,27 @@ def say(text):
     sys.stdout.write(text.encode(enc, "replace").decode(enc, "replace") + "\n")
 
 
+## Tests que MIDEN TIEMPO y por tanto no pueden compartir la maquina.
+#
+#  Se listan por nombre y no se detectan solos porque no hay forma de
+#  distinguirlos desde fuera: un banco y un test de correccion se lanzan igual.
+#  Si se anade otro banco hay que ponerlo AQUI, o dara rojos que nadie sabra
+#  reproducir.
+BANCOS = (
+    "test_mips",           # MIPS del interprete contra lineas base
+    "test_effects_decode", # topes de ns por instruccion y de razon
+)
+
+
+def es_banco(path):
+    """@brief Si este ejecutable mide tiempo y hay que correrlo solo.
+    @param path Ruta del ejecutable.
+    @return True si su nombre esta en @ref BANCOS.
+    """
+    name = os.path.basename(path)
+    return any(b in name for b in BANCOS)
+
+
 def collect(build_dir, pattern):
     """@brief Reune los ejecutables de test del directorio de build.
 
@@ -267,9 +288,35 @@ def main():
         print("no se encontro ningun ejecutable de test en " + build_dir)
         return 2
 
+    # Los BANCOS corren SOLOS y al final.  No es una excepcion caprichosa: lo
+    # que miden es TIEMPO, y con doscientos cincuenta tests a la vez en la
+    # maquina el numero que sacan no describe al codigo sino a la carga.
+    #
+    # Se veia: `test_effects_decode` tiene topes de 20 ns y 11x, y `test_mips`
+    # compara MIPS contra lineas base; los dos daban rojo en la tanda y "sin
+    # fallos" ejecutados aparte, con el MISMO binario.  Un rojo que no se puede
+    # reproducir es peor que no tener el test, porque ensena a no mirarlo.
+    #
+    # Siguen corriendo -- no se saltan --, solo que en las condiciones donde su
+    # medida significa algo.
+    bancos = [t for t in tests if es_banco(t)]
+    resto = [t for t in tests if not es_banco(t)]
+
     with ThreadPoolExecutor(max_workers=args.j) as pool:
         results = list(pool.map(
-            lambda t: run_one(t, args.timeout, args.mem_mb), tests))
+            lambda t: run_one(t, args.timeout, args.mem_mb), resto))
+
+    if bancos:
+        # Un banco tarda lo que tarda: `test_mips` recorre seis mezclas por doce
+        # longitudes por dos motores de despacho, y son casi tres minutos.  Con
+        # el plazo normal daba TIMEOUT y se contaba como fallo -- un rojo que no
+        # dice nada de lo que mide.  El plazo se multiplica; no se quita, que un
+        # banco colgado tiene que seguir cortandose.
+        plazo_banco = max(args.timeout, 600)
+        say("== {} banco(s) en serie (miden tiempo, plazo {} s)".format(
+            len(bancos), plazo_banco))
+        for t in bancos:
+            results.append(run_one(t, plazo_banco, args.mem_mb))
 
     # Lo que FALLA y lo que solo NO SE PUDO CORRER son dos cosas.
     #

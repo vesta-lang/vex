@@ -508,6 +508,33 @@ target_link_libraries(aot_emit PUBLIC LibPEparse)
 
 
 # ---------------------------------------------------------------------------
+# Telemetria de los paquetes de instrucciones.
+#
+# Los contadores (`bundle_stats`) no se pueden encender por target: los
+# INCREMENTOS viven en `bundle.cpp` y `scheduler.cpp`, o sea dentro de
+# `vmcore`, asi que un test que se definiera la macra para si mismo veria los
+# campos a cero y no se enteraria.  Por eso es una definicion GLOBAL.
+#
+# Apagada por defecto, y no por prudencia: con ella los caminos calientes del
+# interprete llevan incrementos que sin ella NO EXISTEN.  Medir no puede
+# cambiar lo que se mide, asi que la construccion normal va sin telemetria y
+# quien quiera los numeros la pide:
+#
+#   cmake -DVESTA_BUNDLE_STATS=ON ...
+#
+# El campo `bundle_stats` de `ProcessVM` existe en las dos: si dependiera de la
+# bandera, un test compilado con ella y enlazado contra un `vmcore` sin ella
+# veria una estructura de otro tamano -- corrupcion en ejecucion, sin un solo
+# error de compilacion.
+# ---------------------------------------------------------------------------
+option(VESTA_BUNDLE_STATS
+       "Contar telemetria de los paquetes de instrucciones (cuesta en el camino caliente)"
+       OFF)
+if (VESTA_BUNDLE_STATS)
+    add_compile_definitions(VM_BUNDLE_STATS=1)
+endif()
+
+# ---------------------------------------------------------------------------
 # Opciones de codigo de Release, en UNA lista.
 #
 # Esta suelta a proposito: Release y Profile tienen que compilar EXACTAMENTE el
@@ -1109,8 +1136,13 @@ else ()
     target_link_libraries(test_efectos_opcodes PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# El test de los paquetes: valida que NO cambian el resultado y, sobre los
+# mismos programas, mide cuanta independencia hay dentro de un paquete -- que
+# es lo que decide si la reordenacion al formar (OoO de VM) tiene algo que
+# mover.  Eran dos binarios que generaban los mismos programas y sacaban tablas
+# iguales; el analisis vive ahora en `tests/util/bundle_ilp.h`.
 add_executable(test_bundles tests/runtime/test_bundles.cpp)
-target_include_directories(test_bundles PRIVATE ${VM_INCLUDES})
+target_include_directories(test_bundles PRIVATE ${VM_INCLUDES} tests)
 target_link_libraries(test_bundles PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
 if(VESTA_BUILD_PREPROCESSOR)
     target_link_libraries(test_bundles PRIVATE vpp_lib)
@@ -1119,20 +1151,6 @@ if (WIN32)
     target_link_libraries(test_bundles PRIVATE vesta_openssl ws2_32 synchronization)
 else ()
     target_link_libraries(test_bundles PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
-endif ()
-
-# Mide cuanta independencia real hay dentro de los paquetes: es lo que decide
-# si la reordenacion al formar (OoO de VM) tiene algo que mover.
-add_executable(test_bundle_ilp tests/runtime/test_bundle_ilp.cpp)
-target_include_directories(test_bundle_ilp PRIVATE ${VM_INCLUDES} tests)
-target_link_libraries(test_bundle_ilp PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
-if(VESTA_BUILD_PREPROCESSOR)
-    target_link_libraries(test_bundle_ilp PRIVATE vpp_lib)
-endif()
-if (WIN32)
-    target_link_libraries(test_bundle_ilp PRIVATE vesta_openssl ws2_32 synchronization)
-else ()
-    target_link_libraries(test_bundle_ilp PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
 # Valida el descodificador de efectos contra el desensamblador, que llega al

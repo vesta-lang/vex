@@ -21,6 +21,8 @@
  */                                                                            \
 #include "runtime/proceso_runtime.h"
 
+#include "runtime/bundle.h" // bundle_release: la arena de paquetes del proceso
+
 #include <atomic>
 #include <cstdint>
 #include <cstdlib> // getenv (gate VESTA_OSR_COUNT del osr_buffer)
@@ -142,6 +144,17 @@ ProcessVM::~ProcessVM() {
     delete[] osr_buffer; // OSR: liberar el buffer del state-transfer
                          // (nullptr-safe)
     osr_buffer = nullptr;
+#if VM_BUNDLES
+    /* La arena de paquetes.  `bundle_release` existia, estaba definida y NO LA
+     * LLAMABA NADIE: cada proceso que llegara a formar un paquete se dejaba la
+     * arena entera sin liberar -- hasta `CAPACITY` paquetes de ~2 KB --, y como
+     * el proceso muere igual y el programa termina, no se notaba en ningun
+     * sitio salvo en la memoria de quien lanza muchos procesos.
+     *
+     * Es tambien lo que hacia inalcanzable el volcado de la telemetria de
+     * paquetes, que vive ahi dentro. */
+    bundle_release(this);
+#endif
     manager_mem_priv.free_all(); // liberar toda la memoria privada del proceso
     // Liberar @c ExceptionFrames del free list (reciclados por
     // @c tryleave).  El @c exc_frame_stack activo solo deberia tener
@@ -261,7 +274,7 @@ std::string ProcessVM::vm_summary() const {
        << "OF=" << (int)registers.flags.bits.OF << " "
        << "SF=" << (int)registers.flags.bits.SF << " "
        << "ZF=" << (int)registers.flags.bits.ZF << " "
-       << "DM=" << (int)registers.flags.bits.DM << "]\n";
+       << "DM=" << (int)registers.flags.DM << "]\n";
 
     // contadores de ejecucion
     ss << " Reductions=" << reductions_remaining << " TSC=" << tsc

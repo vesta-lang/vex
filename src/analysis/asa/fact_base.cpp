@@ -36,6 +36,7 @@ const char *const kProducerAsmFlow = "asa.asm_flow";
 const char *const kProducerBoundary = "asa.boundary";
 const char *const kProducerLoops = "asa.loops";
 const char *const kProducerBulkMemory = "asa.bulk_memory";
+const char *const kProducerBackend = "asa.backend";
 const char *const kModuleUnit = "<module>";
 
 void register_asa_canonical_names() {
@@ -54,6 +55,7 @@ void register_asa_canonical_names() {
         register_canonical_name(kProducerBoundary);
         register_canonical_name(kProducerLoops);
         register_canonical_name(kProducerBulkMemory);
+        register_canonical_name(kProducerBackend);
         register_canonical_name(kModuleUnit);
         return true;
     }();
@@ -148,17 +150,19 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {
      * dependencias.  Los otros dos gestores que piden rangos -- el del
      * optimizador y el de efectos -- apuntan a la MISMA. */
     const RangeFacts &rf =
-        *manager_.get_or_compute<RangeAnalysis,
-                                 std::shared_ptr<const RangeFacts>>(
-            key, [this, &fn]() {
-                /* Con las cotas de induccion.  Es conocimiento que el
-                 * compilador YA tiene y que los rangos no pueden sacar solos:
-                 * la guarda de un bucle desenrollado compara `i + 7`, y
-                 * despejar la `i` con aritmetica que envuelve es incorrecto.
-                 * Sin esto, la variable del bucle valia todo su tipo. */
-                return compute_ranges_ptr(fn, structure(fn), RangeOptions{},
-                                          nullptr, &iv_bounds(fn));
-            });
+        *manager_
+             .get_or_compute<RangeAnalysis, std::shared_ptr<const RangeFacts>>(
+                 key, [this, &fn]() {
+                     /* Con las cotas de induccion.  Es conocimiento que el
+                      * compilador YA tiene y que los rangos no pueden sacar
+                      * solos: la guarda de un bucle desenrollado compara `i +
+                      * 7`, y despejar la `i` con aritmetica que envuelve es
+                      * incorrecto. Sin esto, la variable del bucle valia todo
+                      * su tipo. */
+                     return compute_ranges_ptr(fn, structure(fn),
+                                               RangeOptions{}, nullptr,
+                                               &iv_bounds(fn));
+                 });
     if (fresh) {
         /* La certeza sale del propio analisis, no de quien pregunta: llegar a
          * punto fijo es haber visto todo lo que podia contradecirlo; pararse

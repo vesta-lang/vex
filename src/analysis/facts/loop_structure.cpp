@@ -328,8 +328,7 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
         if (bi.empty()) return bail("loop.empty_body_block");
         const IrInstr &bt = bi.back();
         if (bt.op == IrOp::BR) {
-            if (!st.contains(bt.target_block))
-                return bail("loop.body_exits");
+            if (!st.contains(bt.target_block)) return bail("loop.body_exits");
         } else if (bt.op == IrOp::BR_COND) {
             if (!st.contains(bt.target_block) || !st.contains(bt.false_block))
                 return bail("loop.body_exits");

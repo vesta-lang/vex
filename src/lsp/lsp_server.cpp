@@ -2591,7 +2591,8 @@ int LspServer::run() {
                  * El codigo lo manda el protocolo: cero si hubo `shutdown`
                  * antes, uno si no.  Se mira aqui y no al salir porque el
                  * `shutdown` puede estar todavia en la cola -- lo importante
-                 * es que el editor lo PIDIO, no que ya se le haya contestado. */
+                 * es que el editor lo PIDIO, no que ya se le haya contestado.
+                 */
                 exit_code.store(shutdown_requested_.load() ? 0 : 1);
                 input_finished.store(true);
                 cv.notify_all();
@@ -2752,8 +2753,7 @@ int LspServer::run() {
                 return !trabajo.empty() || in_flight != 0;
             };
             cv.wait(guard, [&] {
-                return !cola.empty() ||
-                       (input_finished.load() && !pool_busy());
+                return !cola.empty() || (input_finished.load() && !pool_busy());
             });
             /* Se acabo la entrada Y no queda nada por atender: AHORA se sale.
              *

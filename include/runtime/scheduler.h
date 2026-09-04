@@ -380,14 +380,24 @@ class Scheduler {
 
     // --- Contadores del profiler por hilo ---
     uint64_t profiler_sample = 0; ///< Contador de muestras del profiler
-    uint64_t profiler_instr_counter =
-        0; ///< Se incrementa cada 256 instrucciones ejecutadas
+    /// Instrucciones bytecode ejecutadas por el INTERPRETE.  Se incrementa de
+    /// UNA EN UNA, en los 24 sitios que retiran una instruccion (el camino
+    /// rapido del scheduler y @c decode_instruction).  Es exacto, no una
+    /// muestra: comprobado contra la cuenta estatica en `test_mips`.
+    ///
+    /// Decia "se incrementa cada 256 instrucciones", y no era cierto -- nunca
+    /// hubo mascara --, asi que los consumidores que multiplicaban por 256
+    /// daban MIPS 256 veces mas altos de lo real.  Al no haber ningun test que
+    /// mirara la cifra, el error sobrevivio: el numero era absurdo pero
+    /// PLAUSIBLE si nadie tenia con que compararlo.
+    uint64_t profiler_instr_counter = 0;
     /// Contador de "instrucciones VM equivalentes" ejecutadas en JIT.
     /// El JIT-eated code emite @c add qword [&counter], N al inicio de
     /// cada metodo, donde N es el numero de IR instructions de ese metodo.
     /// Aproxima cuantas instrucciones bytecode habrian corrido si interp
-    /// hubiera ejecutado el mismo metodo.  Combinado con @c
-    /// profiler_instr_counter da MIPS total: (interp * 256 + jit) / time / 1M.
+    /// hubiera ejecutado el mismo metodo.  Las dos cuentas estan en la MISMA
+    /// unidad -- instrucciones, sin escalar --, asi que el MIPS total es
+    /// (interp + jit) / time / 1M.
     uint64_t profiler_jit_instr_counter = 0;
 
     std::atomic<bool> profiler_running =
@@ -470,8 +480,8 @@ void vm_hook(ProcessVM *process, DebugStage stage);
  * @brief Hilo de perfilado continuo para un scheduler de la VM.
  *
  * Se ejecuta en paralelo al scheduler y calcula:
- *   - Instrucciones por segundo (IPS): delta de profiler_instr_counter * 256 /
- * segundo.
+ *   - Instrucciones por segundo (IPS): delta de profiler_instr_counter por
+ * segundo (el contador va de una en una; no lleva factor de escala).
  *   - Porcentaje de CPU: time_exec (ns acumulados) / 1e9 * 100 por segundo.
  *
  * Interpretacion de resultados:

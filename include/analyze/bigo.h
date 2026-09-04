@@ -151,7 +151,7 @@ struct CostResult {
     std::string function;             ///< nombre de la funcion analizada.
     CostClass big_o = CostClass::O_1; ///< clase PARCIAL (cuerpo, calls=O(1)).
     Confidence confidence =
-        Confidence::EXACT;          ///< confianza en la cota parcial.
+        Confidence::EXACT;       ///< confianza en la cota parcial.
     uint32_t max_loop_depth = 0; ///< maxima profundidad de loop.
     /**
      * @brief Bucles que el analisis NO llego a entender.

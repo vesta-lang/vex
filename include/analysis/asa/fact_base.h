@@ -90,6 +90,12 @@ extern const char *const kProducerAsmFlow;
 /// afirman DOS sitios: el dominio, mirando el codigo, y el pase que lo reduce,
 /// que lo dice justo antes de que el bucle deje de existir.
 extern const char *const kProducerBulkMemory;
+/// Que operaciones NO puede compilar un backend, y por que.  El analisis lo
+/// hace `aot_analyze` desde hace tiempo -- clasifica cada op del intermedio
+/// contra un objetivo nativo -- y lo consumia UN solo sitio, el editor.  Aqui
+/// se convierte en conocimiento compartido: el mismo hecho lo lee tambien el
+/// linter, y cualquiera que venga despues, sin volver a analizar nada.
+extern const char *const kProducerBackend;
 
 /// Clave con la que se guarda lo que es del MODULO entero y no de una funcion.
 extern const char *const kModuleUnit;

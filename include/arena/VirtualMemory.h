@@ -22,9 +22,11 @@
 #define VIRTUALMEMORY_H
 
 #include <cstdint>
+#include <cstring>
 
 #include "arena_manager.h"
 #include "TLB.h"
+#include "util/simd_copy.h" // copia por bloques que SI despacha por CPU
 
 namespace vm {
 
@@ -208,7 +210,44 @@ class VirtualMemory {
      * @param dst   Buffer del host donde se almacenan los bytes leidos.
      * @param size  Numero de bytes a leer.
      */
-    void read_bytes(uint64_t vaddr, void *dst, size_t size);
+    void read_bytes_slow(uint64_t vaddr, void *dst, size_t size);
+
+    /**
+     * @brief Camino RAPIDO: la pagina esta cacheada y el bloque cabe en ella.
+     *
+     * El cuerpo de verdad -- cruce de pagina, asignacion perezosa, el
+     * fast-path SIMD -- sigue fuera de linea en `read_bytes_slow`.  Aqui solo
+     * queda la comprobacion y la copia, que es el caso comun con diferencia.
+     *
+     * Se parte asi y no inlinando el cuerpo entero: son sesenta y dos lineas
+     * con reservas de memoria dentro, y meterlas en cada llamante hincharia el
+     * icache del camino caliente para acelerar el frio.  Lo que se inlina es
+     * SOLO la parte que casi siempre basta.
+     *
+     * MEDIDO: no da ganancia apreciable (+0,82% en el banco de 68, dentro del
+     * +-7% de ruido).  Se deja porque la forma es la correcta -- el camino
+     * caliente no debe pagar una llamada -- pero que conste que el numero no lo
+     * respalda: lo que si la dio fue conectar la cache de pagina en
+     * `operator[]` (-20,6%) e inlinar `get_entry` (-11,1%).
+     */
+    inline void read_bytes(uint64_t vaddr, void *dst, size_t size) {
+        const uint64_t page = vaddr & ~0xFFFULL;
+        const uint64_t off = vaddr & 0xFFFULL;
+        if (__builtin_expect(page == cached_page_vaddr && off + size <= 4096,
+                             1)) {
+            /* `simd_copy::fast_copy` y no `std::memcpy`: el de la CRT de
+             * Windows no despacha por capacidad de la CPU y se queda en el
+             * camino escalar.  El nuestro elige AVX-512, AVX2 o SSE2 segun lo
+             * que haya, y por debajo de 16 bytes copia en linea con bloques
+             * solapados en vez de llamar a la biblioteca.
+             *
+             * Ya estaba escrito y lo usan los opcodes `memcpy`/`memset` de la
+             * VM; aqui faltaba. */
+            simd_copy::fast_copy(dst, cached_page_host + off, size);
+            return;
+        }
+        read_bytes_slow(vaddr, dst, size);
+    }
 
     /**
      * @brief Escribe @p size bytes desde un buffer del host a memoria virtual.
@@ -220,7 +259,19 @@ class VirtualMemory {
      * @param src   Buffer del host con los datos a escribir.
      * @param size  Numero de bytes a escribir.
      */
-    void write_bytes(uint64_t vaddr, const void *src, size_t size);
+    void write_bytes_slow(uint64_t vaddr, const void *src, size_t size);
+
+    /// Camino RAPIDO de escritura, simetrico del de lectura.  Ver `read_bytes`.
+    inline void write_bytes(uint64_t vaddr, const void *src, size_t size) {
+        const uint64_t page = vaddr & ~0xFFFULL;
+        const uint64_t off = vaddr & 0xFFFULL;
+        if (__builtin_expect(page == cached_page_vaddr && off + size <= 4096,
+                             1)) {
+            simd_copy::fast_copy(cached_page_host + off, src, size);
+            return;
+        }
+        write_bytes_slow(vaddr, src, size);
+    }
 
     /**
      * @brief Escribe un byte en la direccion virtual indicada.

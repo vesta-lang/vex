@@ -18,6 +18,9 @@
 
 #include "bytecode/bytecode.h"
 #include "runtime/decode_instruction.h"
+#include "disasm/disasm.h" // asm real en los volcados de la cache
+#include "runtime/instr_db_vm.h" // nombre del opcode en los volcados
+#include "util/env_flags.h" // VESTA_CACHE_DUMP: volcado del estado de caches
 #include "runtime/exec_instruction.h"
 
 namespace runtime {
@@ -26,10 +29,18 @@ namespace {
 
 #if VM_BUNDLE_STATS
 #define BSTAT(p, field) (++(p)->bundle_stats.field)
+/* Suma una cantidad en vez de uno: hace falta para lo que no se cuenta por
+ * veces sino por unidades -- cuantas instrucciones cambiaron de sitio --.
+ *
+ * OJO: sin telemetria el argumento SE SIGUE EVALUANDO, y tiene que ser asi.
+ * Ahi dentro va la llamada que hace el trabajo, no solo la que produce el
+ * numero; que la cuenta desaparezca no puede hacer desaparecer el reorden. */
+#define BSTAT_ADD(p, field, n) ((p)->bundle_stats.field += (n))
 #else
 /* Sin telemetria no queda ni la suma: medir el coste no puede cambiar lo que se
  * mide. */
 #define BSTAT(p, field) ((void)0)
+#define BSTAT_ADD(p, field, n) ((void)(n))
 #endif
 
 /**
@@ -117,13 +128,374 @@ runtime::InstrFormat g_bundle_format = {
 
 } // namespace
 
+/**
+ * @brief Vuelca el ESTADO de las caches: que hay dentro ahora mismo.
+ *
+ * No cuenta nada durante la ejecucion -- RECORRE las estructuras cuando se le
+ * pide --, asi que el camino caliente no paga ni una instruccion por que esto
+ * exista.  Por eso puede vivir detras de una variable de entorno y usarse sobre
+ * el binario que se entrega, en vez de exigir una compilacion aparte como la
+ * telemetria de contadores.
+ *
+ * Son dos preguntas distintas y conviene no confundirlas: los contadores dicen
+ * QUE HA PASADO (cuantas veces se formo, se abandono, se recogio) y esto dice
+ * COMO ESTA (cuanto se esta usando, cuanto queda, que sigue vivo).
+ */
+[[gnu::cold]] static void bundle_dump_state(const ProcessVM *process) {
+    // Ocupacion de la icache y cuantas de sus entradas son cabeceras.
+    uint32_t filled = 0, heads = 0;
+    for (uint32_t i = 0; i < ICACHE_SIZE; ++i) {
+        const DecodedInstr &e = process->icache[i];
+        if (e.exec_cached == nullptr) continue;
+        ++filled;
+        if (e.exec_cached == &exec_bundle) ++heads;
+    }
+
+    std::fprintf(stderr,
+                 "\n[caches pid=%llu] icache: %u/%u ocupadas (%.1f%%), %u son "
+                 "cabeceras de paquete\n",
+                 (unsigned long long)process->pid.local_pid, filled,
+                 (unsigned)ICACHE_SIZE,
+                 100.0 * (double)filled / (double)ICACHE_SIZE, heads);
+
+    const auto *arena = static_cast<const BundleArena *>(process->bundle_arena);
+    if (arena == nullptr) {
+        std::fprintf(stderr, "                 paquetes: sin arena\n");
+        return;
+    }
+    /* Las dos regiones.  `viva` es donde se reserva ahora; la otra esta
+     * vacia salvo que quede una recoleccion por rematar. */
+    for (uint32_t h = 0; h < 2; ++h) {
+        const auto &half = arena->half[h];
+        std::fprintf(stderr,
+                     "                 region %u%s: %u/%u paquetes, %u bloques "
+                     "pedidos (%zu KB)\n",
+                     h, h == arena->current ? " (viva)" : "", half.used,
+                     (unsigned)BundleArena::CAPACITY, half.n_chunks,
+                     (size_t)half.n_chunks * BundleArena::Half::CHUNK_BYTES /
+                         1024);
+    }
+    /* Cabeceras y paquetes reservados no tienen por que cuadrar: un paquete
+     * cuya cabecera desalojo la icache sigue ocupando sitio hasta la proxima
+     * recoleccion.  La diferencia ES la basura pendiente. */
+    std::fprintf(stderr,
+                 "                 vivos %u de %u reservados -> %u por "
+                 "reciclar\n",
+                 heads, arena->half[arena->current].used,
+                 arena->half[arena->current].used > heads
+                     ? arena->half[arena->current].used - heads
+                     : 0u);
+
+    /* CONFLICTOS: cuantas cabeceras caen en el mismo conjunto.  Es la cifra que
+     * distingue "la cache se ha llenado" de "el indice las esta amontonando", y
+     * las dos se arreglan de forma OPUESTA -- una pide mas sitio, la otra pide
+     * dispersar --.  Sin esto se confunden: aqui la cache estaba al 9,4% y aun
+     * asi desalojaba. */
+    uint32_t by_size[16] = {};
+    {
+        // Se cuenta sobre las heads VIVAS, recorriendo sus pc.
+        for (uint32_t i = 0; i < ICACHE_SIZE; ++i) {
+            const DecodedInstr &e = process->icache[i];
+            if (e.exec_cached != &exec_bundle) continue;
+            const Bundle *b = bundle_of(e);
+            if (b == nullptr || b->k == 0) continue;
+            const uint32_t n = b->k < 16 ? b->k : 15;
+            ++by_size[n];
+        }
+    }
+    std::fprintf(stderr, "                 tamano de paquete:");
+    for (uint32_t n = 1; n < 16; ++n)
+        if (by_size[n] != 0)
+            std::fprintf(stderr, " %u:%u", n, by_size[n]);
+    std::fprintf(stderr, "%s\n", by_size[15] ? " (15 = 15 o mas)" : "");
+}
+
+void bundle_dump(const ProcessVM *process) { bundle_dump_state(process); }
+
+
+void bundle_dump_one(ProcessVM *process, const Bundle *b) {
+    /* El CONTENIDO, que es lo que hace falta el dia que algo va mal: que
+     * instrucciones lleva el paquete y en que direccion esta cada una.  Con el
+     * histograma se ve la forma; con esto se ve el caso.
+     *
+     * El `pc` de cada instruccion se guarda al formar, no se deduce del orden.
+     * Eso importa aqui mas que en ningun sitio: en cuanto se reordene, deducirlo
+     * daria la direccion equivocada, y un volcado de depuracion que miente es
+     * peor que no tenerlo. */
+    if (b == nullptr) {
+        std::fprintf(stderr, "  (paquete nulo)\n");
+        return;
+    }
+    std::fprintf(stderr,
+                 "  paquete k=%u entradas=%u ejecutadas=%u retirado=%s\n", b->k,
+                 b->entries, b->executed, b->retired ? "si" : "no");
+    bundle_dump_asm(process, b);
+}
+
+/**
+ * @brief Escribe @p s y lo rellena hasta @p width columnas VISIBLES.
+ *
+ * El desensamblador colorea su salida, asi que las cadenas llevan secuencias
+ * ANSI dentro: `%-33s` cuenta esos bytes invisibles como ancho y la columna
+ * sale corrida justo en las lineas que mas cuesta leer.  Aqui se cuenta lo que
+ * de verdad ocupa en pantalla -- todo lo que va entre `ESC[` y la `m` final no
+ * ocupa nada -- y se rellena con eso.
+ *
+ * @param s     Cadena, posiblemente con secuencias ANSI.
+ * @param width Columnas visibles que debe ocupar como minimo.
+ */
+[[gnu::cold]] static void fput_padded(const char *s, int width) {
+    int visible = 0;
+    for (const char *p = s; *p != '\0'; ++p) {
+        if (*p == '\x1B') {                     // arranca una secuencia ANSI
+            while (*p != '\0' && *p != 'm') ++p; // hasta su terminador
+            if (*p == '\0') break;
+            continue; // no ocupa columnas
+        }
+        ++visible;
+    }
+    std::fputs(s, stderr);
+    for (int i = visible; i < width; ++i) std::fputc(' ', stderr);
+}
+
+void bundle_dump_asm(ProcessVM *process, const Bundle *b) {
+    /* El ENSAMBLADOR de lo que hay en la cache, con su direccion virtual.
+     *
+     * El nombre del opcode no basta para depurar: dice `adds` pero no sobre que
+     * registros ni con que inmediato, que es justo lo que se necesita saber
+     * cuando un paquete hace algo raro.  Aqui se leen los BYTES REALES de la
+     * memoria de la VM en la direccion de cada instruccion y se pasan por el
+     * mismo desensamblador que `--disasm-file`, con lo que se ve exactamente lo
+     * que se veria mirando el programa -- y se puede contrastar con el.
+     *
+     * Leer de `vm_mem` y no del `DecodedInstr` es deliberado: si alguna vez el
+     * paquete guardara algo distinto de lo que hay en memoria, esto lo
+     * ensenaria en vez de taparlo. */
+    if (b == nullptr || process == nullptr) return;
+
+    // Lo que ocupa como mucho una instruccion; el desensamblador nunca lee mas.
+    constexpr uint32_t kMaxBytes = 16;
+    uint8_t buf[kMaxBytes];
+    for (uint32_t i = 0; i < b->k && i < BUNDLE_MAX; ++i) {
+        const DecodedInstr &d = b->instr[i];
+        const uint32_t n =
+            d.flags_info.size_instr != 0 ? d.flags_info.size_instr : kMaxBytes;
+        process->vm_mem.read_bytes(d.pc, buf, n);
+
+        disasm::DisasmOptions opts;
+        opts.show_hex = true;
+        const auto out = disasm::disasm_bytes(buf, n, d.pc, opts);
+        if (out.empty()) {
+            std::fprintf(stderr, "    [%2u] 0x%08llx  <no se pudo leer>\n", i,
+                         (unsigned long long)d.pc);
+            continue;
+        }
+        const disasm::DisasmResult &r = out.front();
+        /* El hex va a 33 columnas porque una instruccion de VM llega a 11
+         * bytes ("00 " por byte = 33): con menos, las que son largas empujan
+         * el mnemonico y la columna deja de estar alineada justo en las filas
+         * que mas cuesta leer.  Y se rellena contando columnas VISIBLES: estas
+         * cadenas vienen coloreadas. */
+        std::fprintf(stderr, "    [%2u] 0x%08llx  ", i,
+                     (unsigned long long)r.address);
+        fput_padded(r.hex.c_str(), 33);
+        std::fputs("  ", stderr);
+        fput_padded(r.mnemonic.c_str(), 8);
+        std::fputc(' ', stderr);
+        std::fputs(r.operands.c_str(), stderr);
+        std::fputc('\n', stderr);
+    }
+}
+
+void bundle_dump_heads(ProcessVM *process, uint32_t max_lines,
+                       bool with_instructions) {
+    /* Volcado DETALLADO, para depurar un caso concreto: cada cabecera viva con
+     * lo que el paquete ha hecho.  No sale solo -- se pide desde el depurador o
+     * desde un test -- porque con miles de cabeceras seria ilegible.
+     *
+     * `entradas` y `ejecutadas` son las que decide la retirada: por debajo de
+     * `MIN_PER_ENTRY` instrucciones por entrada el paquete no compensa y se
+     * devuelve la ranura.  Verlas es la unica forma de entender por que un
+     * paquete concreto se retiro. */
+    std::fprintf(stderr, "\n[cabeceras pid=%llu]  pc  k  entradas  ejecutadas  "
+                         "por_entrada  retirado\n",
+                 (unsigned long long)process->pid.local_pid);
+    uint32_t shown = 0;
+    for (uint32_t i = 0; i < ICACHE_SIZE && shown < max_lines; ++i) {
+        const DecodedInstr &e = process->icache[i];
+        if (e.exec_cached != &exec_bundle) continue;
+        const Bundle *b = bundle_of(e);
+        if (b == nullptr) continue;
+        std::fprintf(stderr, "  0x%08llx  %2u  %8u  %10u  %11.1f  %s\n",
+                     (unsigned long long)e.pc, b->k, b->entries, b->executed,
+                     b->entries ? (double)b->executed / (double)b->entries : 0.0,
+                     b->retired ? "si" : "no");
+        // La linea de arriba ya dice lo que el paquete ha hecho; aqui va lo que
+        // LLEVA, entero.  Por eso se llama al desensamblado y no a
+        // `bundle_dump_one`, que repetiria esa misma linea.
+        if (with_instructions) bundle_dump_asm(process, b);
+        ++shown;
+    }
+}
+
 void bundle_release(ProcessVM *process) {
+    // Cualificado desde la raiz: dentro de `runtime` hay otro `util` que
+    // sombrearia al del proyecto.
+    if (__builtin_expect(::util::flag_on(::util::FlagId::CacheDump), 0))
+        bundle_dump_state(process);
+#if VM_BUNDLE_STATS
+    /* La telemetria de paquetes existia y NO LA IMPRIMIA NADIE: los contadores
+     * se llenaban y morian con el proceso.  Una medida que no se puede leer no
+     * es una medida, asi que se vuelca aqui, que es donde el proceso termina.
+     *
+     * Va dentro del mismo `#if` que los incrementos: con la telemetria apagada
+     * -- que es el defecto -- esto no existe, igual que ellos. */
+    const auto &s = process->bundle_stats;
+    if (s.dispatches != 0 || s.formed != 0) {
+        std::fprintf(
+            stderr,
+            "\n[paquetes] formados=%llu no_formados=%llu aplazados=%llu "
+            "recolecciones=%llu\n"
+            "           despachos=%llu instr_dentro=%llu  -> %.1f por despacho\n"
+            "           abandonos=%llu encogidos=%llu encadenados=%llu\n"
+            /* Cuanto movio el planificador, en INSTRUCCIONES y no en paquetes:
+             * lo que interesa es si de verdad reordena algo, no cuantas veces
+             * se le llamo.  Sobre el total de las que entraron en un paquete da
+             * la proporcion real. */
+            "           reordenadas=%llu (%.1f%% de las que entran) en %llu "
+            "paquetes\n"
+            /* POR QUE se movieron.  Con el total solo se sabe cuanto; esto dice
+             * que criterio lo decidio, que es lo que permite ajustar los pesos
+             * mirando datos en vez de a ojo. */
+            "           decidio: fusion=%llu independencia=%llu localidad=%llu "
+            "orden=%llu  de %llu elecciones\n",
+            (unsigned long long)s.formed, (unsigned long long)s.not_formed,
+            (unsigned long long)s.flushes, (unsigned long long)s.collects,
+            (unsigned long long)s.dispatches,
+            (unsigned long long)s.instrs_in_bundles,
+            s.dispatches ? (double)s.instrs_in_bundles / (double)s.dispatches
+                         : 0.0,
+            (unsigned long long)s.aborts, (unsigned long long)s.shrinks,
+            (unsigned long long)s.chained, (unsigned long long)s.reordered,
+            s.instrs_in_bundles
+                ? 100.0 * (double)s.reordered / (double)s.instrs_in_bundles
+                : 0.0,
+            (unsigned long long)s.reorder_bundles,
+            (unsigned long long)s.reorder_wins[0],
+            (unsigned long long)s.reorder_wins[1],
+            (unsigned long long)s.reorder_wins[2],
+            (unsigned long long)s.reorder_wins[3],
+            (unsigned long long)s.reorder_choices);
+    }
+#endif
     delete static_cast<BundleArena *>(process->bundle_arena);
     process->bundle_arena = nullptr;
 }
 
+/**
+ * @brief Copia lo vivo a la otra region, publica el cambio y reserva la vieja.
+ *
+ * Las RAICES son las entradas de icache: se recorren todas, y cada una que sea
+ * cabecera de paquete se copia a la region nueva y se repunta ahi.  Lo que
+ * ninguna referencia -- retirado, o huerfano porque la icache lo desalojo --
+ * no se copia y desaparece: la copia ES la recoleccion.
+ *
+ * No se reinicia la region vieja aqui.  Puede haber un `Bundle*` suyo en manos
+ * de `exec_bundle`, incluso ANIDADO: una instruccion de dentro de un paquete
+ * puede provocar un fallo de icache que llegue hasta aqui.  Mientras la vieja
+ * no se toque, ese puntero sigue siendo valido; reiniciarla es lo que hay que
+ * aplazar, y de eso se encarga @ref bundle_grace_point.
+ *
+ * @param process Proceso cuya cache se recoge.
+ */
+[[gnu::cold]] static void bundle_collect(ProcessVM *process) {
+    BundleArena *arena = arena_of(process);
+    BundleArena::Half &to = arena->spare();
+
+    to.reset(); // la nueva empieza vacia; sus bloques ya estan pedidos
+
+    /* NO hace falta comprobar en que region vive cada paquete, y eso quita un
+     * recorrido de bloques por raiz.  El invariante lo garantiza: tras cada
+     * recoleccion TODAS las raices vivas quedan repuntadas a la region nueva, y
+     * las formaciones posteriores reservan de esa misma.  Luego cualquier
+     * cabecera apunta siempre a la region ACTUAL, que es justo la que se esta
+     * vaciando aqui. */
+    for (uint32_t i = 0; i < ICACHE_SIZE; ++i) {
+        DecodedInstr &root = process->icache[i];
+        if (root.exec_cached != &exec_bundle) continue;
+        Bundle *old = bundle_of(root);
+        if (old == nullptr) continue;
+
+        Bundle *fresh = to.alloc();
+        // Imposible por la cota: no hay mas vivos que raices, y una region
+        // tiene sitio para `CAPACITY` >= `ICACHE_SIZE`.
+        if (fresh == nullptr) break;
+        *fresh = *old;
+        /* Publicacion: una escritura de 64 bits alineada.  Quien lea ve la
+         * vieja o la nueva, y las dos valen mientras la vieja siga en pie. */
+        bundle_store(&root, fresh);
+    }
+
+    arena->current ^= 1u; // la nueva pasa a ser la actual
+    /* La vieja se reinicia en el punto de gracia.  La bandera vive en el
+     * PROCESO y no en la arena: se mira al salir de cada paquete, o sea en
+     * camino caliente. */
+    process->bundle_needs_grace = true;
+    BSTAT(process, collects);
+}
+
+/**
+ * @brief Reinicia la region vieja.  Camino FRIO del punto de gracia.
+ *
+ * Que la cache sea de UN proceso simplifica esto muchisimo: no hacen falta
+ * epocas por planificador ni esperar a nadie mas.  Basta con que este proceso
+ * no este dentro de ningun paquete, y eso es un contador.
+ */
+[[gnu::cold]] void bundle_grace_slow(ProcessVM *process) {
+    BundleArena *arena = static_cast<BundleArena *>(process->bundle_arena);
+    process->bundle_needs_grace = false;
+    if (arena == nullptr) return;
+    arena->spare().reset(); // contador a cero; los bloques se quedan
+}
+
 void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
     if (!process->bundles_on) return;
+
+    /* ARENA LLENA: se comprueba LO PRIMERO, y esto no es un detalle de estilo.
+     *
+     * Estaba al FINAL, despues del bucle que descodifica hasta `BUNDLE_MAX`
+     * instrucciones por adelantado -- o sea despues de hacer todo el trabajo
+     * que este corte existe para evitar.  Con la arena llena se descodificaban
+     * 32 instrucciones y se tiraban, en cada fallo de icache, para siempre.
+     *
+     * Medido con `VM_BUNDLE_STATS=1` sobre un tramo recto de 8192
+     * instrucciones: 5.015.813 rechazos por arena llena, o sea ~160 millones
+     * de descodificaciones desperdiciadas a ~13 ns cada una.  El caso rendia
+     * 3 MIPS donde el mismo programa con tramos de 4096 rinde 350.
+     *
+     * El coste ahora es una comparacion.  Sigue sin formarse nada -- eso lo
+     * arregla el reciclado de la arena, que es otra cosa -- pero deja de
+     * costar. */
+    BundleArena *arena = arena_of(process);
+    if (arena->total() >= BundleArena::CAPACITY) {
+        /* Llena: se RECOGE.  Copiar lo vivo a la otra region y seguir.
+         *
+         * Antes esto era `return` y no se volvia a formar nunca: la cache
+         * funcionaba un rato y luego se apagaba.  Y la comprobacion estaba al
+         * FINAL, despues de descodificar 32 instrucciones por adelantado, asi
+         * que con la region llena se hacia todo ese trabajo para tirarlo --
+         * 5.015.813 veces en un tramo recto de 8192, medido.
+         *
+         * No se recoge si hay un paquete EJECUTANDOSE: la copia repunta las
+         * raices y el que corre dejaria de ser alcanzable a mitad.  En ese caso
+         * se salta esta formacion y se recoge en la siguiente, que llegara
+         * enseguida. */
+        if (process->bundle_depth != 0) {
+            BSTAT(process, flushes);
+            return;
+        }
+        bundle_collect(process);
+    }
 
     // Una cabecera de paquete no puede ser a su vez parte de otro: la entrada
     // que se acaba de escribir tiene que ser una instruccion normal.
@@ -179,15 +551,22 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
         return;
     }
 
-    BundleArena *arena = arena_of(process);
-    if (arena->total >= BundleArena::CAPACITY) {
-        // Llena.  No se puede vaciar aqui sin invalidar la icache -- sus
-        // entradas de paquete apuntarian a indices muertos --, asi que
-        // simplemente se deja de formar.  Reciclar exige vaciar las dos a la
-        // vez, y ese es el mismo camino que la invalidacion por codigo nuevo.
-        BSTAT(process, flushes);
-        return;
-    }
+    /* La comprobacion de arena llena ya se hizo ARRIBA, antes de descodificar
+     * nada.  Aqui solo queda reservar.
+     *
+     * Sigue pendiente el RECICLADO: al llenarse se deja de formar y no se
+     * vuelve a formar nunca, porque vaciar aqui invalidaria las entradas de
+     * icache que apuntan a paquetes muertos.  El diseno acordado para eso son
+     * dos arenas que se turnan con copia dirigida por la icache. */
+    /* REORDENAR antes de publicar.  Aqui y no al ejecutar: se paga una vez por
+     * sitio y se cobra en cada una de las miles de entradas siguientes.
+     *
+     * Se hace sobre `b`, que todavia es local: si algo saliera mal, el paquete
+     * que se publica es el que ya estaba bien formado. */
+    if (__builtin_expect(process->bundle_reorder_on &&
+                             !::util::flag_on(::util::FlagId::NoBundleReorder),
+                         1))
+        BSTAT_ADD(process, reordered, bundle_reorder(process, b));
 
     Bundle *rec = arena->alloc();
     *rec = b;
@@ -226,8 +605,25 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
         ProcessVM *p;
         explicit Pin(ProcessVM *proc, DecodedInstr *e) : p(proc) {
             p->icache_pinned = e;
+            /* Profundidad de anidamiento en paquetes.  Cuenta, no es un
+             * booleano, porque SE ANIDA: una instruccion de dentro de un
+             * paquete puede provocar un fallo de icache que forme otro.
+             *
+             * Es lo que hace segura la recoleccion.  Mientras sea distinta de
+             * cero hay un `Bundle*` en manos de alguien, asi que ni se copia ni
+             * se reinicia nada; al volver a cero se pasa por el punto de
+             * gracia. */
+            ++p->bundle_depth;
         }
-        ~Pin() { p->icache_pinned = nullptr; }
+        ~Pin() {
+            p->icache_pinned = nullptr;
+            /* Camino caliente: un decremento, una comparacion y una rama que
+             * casi siempre no se toma.  El trabajo de verdad esta detras, en
+             * una funcion marcada FRIA para que no engorde este bucle. */
+            if (__builtin_expect(--p->bundle_depth == 0 && p->bundle_needs_grace,
+                                 0))
+                bundle_grace_slow(p);
+        }
     } pin(process, head);
 
     BSTAT(process, dispatches);
@@ -277,11 +673,29 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
      * Se cobra al paquete de CABECERA aunque se encadene: la pregunta es si
      * merecio la pena entrar por aqui. */
     struct Profit {
+        ProcessVM *process;
         Bundle *head_bundle;
         DecodedInstr *entry;
         uint32_t instrs = 0;
         uint32_t entries = 1; ///< esta, mas los encadenados que vengan
         ~Profit() {
+            /* Las instrucciones del paquete van al MISMO contador que las del
+             * interprete.  El planificador cuenta UNA por despacho, y aqui se
+             * despacha una vez y se retiran `instrs`, asi que se le suman las
+             * que van de mas.
+             *
+             * Sin esto la cuenta salia corta justo donde el paquete cunde: un
+             * bucle entero recorrido en un solo despacho contaba como una
+             * instruccion, y los MIPS bajaban cuanto MEJOR fuera el
+             * desenrollado.  Hoy no se nota porque `bundles_on` es false por
+             * defecto -- por eso hay que arreglarlo antes de encenderlo, no
+             * despues.
+             *
+             * Va lo PRIMERO del destructor: por debajo hay salidas tempranas
+             * (`retired`), y de `exec_bundle` se sale por cinco sitios. */
+            if (instrs > 1)
+                process->scheduler.profiler_instr_counter += instrs - 1;
+
             Bundle *hb = head_bundle;
             if (hb->retired) return;
             hb->entries += entries;
@@ -310,7 +724,7 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
             entry->flags_info.blocking = blocked;
             hb->retired = true;
         }
-    } profit{b, head};
+    } profit{process, b, head};
 
     uint32_t turns = 0; ///< paquetes encadenados sin soltar el despacho
     uint32_t i = 0;

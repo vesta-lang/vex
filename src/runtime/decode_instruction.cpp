@@ -23,6 +23,7 @@
 #include "runtime/decode_table.h"
 #include "runtime/dispatch_table.h"
 #include "runtime/runtime.h"
+#include "util/reloj.h"
 #include <cstdio> // debug temporal
 
 namespace {
@@ -92,19 +93,31 @@ inline uint16_t cursor_dump_len(const runtime::InstrCursor &c) {
 #endif
 
 /**
- * @brief Devuelve la marca de tiempo actual en nanosegundos.
+ * @brief Marca de tiempo actual, en TICKS del reloj mas fino de la maquina.
  *
- * Implementacion inline que usa CLOCK_MONOTONIC para medir intervalos de
- * tiempo de alta resolucion.  Solo se invoca cuando has_hooks esta activo
- * para evitar penalizacion en el hot-path de produccion.
+ * Usa @ref util::reloj, que en un procesador con contador de ciclos invariante
+ * lee el contador directamente (~0,3 ns de resolucion) y cae a
+ * @c steady_clock si el procesador no lo garantiza.
  *
- * @return Tiempo monotono actual expresado en nanosegundos.
+ * Antes leia @c CLOCK_MONOTONIC.  En Windows eso sale de
+ * @c QueryPerformanceCounter, que corre a 10 MHz: **un salto cada 100 ns**.
+ * Lo que se cronometra aqui es UNA instruccion de la maquina virtual, que
+ * cuesta unos 3 ns -- con esa granularidad el 97% de las lecturas daban CERO y
+ * el 3% daban 100, asi que `time_decode` y `time_exec` no median el tiempo,
+ * median cada cuanto el reloj se dignaba a saltar.  Ademas se lee mas barato,
+ * y se lee dos veces por instruccion.
  */
-inline uint64_t now_ns() {
-    timespec ts{};
-    clock_gettime(CLOCK_MONOTONIC, &ts); // leer reloj monotono del SO
-    return (uint64_t)ts.tv_sec * 1000000000ULL +
-           ts.tv_nsec; // convertir a nanosegundos totales
+inline uint64_t now_ticks() { return util::reloj::ahora(); }
+
+/**
+ * @brief Nanosegundos transcurridos desde la marca @p t1.
+ *
+ * La conversion se hace sobre la DIFERENCIA, no sobre cada lectura: el valor
+ * absoluto del contador de ciclos es enorme y convertirlo perderia en el
+ * redondeo justo los pocos nanosegundos que se quieren medir.
+ */
+inline uint64_t elapsed_ns(uint64_t t1) {
+    return (uint64_t)util::reloj::a_ns(util::reloj::ahora() - t1);
 }
 
 namespace runtime {
@@ -1274,6 +1287,17 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
      * direccion es un argumento y el proceso no se toca. */
     uint8_t buf[INSTR_BYTES_MAX];
     m->decode(cursor_en(process, pc, buf), out);
+    /* Las binarias de coma flotante tienen variante por nivel de ISA Y por
+     * ancho, con el cuerpo SIMD ya metido en linea.  Se elige AQUI -- DESPUES
+     * de descodificar, que es cuando `mode` ya esta puesto -- y no en cada
+     * ejecucion: asi la aprovechan todos los consumidores, incluido
+     * `exec_bundle`, que no pasa por la tabla de rutas rapidas del interprete
+     * y por tanto no veria una especializacion que viviera solo alli. */
+    if (out.flags_info.is_not_extended == 0x00) {
+        if (auto *esp = float_exec_specialized(out.flags_info.opcode_index,
+                                               out.flags_info.mode))
+            out.exec_cached = esp;
+    }
     cachear_estado_de_runtime(process, *m, out);
     return true;
 }
@@ -1284,7 +1308,7 @@ void decode_instruction(ProcessVM *process) {
     vm_hook(process, DebugStage::DecodeBegin); // hook de inicio de fase
     PROFILE_START
     const uint64_t t1 =
-        measuring ? now_ns() : 0; // marca de tiempo inicial (solo si se mide)
+        measuring ? now_ticks() : 0; // marca inicial (solo si se mide)
 
     uint64_t pc = process->registers.rip.raw(); // PC actual del proceso
 
@@ -1297,7 +1321,7 @@ void decode_instruction(ProcessVM *process) {
         process->decoded_ptr = cached; // apuntar al cache sin copiar
 
         if (measuring)
-            process->scheduler.time_decode += now_ns() - t1; // acumular tiempo
+            process->scheduler.time_decode += elapsed_ns(t1); // acumular
 
         PROFILE_END("DECODER");
         vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
@@ -1348,7 +1372,7 @@ void decode_instruction(ProcessVM *process) {
         if (slot == nullptr) slot = &process->decoded_scratch;
         *slot = decode_tmp; // cachear para que decoded_ptr sea valido
         process->decoded_ptr = slot;
-        if (measuring) process->scheduler.time_decode += now_ns() - t1;
+        if (measuring) process->scheduler.time_decode += elapsed_ns(t1);
         PROFILE_END("DECODER")
         vm_hook(process, DebugStage::DecodeEnd);
         return; // execute_instruction detectara exec==nullptr y haltara el
@@ -1382,6 +1406,14 @@ void decode_instruction(ProcessVM *process) {
     // llamar al metodo especializado de descodificacion de la instruccion
     uint8_t instr_buf[INSTR_BYTES_MAX];
     metadata.decode(cursor_en(process, pc, instr_buf), decode_tmp);
+    // Y AHORA, con `mode` ya puesto, la variante por ISA y ancho si la hay.
+    // Ver el otro sitio que rellena `exec_cached`, mas arriba en este fichero.
+    if (decode_tmp.flags_info.is_not_extended == 0x00) {
+        if (auto *esp =
+                float_exec_specialized(decode_tmp.flags_info.opcode_index,
+                                       decode_tmp.flags_info.mode))
+            decode_tmp.exec_cached = esp;
+    }
     cachear_estado_de_runtime(process, metadata, decode_tmp);
 
     // guardar el resultado en la icache (muy importante: despues de llamar a
@@ -1409,7 +1441,7 @@ void decode_instruction(ProcessVM *process) {
 
     if (measuring)
         process->scheduler.time_decode +=
-            now_ns() - t1; // acumular tiempo de descodificacion
+            elapsed_ns(t1); // acumular tiempo de descodificacion
 
     PROFILE_END("DECODER");
     vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
@@ -1436,7 +1468,7 @@ vm_event execute_instruction(ProcessVM *process) {
     vm_hook(process, DebugStage::ExecuteBegin); // hook antes de ejecutar
     PROFILE_START
 
-    const uint64_t t1 = measuring ? now_ns() : 0; // marca de tiempo inicial
+    const uint64_t t1 = measuring ? now_ticks() : 0; // marca inicial
 
     // ejecutar la instruccion descodificada; si exec es null, tratar como HLT
     // (instruccion invalida)
@@ -1472,7 +1504,7 @@ vm_event execute_instruction(ProcessVM *process) {
     process->scheduler.profiler_instr_counter++;
     if (measuring)
         process->scheduler.time_exec +=
-            now_ns() - t1; // acumular tiempo de ejecucion
+            elapsed_ns(t1); // acumular tiempo de ejecucion
 
     PROFILE_END("EXECUTER");
     vm_hook(process, DebugStage::ExecuteEnd); // hook tras ejecutar

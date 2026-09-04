@@ -145,7 +145,7 @@ static inline int fmode_bytes(uint8_t mode) {
 //   <op>_avx512_f64/<op>_avx512_f32 -- usa ZMM (512b), YMM/XMM para modos<3
 //
 // Parametros de las funciones generadas:
-//   d     -- puntero al buffer de destino (ZmmRegister::data, alignas(64))
+//   d     -- puntero al buffer de target_isa (ZmmRegister::data, alignas(64))
 //   s     -- puntero al buffer de fuente  (ZmmRegister::data, alignas(64))
 //   bytes -- numero de bytes a procesar (16, 32 o 64)
 //
@@ -157,9 +157,10 @@ static inline int fmode_bytes(uint8_t mode) {
 /* --- SSE2: bucle de instrucciones XMM de 128 bits --- */
 
 #define DEF_BINARY_SSE2_F64(fname, op128)                                      \
-    [[gnu::target("sse2")]]                                                    \
-    static void fname##_sse2_f64(uint8_t *__restrict__ d,                      \
-                                 const uint8_t *__restrict__ s, int bytes) {   \
+    [[gnu::target("sse2"), gnu::always_inline]]                                \
+    static inline void fname##_sse2_f64(uint8_t *__restrict__ d,               \
+                                        const uint8_t *__restrict__ s,         \
+                                        int bytes) {                           \
         for (int i = 0; i < bytes; i += 16) {                                  \
             __m128d vd = _mm_load_pd(reinterpret_cast<const double *>(d + i)); \
             __m128d vs = _mm_load_pd(reinterpret_cast<const double *>(s + i)); \
@@ -169,9 +170,10 @@ static inline int fmode_bytes(uint8_t mode) {
     }
 
 #define DEF_BINARY_SSE2_F32(fname, op128)                                      \
-    [[gnu::target("sse2")]]                                                    \
-    static void fname##_sse2_f32(uint8_t *__restrict__ d,                      \
-                                 const uint8_t *__restrict__ s, int bytes) {   \
+    [[gnu::target("sse2"), gnu::always_inline]]                                \
+    static inline void fname##_sse2_f32(uint8_t *__restrict__ d,               \
+                                        const uint8_t *__restrict__ s,         \
+                                        int bytes) {                           \
         for (int i = 0; i < bytes; i += 16) {                                  \
             __m128 vd = _mm_load_ps(reinterpret_cast<const float *>(d + i));   \
             __m128 vs = _mm_load_ps(reinterpret_cast<const float *>(s + i));   \
@@ -183,9 +185,10 @@ static inline int fmode_bytes(uint8_t mode) {
 /* --- AVX: YMM (256b) para bytes>=32, XMM para bytes==16 --- */
 
 #define DEF_BINARY_AVX_F64(fname, op128, op256)                                \
-    [[gnu::target("avx")]]                                                     \
-    static void fname##_avx_f64(uint8_t *__restrict__ d,                       \
-                                const uint8_t *__restrict__ s, int bytes) {    \
+    [[gnu::target("avx"), gnu::always_inline]]                                 \
+    static inline void fname##_avx_f64(uint8_t *__restrict__ d,                \
+                                       const uint8_t *__restrict__ s,          \
+                                       int bytes) {                            \
         if (__builtin_expect(bytes < 32, 0)) {                                 \
             __m128d vd = _mm_load_pd(reinterpret_cast<const double *>(d));     \
             __m128d vs = _mm_load_pd(reinterpret_cast<const double *>(s));     \
@@ -204,9 +207,10 @@ static inline int fmode_bytes(uint8_t mode) {
     }
 
 #define DEF_BINARY_AVX_F32(fname, op128, op256)                                \
-    [[gnu::target("avx")]]                                                     \
-    static void fname##_avx_f32(uint8_t *__restrict__ d,                       \
-                                const uint8_t *__restrict__ s, int bytes) {    \
+    [[gnu::target("avx"), gnu::always_inline]]                                 \
+    static inline void fname##_avx_f32(uint8_t *__restrict__ d,                \
+                                       const uint8_t *__restrict__ s,          \
+                                       int bytes) {                            \
         if (__builtin_expect(bytes < 32, 0)) {                                 \
             __m128 vd = _mm_load_ps(reinterpret_cast<const float *>(d));       \
             __m128 vs = _mm_load_ps(reinterpret_cast<const float *>(s));       \
@@ -227,9 +231,10 @@ static inline int fmode_bytes(uint8_t mode) {
 /* --- AVX-512: ZMM (512b) para bytes==64, YMM/XMM para bytes menores --- */
 
 #define DEF_BINARY_AVX512_F64(fname, op128, op256, op512)                      \
-    [[gnu::target("avx512f")]]                                                 \
-    static void fname##_avx512_f64(uint8_t *__restrict__ d,                    \
-                                   const uint8_t *__restrict__ s, int bytes) { \
+    [[gnu::target("avx512f"), gnu::always_inline]]                             \
+    static inline void fname##_avx512_f64(uint8_t *__restrict__ d,             \
+                                          const uint8_t *__restrict__ s,       \
+                                          int bytes) {                         \
         if (bytes == 64) {                                                     \
             __m512d vd = _mm512_load_pd(reinterpret_cast<const double *>(d));  \
             __m512d vs = _mm512_load_pd(reinterpret_cast<const double *>(s));  \
@@ -248,9 +253,10 @@ static inline int fmode_bytes(uint8_t mode) {
     }
 
 #define DEF_BINARY_AVX512_F32(fname, op128, op256, op512)                      \
-    [[gnu::target("avx512f")]]                                                 \
-    static void fname##_avx512_f32(uint8_t *__restrict__ d,                    \
-                                   const uint8_t *__restrict__ s, int bytes) { \
+    [[gnu::target("avx512f"), gnu::always_inline]]                             \
+    static inline void fname##_avx512_f32(uint8_t *__restrict__ d,             \
+                                          const uint8_t *__restrict__ s,       \
+                                          int bytes) {                         \
         if (bytes == 64) {                                                     \
             __m512 vd = _mm512_load_ps(reinterpret_cast<const float *>(d));    \
             __m512 vs = _mm512_load_ps(reinterpret_cast<const float *>(s));    \
@@ -333,7 +339,7 @@ DEF_BINARY_AVX512_F32(fdiv, _mm_div_ps, _mm256_div_ps, _mm512_div_ps)
 // FSQRT: raiz cuadrada packed
 //
 // Para FSQRT no existe el patron binario; se generan funciones separadas
-// porque el operando fuente (src) puede diferir del destino (dst).
+// porque el operando fuente (src) puede diferir del target_isa (dst).
 // VSQRTPD/VSQRTPS son instrucciones de un solo operando fuente.
 // =========================================================================
 
@@ -702,7 +708,7 @@ void decode_instr_fmowi(const InstrCursor &c, DecodedInstr &instr) {
  * mode 3 -> write_zmm  (copia completa)
  *
  * @param vm    Proceso virtual.
- * @param instr reg1 = destino, reg2 = fuente; mode = ancho.
+ * @param instr reg1 = target_isa, reg2 = fuente; mode = ancho.
  */
 void exec_instr_fmov(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t dst = instr.data_instruction.reg_data.reg1;
@@ -735,25 +741,25 @@ void exec_instr_fmov(ProcessVM *vm, const DecodedInstr &instr) {
  * @param vm    Proceso virtual.
  * @param instr reg1 += reg2.
  */
-void exec_instr_fadd(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t dst = instr.data_instruction.reg_data.reg1;
-    const uint8_t src = instr.data_instruction.reg_data.reg2;
-    const uint8_t mode = instr.flags_info.mode;
-    const bool is_f32 = (instr.flags_info._signed_instruct != 0);
-
-    ZmmRegister &d = vm->registers.zmm[dst];
-    const ZmmRegister &s = vm->registers.zmm[src];
-
-    if (mode == 0) {
-        if (is_f32)
-            d.write_f32(d.read_f32() + s.read_f32());
-        else
-            d.write_f64(d.read_f64() + s.read_f64());
-        return;
+/* Los cuatro manejadores GENERICOS son ahora un reenvio.
+ *
+ * Siguen existiendo porque son lo que la tabla de descodificacion deja en
+ * `metadata.exec` y porque se les puede llamar por su nombre, pero la
+ * implementacion es UNA: la variante especializada por nivel de ISA y por
+ * ancho.  Dejarles su propia copia del despacho SIMD seria tener dos
+ * implementaciones de la misma instruccion, y el dia que una se quedara atras
+ * no daria un error de compilacion -- daria OTRO RESULTADO.
+ *
+ * Es ademas lo que permite que las funciones SIMD lleven `always_inline`: un
+ * manejador sin atributo de destino no puede incrustarlas, asi que mientras
+ * hubiera aqui una copia del despacho, el atributo era un error de
+ * compilacion. */
+#define DEF_FBIN_GENERIC(name, opcode2)                                        \
+    void exec_instr_##name(ProcessVM *vm, const DecodedInstr &instr) {         \
+        float_exec_specialized(opcode2, instr.flags_info.mode)(vm, instr);     \
     }
 
-    DISPATCH_BINARY_PACKED(d.raw(), s.raw(), fmode_bytes(mode), is_f32, fadd);
-}
+DEF_FBIN_GENERIC(fadd, 0xF1)
 
 // =========================================================================
 // FSUB  (0x00 0xF2)
@@ -764,25 +770,7 @@ void exec_instr_fadd(ProcessVM *vm, const DecodedInstr &instr) {
  * @param vm    Proceso virtual.
  * @param instr reg1 -= reg2.
  */
-void exec_instr_fsub(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t dst = instr.data_instruction.reg_data.reg1;
-    const uint8_t src = instr.data_instruction.reg_data.reg2;
-    const uint8_t mode = instr.flags_info.mode;
-    const bool is_f32 = (instr.flags_info._signed_instruct != 0);
-
-    ZmmRegister &d = vm->registers.zmm[dst];
-    const ZmmRegister &s = vm->registers.zmm[src];
-
-    if (mode == 0) {
-        if (is_f32)
-            d.write_f32(d.read_f32() - s.read_f32());
-        else
-            d.write_f64(d.read_f64() - s.read_f64());
-        return;
-    }
-
-    DISPATCH_BINARY_PACKED(d.raw(), s.raw(), fmode_bytes(mode), is_f32, fsub);
-}
+DEF_FBIN_GENERIC(fsub, 0xF2)
 
 // =========================================================================
 // FMUL  (0x00 0xF3)
@@ -793,25 +781,7 @@ void exec_instr_fsub(ProcessVM *vm, const DecodedInstr &instr) {
  * @param vm    Proceso virtual.
  * @param instr reg1 *= reg2.
  */
-void exec_instr_fmul(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t dst = instr.data_instruction.reg_data.reg1;
-    const uint8_t src = instr.data_instruction.reg_data.reg2;
-    const uint8_t mode = instr.flags_info.mode;
-    const bool is_f32 = (instr.flags_info._signed_instruct != 0);
-
-    ZmmRegister &d = vm->registers.zmm[dst];
-    const ZmmRegister &s = vm->registers.zmm[src];
-
-    if (mode == 0) {
-        if (is_f32)
-            d.write_f32(d.read_f32() * s.read_f32());
-        else
-            d.write_f64(d.read_f64() * s.read_f64());
-        return;
-    }
-
-    DISPATCH_BINARY_PACKED(d.raw(), s.raw(), fmode_bytes(mode), is_f32, fmul);
-}
+DEF_FBIN_GENERIC(fmul, 0xF3)
 
 // =========================================================================
 // FDIV  (0x00 0xF4)
@@ -822,24 +792,192 @@ void exec_instr_fmul(ProcessVM *vm, const DecodedInstr &instr) {
  * @param vm    Proceso virtual.
  * @param instr reg1 /= reg2.
  */
-void exec_instr_fdiv(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t dst = instr.data_instruction.reg_data.reg1;
-    const uint8_t src = instr.data_instruction.reg_data.reg2;
-    const uint8_t mode = instr.flags_info.mode;
-    const bool is_f32 = (instr.flags_info._signed_instruct != 0);
+DEF_FBIN_GENERIC(fdiv, 0xF4)
+#undef DEF_FBIN_GENERIC
 
-    ZmmRegister &d = vm->registers.zmm[dst];
-    const ZmmRegister &s = vm->registers.zmm[src];
+// =========================================================================
+// Variantes del manejador ENTERO por nivel de ISA
+// =========================================================================
 
-    if (mode == 0) {
-        if (is_f32)
-            d.write_f32(d.read_f32() / s.read_f32());
-        else
-            d.write_f64(d.read_f64() / s.read_f64());
-        return;
+/**
+ * @brief Genera `exec_instr_<nombre>_<suffix>`: el manejador completo,
+ *        compilado para UN nivel de ISA concreto.
+ *
+ * POR QUE, si ya existe `exec_instr_fadd`.  Ese resuelve la ISA en CADA
+ * instruccion: mira el nivel cacheado, entra en un `switch` de tres ramas y
+ * llama a la funcion SIMD que toque.  Esa ultima llamada no se puede evitar
+ * desde una funcion generica -- las funciones SIMD llevan
+ * `[[gnu::target("avx512f")]]` y similares, y el compilador no puede
+ * incrustarlas dentro de codigo que tambien tiene que correr en maquinas sin
+ * AVX-512 --, asi que queda una llamada por instruccion.
+ *
+ * Estas variantes llevan el atributo ELLAS.  Dentro, el cuerpo SIMD si se mete
+ * en linea y no queda ninguna llamada.  Y como el nivel de ISA de una maquina
+ * no cambia a mitad de ejecucion, CUAL usar se decide una sola vez: el
+ * interprete lo resuelve al construir su tabla de despacho y el salto aterriza
+ * ya en la correcta.  Del camino por instruccion desaparecen la lectura del
+ * nivel, la rama y el `switch`.
+ *
+ * (El nivel esta en un atomico, pero eso NO era el coste: una lectura relajada
+ * de un byte en x86 es un `mov` corriente, sin barrera.)
+ *
+ * @param nombre  Operacion (fadd, fsub, ...), que da tambien el nombre de las
+ *                funciones SIMD `<nombre>_<suffix>_f32/f64`.
+ * @param oper    El operador de C++ para la variante escalar.
+ * @param suffix  Nivel de ISA: sse2, avx o avx512.
+ * @param target_isa Cadena para `[[gnu::target(...)]]`.
+ */
+/**
+ * @brief Variante ESCALAR de una binaria.  No depende del nivel de ISA.
+ *
+ * Escribe con `write_*_keep`, o sea PRESERVANDO los bytes altos del registro
+ * -- que es lo que hace el procesador: `ADDSD` toca los ocho bajos y deja el
+ * resto.  Solo `fmov` zerifica, que es lo que esta documentado para el.
+ */
+#define DEF_FBIN_SCALAR(name, oper)                                            \
+    void exec_instr_##name##_s(ProcessVM *vm, const DecodedInstr &instr) {     \
+        ZmmRegister &d =                                                       \
+            vm->registers.zmm[instr.data_instruction.reg_data.reg1];           \
+        const ZmmRegister &s =                                                 \
+            vm->registers.zmm[instr.data_instruction.reg_data.reg2];           \
+        if (instr.flags_info._signed_instruct)                                 \
+            d.write_f32_keep(d.read_f32() oper s.read_f32());                  \
+        else                                                                   \
+            d.write_f64_keep(d.read_f64() oper s.read_f64());                  \
     }
 
-    DISPATCH_BINARY_PACKED(d.raw(), s.raw(), fmode_bytes(mode), is_f32, fdiv);
+DEF_FBIN_SCALAR(fadd, +)
+DEF_FBIN_SCALAR(fsub, -)
+DEF_FBIN_SCALAR(fmul, *)
+DEF_FBIN_SCALAR(fdiv, /)
+#undef DEF_FBIN_SCALAR
+
+/**
+ * @brief Variante EMPAQUETADA, fija en nivel de ISA **y en ANCHO**.
+ *
+ * Las dos cosas se saben al descodificar -- la ISA es de la maquina y el ancho
+ * sale de `mode` --, asi que ninguna tiene por que decidirse al ejecutar.
+ *
+ * Fijar el ancho es lo que remata el trabajo: con `bytes` constante, el bucle
+ * `for (i = 0; i < bytes; i += 32)` de la funcion SIMD se convierte en una o
+ * dos operaciones vectoriales RECTAS, y el `memset` de la cola pasa a ser de
+ * tamano constante (o desaparece con 64).  Con el ancho como variable de
+ * ejecucion no habia nada de eso: un bucle de cuenta desconocida que GCC ni
+ * desenrollaba ni consideraba rentable meter en linea.
+ *
+ * Que se meta en linea no se deja a criterio del compilador: las funciones SIMD
+ * llevan `always_inline`.  Sin el, medido con VTune, `fadd_avx_f64` salia como
+ * simbolo propio con 2,39 s -- o sea que la llamada seguia ahi pese a que
+ * llamante y llamada tienen el mismo atributo de destino.
+ *
+ * @param tag     Sufijo del ancho: x=128, y=256, z=512 bits.
+ * @param nbytes  Ese ancho en bytes, como CONSTANTE.
+ */
+#define DEF_FBIN_ISA_W(name, oper, suffix, target_isa, tag, nbytes)            \
+    [[gnu::target(target_isa)]] void exec_instr_##name##_##suffix##_##tag(     \
+        ProcessVM *vm, const DecodedInstr &instr) {                            \
+        ZmmRegister &d =                                                       \
+            vm->registers.zmm[instr.data_instruction.reg_data.reg1];           \
+        const ZmmRegister &s =                                                 \
+            vm->registers.zmm[instr.data_instruction.reg_data.reg2];           \
+        if (instr.flags_info._signed_instruct)                                 \
+            name##_##suffix##_f32(d.raw(), s.raw(), nbytes);                   \
+        else                                                                   \
+            name##_##suffix##_f64(d.raw(), s.raw(), nbytes);                   \
+    }
+
+/// Las cuatro operaciones en los tres anchos, para un nivel de ISA.
+#define DEF_FBIN_ISA_ALL(suffix, target_isa)                                   \
+    DEF_FBIN_ISA_W(fadd, +, suffix, target_isa, x, 16)                         \
+    DEF_FBIN_ISA_W(fadd, +, suffix, target_isa, y, 32)                         \
+    DEF_FBIN_ISA_W(fadd, +, suffix, target_isa, z, 64)                         \
+    DEF_FBIN_ISA_W(fsub, -, suffix, target_isa, x, 16)                         \
+    DEF_FBIN_ISA_W(fsub, -, suffix, target_isa, y, 32)                         \
+    DEF_FBIN_ISA_W(fsub, -, suffix, target_isa, z, 64)                         \
+    DEF_FBIN_ISA_W(fmul, *, suffix, target_isa, x, 16)                         \
+    DEF_FBIN_ISA_W(fmul, *, suffix, target_isa, y, 32)                         \
+    DEF_FBIN_ISA_W(fmul, *, suffix, target_isa, z, 64)                         \
+    DEF_FBIN_ISA_W(fdiv, /, suffix, target_isa, x, 16)                         \
+    DEF_FBIN_ISA_W(fdiv, /, suffix, target_isa, y, 32)                         \
+    DEF_FBIN_ISA_W(fdiv, /, suffix, target_isa, z, 64)
+
+DEF_FBIN_ISA_ALL(sse2, "sse2")
+DEF_FBIN_ISA_ALL(avx, "avx")
+DEF_FBIN_ISA_ALL(avx512, "avx512f")
+
+#undef DEF_FBIN_ISA_ALL
+#undef DEF_FBIN_ISA_W
+
+int float_isa_level() {
+    switch (float_isa()) {
+    case FloatISA::AVX512: return 2;
+    case FloatISA::FMA:
+    case FloatISA::AVX: return 1;
+    default: return 0; // SSE2 y el respaldo escalar comparten variante
+    }
+}
+
+void (*float_exec_specialized(uint8_t opcode2, uint8_t mode))(
+    ProcessVM *, const DecodedInstr &) {
+    /* Se resuelve la primera vez y se queda.  Ni la ISA de una maquina ni el
+     * juego de anchos cambian a mitad de ejecucion, asi que esto se pregunta
+     * una vez y no una vez por instruccion.
+     *
+     * Indices: [operacion][mode].  mode 0 es escalar y no depende de la ISA,
+     * asi que su fila es la misma en los tres niveles. */
+    using Fn = void (*)(ProcessVM *, const DecodedInstr &);
+    /* La tabla nace INICIALIZADA con la linea base (SSE2), no vacia.  Dos
+     * motivos, y el segundo no es cosmetico:
+     *
+     *   - en una maquina sin AVX no hay nada que rellenar;
+     *   - vacia, la tabla son CEROS en la imagen del programa, y el derivador
+     *     de efectos -- que lee el binario, no lo ejecuta -- veia una tabla que
+     *     no apunta a codigo y renunciaba.  Con eso `fadd`, `fsub`, `fmul` y
+     *     `fdiv` quedaban con efectos "de cota inferior", y el generador de la
+     *     base de datos SE NIEGA a escribirla mientras haya alguno asi.  O sea
+     *     que un `static` perezoso aqui bloqueaba la base de datos entera.
+     *
+     * Que el runtime cambie estas entradas por las de AVX no altera lo que se
+     * deriva: las variantes hacen la MISMA operacion sobre el MISMO estado, y
+     * lo unico que cambia es con que instrucciones del anfitrion. */
+    static Fn table[4][4] = {
+        {&exec_instr_fadd_s, &exec_instr_fadd_sse2_x, &exec_instr_fadd_sse2_y,
+         &exec_instr_fadd_sse2_z},
+        {&exec_instr_fsub_s, &exec_instr_fsub_sse2_x, &exec_instr_fsub_sse2_y,
+         &exec_instr_fsub_sse2_z},
+        {&exec_instr_fmul_s, &exec_instr_fmul_sse2_x, &exec_instr_fmul_sse2_y,
+         &exec_instr_fmul_sse2_z},
+        {&exec_instr_fdiv_s, &exec_instr_fdiv_sse2_x, &exec_instr_fdiv_sse2_y,
+         &exec_instr_fdiv_sse2_z},
+    };
+    static bool ready = false;
+    if (__builtin_expect(!ready, 0)) {
+#define FILL_ISA(suffix)                                                       \
+    do {                                                                       \
+        table[0][1] = &exec_instr_fadd_##suffix##_x;                           \
+        table[0][2] = &exec_instr_fadd_##suffix##_y;                           \
+        table[0][3] = &exec_instr_fadd_##suffix##_z;                           \
+        table[1][1] = &exec_instr_fsub_##suffix##_x;                           \
+        table[1][2] = &exec_instr_fsub_##suffix##_y;                           \
+        table[1][3] = &exec_instr_fsub_##suffix##_z;                           \
+        table[2][1] = &exec_instr_fmul_##suffix##_x;                           \
+        table[2][2] = &exec_instr_fmul_##suffix##_y;                           \
+        table[2][3] = &exec_instr_fmul_##suffix##_z;                           \
+        table[3][1] = &exec_instr_fdiv_##suffix##_x;                           \
+        table[3][2] = &exec_instr_fdiv_##suffix##_y;                           \
+        table[3][3] = &exec_instr_fdiv_##suffix##_z;                           \
+    } while (0)
+        switch (float_isa_level()) {
+        case 2: FILL_ISA(avx512); break;
+        case 1: FILL_ISA(avx); break;
+        default: FILL_ISA(sse2); break;
+        }
+#undef FILL_ISA
+        ready = true;
+    }
+    // 0xF1..0xF4 son fadd, fsub, fmul y fdiv.  El resto no tiene variantes.
+    if (opcode2 < 0xF1 || opcode2 > 0xF4 || mode > 3) return nullptr;
+    return table[opcode2 - 0xF1][mode];
 }
 
 // =========================================================================
@@ -1103,7 +1241,7 @@ void exec_instr_fcvt(ProcessVM *vm, const DecodedInstr &instr) {
  * El inmediato ya fue decodificado en inmmed_data por decode_instr_fmowi.
  *
  * @param vm    Proceso virtual.
- * @param instr inmmed_data.reg = ZMM destino; inmmed_data.inmmed = bits IEEE
+ * @param instr inmmed_data.reg = ZMM target_isa; inmmed_data.inmmed = bits IEEE
  * 754.
  */
 void exec_instr_fmovi(ProcessVM *vm, const DecodedInstr &instr) {
@@ -1135,7 +1273,7 @@ void exec_instr_fmovi(ProcessVM *vm, const DecodedInstr &instr) {
  * llamadas a la interfaz de memoria VM).
  *
  * @param vm    Proceso virtual.
- * @param instr reg1 = ZMM destino, reg2 = GP con la direccion VM.
+ * @param instr reg1 = ZMM target_isa, reg2 = GP con la direccion VM.
  */
 void exec_instr_fload(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t zmm_idx = instr.data_instruction.reg_data.reg1;
@@ -1218,11 +1356,11 @@ void exec_instr_fstore(ProcessVM *vm, const DecodedInstr &instr) {
  * @brief Ejecuta FEXTEND: convierte f32 -> f64 dentro del banco ZMM.
  *
  * Lee el f32 escalar (4 bytes bajos) del registro fuente, lo extiende
- * a double y lo escribe como f64 en el destino.  write_f64 zerifica los
- * bytes altos del registro destino.
+ * a double y lo escribe como f64 en el target_isa.  write_f64 zerifica los
+ * bytes altos del registro target_isa.
  *
  * @param vm    Proceso virtual.
- * @param instr reg1 = ZMM destino, reg2 = ZMM fuente.
+ * @param instr reg1 = ZMM target_isa, reg2 = ZMM fuente.
  */
 void exec_instr_fextend(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t dst = instr.data_instruction.reg_data.reg1;
@@ -1236,11 +1374,11 @@ void exec_instr_fextend(ProcessVM *vm, const DecodedInstr &instr) {
  * @brief Ejecuta FNARROW: convierte f64 -> f32 dentro del banco ZMM.
  *
  * Lee el f64 escalar (8 bytes bajos) del registro fuente, lo trunca
- * a float y lo escribe como f32 en el destino.  write_f32 zerifica los
- * bytes altos del registro destino.
+ * a float y lo escribe como f32 en el target_isa.  write_f32 zerifica los
+ * bytes altos del registro target_isa.
  *
  * @param vm    Proceso virtual.
- * @param instr reg1 = ZMM destino, reg2 = ZMM fuente.
+ * @param instr reg1 = ZMM target_isa, reg2 = ZMM fuente.
  */
 void exec_instr_fnarrow(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t dst = instr.data_instruction.reg_data.reg1;

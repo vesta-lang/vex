@@ -62,18 +62,30 @@ namespace runtime {
  * Las estructuras Op derivadas solo necesitan proveer compute(); flags() se
  * hereda.
  */
+/* CONVENIO DE `flags()`: DEVUELVE los bits, no los escribe.
+ *
+ * Antes cada `Op::flags` escribia CF y OF directamente en `vm->registers`, y
+ * `compute_with_flags` hacia lo propio con ZF y SF.  Eran cuatro
+ * lee-modifica-escribe encadenados sobre el mismo byte -- ver la explicacion
+ * larga en `include/runtime/rflags.h` --, que costaban el 27% del interprete
+ * y ademas hacian que el derivador de efectos marcase `add` como LECTOR de
+ * banderas, con lo que dos operaciones aritmeticas nunca parecian
+ * independientes.
+ *
+ * Ahora cada `flags()` devuelve un `uint8_t` con sus bits ya colocados
+ * (`RF_CF`, `RF_OF`), quien llama compone tambien SF y ZF, y se escribe UNA
+ * vez.  Sigue recibiendo `vm` porque hay operaciones -- INC y DEC -- que
+ * PRESERVAN el acarreo y necesitan el valor anterior. */
 struct LogicFlagsBase {
     /**
-     * @brief Limpia CF y OF; ZF/SF son manejados por compute_with_flags.
+     * @brief Limpia CF y OF; ZF/SF los compone quien llama.
      * @tparam T Ancho entero sin signo de los operandos.
+     * @return Cero: una operacion bitwise no produce acarreo ni desborda.
      */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T /*a*/, T /*b*/, T /*result*/,
-                             bool /*is_signed*/) {
-        vm->registers.flags.bits.CF =
-            0; // las operaciones bitwise nunca producen acarreo
-        vm->registers.flags.bits.OF =
-            0; // las operaciones bitwise nunca desbordan
+    static inline uint8_t flags(ProcessVM * /*vm*/, T /*a*/, T /*b*/,
+                                T /*result*/, bool /*is_signed*/) {
+        return 0;
     }
 };
 
@@ -95,16 +107,15 @@ struct IncOp {
     /** @brief Returns a + 1. */
     template <typename T> static inline T compute(T a) { return a + 1; }
 
-    /** @brief Sets ZF; preserves CF; clears OF. */
+    /**
+     * @brief Preserva CF, limpia OF.
+     * @return El CF ANTERIOR, que es lo que INC preserva; OF a cero.
+     */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T /*a*/, T result) {
-        vm->registers.flags.bits.CF =
-            vm->registers.flags.bits
-                .CF; // CF preservado (asignacion sin efecto)
-        vm->registers.flags.bits.OF =
-            0; // INC sin signo no tiene flag de desbordamiento
-        vm->registers.flags.bits.ZF =
-            (result == 0); // establecer ZF si el resultado es cero
+    static inline uint8_t flags(ProcessVM *vm, T /*a*/, T /*result*/) {
+        // Unica operacion que necesita el valor previo: por eso `flags()`
+        // sigue recibiendo `vm` aunque la mayoria no lo use.
+        return (uint8_t)(vm->registers.flags.arith & RF_CF);
     }
 };
 
@@ -121,15 +132,13 @@ struct DecOp {
     /** @brief Returns a - 1. */
     template <typename T> static inline T compute(T a) { return a - 1; }
 
-    /** @brief Sets ZF; preserves CF; clears OF. */
+    /**
+     * @brief Preserva CF, limpia OF.  Misma semantica que INC.
+     * @return El CF ANTERIOR; OF a cero.
+     */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T /*a*/, T result) {
-        vm->registers.flags.bits.CF =
-            vm->registers.flags.bits.CF; // CF preservado
-        vm->registers.flags.bits.OF =
-            0; // DEC sin signo no tiene flag de desbordamiento
-        vm->registers.flags.bits.ZF =
-            (result == 0); // establecer ZF si el resultado es cero
+    static inline uint8_t flags(ProcessVM *vm, T /*a*/, T /*result*/) {
+        return (uint8_t)(vm->registers.flags.arith & RF_CF);
     }
 };
 
@@ -145,11 +154,13 @@ struct NotOp {
     /** @brief Returns ~a. */
     template <typename T> static inline T compute(T a) { return ~a; }
 
-    /** @brief Clears CF and OF; ZF/SF are set generically by alu_core_unary. */
+    /**
+     * @brief Limpia CF y OF; ZF/SF los compone `alu_core_unary`.
+     * @return Cero.
+     */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T /*a*/, T /*result*/) {
-        vm->registers.flags.bits.CF = 0; // NOT bitwise limpia el acarreo
-        vm->registers.flags.bits.OF = 0; // NOT bitwise limpia el desbordamiento
+    static inline uint8_t flags(ProcessVM * /*vm*/, T /*a*/, T /*result*/) {
+        return 0;
     }
 };
 
@@ -170,26 +181,22 @@ struct AddOp {
     /** @brief Returns a + b. */
     template <typename T> static inline T compute(T a, T b) { return a + b; }
 
-    /** @brief Sets CF or OF depending on is_signed. */
+    /** @brief Devuelve CF u OF segun is_signed. */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T a, T b, T result,
-                             bool is_signed) {
+    static inline uint8_t flags(ProcessVM * /*vm*/, T a, T b, T result,
+                                bool is_signed) {
         using ST = std::make_signed_t<T>;   // vista con signo para verificacion
                                             // de desbordamiento
         using UT = std::make_unsigned_t<T>; // vista sin signo para verificacion
                                             // de acarreo
         if (is_signed) {
             ST sa = (ST)a, sb = (ST)b, sres = (ST)result;
-            vm->registers.flags.bits.OF =
-                ((sa ^ sres) & (sb ^ sres)) <
-                0; // regla de desbordamiento con signo
-            vm->registers.flags.bits.CF = 0; // IMUL no activa CF
-        } else {
-            UT ua = (UT)a, ub = (UT)b;
-            vm->registers.flags.bits.CF =
-                ((UT)(ua + ub)) < ua;        // acarreo si hubo vuelta al inicio
-            vm->registers.flags.bits.OF = 0; // ADD sin signo no activa OF
+            // regla de desbordamiento con signo; ADD con signo no activa CF
+            return ((sa ^ sres) & (sb ^ sres)) < 0 ? RF_OF : 0;
         }
+        UT ua = (UT)a, ub = (UT)b;
+        // acarreo si hubo vuelta al inicio; ADD sin signo no activa OF
+        return ((UT)(ua + ub)) < ua ? RF_CF : 0;
     }
 };
 
@@ -206,26 +213,21 @@ struct SubOp {
     /** @brief Returns a - b. */
     template <typename T> static inline T compute(T a, T b) { return a - b; }
 
-    /** @brief Sets CF (borrow) or OF (signed overflow) depending on is_signed.
-     */
+    /** @brief Devuelve CF (prestamo) u OF (desbordamiento) segun is_signed. */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T a, T b, T result,
-                             bool is_signed) {
+    static inline uint8_t flags(ProcessVM * /*vm*/, T a, T b, T result,
+                                bool is_signed) {
         using ST = std::make_signed_t<T>;   // vista con signo para verificacion
                                             // de desbordamiento
         using UT = std::make_unsigned_t<T>; // vista sin signo para verificacion
                                             // de prestamo
         if (is_signed) {
             ST sa = (ST)a, sb = (ST)b, sres = (ST)result;
-            vm->registers.flags.bits.OF =
-                ((sa ^ sb) & (sa ^ sres)) <
-                0; // regla de desbordamiento de SUB con signo
-            vm->registers.flags.bits.CF = 0; // SUB con signo no activa CF
-        } else {
-            UT ua = (UT)a, ub = (UT)b;
-            vm->registers.flags.bits.CF = ua < ub; // prestamo cuando a < b
-            vm->registers.flags.bits.OF = 0;       // SUB sin signo no activa OF
+            // regla de desbordamiento de SUB con signo; no activa CF
+            return ((sa ^ sb) & (sa ^ sres)) < 0 ? RF_OF : 0;
         }
+        UT ua = (UT)a, ub = (UT)b;
+        return ua < ub ? RF_CF : 0; // prestamo cuando a < b; no activa OF
     }
 };
 
@@ -242,12 +244,12 @@ struct CmpOp {
     /** @brief Returns a - b (result is discarded by alu_core). */
     template <typename T> static inline T compute(T a, T b) { return a - b; }
 
-    /** @brief Delegates to SubOp::flags (identical subtraction semantics). */
+    /** @brief Delega en SubOp::flags (misma semantica de resta). */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T a, T b, T result,
-                             bool is_signed) {
-        SubOp::flags(vm, a, b, result,
-                     is_signed); // reutilizar la logica de flags de SUB
+    static inline uint8_t flags(ProcessVM *vm, T a, T b, T result,
+                                bool is_signed) {
+        return SubOp::flags(vm, a, b, result,
+                            is_signed); // reutilizar la logica de SUB
     }
 };
 
@@ -266,7 +268,7 @@ struct MulOp {
 
     /** @brief Detects multiplication overflow and sets CF/OF accordingly. */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T a, T b, T result,
+    static inline uint8_t flags(ProcessVM * /*vm*/, T a, T b, T result,
                              bool is_signed) {
         using ST =
             std::make_signed_t<T>; // vista con signo para verificacion de IMUL
@@ -295,10 +297,10 @@ struct MulOp {
                                ? (sb > 0 ? sa > S_MAX / sb : sb < S_MIN / sa)
                                : (sb > 0 ? sa < S_MIN / sb : sa < S_MAX / sb);
             }
-            vm->registers.flags.bits.OF =
-                overflow;                    // IMUL activa OF en desbordamiento
-            vm->registers.flags.bits.CF = 0; // IMUL limpia CF
-        } else {
+            // IMUL activa OF en desbordamiento y limpia CF
+            return overflow ? RF_OF : 0;
+        }
+        {
             UT ua = (UT)a;
             UT ub = (UT)b;
             if (ua == 0 || ub == 0) {
@@ -311,10 +313,8 @@ struct MulOp {
                     (U_MAX /
                      ub); // desbordamiento si el cociente supera al divisor
             }
-            vm->registers.flags.bits.CF =
-                overflow; // MUL activa CF en desbordamiento
-            vm->registers.flags.bits.OF =
-                overflow; // MUL tambien activa OF en desbordamiento
+            // MUL sin signo activa CF y OF a la vez en desbordamiento
+            return overflow ? (uint8_t)(RF_CF | RF_OF) : 0;
         }
     }
 };
@@ -338,37 +338,25 @@ struct DivOp {
         return (b == 0) ? T(0) : a / b;
     }
 
-    /** @brief Sets OF/CF on divide-by-zero or IDIV INT_MIN/-1. */
+    /** @brief Devuelve OF|CF si hubo division por cero o IDIV INT_MIN/-1. */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T a, T b, T result,
-                             bool is_signed) {
+    static inline uint8_t flags(ProcessVM * /*vm*/, T a, T b, T result,
+                                bool is_signed) {
         using ST = std::make_signed_t<T>; // vista con signo para verificacion
                                           // de desbordamiento IDIV
-        if (b == 0) {
-            // la division por cero es una condicion excepcional
-            vm->registers.flags.bits.OF = 1; // senalizar desbordamiento
-            vm->registers.flags.bits.CF = 1; // senalizar acarreo
-            return;
-        }
+        (void)result; // lo usa alu_core; aqui no hace falta
+        // la division por cero es una condicion excepcional
+        if (b == 0) return RF_OF | RF_CF;
         if (is_signed) {
             ST sa = (ST)a;
             ST sb = (ST)b;
-            if (sa == std::numeric_limits<ST>::min() && sb == -1) {
-                // IDIV INT_MIN / -1 desbordaria el registro de cociente
-                vm->registers.flags.bits.OF = 1; // desbordamiento
-                vm->registers.flags.bits.CF = 1; // acarreo
-                return;
-            }
-            vm->registers.flags.bits.OF = 0; // division normal con signo
-            vm->registers.flags.bits.CF = 0; // sin acarreo
-        } else {
-            vm->registers.flags.bits.OF =
-                0; // la division sin signo nunca desborda (excepto por cero,
-                   // manejado arriba)
-            vm->registers.flags.bits.CF = 0; // sin acarreo
+            // IDIV INT_MIN / -1 desbordaria el registro de cociente
+            if (sa == std::numeric_limits<ST>::min() && sb == -1)
+                return RF_OF | RF_CF;
         }
-        (void)result; // resultado usado por alu_core; suprimir advertencia de
-                      // parametro no usado
+        // division normal: ni desbordamiento ni acarreo.  La sin signo nunca
+        // desborda salvo por cero, que ya se trato arriba.
+        return 0;
     }
 };
 
@@ -412,27 +400,19 @@ struct ShlOp {
         return (T)((UT)a << shift);
     }
 
-    /** @brief Computes CF from the vacated bit and OF from MSB after shift. */
+    /** @brief CF sale del bit desplazado fuera y OF del MSB resultante. */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T a, T b, T result, bool) {
+    static inline uint8_t flags(ProcessVM * /*vm*/, T a, T b, T result, bool) {
         using UT = std::make_unsigned_t<T>;
         uint32_t shift = (uint32_t)b &
                          (sizeof(T) * 8 - 1); // mismo enmascarado que compute()
-        if (shift == 0) {
-            vm->registers.flags.bits.CF =
-                0; // desplazamiento cero deja CF limpio
-            vm->registers.flags.bits.OF =
-                0; // desplazamiento cero deja OF limpio
-            return;
-        }
+        if (shift == 0) return 0; // desplazamiento cero deja CF y OF limpios
         UT ua = (UT)a;
         UT cf_bit =
-            (ua >> (sizeof(T) * 8 - shift)) & 1; // bit que fue desplazado fuera
-        vm->registers.flags.bits.CF = cf_bit; // acarreo = bit desplazado fuera
+            (ua >> (sizeof(T) * 8 - shift)) & 1; // bit desplazado fuera
         UT msb = ((UT)result >> (sizeof(T) * 8 - 1)) & 1;
-        vm->registers.flags.bits.OF =
-            (cf_bit ^
-             msb); // desbordamiento = CF XOR nuevo MSB (regla SHL de x86)
+        // OF = CF XOR nuevo MSB (regla SHL de x86)
+        return (uint8_t)((cf_bit ? RF_CF : 0) | ((cf_bit ^ msb) ? RF_OF : 0));
     }
 };
 
@@ -455,23 +435,17 @@ struct ShrOp {
         return (T)((UT)a >> shift);
     }
 
-    /** @brief Sets CF = bit shifted out; clears OF. */
+    /** @brief CF = ultimo bit desplazado fuera; OF a cero. */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T a, T b, T /*result*/, bool) {
+    static inline uint8_t flags(ProcessVM * /*vm*/, T a, T b, T /*result*/,
+                                bool) {
         using UT = std::make_unsigned_t<T>;
         uint32_t shift = (uint32_t)b &
                          (sizeof(T) * 8 - 1); // mismo enmascarado que compute()
-        if (shift == 0) {
-            vm->registers.flags.bits.CF =
-                0; // desplazamiento cero deja CF limpio
-            vm->registers.flags.bits.OF =
-                0; // desplazamiento cero deja OF limpio
-            return;
-        }
+        if (shift == 0) return 0; // desplazamiento cero deja CF y OF limpios
         UT ua = (UT)a;
-        vm->registers.flags.bits.CF =
-            (ua >> (shift - 1)) & 1;     // ultimo bit desplazado fuera
-        vm->registers.flags.bits.OF = 0; // SHR nunca activa OF
+        // SHR nunca activa OF
+        return ((ua >> (shift - 1)) & 1) ? RF_CF : 0;
     }
 };
 
@@ -494,23 +468,16 @@ struct SarOp {
         return (T)((ST)a >> shift);
     }
 
-    /** @brief Sets CF = last bit shifted out; clears OF. */
+    /** @brief CF = ultimo bit desplazado fuera; OF a cero (regla x86). */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T a, T b, T /*result*/, bool) {
+    static inline uint8_t flags(ProcessVM * /*vm*/, T a, T b, T /*result*/,
+                                bool) {
         using UT = std::make_unsigned_t<T>;
         uint32_t shift = (uint32_t)b &
                          (sizeof(T) * 8 - 1); // mismo enmascarado que compute()
-        if (shift == 0) {
-            vm->registers.flags.bits.CF =
-                0; // desplazamiento cero deja CF limpio
-            vm->registers.flags.bits.OF =
-                0; // desplazamiento cero deja OF limpio
-            return;
-        }
+        if (shift == 0) return 0; // desplazamiento cero deja CF y OF limpios
         UT ua = (UT)a;
-        vm->registers.flags.bits.CF =
-            (ua >> (shift - 1)) & 1;     // ultimo bit desplazado fuera
-        vm->registers.flags.bits.OF = 0; // SAR nunca activa OF (regla x86)
+        return ((ua >> (shift - 1)) & 1) ? RF_CF : 0;
     }
 };
 
@@ -594,12 +561,19 @@ inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed,
     } else {
         res = Op::compute(a, b); // ejecutar la operacion
     }
-    vm->registers.flags.bits.ZF = (res == 0); // ZF: el resultado es cero
+    /* Las cuatro banderas se componen en un registro y se escriben de UNA vez.
+     *
+     * Antes eran cuatro asignaciones a campos de bits del mismo byte -- dos
+     * aqui y dos dentro de `Op::flags` --, o sea cuatro lee-modifica-escribe
+     * encadenados sobre la misma direccion.  Costaban el 27% del interprete
+     * medido con VTune, y ademas hacian que el derivador de efectos viera un
+     * `add` LEYENDO las banderas.  Ver `include/runtime/rflags.h`. */
     constexpr int SIGN_BIT =
         sizeof(T) * 8 - 1; // indice del bit de mayor peso (signo)
-    vm->registers.flags.bits.SF = (static_cast<UT>(res) >> SIGN_BIT) &
-                                  1;     // SF: bit de signo del resultado
-    Op::flags(vm, a, b, res, is_signed); // actualizacion CF/OF especifica de Op
+    uint8_t nf = (res == 0) ? RF_ZF : 0;                 // ZF
+    if ((static_cast<UT>(res) >> SIGN_BIT) & 1) nf |= RF_SF; // SF
+    nf |= Op::flags(vm, a, b, res, is_signed);           // CF/OF segun Op
+    vm->registers.flags.arith = nf; // store PURO: no lee el valor anterior
     return res; // el llamante decide si almacenar el resultado
 }
 
@@ -667,12 +641,15 @@ inline void alu_core(ProcessVM *vm, T a, T b, bool is_signed,
 template <typename T, typename Op>
 inline void alu_core_unary(ProcessVM *vm, T a, int dst_reg_index) {
     using UT = std::make_unsigned_t<T>; // vista sin signo para extraccion de SF
-    T result = Op::compute(a);          // aplicar la operacion unaria
-    vm->registers.flags.bits.ZF = (result == 0); // ZF: el resultado es cero
-    constexpr int SIGN_BIT = sizeof(T) * 8 - 1;  // indice del bit de signo
-    vm->registers.flags.bits.SF =
-        (static_cast<UT>(result) >> SIGN_BIT) & 1; // SF: sign bit
-    Op::flags(vm, a, result);                      // CF/OF update (Op-specific)
+    T result = Op::compute(a);                  // aplicar la operacion unaria
+    constexpr int SIGN_BIT = sizeof(T) * 8 - 1; // indice del bit de signo
+    // Mismo criterio que en `compute_with_flags`: componer y escribir una vez.
+    // OJO con el ORDEN: `Op::flags` de INC y DEC LEE el CF anterior para
+    // preservarlo, asi que tiene que llamarse ANTES de escribir el byte.
+    uint8_t nf = (result == 0) ? RF_ZF : 0;                     // ZF
+    if ((static_cast<UT>(result) >> SIGN_BIT) & 1) nf |= RF_SF; // SF
+    nf |= Op::flags(vm, a, result);          // CF/OF segun Op
+    vm->registers.flags.arith = nf;          // store PURO
     auto &dst =
         vm->registers.regs[dst_reg_index]; // referencia al registro destino
     if constexpr (sizeof(T) == 1)
@@ -1041,32 +1018,13 @@ void exec_instr_inc_dec_reg(ProcessVM *vm, const DecodedInstr &instr) {
 // SIB (Scale-Index-Base) memory access helpers
 // =========================================================================
 
-/**
- * @brief Computes the effective address for an SIB-encoded memory operand.
+/* `sib_effective_addr` VIVE AHORA EN `include/runtime/exec_instruction.h`.
  *
- * scale field encoding: bits[2] = has_index flag, bits[1:0] = shift amount
- *   0 -> index * 1   (shift 0)
- *   1 -> index * 2   (shift 1)
- *   2 -> index * 4   (shift 2)
- *   3 -> index * 8   (shift 3)
- *
- * @param vm    Puntero a la maquina virtual.
- * @param instr Decoded instruction with mem_data fields.
- * @return      Effective address as a 64-bit value.
- */
-inline uint64_t sib_effective_addr(ProcessVM *vm, const DecodedInstr &instr) {
-    uint64_t base = vm->registers.regs[instr.data_instruction.mem_data.reg_base]
-                        .raw(); // base address
-    uint8_t has_index =
-        (instr.data_instruction.mem_data.scale >> 2) & 1; // index present flag
-    if (!has_index) return base; // simple base-only addressing
-    uint64_t index =
-        vm->registers.regs[instr.data_instruction.mem_data.reg_index]
-            .raw(); // index value
-    uint8_t scale = instr.data_instruction.mem_data.scale &
-                    0x3;            // 2-bit scale: 0=*1, 1=*2, 2=*4, 3=*8
-    return base + (index << scale); // base + index * (1<<scale)
-}
+ * Se movio porque la ruta rapida del interprete (`L_MOV_SIB`, en
+ * `scheduler.cpp`) necesita la MISMA aritmetica de direccion.  La alternativa
+ * era copiarla alli, y una direccion efectiva calculada de dos formas es
+ * exactamente la clase de duplicado que un dia deja de coincidir sin que nadie
+ * lo note: no daria un error, daria OTRA DIRECCION. */
 
 /**
  * @brief SIB direction=0 wrapper: dst_reg = Op(dst_reg, mem[sib]).
@@ -1294,7 +1252,7 @@ inline bool read_flag(ProcessVM *vm, uint8_t flag_code) {
     case 1: return vm->registers.flags.bits.ZF; // zero flag
     case 2: return vm->registers.flags.bits.CF; // acarreo flag
     case 3: return vm->registers.flags.bits.OF; // desbordamiento flag
-    case 4: return vm->registers.flags.bits.DM; // direction / mode flag
+    case 4: return vm->registers.flags.DM; // direction / mode flag
     default: return false; // unknown code: treated as not set
     }
 }
@@ -1412,18 +1370,12 @@ struct ModOp {
         return a % b;
     }
 
-    /** @brief Sets CF/OF on divide-by-zero; clears them otherwise. */
+    /** @brief Devuelve CF|OF si hubo division por cero; cero si no. */
     template <typename T>
-    static inline void flags(ProcessVM *vm, T /*a*/, T b, T /*result*/,
-                             bool /*is_signed*/) {
-        if (b == 0) {
-            vm->registers.flags.bits.OF = 1; // senalizar condicion excepcional
-            vm->registers.flags.bits.CF = 1;
-        } else {
-            vm->registers.flags.bits.OF =
-                0; // operacion normal sin desbordamiento
-            vm->registers.flags.bits.CF = 0;
-        }
+    static inline uint8_t flags(ProcessVM * /*vm*/, T /*a*/, T b, T /*result*/,
+                                bool /*is_signed*/) {
+        // b == 0 es la condicion excepcional; lo demas es una operacion normal
+        return b == 0 ? (uint8_t)(RF_OF | RF_CF) : 0;
     }
 };
 
@@ -1839,85 +1791,62 @@ void exec_instr_alu3(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t opc = instr.flags_info.opcode_index;
 
     auto &regs = vm->registers.regs;
-    auto &fl = vm->registers.flags.bits;
     const uint64_t a = regs[r_src1].qword();
     const uint64_t b = regs[r_src2].qword();
     uint64_t res = 0;
+
+    /* Cada caso produce el resultado y SOLO sus bits CF/OF; ZF y SF son iguales
+     * en las nueve variantes, asi que se calculan una vez al salir y todo se
+     * escribe de UNA vez.
+     *
+     * Antes cada rama hacia cuatro asignaciones a campos de bits del mismo
+     * byte, o sea cuatro lee-modifica-escribe encadenados.  Aparte del coste,
+     * eso hacia que el derivador de efectos viera `adds3` LEYENDO las
+     * banderas, cuando no las lee: la explicacion larga esta en
+     * `include/runtime/rflags.h`.  Importa mas aqui que en `adds` normal,
+     * porque estas son las que emite el IR cuando el asignador de registros no
+     * pudo coalescer -- o sea, camino caliente. */
+    uint8_t cf_of = 0;
 
     switch (opc) {
     case 0x73:
     case 0x76: // adds3 / addu3
         res = a + b;
-        regs[r_dst].qword(res);
-        fl.ZF = (res == 0);
-        fl.SF = static_cast<int64_t>(res) < 0;
         if (opc == 0x73) {
-            fl.OF = ((static_cast<int64_t>(a) ^ static_cast<int64_t>(res)) &
-                     (static_cast<int64_t>(b) ^ static_cast<int64_t>(res))) < 0;
-            fl.CF = 0;
-        } else {
-            fl.CF = res < a;
-            fl.OF = 0;
+            if (((static_cast<int64_t>(a) ^ static_cast<int64_t>(res)) &
+                 (static_cast<int64_t>(b) ^ static_cast<int64_t>(res))) < 0)
+                cf_of = RF_OF; // con signo: desborda, y no toca CF
+        } else if (res < a) {
+            cf_of = RF_CF; // sin signo: acarreo, y no toca OF
         }
         break;
     case 0x74:
     case 0x77: // subs3 / subu3
         res = a - b;
-        regs[r_dst].qword(res);
-        fl.ZF = (res == 0);
-        fl.SF = static_cast<int64_t>(res) < 0;
         if (opc == 0x74) {
-            fl.OF = ((static_cast<int64_t>(a) ^ static_cast<int64_t>(b)) &
-                     (static_cast<int64_t>(a) ^ static_cast<int64_t>(res))) < 0;
-            fl.CF = 0;
-        } else {
-            fl.CF = a < b;
-            fl.OF = 0;
+            if (((static_cast<int64_t>(a) ^ static_cast<int64_t>(b)) &
+                 (static_cast<int64_t>(a) ^ static_cast<int64_t>(res))) < 0)
+                cf_of = RF_OF;
+        } else if (a < b) {
+            cf_of = RF_CF;
         }
         break;
     case 0x75: // muls3
         res = static_cast<uint64_t>(static_cast<int64_t>(a) *
                                     static_cast<int64_t>(b));
-        regs[r_dst].qword(res);
-        fl.ZF = (res == 0);
-        fl.SF = static_cast<int64_t>(res) < 0;
-        fl.CF = 0;
-        fl.OF = 0;
         break;
-    case 0x78: // mulu3
-        res = a * b;
-        regs[r_dst].qword(res);
-        fl.ZF = (res == 0);
-        fl.SF = static_cast<int64_t>(res) < 0;
-        fl.CF = 0;
-        fl.OF = 0;
-        break;
-    case 0x79: // and3
-        res = a & b;
-        regs[r_dst].qword(res);
-        fl.ZF = (res == 0);
-        fl.SF = static_cast<int64_t>(res) < 0;
-        fl.CF = 0;
-        fl.OF = 0;
-        break;
-    case 0x7A: // or3
-        res = a | b;
-        regs[r_dst].qword(res);
-        fl.ZF = (res == 0);
-        fl.SF = static_cast<int64_t>(res) < 0;
-        fl.CF = 0;
-        fl.OF = 0;
-        break;
-    case 0x7B: // xor3
-        res = a ^ b;
-        regs[r_dst].qword(res);
-        fl.ZF = (res == 0);
-        fl.SF = static_cast<int64_t>(res) < 0;
-        fl.CF = 0;
-        fl.OF = 0;
-        break;
-    default: break;
+    case 0x78: res = a * b; break; // mulu3
+    case 0x79: res = a & b; break; // and3
+    case 0x7A: res = a | b; break; // or3
+    case 0x7B: res = a ^ b; break; // xor3
+    default: return;               // opcode que no es de esta familia
     }
+
+    regs[r_dst].qword(res);
+    uint8_t nf = cf_of;
+    if (res == 0) nf |= RF_ZF;
+    if (static_cast<int64_t>(res) < 0) nf |= RF_SF;
+    vm->registers.flags.arith = nf; // store PURO, sin leer el valor anterior
 }
 
 // =========================================================================

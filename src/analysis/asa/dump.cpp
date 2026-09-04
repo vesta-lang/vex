@@ -79,8 +79,8 @@ std::vector<FactId> sorted(const FactStore &a) {
 std::string fact_text(const Fact &f) {
     const char *det = f.what.detail != nullptr ? f.what.detail : "";
     if (f.what.code == nullptr || !vx::diag::has_code(f.what.code)) return det;
-    return vx::diag::format(f.what.code, {std::to_string(f.what.a),
-                                          std::to_string(f.what.b), det});
+    return vx::diag::format(
+        f.what.code, {std::to_string(f.what.a), std::to_string(f.what.b), det});
 }
 
 void write_fact(const FactStore &a, FactId id, FILE *out) {

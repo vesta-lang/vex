@@ -6,7 +6,7 @@
  */
 
 /**
- * @file tests/runtime/test_bundle_ilp.cpp
+ * @file tests/util/bundle_ilp.h
  * @brief Cuanta independencia REAL hay dentro de un paquete.
  *
  * Que decide
@@ -53,9 +53,17 @@
  * de verdad; si no la hay, todavia podria aparecer al afinar el modelo, y este
  * test dice cual de las cuatro es la que aprieta.
  *
- * Uso:
- *   test_bundle_ilp <fichero.velb> [mas.velb ...] [--tope N] [--detalle]
+ * POR QUE ES UNA CABECERA Y NO UN TEST APARTE.  Cada `.cpp` de `tests/` produce
+ * su propio binario, y esto medía sobre LOS MISMOS programas, LA MISMA arena y
+ * con LA MISMA tabla que `test_bundles`: dos binarios que generan lo mismo, lo
+ * ejecutan otra vez y lo imprimen dos veces.  Son dos PREGUNTAS distintas
+ * -- una valida que los paquetes no cambian el resultado, esta mide cuanta
+ * independencia hay dentro -- pero de un solo sujeto, asi que van en el mismo
+ * test.  Aqui queda el analisis; el informe lo pide `ilp_report`.
  */
+
+#ifndef VESTA_TESTS_BUNDLE_ILP_H
+#define VESTA_TESTS_BUNDLE_ILP_H
 
 #include <algorithm>
 #include <cstdint>
@@ -69,8 +77,9 @@
 #include "runtime/instr_db_vm.h"
 #include "runtime/decode_instruction.h"
 
-#include "../util/opcode_effects.h"
-#include "../util/vm_standalone.h"
+#include "opcode_effects.h"
+#include "util/ansi.h"
+#include "vm_standalone.h"
 
 namespace {
 
@@ -648,37 +657,76 @@ BundleStat analyze(runtime::ProcessVM *proc, const Model &model,
 
 } // namespace
 
-int main(int argc, char **argv) {
-    std::vector<std::string> ficheros;
-    uint64_t tope = 20000000;
-    bool detalle = false;
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--tope") == 0 && i + 1 < argc)
-            tope = std::strtoull(argv[++i], nullptr, 10);
-        else if (std::strcmp(argv[i], "--detalle") == 0)
-            detalle = true;
-        else
-            ficheros.push_back(argv[i]);
-    }
-    if (ficheros.empty()) {
-        std::fprintf(stderr, "uso: test_bundle_ilp <fichero.velb> [mas.velb "
-                             "...] [--tope N] [--detalle]\n");
-        return 2;
-    }
+namespace tests {
 
+/**
+ * @brief Mide y publica la independencia dentro de los paquetes.
+ *
+ * Vuelve a EJECUTAR cada programa por su cuenta (con `VmStandalone`) porque el
+ * analisis necesita la arena viva y con los paquetes ya calientes, y quien
+ * llama ya solto la suya.
+ *
+ * @param ficheros Los `.velb` a analizar.
+ * @param detalle  Anade las entradas ponderadas por programa.
+ * @param tope     Tope de instrucciones por programa.
+ * @return 0 si pudo analizar algo.
+ */
+inline int ilp_report(const std::vector<std::string> &ficheros, bool detalle,
+                      uint64_t tope = 20000000) {
 #if !VM_BUNDLES
+    (void)ficheros;
+    (void)detalle;
+    (void)tope;
     std::fprintf(stderr, "construido sin VM_BUNDLES: no hay paquetes que "
                          "analizar\n");
     return 3;
 #else
     const Model model(tests::build_opcode_model());
+    const char *B = ansi::c(ansi::BOLD);
+    const char *D = ansi::c(ansi::DIM);
+    const char *R = ansi::c(ansi::RESET);
 
-    std::printf("Independencia dentro de los paquetes\n");
+    std::printf("\n%s%s%s\n", D, std::string(108, '=').c_str(), R);
+    std::printf("%sIndependencia dentro de los paquetes%s\n", B, R);
     std::printf("  Ponderado por ENTRADAS, no por paquetes: uno formado una vez"
                 " y entrado\n  un millon de veces pesa un millon.\n\n");
-    std::printf("%-26s %6s %6s %7s %8s %7s %7s\n", "programa", "paqs", "k med",
-                "critica", "libres%", "salta%", "?%");
-    std::printf("%s\n", std::string(76, '-').c_str());
+
+    /* QUE MIDE CADA COLUMNA.  Sin esto son seis numeros sin nombre, y la
+     * conclusion -- si merece la pena reordenar al formar -- depende justo de
+     * saber cual de ellos aprieta. */
+    std::printf("%sColumnas:%s\n", B, R);
+    std::printf("  %spaquetes%s   cabeceras vivas analizadas.\n", D, R);
+    std::printf("  %sk medio%s    instrucciones por paquete (de %d).\n", D, R,
+                BUNDLE_MAX);
+    std::printf("  %scadena%s     largo de la cadena de dependencias mas larga "
+                "de dentro.  Si vale\n"
+                "             lo mismo que `k medio`, el orden ya es el unico "
+                "posible: no hay\n"
+                "             NADA que mover, y reordenar no daria nada.\n",
+                D, R);
+    std::printf("  %slibres%%%s    pares consecutivos SIN dependencia entre "
+                "ellos: lo que se podria\n"
+                "             mover.  Cuanto MAS, mas margen.\n",
+                D, R);
+    std::printf("  %ssalta%%%s     instrucciones que no se mueven nunca porque "
+                "transfieren control.\n"
+                "             Es un limite REAL del programa.\n",
+                D, R);
+    std::printf("  %s?%%%s        instrucciones cuyos efectos el modelo solo "
+                "acota por debajo, asi\n"
+                "             que se tratan como barrera por prudencia.  Es un "
+                "limite del MODELO,\n"
+                "             no del programa: si manda esta columna, lo que "
+                "toca es afinarlo,\n"
+                "             porque reordenar sin saber que se toca es mover "
+                "a ciegas.\n\n",
+                D, R);
+
+    // Los anchos son los de las filas contando el `%` que llevan pegado: 9 en
+    // los tres porcentajes con dos digitos y 8 en el ultimo.
+    std::printf("%s%-28s %8s %8s %8s %9s %9s %8s%s\n", B, "programa",
+                "paquetes", "k medio", "cadena", "libres%", "salta%", "?%", R);
+    std::printf("%s%s%s\n", D, std::string(108, '-').c_str(), R);
 
     double g_k = 0, g_crit = 0, g_bar = 0, g_free = 0, g_pairs = 0, g_ent = 0;
     double g_bctl = 0, g_bunk = 0;
@@ -704,7 +752,7 @@ int main(int argc, char **argv) {
 
         auto *arena =
             reinterpret_cast<runtime::BundleArena *>(s.proc->bundle_arena);
-        if (arena == nullptr || arena->total == 0) {
+        if (arena == nullptr || arena->total() == 0) {
             std::printf("%-28s  no se formo ningun paquete\n", f.c_str());
             continue;
         }
@@ -712,13 +760,16 @@ int main(int argc, char **argv) {
         double k = 0, crit = 0, bar = 0, fp = 0, pr = 0, ent = 0;
         double bctl = 0, bunk = 0;
         uint64_t n = 0;
-        for (size_t c = 0; c < arena->chunks.size(); ++c) {
-            const uint32_t hasta = (c + 1 == arena->chunks.size())
-                                       ? arena->used
-                                       : runtime::BundleArena::CHUNK;
-            for (uint32_t i = 0; i < hasta; ++i) {
-                const BundleStat st =
-                    analyze(s.proc, model, arena->chunks[c][i]);
+        /* Se recorre la region VIVA por indice.  Antes se paseaba por los
+         * bloques a mano; con la cache de doble region eso ya no vale -- hay
+         * dos, y la vieja puede estar a medio reciclar --, asi que la region
+         * expone `at()` y quien recorre no tiene que saber como esta troceada. */
+        {
+            const auto &half = arena->live();
+            for (uint32_t i = 0; i < half.used; ++i) {
+                const runtime::Bundle *bp = half.at(i);
+                if (bp == nullptr) break;
+                const BundleStat st = analyze(s.proc, model, *bp);
                 if (st.k == 0) continue;
                 ++n;
                 /* El peso es ENTRADAS: un paquete que nadie ejecuta no dice
@@ -740,10 +791,27 @@ int main(int argc, char **argv) {
         const size_t slash = f.find_last_of("/\\");
         const std::string corto =
             (slash == std::string::npos) ? f : f.substr(slash + 1);
-        std::printf("%-26s %6llu %6.2f %7.2f %7.1f%% %6.1f%% %6.1f%%\n",
-                    corto.c_str(), (unsigned long long)n, k / ent, crit / ent,
-                    pr > 0 ? 100.0 * fp / pr : 0.0, 100.0 * bctl / k,
-                    100.0 * bunk / k);
+        /* `libres%` cuanto mas alto mejor (hay margen para mover); `?%` cuanto
+         * mas alto PEOR, porque es lo que el modelo no sabe. */
+        const double libres = pr > 0 ? 100.0 * fp / pr : 0.0;
+        const double desconocido = 100.0 * bunk / k;
+        std::printf("%s%-28s%s %8llu %8.2f %s%8.2f%s %s%8.1f%%%s %8.1f%% "
+                    "%s%7.1f%%%s\n",
+                    ansi::c(ansi::BR_CYAN), corto.c_str(), R,
+                    (unsigned long long)n, k / ent,
+                    /* La cadena critica en verde cuando es CORTA respecto a k:
+                     * ahi es donde hay niveles independientes. */
+                    (crit / ent) < 0.75 * (k / ent) ? ansi::c(ansi::BR_GREEN)
+                                                    : ansi::c(ansi::BR_RED),
+                    crit / ent, R,
+                    libres >= 30.0   ? ansi::c(ansi::BR_GREEN)
+                    : libres >= 10.0 ? ansi::c(ansi::BR_YELLOW)
+                                     : ansi::c(ansi::BR_RED),
+                    libres, R, 100.0 * bctl / k,
+                    desconocido >= 30.0   ? ansi::c(ansi::BR_RED)
+                    : desconocido >= 10.0 ? ansi::c(ansi::BR_YELLOW)
+                                          : ansi::c(ansi::BR_BLACK),
+                    desconocido, R);
         if (detalle)
             std::printf("      entradas ponderadas: %.0f\n", ent);
         g_bundles += n;
@@ -758,12 +826,12 @@ int main(int argc, char **argv) {
     }
 
     if (g_ent > 0) {
-        std::printf("%s\n", std::string(76, '-').c_str());
-        std::printf("%-26s %6llu %6.2f %7.2f %7.1f%% %6.1f%% %6.1f%%\n",
+        std::printf("%s%s%s\n", D, std::string(108, '-').c_str(), R);
+        std::printf("%s%-28s %8llu %8.2f %8.2f %8.1f%% %8.1f%% %7.1f%%%s\n", B,
                     "TOTAL", (unsigned long long)g_bundles, g_k / g_ent,
                     g_crit / g_ent,
                     g_pairs > 0 ? 100.0 * g_free / g_pairs : 0.0,
-                    100.0 * g_bctl / g_k, 100.0 * g_bunk / g_k);
+                    100.0 * g_bctl / g_k, 100.0 * g_bunk / g_k, R);
         std::printf("\n  k medio / cadena critica = %.2f niveles "
                     "independientes por paquete.\n",
                     g_crit > 0 ? g_k / g_crit : 0.0);
@@ -838,3 +906,7 @@ int main(int argc, char **argv) {
     return 0;
 #endif
 }
+
+} // namespace tests
+
+#endif // VESTA_TESTS_BUNDLE_ILP_H

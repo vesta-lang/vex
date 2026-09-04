@@ -57,6 +57,50 @@
  * otro sitio abandona el paquete ahi.  Es correcto por construccion en vez de
  * por una lista de opcodes que se queda vieja.
  *
+ * Donde encaja esto: los tres niveles
+ * ------------------------------------
+ * Conviene tener el mapa delante, porque son tres cuellos DISTINTOS y se
+ * confunden con facilidad -- reciclar la cache no arregla la localidad, y al
+ * reves.
+ *
+ *                          BYTECODE
+ *                             |
+ *                             v
+ *              +--------------------------------+
+ *              |  Planificador de la VM         |
+ *              |  dependencias y efectos        |   <- lo sabe el ASA:
+ *              |  fusion y reordenacion         |      `instr_db_vm`
+ *              +---------------+----------------+
+ *                              |
+ *                              v
+ *              +--------------------------------+
+ *              |  Cache de ejecucion            |
+ *              |  paquetes / ventanas           |   <- esto es este fichero
+ *              +---------------+----------------+
+ *                              |
+ *                    +---------+---------+
+ *                    |                   |
+ *                REGION A            REGION B
+ *                ejecutando          recogiendo
+ *                    |                   |
+ *                    +---------+---------+
+ *                              |
+ *                              v
+ *                    PROCESADOR ANFITRION
+ *                    (su propio fuera de orden)
+ *
+ * QUE ARREGLA CADA NIVEL, que es lo que se confunde:
+ *
+ *   - La cache de doble region arregla CAPACIDAD y AGOTAMIENTO: antes se
+ *     llenaba y dejaba de formar para siempre, o sea que el optimizador
+ *     dinamico funcionaba un rato y se apagaba.  Medido en un tramo recto de
+ *     8192 instrucciones: la cobertura pasa del 22% al 100% y aguanta quince
+ *     ciclos de reciclaje sin degradarse.
+ *   - NO arregla la LOCALIDAD del codigo.  Si la icache desaloja las cabeceras
+ *     mas rapido de lo que se amortizan -- una formacion cada dos despachos --
+ *     el limite es el tamano de la icache, y ninguna cantidad de reciclado lo
+ *     mueve.  Son cuellos independientes y hay que atacarlos por separado.
+ *
  * Los interruptores @c VM_BUNDLES y @c VM_BUNDLE_STATS se definen en
  * `proceso_runtime.h`, no aqui: anaden campos a @c ProcessVM y su defecto tiene
  * que verlo TODA unidad de traduccion, la incluya esta cabecera o no.
@@ -168,12 +212,53 @@ struct Bundle {
 
 /**
  * @struct BundleArena
- * @brief Almacen de paquetes de un proceso.
+ * @brief Cache copiadora y compactadora de DOBLE REGION, con publicacion por
+ *        cambio de puntero.
  *
- * Asignador que solo avanza, y vaciado ENTERO cuando se llena -- lo mismo que
- * hace un cache de codigo de JIT.  Esta acotada por el numero de cabeceras de
- * traza distintas, o sea por el tamano del codigo, no por lo que se ejecute:
- * un bucle de mil millones de vueltas forma sus paquetes una vez.
+ * EN QUE SE PARECE A UN RECOLECTOR.  En la mecanica, y conviene decirlo porque
+ * hace el diseno legible de golpe para quien conozca uno: hay dos semiespacios,
+ * se copia lo VIVO al otro y se intercambia cual es el bueno.  Las RAICES son
+ * las entradas de icache -- un paquete esta vivo si y solo si alguna lo
+ * referencia, porque la cabecera es la UNICA puerta de entrada y no hay ningun
+ * otro puntero duradero a un paquete --.  Y la region vieja no se toca hasta
+ * que nadie puede estar dentro, que es el periodo de gracia de siempre.
+ *
+ * EN QUE NO SE PARECE, que es lo que de verdad importa aqui:
+ *
+ *   1. PERDER ALGO NO ES UN FALLO.  Un objeto recolectado que aun hacia falta
+ *      es un bug; un paquete perdido es un fallo de cache y se vuelve a formar.
+ *      Eso permite ser conservador sin red: no hay barreras de escritura, ni
+ *      finalizadores, ni exigencia de precision.  Es la diferencia que borra
+ *      casi toda la complejidad de un recolector de verdad.
+ *   2. NO HAY GRAFO QUE RECORRER.  Un paquete no referencia a otro paquete: el
+ *      alcance es de profundidad UNO, raiz -> paquete.  Sin ciclos, sin lista
+ *      de trabajo, sin fase de marcado.  Recorrer las raices ES la recoleccion.
+ *   3. LAS RAICES ESTAN ENUMERADAS.  Son exactamente `ICACHE_SIZE` entradas en
+ *      un array.  Un recolector tiene que ir a buscarlas por pilas y registros
+ *      -- el de este proyecto barre la pila de forma conservativa --; aqui se
+ *      recorren en un bucle.
+ *   4. EL CONJUNTO VIVO ESTA ACOTADO.  Como cada raiz apunta como mucho a un
+ *      paquete, no puede haber mas vivos que raices.  Con `CAPACITY` >=
+ *      `ICACHE_SIZE` la copia NUNCA se queda sin sitio: no hay caso degenerado
+ *      que tratar, cosa que en un monton no se puede afirmar jamas.
+ *   5. TODO MIDE LO MISMO.  `Bundle` es de tamano fijo, asi que no hay clases
+ *      de tamano ni fragmentacion, y compactar es copiar en orden.
+ *
+ * En resumen: se coge la mecanica de un copiador y se tira todo lo que un
+ * monton obliga a llevar y una cache no.
+ *
+ * LA PUBLICACION es un cambio de puntero, y es lo que evita parar el
+ * interprete.  Repuntar una raiz es una escritura de 64 bits alineada -- o sea
+ * atomica de por si en x86-64 --, asi que quien lee ve la vieja o la nueva y
+ * las dos son validas mientras la vieja siga en pie.  Los lectores no
+ * sincronizan NADA.
+ *
+ * DE DONDE VIENE.  Antes esto era un asignador que solo avanzaba y, al
+ * llenarse, DEJABA DE FORMAR PARA SIEMPRE -- el comentario decia que se vaciaba
+ * entero, pero el codigo no lo hacia, porque vaciar invalidaria las entradas de
+ * icache que apuntan a paquetes muertos.  O sea que la cache funcionaba un rato
+ * y luego se apagaba.  Copiar resuelve las dos cosas a la vez: recicla, y al
+ * repuntar las raices no deja ninguna colgando.
  */
 struct BundleArena {
     /* Bloques que NO se mueven, y asignacion por puntero que solo avanza.
@@ -197,34 +282,109 @@ struct BundleArena {
      * completo del camino caliente: leer el puntero y ya.
      *
      * `alloc` es un incremento y una comparacion.  Nada mas. */
-    static constexpr uint32_t CHUNK = 16; ///< paquetes por bloque
-    static constexpr uint32_t CAPACITY =
-        8192; ///< tope antes de dejar de formar
+    static constexpr uint32_t CHUNK = 16;      ///< paquetes por bloque
+    static constexpr uint32_t CAPACITY = 8192; ///< paquetes por MITAD
 
-    std::vector<Bundle *> chunks;
-    uint32_t used = CHUNK; ///< usados en el ultimo bloque (fuerza el primero)
-    uint32_t total = 0;    ///< paquetes vivos, para el tope
+    /* EL invariante que hace que esto no pueda desbordar, comprobado y no solo
+     * escrito.  Cada raiz -- una entrada de icache -- apunta como mucho a un
+     * paquete, asi que el conjunto vivo nunca pasa de `ICACHE_SIZE`; si una
+     * mitad tiene sitio para mas, la copia siempre cabe y tras cada recoleccion
+     * queda hueco para seguir formando.
+     *
+     * Con la desigualdad al reves no habria un error: `bundle_collect` se
+     * quedaria sin sitio a mitad de la copia y su guarda -- `if (fresh ==
+     * nullptr) break;` -- ABANDONARIA raices vivas apuntando a la region que se
+     * esta vaciando.  O sea punteros colgando, en silencio.  Subir
+     * `ICACHE_SIZE` por encima de `CAPACITY` es justo el cambio que alguien
+     * haria sin sospecharlo, y por eso se para aqui. */
+    static_assert(CAPACITY >= ICACHE_SIZE,
+                  "una mitad tiene que poder alojar TODAS las raices vivas: "
+                  "con menos, la copia deja raices apuntando a la region vieja");
 
-    Bundle *alloc() {
-        if (used == CHUNK) {
-            chunks.push_back(new Bundle[CHUNK]);
-            used = 0;
+    /// Bloques por mitad.  Array fijo, no `std::vector`: el numero maximo se
+    /// sabe (CAPACITY/CHUNK) y una lista que crece en el corazon del
+    /// interprete es una reserva de monton escondida.
+    static constexpr uint32_t CHUNKS = CAPACITY / CHUNK;
+
+    /**
+     * @struct Half
+     * @brief Una de las dos mitades que se turnan.
+     *
+     * Los bloques se piden al crecer y NO se sueltan jamas.  Reiniciar una
+     * mitad es poner su contador a cero: los bloques se reutilizan.  Asi la
+     * memoria se estabiliza en el maximo que el programa llego a necesitar y
+     * el sistema no vuelve a ver una peticion.
+     */
+    struct Half {
+        Bundle *chunks[CHUNKS] = {};
+        uint32_t n_chunks = 0; ///< bloques pedidos hasta ahora
+        uint32_t used = 0;     ///< paquetes ocupados AHORA
+
+        /// Bytes de un bloque.  32 KB con los valores de hoy: un multiplo de
+        /// pagina redondo para lo que hay debajo.
+        static constexpr size_t CHUNK_BYTES = CHUNK * sizeof(Bundle);
+
+        Bundle *alloc() {
+            const uint32_t chunk = used / CHUNK;
+            if (chunk >= n_chunks) {
+                if (n_chunks >= CHUNKS) return nullptr; // mitad llena
+                /* Al sistema por la puerta del proyecto -- VirtualAlloc en
+                 * Windows, mmap en POSIX -- y no por `new Bundle[]`.  Se pide
+                 * por bloques y NO se suelta nunca: reiniciar una mitad es
+                 * poner su contador a cero, con lo que la memoria se estabiliza
+                 * en el maximo que el programa llego a necesitar y el sistema
+                 * no vuelve a ver una peticion. */
+                void *mem = vm::allocate_memory(
+                    CHUNK_BYTES, vm::MemPerm::READ | vm::MemPerm::WRITE);
+                if (mem == nullptr) return nullptr;
+                Bundle *c = static_cast<Bundle *>(mem);
+                for (uint32_t i = 0; i < CHUNK; ++i) new (&c[i]) Bundle();
+                chunks[n_chunks++] = c;
+            }
+            return &chunks[chunk][used++ % CHUNK];
         }
-        ++total;
-        return &chunks.back()[used++];
-    }
 
-    /// Vacia la arena.  Quien la llame DEBE invalidar tambien la icache: sus
-    /// entradas de paquete quedan apuntando a memoria liberada.
-    void clear() {
-        for (Bundle *c : chunks)
-            delete[] c;
-        chunks.clear();
-        used = CHUNK;
-        total = 0;
-    }
+        /// Reinicia SIN soltar los bloques.  Lo que se reutiliza es el espacio.
+        void reset() { used = 0; }
 
-    ~BundleArena() { clear(); }
+        /// @brief El paquete @p i de esta region, o nullptr si no existe.
+        ///        Con esto se puede recorrer la region sin conocer los bloques.
+        Bundle *at(uint32_t i) {
+            if (i >= used) return nullptr;
+            return &chunks[i / CHUNK][i % CHUNK];
+        }
+        const Bundle *at(uint32_t i) const {
+            if (i >= used) return nullptr;
+            return &chunks[i / CHUNK][i % CHUNK];
+        }
+
+        /// Si @p b vive en esta mitad.  Lo usa la copia para saber que mover.
+        bool contains(const Bundle *b) const {
+            for (uint32_t i = 0; i < n_chunks; ++i)
+                if (b >= chunks[i] && b < chunks[i] + CHUNK) return true;
+            return false;
+        }
+
+        ~Half() {
+            for (uint32_t i = 0; i < n_chunks; ++i)
+                vm::free_memory(chunks[i], CHUNK_BYTES);
+        }
+    };
+
+    Half half[2];         ///< las dos, fijas
+    uint32_t current = 0; ///< cual esta en uso
+    /// La otra espera a poder reiniciarse: hay un `Bundle*` suyo en manos de
+    /// `exec_bundle`.  Ver @ref bundle_in_use.
+    /* La bandera de "hay region esperando" vive en `ProcessVM`, no aqui: se
+     * mira al salir de CADA paquete y ahi una indireccion mas cuesta. */
+
+    Half &live() { return half[current]; }
+    Half &spare() { return half[current ^ 1u]; }
+
+    /// Compatibilidad con quien preguntaba `total`: paquetes en la mitad viva.
+    uint32_t total() const { return half[current].used; }
+
+    Bundle *alloc() { return half[current].alloc(); }
 };
 
 /**
@@ -303,7 +463,92 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc);
 void exec_bundle(ProcessVM *process, const DecodedInstr &d);
 
 /// Libera la arena de un proceso.  Idempotente.
+/**
+ * @brief Reordena las instrucciones DENTRO del paquete, al formarlo.
+ *
+ * No es el fuera-de-orden de un procesador: se reordena para poder FUSIONAR --
+ * juntar productor y consumidor deja el par adyacente, y solo un par adyacente
+ * se puede convertir en UNA instruccion --, que es lo unico que baja el
+ * RECUENTO de instrucciones de VM.
+ *
+ * Corre una vez por sitio; lo que ahorra se cobra en cada entrada posterior.
+ * Detalle del modelo y de por que es seguro, en `bundle_reorder.cpp`.
+ *
+ * @param process Proceso, para leer los bytes de cada instruccion.
+ * @param b       Paquete recien formado, todavia sin publicar.
+ * @param why     Si no es nulo, recibe POR QUE se eligio cada posicion: el
+ *                identificador del criterio que decidio, o
+ *                @ref kBundleReorderCriteria si ninguno tiro (orden natural).
+ *                Tiene que caber @c BUNDLE_MAX.  Existe porque "se movio" no
+ *                es una explicacion: al mirar un paquete reordenado hay que
+ *                poder decir si fue para fusionar, para separar dependencias o
+ *                para agrupar accesos, y eso solo lo sabe quien elige.
+ * @return Cuantas instrucciones cambiaron de sitio; 0 si se dejo igual.
+ */
+uint32_t bundle_reorder(ProcessVM *process, Bundle &b, uint8_t *why = nullptr);
+
+/// Cuantos criterios pesa el planificador.  Ver `bundle_reorder.cpp`.
+constexpr uint8_t kBundleReorderCriteria = 4;
+
+/// @return El nombre del criterio @p id, o "orden" si no decidio ninguno.
+const char *bundle_reorder_criterion(uint8_t id);
+
 void bundle_release(ProcessVM *process);
+
+/**
+ * @brief Vuelca el ESTADO de las caches de este proceso.
+ *
+ * Ocupacion de la icache, cuantas entradas son cabeceras de paquete, cuanto
+ * lleva cada region y cuantos paquetes siguen vivos frente a los reservados --
+ * la diferencia es la basura pendiente de recoger.
+ *
+ * NO cuenta nada durante la ejecucion: recorre las estructuras cuando se le
+ * pide, asi que el camino caliente no paga por que exista.  Sale solo al morir
+ * el proceso con `VESTA_CACHE_DUMP=1`, y se puede llamar a mano desde un test o
+ * desde el depurador.
+ */
+void bundle_dump(const ProcessVM *process);
+
+/**
+ * @brief Vuelca CADA cabecera viva con lo que su paquete ha hecho.
+ *
+ * Mas detallado que @ref bundle_dump y por eso no sale solo: con miles de
+ * cabeceras seria ilegible.  Es lo que hay que mirar para entender por que un
+ * paquete concreto se retiro -- las columnas `entradas` y `ejecutadas` son
+ * justo las que decide `Bundle::MIN_PER_ENTRY`.
+ *
+ * @param max_lines Tope de lineas, para no inundar la salida.
+ */
+// No es `const` porque desensamblar LEE la memoria de la VM, que es lo unico
+// que hace que el volcado sea util: sin eso solo saldrian nombres de opcode.
+void bundle_dump_heads(ProcessVM *process, uint32_t max_lines = 64,
+                       bool with_instructions = false);
+
+/**
+ * @brief Vuelca un paquete: lo que ha hecho, y su ENSAMBLADOR completo.
+ *
+ * Es lo que hace falta el dia que algo va mal.  El `pc` de cada instruccion se
+ * guarda al formar y no se deduce del orden: en cuanto se reordene, deducirlo
+ * daria la direccion equivocada, y un volcado que miente es peor que ninguno.
+ *
+ * Imprime la instruccion ENTERA, no su nombre.  Antes listaba `add  4 bytes`,
+ * que no dice sobre que registros ni con que inmediato -- o sea, no dice nada
+ * que sirva para depurar: con veinte `add` seguidos no se distingue cual es
+ * cual.  Ahora es la misma linea que sacaria `--disasm-file`, y por eso se
+ * puede contrastar contra el programa.
+ */
+void bundle_dump_one(ProcessVM *process, const Bundle *b);
+
+/**
+ * @brief Solo el ENSAMBLADOR de un paquete, sin la linea de estado.
+ *
+ * Lee los BYTES REALES de la memoria de la VM y los pasa por el mismo
+ * desensamblador que `--disasm-file`, asi que se ve lo mismo que mirando el
+ * programa.  Leer de `vm_mem` y no del `DecodedInstr` es deliberado: si alguna
+ * vez el paquete guardara algo distinto de lo que hay en memoria, esto lo
+ * ensenaria en vez de taparlo.
+ */
+void bundle_dump_asm(ProcessVM *process, const Bundle *b);
 
 #if VM_BUNDLE_STATS
 /**

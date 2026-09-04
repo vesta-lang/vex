@@ -86,7 +86,8 @@ ir::IrFunction hacer_relleno(int64_t paso, int64_t n_constante) {
      * 6=p (puntero base) | 7=direccion | 8=cte 0 (el valor escrito) */
     ir::IrFunction fn;
     fn.name = "relleno";
-    for (int i = 0; i < 9; ++i) fn.values.push_back({});
+    for (int i = 0; i < 9; ++i)
+        fn.values.push_back({});
     /* El puntero es del HOST -- lo que devuelve `malloc` --, y la marca va en
      * el VALOR, no en la instruccion: de que memoria es un puntero es una
      * propiedad suya, no de quien lo usa. */
@@ -206,8 +207,7 @@ int main() {
         CHECK(r.facts.size() == 1, "se reconoce el bucle");
         CHECK(r.declines.empty(), "y no se renuncia a nada");
         if (!r.facts.empty()) {
-            CHECK(r.facts[0].clase ==
-                      analysis::BulkMemoryFact::Clase::Relleno,
+            CHECK(r.facts[0].clase == analysis::BulkMemoryFact::Clase::Relleno,
                   "es un RELLENO, no una copia");
             CHECK(r.facts[0].ancho == 1, "de un byte por elemento");
 
@@ -279,7 +279,8 @@ int main() {
         r.op = IrOp::RET;
         b0.instrs.push_back(r);
         fn.blocks = {b0};
-        const analysis::BulkMemoryReport rep = analysis::analyze_bulk_memory(fn);
+        const analysis::BulkMemoryReport rep =
+            analysis::analyze_bulk_memory(fn);
         CHECK(rep.facts.empty() && rep.declines.empty(),
               "nada que decir, y se distingue de haber mirado y descartado");
     }

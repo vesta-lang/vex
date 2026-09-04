@@ -277,8 +277,7 @@ void test_modulo_vacio() {
      *
      * Lo que si tiene que cumplirse es que sea SOLO cabecera y que vuelva a
      * leerse igual, que es lo que se comprueba abajo. */
-    CHECK(b.size() >= 48 && b.size() < 256,
-          "modulo vacio = solo la cabecera");
+    CHECK(b.size() >= 48 && b.size() < 256, "modulo vacio = solo la cabecera");
     auto r = vx::vxi_parse(b.data(), b.size());
     CHECK(r.ok, "modulo vacio parsea OK");
     CHECK(r.module_.symbols.empty(), "sin simbolos");
