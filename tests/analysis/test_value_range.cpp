@@ -757,6 +757,81 @@ static void probar_bucle(ir::IrType tipo, RangeType rt, const char *etiqueta) {
               ": al salir i vale exactamente 200");
 }
 
+/**
+ * @brief Quedarse sin presupuesto NO puede borrar lo que ya se sabia.
+ *
+ * El motor puede no llegar a punto fijo, y entonces nada de lo DERIVADO se
+ * sostiene.  Pero el suelo -- lo que impone el tipo, mas la constante si el
+ * valor lo es -- se calcula antes de la primera vuelta y sigue siendo cierto.
+ *
+ * Borrarlo dejaba sin acotar hasta las CONSTANTES de cualquier funcion grande,
+ * que es el caso mas sabido que existe, y ademas lo hacia EN SILENCIO: quien
+ * preguntaba no podia distinguir "de ese valor no se nada" de "me quede sin
+ * presupuesto", que se arregla subiendo el limite y no es culpa del programa.
+ */
+static void probar_tope_de_presupuesto() {
+    ir::IrFunction fn;
+    fn.name = "sin_presupuesto";
+    const uint32_t b0 = fn.new_block("entry");
+    const uint32_t cabecera = fn.new_block("cabecera");
+    const uint32_t cuerpo = fn.new_block("cuerpo");
+    const uint32_t salida = fn.new_block("salida");
+
+    // Una constante en la entrada: lo mas sabido que hay.
+    const ir::IrValueId siete = cte(fn, b0, ir::IrType::I64, 7);
+    const ir::IrValueId cero = cte(fn, b0, ir::IrType::I64, 0);
+    const ir::IrValueId mil = cte(fn, b0, ir::IrType::I64, 1000);
+    const ir::IrValueId uno = cte(fn, b0, ir::IrType::I64, 1);
+    {
+        ir::IrInstr &b = emitir(fn, b0, ir::IrOp::BR, ir::IR_NO_VALUE, {});
+        b.target_block = cabecera;
+    }
+
+    /* Un bucle con una induccion que crece: es lo que obliga a ensanchar y,
+     * con el presupuesto a cero, a parar antes de tiempo. */
+    const ir::IrValueId i = fn.new_value(ir::IrType::I64);
+    const ir::IrValueId sig = fn.new_value(ir::IrType::I64);
+    {
+        ir::IrInstr &p = emitir(fn, cabecera, ir::IrOp::PHI, i, {});
+        p.phi_args.push_back({cero, b0});
+        p.phi_args.push_back({sig, cuerpo});
+    }
+    const ir::IrValueId c = fn.new_value(ir::IrType::BOOL);
+    emitir(fn, cabecera, ir::IrOp::CMP_LT, c, {i, mil});
+    {
+        ir::IrInstr &br =
+            emitir(fn, cabecera, ir::IrOp::BR_COND, ir::IR_NO_VALUE, {c});
+        br.target_block = cuerpo;
+        br.false_block = salida;
+    }
+    emitir(fn, cuerpo, ir::IrOp::ADD, sig, {i, uno});
+    {
+        ir::IrInstr &b = emitir(fn, cuerpo, ir::IrOp::BR, ir::IR_NO_VALUE, {});
+        b.target_block = cabecera;
+    }
+    emitir(fn, salida, ir::IrOp::RET, ir::IR_NO_VALUE, {siete});
+
+    // Presupuesto ridiculo a proposito: se busca la parada, no el resultado.
+    RangeOptions op;
+    op.pasos_por_bloque = 0;
+    op.pasos_extra = 1;
+    const IrFacts f = build_ir_facts(fn);
+    const RangeFacts r = compute_ranges(fn, f, op);
+
+    check(!r.convergio, "presupuesto: el motor NO llega a punto fijo");
+    check(r.reason == asa::UnknownReason::BudgetExceeded,
+          "presupuesto: se DICE que la parada es por presupuesto");
+    check(r.code != nullptr && r.code[0] != '\0',
+          "presupuesto: la parada lleva codigo del dominio");
+    /* Lo que de verdad se protege: sin punto fijo se pierde lo derivado, pero
+     * NO la constante.  Antes esto era top y el consumidor no sabia ni que
+     * `siete` valia 7. */
+    check(es(r.at(siete), kI64, 7, 7),
+          "presupuesto: una constante sigue valiendo lo que dice");
+    check(es(r.at(cero), kI64, 0, 0),
+          "presupuesto: y las demas constantes tambien");
+}
+
 int main() {
     probar_reticulo();
     probar_tipos();
@@ -773,6 +848,7 @@ int main() {
     probar_switch(10, /*defecto_acotado=*/false);
     probar_bucle(ir::IrType::U32, kU32, "u32");
     probar_bucle(ir::IrType::I32, kI32, "i32");
+    probar_tope_de_presupuesto();
     std::printf("=== rangos de valor: %d checks, %d fallos ===\n", total,
                 fallos);
     return fallos == 0 ? 0 : 1;

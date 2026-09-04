@@ -54,6 +54,7 @@
 #ifndef ANALYSIS_FACTS_VALUE_RANGE_H
 #define ANALYSIS_FACTS_VALUE_RANGE_H
 
+#include "analysis/asa/fact.h" // UnknownReason: por que no se pudo afirmar mas
 #include "analysis/facts/ir_facts.h"
 
 #include <cstddef> // offsetof: las aserciones que fijan el layout de RangeEntry
@@ -677,6 +678,18 @@ struct RangeFacts {
      * conclusion de una parada, asi que sin convergencia no se afirma nada.
      */
     bool convergio = true;
+    /**
+     * @brief Por que no se pudo afirmar mas, cuando no se pudo.
+     *
+     * @c convergio dice SI hubo punto fijo; esto dice por que no lo hubo, que
+     * es lo que decide que puede hacer el consumidor.  Un tope de presupuesto
+     * es limite NUESTRO -- se arregla subiendolo --, y leerlo igual que "de
+     * ese valor no se sabe nada" hacia que un fallo del analisis pareciera una
+     * propiedad del programa.
+     */
+    asa::UnknownReason reason = asa::UnknownReason::NotAsked;
+    /// Codigo estable del caso exacto, del vocabulario de este dominio.
+    const char *code = "";
     /// Lo que se leyo para llegar hasta aqui.  Es lo que permite reusar estos
     /// hechos sin recalcularlos, y lo que impide reusarlos cuando no valen.
     DependenciasRango deps;

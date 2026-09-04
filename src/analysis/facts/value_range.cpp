@@ -1662,8 +1662,25 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
     out.stats = m.stats;
     out.convergio = ok;
     if (!out.convergio) {
-        // Sin punto fijo no hay hecho que sostener: no se afirma nada.
-        out.r.assign(facts.def_of.size(), ValueRange::top());
+        /* Sin punto fijo no se sostiene nada DERIVADO -- lo que salia de
+         * iterar --, pero el SUELO no sale de iterar: es lo que impone el tipo,
+         * mas la constante si el valor lo es, mas las cotas de induccion, todo
+         * calculado antes de la primera vuelta.  Sigue siendo cierto tanto si
+         * el motor converge como si no.
+         *
+         * Borrarlo a Top era tirar lo unico que no costaba nada: una funcion
+         * grande dejaba sin acotar hasta sus CONSTANTES, que es el caso mas
+         * sabido que hay.  Medido: en un solo ejemplo eran 173 valores, 162 de
+         * ellos `const`.  Es el mismo respaldo que ya usa la funcion sin
+         * bloques, tres lineas mas arriba.
+         *
+         * Y se DICE por que se paro: quien pregunte distingue "no se" de "me
+         * quede sin presupuesto", que son cosas distintas -- la segunda no es
+         * culpa del programa y se arregla subiendo el limite. */
+        out.r = m.suelo;
+        out.r.resize(facts.def_of.size(), ValueRange::top());
+        out.reason = asa::UnknownReason::BudgetExceeded;
+        out.code = "ranges.fixpoint_budget";
         return out;
     }
     /* La proyeccion final es la UNICA pasada que apunta los desbordamientos:
