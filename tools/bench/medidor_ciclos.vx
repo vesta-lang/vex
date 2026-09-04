@@ -22,6 +22,12 @@ u64 t_inicio = 0_u64;
 
 // Fuera de la medida: si el propio medidor se instrumentara, cada lectura del
 // contador generaria otra lectura.
+//
+// Una version por arquitectura, como hace `std.atomic` con sus primitivas: el
+// contador de ciclos no es el mismo registro ni la misma instruccion, y sin
+// separarlas el bloque de x86 se intentaba ensamblar para ARM y el error que
+// salia hablaba de registros que el fuente no menciona.
+@Target("arch:x86_64 || arch:x86")
 @NoInstrument
 u64 ciclos() {
 	// Operandos en la lista: el bloque queda con SOLO asm y los registros los
@@ -37,6 +43,28 @@ u64 ciclos() {
 		rdtsc
 	}
 	return (hi << 32) | lo;
+}
+
+// En AArch64 el contador es un registro del sistema, no una instruccion suya:
+// `cntvct_el0` es el contador virtual, que cuenta a frecuencia fija -- no en
+// ciclos de nucleo --, asi que sus unidades NO son las de x86 y los dos
+// numeros no se comparan entre si.  Para lo que esto hace da igual: la red
+// compara una medida contra otra de la MISMA maquina.
+//
+// Escrito de la especificacion de ARMv8, sin haberlo podido ejecutar en
+// hardware desde aqui; el objeto se genera, pero no hay donde correrlo.
+@Target("arch:arm64")
+@NoInstrument
+u64 ciclos() {
+	// Registro CONCRETO, no `reg`: `mrs` no admite que el compilador elija --
+	// el operando forma parte de la codificacion de la instruccion --, y con
+	// `reg` el ensamblador rechaza el operando.  Es el mismo motivo por el que
+	// `std.atomic` liga x0..x3 a mano en sus primitivas de AArch64.
+	register("x0") u64 t = 0_u64;
+	asm {
+		mrs x0, cntvct_el0
+	};
+	return t;
 }
 
 // El selector acota a `main`: medir funcion por funcion cambiaria lo que se
