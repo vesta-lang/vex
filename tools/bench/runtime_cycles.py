@@ -43,6 +43,7 @@ import re
 import subprocess
 import sys
 
+import corpus
 import procedencia
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,7 +53,7 @@ MEDIDOR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 MARCA = re.compile(r"__CICLOS__\s+(\d+)")
 
 
-def _medir(vm, fuente, tmp_dir, corridas):
+def _medir(vm, entrada, tmp_dir, corridas):
     """Compila el ejemplo con el medidor delante y devuelve el minimo.
 
     Devuelve None si no compila a nativo o si no llega a imprimir la marca.
@@ -60,7 +61,9 @@ def _medir(vm, fuente, tmp_dir, corridas):
     runtime, y otros que terminan por una via que no pasa por el epilogo de
     `main` --, pero tampoco se pueden dar por medidos: se cuentan aparte.
     """
-    nombre = os.path.splitext(os.path.basename(fuente))[0]
+    # El nombre viene del corpus y ya lleva la carpeta cuando la hay: dos
+    # `main.vx` de carpetas distintas no se pueden llamar igual en el informe.
+    nombre, fuente = entrada
     # El fichero combinado se escribe JUNTO al original, no en el temporal:
     # un ejemplo puede importar por ruta relativa, y moverlo de sitio romperia
     # esos imports -- se mediria "no compila" cuando el ejemplo esta bien.
@@ -132,9 +135,9 @@ def main():
         print("no encuentro el binario en " + args.build, file=sys.stderr)
         return 2
 
-    fuentes = sorted(
-        os.path.join(EJEMPLOS, f) for f in os.listdir(EJEMPLOS)
-        if f.endswith(".vx") and (not args.filtro or args.filtro in f))
+    # Todo el corpus, no solo los .vx sueltos de arriba: una carpeta con
+    # `main.vx` es UN ejemplo de varios ficheros, y quedaba fuera entera.
+    fuentes = corpus.entradas(args.filtro)
     if not fuentes:
         print("ningun ejemplo casa con el filtro", file=sys.stderr)
         return 2

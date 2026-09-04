@@ -35,6 +35,7 @@ import os
 import subprocess
 import sys
 
+import corpus
 import procedencia
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -75,14 +76,16 @@ def _secciones_pe(ruta):
     return out
 
 
-def _medir(vm, fuente, tmp_dir):
+def _medir(vm, entrada, tmp_dir):
     """Compila un ejemplo a nativo y devuelve sus numeros, o None si no compila.
 
     Que un ejemplo no compile a nativo NO es un fallo de esto: hay ejemplos que
     piden runtime y solo corren en la maquina virtual.  Se omiten, y el
     contador de omitidos se imprime al final para que no pasen por medidos.
     """
-    nombre = os.path.splitext(os.path.basename(fuente))[0]
+    # El nombre viene del corpus y ya lleva la carpeta cuando la hay: dos
+    # `main.vx` de carpetas distintas no se pueden llamar igual en el informe.
+    nombre, fuente = entrada
     salida = os.path.join(tmp_dir, nombre + ".exe")
     try:
         r = subprocess.run(
@@ -128,9 +131,9 @@ def main():
         print("no encuentro el binario en " + args.build, file=sys.stderr)
         return 2
 
-    fuentes = sorted(
-        os.path.join(EJEMPLOS, f) for f in os.listdir(EJEMPLOS)
-        if f.endswith(".vx") and (not args.filtro or args.filtro in f))
+    # Todo el corpus, no solo los .vx sueltos de arriba: una carpeta con
+    # `main.vx` es UN ejemplo de varios ficheros, y quedaba fuera entera.
+    fuentes = corpus.entradas(args.filtro)
     if not fuentes:
         print("ningun ejemplo casa con el filtro", file=sys.stderr)
         return 2
