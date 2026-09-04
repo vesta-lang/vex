@@ -204,6 +204,14 @@ VESTA_ENV_FLAG(NoBundleReorder, "VESTA_NO_BUNDLE_REORDER", Report, Scheduler,
  * eso, porque tiene dos instanciaciones y esto elige cual se llama. */
 VESTA_ENV_FLAG(BundleStats, "VESTA_BUNDLE_STATS", Report, Scheduler, Bool, Any)
 
+/* Apaga la FUSION de pares dentro de un paquete.
+ *
+ * Fusionar es lo unico que baja el RECUENTO de instrucciones, asi que un
+ * programa que cambie de resultado al apagarla senala directamente aqui.  Se
+ * mira UNA vez por paquete formado, no al ejecutarlo. */
+VESTA_ENV_FLAG(NoBundleFuse, "VESTA_NO_BUNDLE_FUSE", Report, Scheduler, Bool,
+               Any)
+
 /* -- Asignacion de registros ---------------------------------------------- */
 VESTA_ENV_FLAG(AsignadorMaquina, "VESTA_ASIGNADOR_MAQUINA", Emitted, RegAlloc,
                Bool, Any)
@@ -228,6 +236,10 @@ VESTA_ENV_FLAG(RbankAsmDebug, "VESTA_RBANK_ASM_DEBUG", Report, RegAlloc, Bool,
 /* -- Emision de codigo maquina -------------------------------------------- */
 VESTA_ENV_FLAG(NoPeephole, "VESTA_NO_PEEPHOLE", Emitted, Codegen, Bool, Any)
 VESTA_ENV_FLAG(NoSib, "VESTA_NO_SIB", Emitted, Codegen, Bool, Any)
+/* Un tramo corto de longitud conocida se escribe por LANES en vez de con el
+ * bucle de bloque de la maquina.  Apagarlo es lo que permite medir si compensa
+ * sin recompilar el compilador -- y el umbral esta razonado, no medido. */
+VESTA_ENV_FLAG(NoShortFill, "VESTA_NO_SHORT_FILL", Emitted, Codegen, Bool, Any)
 VESTA_ENV_FLAG(NoXorZero, "VESTA_NO_XORZERO", Emitted, Codegen, Bool, Any)
 VESTA_ENV_FLAG(NoJmpFall, "VESTA_NO_JMPFALL", Emitted, Codegen, Bool, Any)
 VESTA_ENV_FLAG(NoDeadDef, "VESTA_NO_DEADDEF", Emitted, Codegen, Bool, Any)
@@ -334,6 +346,14 @@ VESTA_ENV_FLAG(DbgReg, "VX_DBG_REG", Report, Cache, Bool, Any)
 /* Verifica el IR recien construido contra sus propias reglas.  Cuesta un
  * recorrido del modulo, asi que no va por defecto. */
 VESTA_ENV_FLAG(VerifyIr, "VESTA_VERIFY_IR", Report, None, Bool, Any)
+
+/* Compara, valor a valor, los rangos que deduce el optimizador por su cuenta
+ * (`compute_value_facts`) con los que produce el ASA (`compute_ranges`).  Son
+ * DOS analisis del mismo hecho, que es justo lo que el ASA existe para evitar;
+ * antes de unificarlos hay que saber cuanto se solapan de verdad y cual es mas
+ * preciso.  Cuesta calcular los del ASA aunque nadie los pida, asi que no va
+ * por defecto. */
+VESTA_ENV_FLAG(RangosComparar, "VESTA_RANGOS_COMPARAR", Report, None, Bool, Any)
 
 /* -- Medicion transversal ------------------------------------------------- */
 VESTA_ENV_FLAG(Times, "VESTA_TIMES", Report, None, Bool, Any)

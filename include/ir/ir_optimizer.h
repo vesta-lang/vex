@@ -197,6 +197,17 @@ std::vector<TiempoPaseFuncion> tiempos_por_funcion();
 /// Los pases que han corrido, del mas caro al mas barato.
 std::vector<TiempoPase> tiempos_de_pases();
 
+/**
+ * @brief Vuelca la comparacion de los DOS analisis de rangos.
+ *
+ * Solo dice algo con `VESTA_RANGOS_COMPARAR`.  El optimizador deduce rangos por
+ * su cuenta y el ASA los produce tambien: son dos productores del mismo hecho,
+ * que es lo que el primer invariante del ASA prohibe.  Esto mide cuanto se
+ * solapan y cual es mas preciso, para poder decidir cual absorbe al otro con
+ * datos en vez de con una suposicion.
+ */
+void rangos_comparados_informe();
+
 /// Pone a cero el acumulador (una compilacion no debe heredar el reparto de
 /// otra: se llama al empezar cada @ref ir_optimize del modulo raiz).
 void reiniciar_tiempos_de_pases();

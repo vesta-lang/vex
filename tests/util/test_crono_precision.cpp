@@ -176,7 +176,8 @@ static void probar_por_orden_de_magnitud() {
              * vuelta costaria mas que el tramo que se mide. */
             if (i % paso == 0)
                 barra(c.titulo, c.repeticiones + i, 2 * c.repeticiones);
-            util::CronoTramo crono(c.etiqueta);
+            // La prueba SIEMPRE mide: es lo que esta comprobando.
+        util::CronoTramo crono(c.etiqueta, true);
             esperar_ns(c.ns);
         }
         barra(c.titulo, 2 * c.repeticiones, 2 * c.repeticiones);
@@ -213,7 +214,7 @@ static void probar_acumulacion_de_cortos() {
     const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < kN; ++i) {
         if (i % 2000 == 0) barra("cortos", i, kN);
-        util::CronoTramo crono("  prueba:cortos");
+        util::CronoTramo crono("  prueba:cortos", true);
         esperar_ns(200);
     }
     const auto t1 = std::chrono::steady_clock::now();
@@ -240,7 +241,7 @@ static void probar_no_negativo() {
     constexpr int kVacios = 50000;
     for (int i = 0; i < kVacios; ++i) {
         if (i % 500 == 0) barra("vacios", i, kVacios);
-        util::CronoTramo crono("  prueba:vacio");
+        util::CronoTramo crono("  prueba:vacio", true);
     }
     barra("vacios", kVacios, kVacios);
     const long long v = leer("  prueba:vacio");
@@ -253,7 +254,7 @@ static void probar_no_negativo() {
     constexpr int kCon = 1000;
     for (int i = 0; i < kCon; ++i) {
         if (i % 10 == 0) barra("con trabajo", i, kCon);
-        util::CronoTramo crono("  prueba:con-trabajo");
+        util::CronoTramo crono("  prueba:con-trabajo", true);
         esperar_ns(5000);
     }
     barra("con trabajo", kCon, kCon);
@@ -274,7 +275,7 @@ static void probar_hilos() {
     for (int h = 0; h < kHilos; ++h) {
         hilos.emplace_back([] {
             for (int i = 0; i < kPorHilo; ++i) {
-                util::CronoTramo crono("  prueba:hilos");
+                util::CronoTramo crono("  prueba:hilos", true);
                 esperar_ns(300);
             }
         });

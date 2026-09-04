@@ -18,7 +18,8 @@
 
 #include "util/env_flags.h"
 #include "util/crono_tramo.h"
-#include "util/fnv.h" // dispersion de las claves de la CSE
+#include "util/fnv.h"         // dispersion de las claves de la CSE
+#include "util/thread_slot.h" // los vectores de trabajo, uno por hilo
 
 #include "util/reloj.h"
 
@@ -4964,6 +4965,106 @@ namespace {
  * casi cuarenta sitios que escriben en ella, y cambiarlos uno a uno es cambiar
  * cuarenta oportunidades de equivocarse por una.
  */
+/**
+ * @brief Mide el optimizador sus pases?  (`VESTA_TIMES`)
+ *
+ * La bandera se lee UNA vez y se recuerda: apagada, esto es una lectura
+ * relajada y una rama que el predictor acierta siempre.  Se guarda aqui, en
+ * quien mide, y no en el cronometro -- que es una utilidad y no tiene por que
+ * saber bajo que bandera vive cada uno de sus usuarios.
+ *
+ * @return @c true si hay que cronometrar.
+ */
+bool timing_on() noexcept {
+    /* Atomico relajado y no un estatico local: un estatico se inicializa la
+     * primera vez que se pasa por el, y para eso el compilador mete una
+     * comprobacion de guarda -- con cerrojo -- en CADA llamada.  Aqui se llama
+     * una vez por pase y por funcion. */
+    static std::atomic<int8_t> cache{-1};
+    int8_t v = cache.load(std::memory_order_relaxed);
+    if (v < 0) {
+        v = util::flag_on(util::FlagId::Times) ? 1 : 0;
+        cache.store(v, std::memory_order_relaxed);
+    }
+    return v != 0;
+}
+
+/**
+ * @brief Un tramo medido DEL OPTIMIZADOR.
+ *
+ * Envuelve al cronometro general poniendole la puerta de aqui, para que ni el
+ * cronometro tenga que saber de banderas ni cada sitio del optimizador tenga
+ * que acordarse de preguntar.
+ */
+struct PassTimer : util::CronoTramo {
+    explicit PassTimer(const char *etiqueta)
+        : util::CronoTramo(etiqueta, timing_on()) {}
+};
+
+/// Donde una instruccion queda definida: bloque y posicion dentro de el.
+struct DefInfo {
+    IrBlockId bb;
+    size_t idx;
+};
+
+/// Una instruccion que `reassoc` quiere intercalar, y donde.
+struct ReassocInsert {
+    size_t bb_idx;
+    size_t pos;
+    IrInstr instr;
+};
+/// Centinela de @c DefInfo::idx: ese valor no lo define ninguna instruccion
+/// (es un parametro, o no existe).
+constexpr size_t kNoDef = static_cast<size_t>(-1);
+
+/**
+ * @brief Los vectores de trabajo de los pases, UNO POR HILO.
+ *
+ * `reassoc` y `simplify` corren una vez por funcion y por vuelta del punto
+ * fijo, y cada llamada creaba sus vectores: aun despues de cambiar las tablas
+ * hash por vectores planos, `reassoc` seguia siendo el 42 % de todo lo que
+ * reservaba el compilador.  Reutilizandolos, `assign` conserva la capacidad y
+ * tras las primeras funciones deja de tocar el monton.
+ *
+ * Por hilo porque el optimizador recorre las funciones en paralelo.
+ */
+struct PassScratch {
+    std::vector<DefInfo> defs;
+    std::vector<int64_t> const_val;
+    std::vector<uint8_t> value_is_const;
+    std::vector<IrInstr *> def_of;
+    std::vector<ReassocInsert> pending;
+    /// El bloque que se esta tejiendo.  Tras el intercambio se queda con el
+    /// almacenamiento VIEJO del bloque, que es justo lo que se reaprovecha en
+    /// la siguiente vuelta.
+    std::vector<IrInstr> woven;
+};
+
+/* Un array global y una ranura que indexa, que es el patron del proyecto (ver
+ * `scratch_arena.cpp`): asi no hay inicializador dinamico ni variable de
+ * guarda.  Y con `util::ThreadSlot`, no con `thread_local`: la TLS emulada de
+ * MinGW cuesta lo suyo, y para eso existe la ranura. */
+constexpr uint32_t kMaxPassThreads = 64;
+PassScratch g_pass_scratch[kMaxPassThreads];
+std::atomic<uint32_t> g_next_pass_scratch{0};
+util::ThreadSlot g_pass_scratch_slot;
+
+/// @return Los vectores de trabajo de ESTE hilo.
+PassScratch &pass_scratch() {
+    g_pass_scratch_slot.ensure();
+    void *p = g_pass_scratch_slot.get();
+    if (p == nullptr) {
+        const uint32_t i =
+            g_next_pass_scratch.fetch_add(1, std::memory_order_relaxed);
+        // Mas hilos que ranuras: se comparte el ultimo.  No es correcto para
+        // dos hilos a la vez, asi que se limita el reparto -- pero con 64 no
+        // llega a pasar, y callarlo seria peor que quedarse sin sitio.
+        p = &g_pass_scratch[i < kMaxPassThreads ? i : kMaxPassThreads - 1];
+        g_pass_scratch_slot.set(p);
+    }
+    return *static_cast<PassScratch *>(p);
+}
+
 class ConstMap {
   public:
     /// @param n Cuantos valores tiene la funcion, para dimensionar de golpe.
@@ -5044,7 +5145,9 @@ bool ir_pass_simplify(IrFunction &fn) {
      * como fneg(fneg x)->x).  Se lee EN VIVO (def->op actual): simplify
      * reescribe in-place sin redimensionar los vectores, asi que los punteros
      * siguen validos y nunca se toma una op stale. */
-    std::vector<IrInstr *> def_of(n_values, nullptr);
+    // Reutilizado entre llamadas, por lo mismo que en `ir_pass_reassoc`.
+    std::vector<IrInstr *> &def_of = pass_scratch().def_of;
+    def_of.assign(n_values, nullptr);
     for (auto &bb : fn.blocks)
         for (auto &ins : bb.instrs)
             if (ins.dst != IR_NO_VALUE &&
@@ -5884,15 +5987,119 @@ static inline void facts_derive_bits_from_range(ValueFacts &f) {
     f.kz |= known_zero_above;
 }
 
+/**
+ * @brief Lo que se sabe de cada valor, indexado por value-id.
+ *
+ * VECTOR PLANO, no tabla hash: la clave es un value-id, o sea un indice DENSO
+ * en @c IrFunction::values.  Con una tabla se pagaba un nodo del monton por
+ * entrada y una dispersion por consulta para indexar lo que ya es un indice --
+ * y esto era, medido con VTune, el 32,5 % de todo lo que reservaba el
+ * compilador.
+ *
+ * "No consta" va aparte del contenido, y NO son lo mismo: un valor sin entrada
+ * es uno que este analisis no miro, mientras que uno con @ref ValueFacts por
+ * defecto es uno del que se miro y no se pudo afirmar nada.  Dos sitios
+ * (@c have) dependen de la diferencia.
+ */
+class FactsTable {
+  public:
+    void reset(size_t n) {
+        v_.assign(n, ValueFacts{});
+        present_.assign(n, 0);
+    }
+    /// @return Lo que se sabe de @p id, o el vacio si no consta.
+    ValueFacts get(IrValueId id) const {
+        return id < v_.size() && present_[id] != 0 ? v_[id] : ValueFacts{};
+    }
+    /// @return Si de @p id consta algo.
+    bool have(IrValueId id) const {
+        return id < present_.size() && present_[id] != 0;
+    }
+    /// @brief Apunta lo que se sabe de @p id.
+    void set(IrValueId id, const ValueFacts &f) {
+        if (id >= v_.size()) return;
+        v_[id] = f;
+        present_[id] = 1;
+    }
+    /// @brief Para leer y modificar en el sitio; deja @p id como constando.
+    ValueFacts &at(IrValueId id) {
+        present_[id] = 1;
+        return v_[id];
+    }
+
+  private:
+    std::vector<ValueFacts> v_;
+    std::vector<uint8_t> present_;
+};
+
+/* La tabla de ESTE hilo, reutilizada entre llamadas.
+ *
+ * Va en su propia ranura y no en @ref PassScratch porque aquella se declara
+ * antes que @ref ValueFacts, y meterla alli obligaria a mover la estructura
+ * entera de sitio para ganar una ranura.  Mismo patron: array global indexado
+ * por una ranura del proyecto, sin inicializador dinamico ni guarda. */
+namespace {
+constexpr uint32_t kMaxFactsThreads = 64;
+FactsTable g_facts_scratch[kMaxFactsThreads];
+std::atomic<uint32_t> g_next_facts_scratch{0};
+util::ThreadSlot g_facts_scratch_slot;
+
+/// @return La tabla de hechos de ESTE hilo.
+FactsTable &facts_scratch() {
+    g_facts_scratch_slot.ensure();
+    void *p = g_facts_scratch_slot.get();
+    if (p == nullptr) {
+        const uint32_t i =
+            g_next_facts_scratch.fetch_add(1, std::memory_order_relaxed);
+        p = &g_facts_scratch[i < kMaxFactsThreads ? i : kMaxFactsThreads - 1];
+        g_facts_scratch_slot.set(p);
+    }
+    return *static_cast<FactsTable *>(p);
+}
+} // namespace
+
+/* ------------------------------------------------------------------------
+ * COMPARAR los dos analisis de rangos (`VESTA_RANGOS_COMPARAR`).
+ *
+ * El optimizador deduce rangos por su cuenta y el ASA los produce tambien
+ * (`analysis::compute_ranges`).  Son dos productores del MISMO hecho, que es
+ * exactamente lo que el primer invariante del ASA prohibe -- y antes de
+ * unificarlos hay que saber cuanto se solapan y cual es mas preciso, en vez de
+ * suponerlo.
+ *
+ * Se cuenta, valor a valor y sobre el corpus entero:
+ *   - cuantos acota solo uno de los dos,
+ *   - cuando los dos acotan, quien da el intervalo mas estrecho,
+ *   - y si alguna vez se CONTRADICEN, que seria un fallo de uno de ellos.
+ * ---------------------------------------------------------------------- */
+namespace {
+std::atomic<long long> g_rc_valores{0};   ///< valores mirados
+std::atomic<long long> g_rc_solo_opt{0};  ///< solo el optimizador acota
+std::atomic<long long> g_rc_solo_asa{0};  ///< solo el ASA acota
+std::atomic<long long> g_rc_iguales{0};   ///< el mismo intervalo
+std::atomic<long long> g_rc_opt_mejor{0}; ///< el del optimizador, mas estrecho
+std::atomic<long long> g_rc_asa_mejor{0}; ///< el del ASA, mas estrecho
+std::atomic<long long> g_rc_cruzados{0};  ///< cada uno estrecha por un lado
+std::atomic<long long> g_rc_contra{0};    ///< NO se solapan: uno de los dos miente
+
+bool comparar_rangos_on() noexcept {
+    static std::atomic<int8_t> cache{-1};
+    int8_t v = cache.load(std::memory_order_relaxed);
+    if (v < 0) {
+        v = util::flag_on(util::FlagId::RangosComparar) ? 1 : 0;
+        cache.store(v, std::memory_order_relaxed);
+    }
+    return v != 0;
+}
+} // namespace
+
+void rangos_comparados_informe();
+
 // Computa ValueFacts de cada valor SSA (forward, over-aproximacion sound).
-static std::unordered_map<IrValueId, ValueFacts>
-compute_value_facts(const IrFunction &fn) {
-    std::unordered_map<IrValueId, ValueFacts> facts;
-    auto get = [&](IrValueId v) -> ValueFacts {
-        auto it = facts.find(v);
-        return it != facts.end() ? it->second : ValueFacts{};
-    };
-    auto have = [&](IrValueId v) -> bool { return facts.count(v) > 0; };
+static void compute_value_facts_into(const IrFunction &fn, FactsTable &facts) {
+    facts.reset(fn.values.size());
+    auto get = [&](IrValueId v) -> ValueFacts { return facts.get(v); };
+    auto have = [&](IrValueId v) -> bool { return facts.have(v); };
 
     // --- Semilla: constantes + variables de induccion acotadas. ---
     std::unordered_map<IrValueId, int64_t> const_vids;
@@ -5907,7 +6114,7 @@ compute_value_facts(const IrFunction &fn) {
                 // KnownBits exactos de una constante.
                 f.kz = ~static_cast<uint64_t>(c);
                 f.ko = static_cast<uint64_t>(c);
-                facts[ins.dst] = f;
+                facts.set(ins.dst, f);
             }
     auto cst_of = [&](IrValueId v, int64_t &o) -> bool {
         auto it = const_vids.find(v);
@@ -5994,7 +6201,7 @@ compute_value_facts(const IrFunction &fn) {
             // La PROCEDENCIA (phi(0,+c) canonico) garantiza el registro exacto.
             f.reg_exact = true;
             facts_derive_bits_from_range(f);
-            facts[ins.dst] = f;
+            facts.set(ins.dst, f);
         }
     }
 
@@ -6173,10 +6380,9 @@ compute_value_facts(const IrFunction &fn) {
             default: break; // FULL para lo no modelado
             }
             facts_derive_bits_from_range(r); // puente rango -> bits altos
-            facts[ins.dst] = r;
+            facts.set(ins.dst, r);
         }
     }
-    return facts;
 }
 
 // =========================================================================
@@ -6197,7 +6403,7 @@ compute_value_facts(const IrFunction &fn) {
 // de consumidores para no recalcular).  El wrapper publico los computa.
 static bool
 elim_casts_with_facts(IrFunction &fn,
-                      const std::unordered_map<IrValueId, ValueFacts> &facts) {
+                      const FactsTable &facts) {
     /* Aqui el estrechable tiene que llevar SIGNO, a diferencia del resto del
      * fichero: este pase razona sobre extensiones con signo, y admitir los u*
      * cambiaria lo que elimina.  Se escribe sobre el vocabulario unico en vez
@@ -6205,10 +6411,7 @@ elim_casts_with_facts(IrFunction &fn,
     auto narrow_bits = [](IrType t) -> int {
         return type_is_signed(t) ? static_cast<int>(type_narrow_bits(t)) : 0;
     };
-    auto facts_of = [&](IrValueId v) -> ValueFacts {
-        auto it = facts.find(v);
-        return it != facts.end() ? it->second : ValueFacts{};
-    };
+    auto facts_of = [&](IrValueId v) -> ValueFacts { return facts.get(v); };
     // Valor CONST de un vid (para la mascara del AND).
     std::unordered_map<IrValueId, int64_t> const_vids;
     for (const auto &bb : fn.blocks)
@@ -6390,11 +6593,8 @@ inline int cmp_implies(IrOp krel, IrOp qop) {
 // valores reales.  Solo enteros con signo (los rangos son i64 con signo); los
 // CMP_U* se dejan (su semantica unsigned no encaja con el rango signed).
 static bool fold_compares_with_facts(
-    IrFunction &fn, const std::unordered_map<IrValueId, ValueFacts> &facts) {
-    auto facts_of = [&](IrValueId v) -> ValueFacts {
-        auto it = facts.find(v);
-        return it != facts.end() ? it->second : ValueFacts{};
-    };
+    IrFunction &fn, const FactsTable &facts) {
+    auto facts_of = [&](IrValueId v) -> ValueFacts { return facts.get(v); };
     constexpr uint64_t SIGN = 1ULL << 63; // bit de signo del registro i64
     // Un valor es provablemente no-negativo si su bit de signo es known-zero o
     // su rango arranca en >=0 (el registro unsigned == signed en ese caso).
@@ -6675,16 +6875,20 @@ bool ir_pass_fold_guarded_compares(IrFunction &fn) {
 }
 
 bool ir_pass_elim_redundant_casts(IrFunction &fn) {
-    return elim_casts_with_facts(fn, compute_value_facts(fn));
+    FactsTable facts;
+    compute_value_facts_into(fn, facts);
+    return elim_casts_with_facts(fn, facts);
 }
 
 bool ir_pass_fold_compares(IrFunction &fn) {
-    return fold_compares_with_facts(fn, compute_value_facts(fn));
+    FactsTable facts;
+    compute_value_facts_into(fn, facts);
+    return fold_compares_with_facts(fn, facts);
 }
 
 // Fwd: strength reduction que consume ValueFacts (definida mas abajo).
 static bool strength_reduce_with_facts(
-    IrFunction &fn, const std::unordered_map<IrValueId, ValueFacts> &facts);
+    IrFunction &fn, const FactsTable &facts);
 
 // Runner de los consumidores de ValueFacts: computa el analisis UNA vez y lo
 // comparte; solo lo RECOMPUTA (invalida) si un consumidor muto el IR.  Es el
@@ -7022,9 +7226,59 @@ ir_pass_elide_narrow_norm(IrFunction &fn, const analysis::RangeFacts &ranges,
     return true;
 }
 bool ir_pass_valuefacts_consumers(IrFunction &fn) {
-    auto facts = compute_value_facts(fn);
+    // La tabla se REUTILIZA entre los tres consumidores y entre llamadas: es lo
+    // que mas reservaba de todo el compilador.
+    FactsTable &facts = facts_scratch();
+    compute_value_facts_into(fn, facts);
+    if (comparar_rangos_on()) {
+        /* Los dos analisis, sobre la MISMA funcion y el mismo momento.  Se
+         * calculan los del ASA aqui aunque nadie los pida: es el precio de
+         * poder compararlos, y por eso va tras bandera. */
+        const analysis::IrFacts hechos = analysis::build_ir_facts(fn);
+        const analysis::RangeFacts rangos = analysis::compute_ranges(fn, hechos);
+        for (IrValueId v = 0; v < static_cast<IrValueId>(fn.values.size());
+             ++v) {
+            g_rc_valores.fetch_add(1, std::memory_order_relaxed);
+            const ValueFacts f = facts.get(v);
+            const bool opt_acota = facts.have(v) && f.has_range();
+            /* Solo se comparan los de 64 bits CON SIGNO.
+             *
+             * El ASA lee sus extremos SEGUN EL TIPO y el optimizador los tiene
+             * como `int64` a secas, asi que para un `u64` el mismo intervalo
+             * sale con extremos distintos y pareceria una contradiccion que no
+             * existe.  Comparar peras con peras es parte de la medicion: un
+             * numero que sale de mezclar dos convenios no dice nada. */
+            const bool asa_acota =
+                v < rangos.r.size() && rangos.r[v].acotada() &&
+                !rangos.r[v].es_todo() && rangos.r[v].t.bits == 64 &&
+                !rangos.r[v].t.sin_signo;
+            if (!opt_acota && !asa_acota) continue;
+            if (opt_acota && !asa_acota) {
+                g_rc_solo_opt.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            if (!opt_acota && asa_acota) {
+                g_rc_solo_asa.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            const int64_t alo = rangos.r[v].lo(), ahi = rangos.r[v].hi();
+            if (alo == f.lo && ahi == f.hi) {
+                g_rc_iguales.fetch_add(1, std::memory_order_relaxed);
+            } else if (ahi < f.lo || f.hi < alo) {
+                // No se solapan: los dos no pueden tener razon.
+                g_rc_contra.fetch_add(1, std::memory_order_relaxed);
+            } else if (f.lo >= alo && f.hi <= ahi) {
+                g_rc_opt_mejor.fetch_add(1, std::memory_order_relaxed);
+            } else if (alo >= f.lo && ahi <= f.hi) {
+                g_rc_asa_mejor.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                g_rc_cruzados.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
     bool c1 = elim_casts_with_facts(fn, facts);
-    if (c1) facts = compute_value_facts(fn); // invalidado por la mutacion
+    // Recalculado si la mutacion lo invalido, pero SOBRE la misma tabla.
+    if (c1) compute_value_facts_into(fn, facts);
     bool c2 = fold_compares_with_facts(fn, facts);
     // 3er consumidor: strength reduction (MUL/DIV/MOD por 2^k -> shift/and).
     // El caso signed DIV/MOD solo aplica si los facts prueban el dividendo
@@ -7039,7 +7293,7 @@ bool ir_pass_valuefacts_consumers(IrFunction &fn) {
 }
 
 static bool strength_reduce_with_facts(
-    IrFunction &fn, const std::unordered_map<IrValueId, ValueFacts> &facts) {
+    IrFunction &fn, const FactsTable &facts) {
     bool changed = false;
     constexpr uint64_t SR_SIGN = 1ULL << 63; // bit de signo del registro i64
     // Un dividendo es provablemente no-negativo si su bit de signo es
@@ -7047,9 +7301,10 @@ static bool strength_reduce_with_facts(
     // `x % 2^k == x & (2^k-1)` SIN la correccion de redondeo que exige el
     // signo.
     auto nonneg_val = [&](IrValueId v) -> bool {
-        auto it = facts.find(v);
-        if (it == facts.end()) return false;
-        const ValueFacts &f = it->second;
+        // "No consta" no es lo mismo que "no se sabe nada": aqui hay que
+        // haberlo mirado, asi que sin entrada la respuesta es que no.
+        if (!facts.have(v)) return false;
+        const ValueFacts f = facts.get(v);
         return (f.kz & SR_SIGN) || (f.has_range() && f.lo >= 0);
     };
 
@@ -7189,7 +7444,9 @@ static bool strength_reduce_with_facts(
 
 // Wrapper publico (uso standalone): computa los ValueFacts al vuelo.
 bool ir_pass_strength_reduction(IrFunction &fn) {
-    return strength_reduce_with_facts(fn, compute_value_facts(fn));
+    FactsTable facts;
+    compute_value_facts_into(fn, facts);
+    return strength_reduce_with_facts(fn, facts);
 }
 
 // =========================================================================
@@ -7218,14 +7475,11 @@ bool ir_pass_reassoc(IrFunction &fn) {
      * seguir, para indexar lo que ya es un indice.  Este pase corre una vez por
      * funcion y por vuelta del punto fijo, y era el que mas reservaba de todo
      * el compilador. */
-    struct DefInfo {
-        IrBlockId bb;
-        size_t idx;
-    };
-    /// Centinela de @c DefInfo::idx: ese valor no lo define ninguna
-    /// instruccion (es un parametro, o no existe).
-    constexpr size_t kNoDef = static_cast<size_t>(-1);
-    std::vector<DefInfo> defs(fn.values.size(), DefInfo{0, kNoDef});
+    // Los vectores de trabajo son de ESTE hilo y se reutilizan: ver
+    // @ref PassScratch.
+    PassScratch &scratch = pass_scratch();
+    std::vector<DefInfo> &defs = scratch.defs;
+    defs.assign(fn.values.size(), DefInfo{0, kNoDef});
     for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         const auto &bb = fn.blocks[bi];
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
@@ -7238,8 +7492,10 @@ bool ir_pass_reassoc(IrFunction &fn) {
     }
     /* El valor de cada constante, y aparte SI lo es: sin la marca no se
      * distingue "vale cero" de "no es constante". */
-    std::vector<int64_t> const_val(fn.values.size(), 0);
-    std::vector<uint8_t> value_is_const(fn.values.size(), 0);
+    std::vector<int64_t> &const_val = scratch.const_val;
+    std::vector<uint8_t> &value_is_const = scratch.value_is_const;
+    const_val.assign(fn.values.size(), 0);
+    value_is_const.assign(fn.values.size(), 0);
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
             if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE &&
@@ -7302,12 +7558,9 @@ bool ir_pass_reassoc(IrFunction &fn) {
         }
     };
 
-    struct ReassocInsert {
-        size_t bb_idx;
-        size_t pos;
-        IrInstr instr;
-    };
-    std::vector<ReassocInsert> pending;
+    // Reutilizados, por lo mismo que los de arriba: ver @ref PassScratch.
+    std::vector<ReassocInsert> &pending = scratch.pending;
+    pending.clear();
 
     for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         auto &bb = fn.blocks[bi];
@@ -7369,7 +7622,8 @@ bool ir_pass_reassoc(IrFunction &fn) {
         while (q < pending.size() && pending[q].bb_idx == bi) ++q;
 
         auto &bb = fn.blocks[bi];
-        std::vector<IrInstr> woven;
+        std::vector<IrInstr> &woven = scratch.woven;
+        woven.clear();
         woven.reserve(bb.instrs.size() + (q - p));
         size_t k = p;
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
@@ -7717,7 +7971,7 @@ static bool model_removable(const IrFunction &fn,
                             const analysis::PointsTo &pt, const IrInstr &ins,
                             const analysis::effects::EffectEnv &env,
                             const analysis::effects::LocSet &leidas) {
-    CronoTramo crono__("  dce:efectos-por-instr");
+    PassTimer crono__("  dce:efectos-por-instr");
     const analysis::effects::EffectAnalysisResult r =
         analysis::effects::effects_of_instr(fn, facts, pt, ins, env);
     if (r.completeness != analysis::effects::AnalysisCompleteness::Complete)
@@ -7795,7 +8049,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
     analysis::effects::LocSet fx_leidas;
     fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
-        CronoTramo crono__("  dce:hechos");
+        PassTimer crono__("  dce:hechos");
         /* Los hechos y el points-to los PRESTA quien llama.  El pase corre una
          * vez por funcion y por vuelta del punto fijo, y el orquestador ya
          * tiene los de esa misma funcion y esa misma version, asi que
@@ -7858,7 +8112,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
     {
         /* Cada tramo en SU bloque: un cronometro de ambito mide hasta que
          * termina el suyo, y suelto acaba midiendo el resto de la funcion. */
-        CronoTramo crono_usados__("  dce:usados");
+        PassTimer crono_usados__("  dce:usados");
         for (const auto &bb : fn.blocks) {
             for (const auto &ins : bb.instrs) {
                 for (IrValueId op : ins.operands) {
@@ -7927,7 +8181,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
 
     bool changed = false;
     {
-        CronoTramo crono_barrer__("  dce:barrer");
+        PassTimer crono_barrer__("  dce:barrer");
         for (auto &bb : fn.blocks) {
             auto &instrs = bb.instrs;
             size_t write = 0;
@@ -8071,7 +8325,7 @@ bool ir_pass_copy_prop(IrFunction &fn) {
      * que acaban de generar.  Sin contarlo, su tramo interno (`dce:hechos`)
      * salia con mas tomas que el propio pase y el reparto no cuadraba. */
     if (changed) {
-        util::CronoTramo crono__("  dce:limpieza-en-pase");
+        PassTimer crono__("  dce:limpieza-en-pase");
         ir_pass_dce(fn);
     }
     return changed;
@@ -8587,7 +8841,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
          * Se asume el ancho maximo (8 B) de la entrada trackeada: conservador.
          */
         auto kill_val_overlapping = [&](const AddrKey &k, int64_t size) {
-            CronoTramo crono__("  dse:kill_val_overlapping");
+            PassTimer crono__("  dse:kill_val_overlapping");
             for (auto it = last_store_val.begin();
                  it != last_store_val.end();) {
                 bool ov = it->first.first == k.first && it->first != k &&
@@ -8605,7 +8859,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
          * cubierto es dead.  Si el rango excede 64 B no se modela la mascara
          * (se descarta el pendiente: conservador, no se mata). */
         auto note_write = [&](IrValueId root, int64_t off, int64_t size) {
-            CronoTramo crono__("  dse:note_write");
+            PassTimer crono__("  dse:note_write");
             for (auto it = pending.begin(); it != pending.end();) {
                 if (it->root != root || it->off >= off + size ||
                     off >= it->off + it->size) {
@@ -8635,7 +8889,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         /* Un LOAD de [off, off+size) LEE los stores pendientes que solapa ->
          * dejan de ser candidatos a dead. */
         auto note_read = [&](IrValueId root, int64_t off, int64_t size) {
-            CronoTramo crono__("  dse:note_read");
+            PassTimer crono__("  dse:note_read");
             for (auto it = pending.begin(); it != pending.end();) {
                 if (it->root == root && it->off < off + size &&
                     off < it->off + it->size)
@@ -8689,7 +8943,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                 hechos_usar = hechos_asm->estructura;
                 rangos_usar = hechos_asm->rangos;
             } else {
-                CronoTramo crono__("  dse:hechos(calculados aqui)");
+                PassTimer crono__("  dse:hechos(calculados aqui)");
                 lig_asm_fn = analysis::compute_asm_bindings(fn);
                 hechos_fn = analysis::build_ir_facts(fn);
                 rangos_fn = analysis::compute_ranges(fn, hechos_fn);
@@ -8721,7 +8975,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         std::unordered_map<std::string, vx::AsmBlockEffects> efectos_de_bloque;
 
         auto dse_asm_preciso = [&](const IrInstr &ins) -> bool {
-            CronoTramo crono__("  dse:asm");
+            PassTimer crono__("  dse:asm");
             asegurar_hechos_asm();
             /* Con las clases de operando: esto pregunta QUE memoria toca el
              * bloque, que es exactamente lo que no se puede responder sin
@@ -9193,7 +9447,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
     // y copy_prop para resolver los MOVs generados por SLF.
     if (changed) {
         ir_pass_copy_prop(fn);
-        util::CronoTramo crono__("  dce:limpieza-en-pase");
+        PassTimer crono__("  dce:limpieza-en-pase");
         ir_pass_dce(fn);
     }
     return changed;
@@ -13823,6 +14077,18 @@ AcumuladorPases merge_pass_times() {
 template <typename F>
 auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     -> decltype(f()) {
+    /* Sin medir, esto no cuesta NADA mas que una rama.
+     *
+     * Medir un pase son dos lecturas del reloj, un recorrido de los bloques
+     * para contar instrucciones, construir una CADENA con el nombre del pase y
+     * el de la funcion, y dos consultas a tablas hash.  Todo eso corria
+     * siempre, y el pase corre una vez por funcion y por vuelta del punto fijo:
+     * medido con VTune era un tercio de todo lo que el compilador hacia con
+     * tablas hash y el 7,6 % de lo que reservaba.
+     *
+     * Quien no pide los tiempos no tiene por que pagarlos. */
+    if (!timing_on()) return f();
+
     const uint64_t t0 = util::reloj::ahora();
     auto r = f();
     // Reloj del proyecto: ~5 ns de resolucion frente a los ~100 del estandar.
@@ -13925,6 +14191,25 @@ long long &fixpoint_truncations() {
     return n;
 }
 
+void rangos_comparados_informe() {
+    if (!comparar_rangos_on()) return;
+    const long long n = g_rc_valores.load(std::memory_order_relaxed);
+    if (n == 0) return;
+    const long long solo_opt = g_rc_solo_opt.load(std::memory_order_relaxed);
+    const long long solo_asa = g_rc_solo_asa.load(std::memory_order_relaxed);
+    const long long iguales = g_rc_iguales.load(std::memory_order_relaxed);
+    const long long opt_mejor = g_rc_opt_mejor.load(std::memory_order_relaxed);
+    const long long asa_mejor = g_rc_asa_mejor.load(std::memory_order_relaxed);
+    const long long cruzados = g_rc_cruzados.load(std::memory_order_relaxed);
+    const long long contra = g_rc_contra.load(std::memory_order_relaxed);
+    std::fprintf(stderr,
+                 "[rangos] %lld valores | solo-opt %lld | solo-ASA %lld | "
+                 "iguales %lld | opt-mas-estrecho %lld | ASA-mas-estrecho %lld "
+                 "| cruzados %lld | CONTRADICEN %lld\n",
+                 n, solo_opt, solo_asa, iguales, opt_mejor, asa_mejor, cruzados,
+                 contra);
+}
+
 std::vector<TiempoPase> tiempos_de_pases() {
     const AcumuladorPases a = merge_pass_times();
     std::vector<TiempoPase> v;
@@ -14020,7 +14305,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * del inyectado, asi que para analizar se optimiza sin inline; el coste
      * interprocedural (TOTAL) lo compone el analizador via el callgraph. */
     if (level >= OptLevel::O1 && allow_inline) {
-        CronoTramo crono__("opt:inline-prologo (pared)");
+        PassTimer crono__("opt:inline-prologo (pared)");
         ir_pass_inline(mod);
         /* Tras inlinar las factorias, la closure se construye y se invoca
          * en el mismo bloque -> inlinar tambien el CUERPO de la lambda en
@@ -14291,7 +14576,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * pase de mas abajo suman CPU de TODOS los hilos.  Restar unos de
              * otros no significa nada, y confundirlos ya llevo a buscar 330 ms
              * que no existian. */
-            CronoTramo crono_fn__("opt:bucle-por-funcion (pared)");
+            PassTimer crono_fn__("opt:bucle-por-funcion (pared)");
             for_each_function(mod, [&](IrFunction &fn) {
                 if (fn.is_native) return; // no optimizar stubs nativos
 
@@ -14476,7 +14761,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             });
         } // fin del ambito del cronometro del bucle
 
-        CronoTramo crono_cross__("opt:cross-modulo devirt+inline (pared)");
+        PassTimer crono_cross__("opt:cross-modulo devirt+inline (pared)");
         /* Devirt + inline @ O2 al final de cada iteracion del fix-point.
          * Importante hacerlo despues de las per-function passes para que
          * la inline pass vea las callees OPTIMIZADAS (e.g. Counter.inc
@@ -14582,7 +14867,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             if (any2) {
                 for (auto &fn : mod.functions) {
                     if (fn.is_native) continue;
-                    util::CronoTramo crono__("  dce:limpieza-orquestada");
+                    PassTimer crono__("  dce:limpieza-orquestada");
                     ir_pass_dce(fn, &decls_nativas);
                 }
             }
@@ -14618,7 +14903,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             if (fn.is_native) continue;
             if (ir_pass_bulk_memory_lower(fn, facts)) {
                 ir_pass_unreachable(fn);
-                util::CronoTramo crono__("  dce:limpieza-orquestada");
+                PassTimer crono__("  dce:limpieza-orquestada");
                 ir_pass_dce(fn);
             }
         }
@@ -14659,7 +14944,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                 ir_pass_copy_prop(fn);
                 ir_pass_cse(fn);
                 ir_pass_const_fold(fn);
-                util::CronoTramo crono__("  dce:limpieza-orquestada");
+                PassTimer crono__("  dce:limpieza-orquestada");
                 ir_pass_dce(fn, &decls_nativas);
             }
         }

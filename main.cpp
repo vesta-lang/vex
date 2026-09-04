@@ -5160,6 +5160,9 @@ int main(int argc, char *argv[]) {
              * para que la linea siga siendo legible -- y con cuantas veces
              * corrio cada uno, que un pase caro por lento y otro caro por
              * repetirse se arreglan de formas distintas. */
+            // Los DOS analisis de rangos, comparados (`VESTA_RANGOS_COMPARAR`).
+            // Callado si no se pide.
+            ir::rangos_comparados_informe();
             const auto pases = ir::tiempos_de_pases();
             long long total_pases = 0;
             for (const auto &q : pases)

@@ -83,13 +83,33 @@ void reiniciar_tramos();
 
 /**
  * @brief Cronometra lo que viva el objeto y lo suma a su etiqueta.
+ *
+ * @p medir NO tiene valor por defecto, y es a proposito: quien mide no debe
+ * cobrarle a quien no mide, y esta es una utilidad -- no sabe ni tiene por que
+ * saber bajo que bandera vive cada uno de sus usuarios.  La decision es de
+ * quien la usa, y escribirla obliga a tomarla.
+ *
+ * Apagado no toca el reloj ni el acumulador: son dos lecturas del reloj y una
+ * suma en una tabla indexada por CADENA, y eso corria SIEMPRE.  Medido con
+ * VTune, el cronometraje se llevaba ~3,5 % de compilar -- un tercio de todo lo
+ * que el compilador hacia con tablas hash -- para responder una pregunta que
+ * casi nadie hace.
  */
 struct CronoTramo {
     const char *n;
     uint64_t t0; ///< en ticks del reloj elegido, no en tiempo.
-    explicit CronoTramo(const char *etiqueta)
-        : n(etiqueta), t0(reloj::ahora()) {}
+    bool on;     ///< se decidio al construir; no se vuelve a preguntar.
+
+    /**
+     * @param etiqueta Bajo que nombre se suma.
+     * @param medir    Si hay que medir; falso no cuesta nada.
+     */
+    CronoTramo(const char *etiqueta, bool medir)
+        : n(etiqueta), t0(0), on(medir) {
+        if (on) t0 = reloj::ahora();
+    }
     ~CronoTramo() {
+        if (!on) return;
         /* Se convierte a tiempo AQUI y no al informar porque el acumulador es
          * uno solo y mezclar unidades seria peor que una multiplicacion. */
         acumular_tramo_ns(n, reloj::a_ns(reloj::ahora() - t0));

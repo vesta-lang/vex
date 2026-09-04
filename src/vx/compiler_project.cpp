@@ -4313,7 +4313,10 @@ CompileResult compile_vx_project(
      * antes de que nadie los mire, asi que observar solo despues hace creer que
      * el programa no los tenia. */
     {
-        util::CronoTramo t_("fase-opt:asa-volcar-formas");
+        // Medir es decision de QUIEN mide: el cronometro es una utilidad y no sabe
+    // bajo que bandera vive cada uno de sus usuarios.
+    util::CronoTramo t_("fase-opt:asa-volcar-formas",
+                        util::flag_on(util::FlagId::Times));
         analysis::asa::volcar_formas(merged, "pre-opt");
     }
 
@@ -4333,12 +4336,14 @@ CompileResult compile_vx_project(
      * reservas): asi el selector del JIT puede llamarlo y compartir mecanismo
      * con el binario nativo, que es lo que permite depurar aquel desde aqui. */
     {
-        util::CronoTramo t_("fase-opt:asignador-del-lenguaje");
+        util::CronoTramo t_("fase-opt:asignador-del-lenguaje",
+                        util::flag_on(util::FlagId::Times));
         traer_asignador_del_lenguaje(merged, opts, root_path);
     }
 
     {
-        util::CronoTramo t_("fase-opt:ir_optimize");
+        util::CronoTramo t_("fase-opt:ir_optimize",
+                        util::flag_on(util::FlagId::Times));
         /* Con el almacen si se pidio el momento de EN MEDIO.  Ver la nota en
          * el camino de fichero suelto. */
         ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
@@ -4372,7 +4377,8 @@ CompileResult compile_vx_project(
             break;
         }
     {
-        util::CronoTramo t_("fase-opt:asm-precondiciones");
+        util::CronoTramo t_("fase-opt:asm-precondiciones",
+                        util::flag_on(util::FlagId::Times));
         /* Antes de preguntar, que este lo que se va a preguntar -- venga de la
          * compilacion anterior o de producirlo ahora.  El consumidor no
          * distingue una cosa de la otra a proposito: si tuviera que decidir
