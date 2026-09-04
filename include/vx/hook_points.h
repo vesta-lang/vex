@@ -117,8 +117,15 @@ inline constexpr HookFieldInfo kHookFields[] = {
     {"call_site", "u64",
      hook_mask(HookPoint::Enter) | hook_mask(HookPoint::Exit),
      "direccion de retorno: QUIEN llamo"},
-    {"depth", "u32", hook_mask(HookPoint::Enter) | hook_mask(HookPoint::Exit),
-     "profundidad de anidamiento de la llamada"},
+    /* La PROFUNDIDAD no esta, y es a proposito: el gancho la lleva solo con un
+     * contador que sube en `enter` y baja en `exit` -- dos lineas, comprobado
+     * --, mientras que darla desde el compilador obligaria a mantener un
+     * contador global en CADA llamada instrumentada.  Un mecanismo que existe
+     * para medir sin distorsionar no puede cobrar eso por un dato que quien lo
+     * quiere ya puede tener.
+     *
+     * Estuvo aqui llegando como cero con su aviso, que es peor que no estar:
+     * una tabla que ofrece lo que no cumple. */
     {"ret_value", "u64", hook_mask(HookPoint::Exit),
      "valor devuelto por la funcion"},
     /* El NOMBRE, que el compilador conoce al compilar: se interna como literal
