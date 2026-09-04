@@ -1159,18 +1159,34 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
 
     /* ---- P2: pre-pase de ADDRESSING-MODE FOLDING (disp) ----
      * Reconoce `ptr = ADD(base, const)` cuyo unico uso es como DIRECCION de
-     * LOAD (acceso a campo `obj.field`, muy comun) y lo fusiona en un solo
-     * `mov dst, [base + disp]` -- elimina el ADD separado.  Requisitos SOUND:
+     * memoria (acceso a campo `obj.field`, muy comun) y lo fusiona en un solo
+     * `mov dst, [base + disp]` / `mov [base + disp], src` -- elimina el ADD
+     * separado.  Requisitos SOUND:
      *   - el const cabe en disp32;
-     *   - @c ptr NO tiene ningun uso que NO sea direccion de LOAD (si se usa
-     *     como valor o como direccion de STORE, se materializa normal -- el
-     *     STORE-fold es un incremento posterior, su MInstr no tiene campo
-     *     libre para el disp);
-     *   - la base es HOST ptr (los LOAD de memoria VM bajan a LOAD_VM = call,
-     *     que toma la direccion completa; no se fusiona).
+     *   - @c ptr NO tiene ningun uso que NO sea direccion de LOAD o de STORE
+     *     (si se usa como VALOR -- guardarlo, pasarlo, compararlo -- se
+     *     materializa normal);
+     *   - la base es HOST ptr (los LOAD/STORE de memoria VM bajan a
+     *     LOAD_VM/STORE_VM = call, que toman la direccion completa; no se
+     *     fusiona).
      * fold_disp[ptr] = (base_vreg, disp).  El ADD de un ptr fusionado NO se
      * emite (queda muerto: su unico consumidor era la direccion).  Desactivable
-     * con VESTA_NO_SIB=1. */
+     * con VESTA_NO_SIB=1.
+     *
+     * El STORE entro DESPUES que el LOAD, y mientras no estuvo no costaba solo
+     * las escrituras: al fusionar dos direcciones iguales en un valor -- que es
+     * lo que pasa en cuanto se lee y se escribe el MISMO campo --, el unico
+     * STORE descalificaba el valor entero y TODAS sus lecturas perdian tambien
+     * la fusion.  Medido en `261_overlay_basics`: un valor con cuatro LOAD y un
+     * STORE daba `cand=2 fold=0`.  Donde mas se notaba es en un `@overlay`,
+     * cuyo acceso a campo ES exactamente `base + constante`.
+     *
+     * El disp viaja en el hueco que cada forma deja libre: el LOAD usa `dst` y
+     * `src1`, asi que va en `src2`; el STORE usa `src1` (direccion) y `src2`
+     * (valor), asi que va en `dst`.  No es un apano: es el mismo sitio del que
+     * ya tira @c STORE_VM para su indice de imm64, y por eso ni el constructor
+     * de intervalos ni el modelo de efectos lo confunden con una definicion
+     * (ambos ignoran el `dst` de un STORE). */
     std::unordered_map<uint32_t, std::pair<uint32_t, int64_t>> fold_disp;
     {
         static const bool sib_off = util::flag_on(util::FlagId::NoSib);
@@ -1230,16 +1246,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     cand[in.dst] = {base, disp};
                 }
             }
-            /* 3) address-only: ptr solo puede usarse como direccion de LOAD.
-             * Cualquier otro uso (valor, direccion de STORE, func_ptr) lo
-             * descalifica. */
+            /* 3) address-only: ptr solo puede usarse como DIRECCION de un
+             * acceso a memoria.  Cualquier otro uso (valor, func_ptr, arg de
+             * llamada, arg de phi) lo descalifica.
+             * Los operandos de un STORE son [0]=valor, [1]=direccion: guardar
+             * el propio puntero COMO valor (k==0) sigue descalificando, que es
+             * lo correcto -- ahi el ADD hay que materializarlo de verdad. */
             std::unordered_set<uint32_t> disqualified;
             for (const auto &blk : fn.blocks) {
                 for (const ir::IrInstr &in : blk.instrs) {
                     for (size_t k = 0; k < in.operands.size(); ++k) {
-                        const bool is_load_addr =
-                            (in.op == ir::IrOp::LOAD && k == 0);
-                        if (!is_load_addr) disqualified.insert(in.operands[k]);
+                        const bool is_mem_addr =
+                            (in.op == ir::IrOp::LOAD && k == 0) ||
+                            (in.op == ir::IrOp::STORE && k == 1);
+                        if (!is_mem_addr) disqualified.insert(in.operands[k]);
                     }
                     if (in.func_ptr != ir::IR_NO_VALUE)
                         disqualified.insert(in.func_ptr);
@@ -1250,10 +1270,26 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             for (const auto &c : cand)
                 if (!disqualified.count(c.first)) fold_disp.emplace(c);
             static const bool sdbg = util::flag_on(util::FlagId::SibDbg);
-            if (sdbg)
-                std::fprintf(stderr, "[sib] %s: const=%zu cand=%zu fold=%zu\n",
-                             fn.name.c_str(), const_val.size(), cand.size(),
-                             fold_disp.size());
+            if (sdbg) {
+                /* Cuantas de las fusiones las usa al menos un STORE.  Esas son
+                 * EXACTAMENTE las que antes se perdian: mientras el pase solo
+                 * aceptaba direcciones de LOAD, un unico STORE descalificaba el
+                 * valor -- y con el, sus lecturas --.  Sin este numero, mirar
+                 * `fold` no dice si el trabajo lo hace la mitad nueva o la
+                 * vieja. */
+                size_t con_store = 0;
+                for (const auto &blk : fn.blocks)
+                    for (const ir::IrInstr &in : blk.instrs)
+                        if (in.op == ir::IrOp::STORE &&
+                            in.operands.size() == 2 &&
+                            fold_disp.count(in.operands[1]))
+                            ++con_store;
+                std::fprintf(
+                    stderr,
+                    "[sib] %s: const=%zu cand=%zu fold=%zu (store=%zu)\n",
+                    fn.name.c_str(), const_val.size(), cand.size(),
+                    fold_disp.size(), con_store);
+            }
         }
     }
 
@@ -3549,9 +3585,22 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* El VALOR (operands[0]) usa vrt() (class-aware): para f64/f32
                  * le da clase FP -> el rewrite enruta a MOVSD/MOVSS [addr],xmm
                  * (consistente con como el FADD produjo el valor en XMM). */
-                O.push_back(MInstr::make_store(vr(in.operands[1]),
-                                               vrt(in.operands[0]),
-                                               static_cast<uint8_t>(w)));
+                /* P2 SIB: si el ptr es `base + const` (address-only), emitir
+                 * `mov [base + disp], src` (el disp viaja en dst=IMM32, el
+                 * hueco que el STORE deja libre; el rewrite lo usa en
+                 * make_mem).  Si no, STORE normal [ptr]. */
+                {
+                    MInstr st = MInstr::make_store(vr(in.operands[1]),
+                                                   vrt(in.operands[0]),
+                                                   static_cast<uint8_t>(w));
+                    auto fs = fold_disp.find(in.operands[1]);
+                    if (fs != fold_disp.end()) {
+                        st.src1 = vr(fs->second.first);
+                        st.dst = MOperand::make_imm32(
+                            static_cast<int32_t>(fs->second.second));
+                    }
+                    O.push_back(st);
+                }
                 break;
             }
 

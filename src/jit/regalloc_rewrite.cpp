@@ -1781,7 +1781,13 @@ struct Lowerer {
                 out.push_back(MInstr::make_unary(mv, xmm(fscr0()), v));
                 v = xmm(fscr0());
             }
-            const MOperand mem = MOperand::make_mem(addr_reg, 0);
+            /* P2 SIB: mismo disp fusionado que el STORE entero.  Esta rama
+             * es la de un valor FLOTANTE, y olvidarla no daria un error de
+             * compilacion: escribiria el f64 en `[base]` en vez de en
+             * `[base+disp]` -- otro sitio, sin avisar. */
+            const int32_t st_disp =
+                (in.dst.kind == MOperandKind::IMM32) ? in.dst.value : 0;
+            const MOperand mem = MOperand::make_mem(addr_reg, st_disp);
             out.push_back(MInstr::make_unary(mv, mem, v));
             return true;
         }
@@ -1853,8 +1859,13 @@ struct Lowerer {
                 v = reg(scr0());
             }
             v.width = width; // ancho del store lo da el reg src
-            /* NO tocar mem.width (index packing). */
-            MOperand mem = MOperand::make_mem(addr_reg, 0);
+            /* NO tocar mem.width (index packing).
+             * P2 SIB: si dst es IMM32, es el disp fusionado (`[base+disp]`) --
+             * el STORE no usa `dst` para nada mas (ver la nota del pre-pase en
+             * vreg_select.cpp). */
+            const int32_t st_disp =
+                (in.dst.kind == MOperandKind::IMM32) ? in.dst.value : 0;
+            MOperand mem = MOperand::make_mem(addr_reg, st_disp);
             out.push_back(MInstr::make_unary(MOp::MOV, mem, v));
             return true;
         }

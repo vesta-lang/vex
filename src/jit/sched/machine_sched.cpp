@@ -116,7 +116,27 @@ MemRef extract_memref(const MInstr &mi, const MEffects &e,
     case MOp::STORE_VM: {
         r.base = op_reg_key(mi.src1);
         r.object = obj(r.base);
-        r.disp = 0;
+        /* Desplazamiento FUSIONADO en el modo de direccionamiento (P2 SIB):
+         * el LOAD lo lleva en `src2` y el STORE en `dst`, que es el hueco que
+         * cada forma deja libre.  Leerlo NO es un adorno: con un 0 fijo y
+         * `exact` puesto, `[base+0x3C]` se anunciaba como `base+0` y podia
+         * decirse que NO solapa con un operando MEM real `0x3C(base)` siendo
+         * la MISMA direccion.  Hoy no se alcanza -- se planifica DESPUES del
+         * reescritor, donde estos pseudos ya no existen --, pero el dia que se
+         * planifique antes el fallo no seria un error: seria un reordenamiento
+         * que da otro valor.
+         *
+         * Solo las formas HOST: en las _VM ese mismo hueco lo ocupa el indice
+         * del imm64 del fallback (`IMM64_IDX`), que no es ningun
+         * desplazamiento -- y ahi no hay fusion posible, porque la direccion
+         * viaja entera al runtime. */
+        r.disp = mi.op == MOp::LOAD    ? (mi.src2.kind == MOperandKind::IMM32
+                                              ? mi.src2.value
+                                              : 0)
+                 : mi.op == MOp::STORE ? (mi.dst.kind == MOperandKind::IMM32
+                                              ? mi.dst.value
+                                              : 0)
+                                       : 0;
         // LOAD: flags=(width<<1)|signed; STORE: flags=width.
         const int w = (mi.op == MOp::LOAD || mi.op == MOp::LOAD_VM)
                           ? (mi.flags >> 1)
