@@ -35,6 +35,8 @@ import os
 import subprocess
 import sys
 
+import procedencia
+
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EJEMPLOS = os.path.join(RAIZ, "examples_codes_vx")
 
@@ -144,7 +146,8 @@ def main():
 
     filas.sort(key=lambda f: f["bench"])
     with open(args.salida, "w", encoding="utf-8") as fh:
-        json.dump({"results": filas}, fh, indent=1)
+        json.dump({"meta": procedencia.recoger(args.build), "results": filas},
+                  fh, indent=1)
 
     omitidos = len(fuentes) - len(filas)
     print("%d medidos, %d omitidos (no compilan a nativo) -> %s"

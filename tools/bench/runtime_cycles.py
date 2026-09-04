@@ -43,6 +43,8 @@ import re
 import subprocess
 import sys
 
+import procedencia
+
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EJEMPLOS = os.path.join(RAIZ, "examples_codes_vx")
 MEDIDOR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -149,7 +151,8 @@ def main():
 
     filas.sort(key=lambda f: f["bench"])
     with open(args.salida, "w", encoding="utf-8") as fh:
-        json.dump({"results": filas}, fh, indent=1)
+        json.dump({"meta": procedencia.recoger(args.build), "results": filas},
+                  fh, indent=1)
 
     print("%d medidos, %d sin medida (no compilan a nativo, o no llegan a "
           "salir de main) -> %s"

@@ -140,6 +140,18 @@ def main():
         return 1
     ref, mot_ref = cargar(sys.argv[1])
     act, mot_act = cargar(sys.argv[2])
+    # De QUE codigo salio cada medida.  Sin esto se ve que algo empeoro pero no
+    # entre que y que: con los dos commits, el cambio queda acotado a un rango
+    # del historial.  Las medidas de antes de que esto existiera no lo traen y
+    # se dice, en vez de callar y que parezca que se sabe.
+    try:
+        import procedencia
+        for etiqueta, ruta in (("antes", sys.argv[1]), ("ahora", sys.argv[2])):
+            meta = json.load(open(ruta, encoding="utf-8")).get("meta")
+            print("%-6s %s" % (etiqueta, procedencia.describir(meta)))
+        print()
+    except Exception:
+        pass  # la comparacion vale igual sin la ficha; no se aborta por ella
     modos = sys.argv[3:] or sorted({m for _, m in act})
     for modo in modos:
         razones, fuera = [], []
