@@ -509,8 +509,31 @@ bool generic_pseudo(const MInstr &mi, MEffects &e) {
     case MOp::MOV_SYM:
     case MOp::LEA_RIP_SYM:
     case MOp::LEA_LABEL:
-    case MOp::TLS_LE_ADDR:
-    case MOp::TLS_PE_ADDR: add(e.writes, reg_key(mi.dst)); break;
+    case MOp::TLS_LE_ADDR: add(e.writes, reg_key(mi.dst)); break;
+
+    /* Igual que las de arriba MAS los dos registros de rascar: el pseudo de
+     * TLS en PE/Windows no es UNA instruccion, se expande en el codificador a
+     * cuatro -- puntero del TEB, indice del modulo, base del bloque y el `lea`
+     * final -- y las tres primeras pasan por R10 y R11.
+     *
+     * Declararlo importa aunque el asignador no reparta esos dos registros: el
+     * REESCRITOR si los usa, para recargar un valor derramado justo antes de
+     * usarlo.  Mientras solo dijo que escribia `dst`, el planificador podia
+     * meter este pseudo ENTRE esa recarga y su uso -- que es exactamente lo
+     * que hacia --, y el uso leia el puntero del bloque TLS en vez de lo que
+     * se habia recargado.  No da un error de compilacion ni uno de ejecucion
+     * cerca del sitio: da una direccion ajena y un acceso invalido mas tarde.
+     *
+     * Lo destapo fusionar el desplazamiento de un STORE en el modo de
+     * direccionamiento: al desaparecer el `add` intermedio, la direccion del
+     * almacenamiento pasa a ser el valor base -- que vive toda la funcion y
+     * suele estar derramado --, asi que la recarga al registro de rascar, que
+     * antes casi no ocurria, paso a ser lo normal. */
+    case MOp::TLS_PE_ADDR:
+        add(e.writes, reg_key(mi.dst));
+        add(e.writes, static_cast<uint8_t>(MReg::R10));
+        add(e.writes, static_cast<uint8_t>(MReg::R11));
+        break;
 
     /* Salva/restaura proc->registers en la work-area del frame (usa R11). */
 
