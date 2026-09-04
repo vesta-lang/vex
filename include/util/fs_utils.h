@@ -808,6 +808,20 @@ static bool write_file_atomic(const std::string &path,
     }
     fs::rename(tmp, path, ec);
     if (ec) {
+        /* El directorio del destino pudo desaparecer entre medias -- alguien
+         * limpio el cache, o el arbol se borro entre dos escrituras --, y el
+         * memo de arriba diria que ya existe.
+         *
+         * Arriba hay un reintento igual, pero solo cubre el caso en que el
+         * TEMPORAL va al lado del destino: alli el fallo aparece al crearlo.
+         * Cuando el temporal va al directorio comun -- mismo volumen --, ese
+         * paso funciona y el fallo se traslada AQUI, donde no habia red.  Un
+         * `false` de esta funcion es un artefacto perdido, que es justo lo que
+         * el reintento existe para evitar. */
+        asegurar_dir(true);
+        std::error_code ec_re;
+        fs::rename(tmp, path, ec_re);
+        if (!ec_re) return true;
         // En Windows hay una carrera rara en la que el renombrado falla si otro
         // proceso tiene el destino abierto.  Copiar y borrar como segundo
         // recurso: deja de ser atomico, pero es preferible a no escribir.
