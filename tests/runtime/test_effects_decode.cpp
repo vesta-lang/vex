@@ -120,14 +120,19 @@ bool disasm_regs(const uint8_t *bytes, size_t n,
  * nombres, y esta tabla es el puente.  El orden es el que produce
  * `operand_field_bit`: campo (reg1, reg2) por parte (entero, bajo, alto).
  */
-constexpr runtime::RegSlot kFormSlot[6] = {
-    runtime::RS_REG1,     runtime::RS_REG1_LO, runtime::RS_REG1_HI,
-    runtime::RS_REG2,     runtime::RS_REG2_LO, runtime::RS_REG2_HI};
+constexpr runtime::RegSlot kFormSlot[12] = {
+    runtime::RS_REG1, runtime::RS_REG1_LO, runtime::RS_REG1_HI,
+    runtime::RS_REG2, runtime::RS_REG2_LO, runtime::RS_REG2_HI,
+    runtime::RS_REG3, runtime::RS_REG3_LO, runtime::RS_REG3_HI,
+    runtime::RS_REGI, runtime::RS_REGI_LO, runtime::RS_REGI_HI};
 
 /// Los registros a los que apunta @p forma sobre la instancia @p d.
-uint16_t regs_de_forma(uint8_t forma, const runtime::DecodedInstr &d) {
+/// Doce bits, no seis: el puente se habia quedado corto cuando el derivador
+/// paso a producir tambien el tercer registro de la forma de memoria y el de
+/// la forma con inmediato.  Truncando, esos campos no se comparaban con nada.
+uint16_t regs_de_forma(uint16_t forma, const runtime::DecodedInstr &d) {
     uint16_t m = 0;
-    for (int b = 0; b < 6; ++b)
+    for (int b = 0; b < 12; ++b)
         if ((forma >> b) & 1)
             m |= static_cast<uint16_t>(
                 1u << (runtime::reg_slot_get(d, kFormSlot[b]) & 0x0F));
@@ -747,6 +752,28 @@ int main(int argc, char **argv) {
                 if (!build(ext, f.indice, bytes, sizeof(bytes), d)) continue;
                 runtime::InstrEffects e;
                 if (!runtime::probe_effects(d, e)) continue; // sin forma escrita
+                /* La forma declarada se lee por INSTANCIA y la derivada por
+                 * OPCODE: donde la instruccion se comporta distinto segun una
+                 * bandera -- `mov` con `_signed_instruct` pasa a mover
+                 * registros ESPECIALES --, lo derivado es la UNION de las dos
+                 * ramas y una instancia sola nunca la cubre.
+                 *
+                 * Asi que se compara contra la union: se pregunta por la
+                 * declaracion con la bandera en los dos estados.  Sin esto, el
+                 * test acusaba a `mov` de no declarar lo que si declara, solo
+                 * que en la otra rama. */
+                {
+                    runtime::DecodedInstr otra = d;
+                    otra.flags_info._signed_instruct =
+                        d.flags_info._signed_instruct ? 0 : 1;
+                    runtime::InstrEffects e2;
+                    if (runtime::probe_effects(otra, e2)) {
+                        e.reg_read |= e2.reg_read;
+                        e.reg_write |= e2.reg_write;
+                        e.vec_read |= e2.vec_read;
+                        e.vec_write |= e2.vec_write;
+                    }
+                }
                 ++comparadas;
                 const uint16_t der_r = regs_de_forma(f.imp.form_read, d);
                 const uint16_t der_w = regs_de_forma(f.imp.form_write, d);

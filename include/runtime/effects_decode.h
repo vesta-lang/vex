@@ -82,6 +82,21 @@ enum RegSlot : uint8_t {
     RS_REG1_HI, ///< nibble alto de `reg1`
     RS_REG2_LO, ///< nibble bajo de `reg2`
     RS_REG2_HI, ///< nibble alto de `reg2`
+    /* Los otros dos sitios donde vive un numero de registro.  La union de
+     * operandos empieza en el mismo byte, asi que las formas se solapan: los
+     * bytes 0 y 1 son `reg1`/`reg2` y a la vez la base y el indice de la forma
+     * de MEMORIA; el 2 es su tercer registro, y el 8 -- detras del inmediato de
+     * ocho bytes -- es el registro de la forma con INMEDIATO.
+     *
+     * Faltaban, y el derivador si los produce: sin ellos ninguna instruccion
+     * con inmediato podia declarar que registro toca, y el puente entre lo
+     * derivado y lo declarado se quedaba corto justo ahi. */
+    RS_REG3,    ///< `mem_data.reg_final` entero
+    RS_REG3_LO, ///< nibble bajo de `reg3`
+    RS_REG3_HI, ///< nibble alto de `reg3`
+    RS_REGI,    ///< `inmmed_data.reg` entero
+    RS_REGI_LO, ///< nibble bajo de `regi`
+    RS_REGI_HI, ///< nibble alto de `regi`
 };
 
 /**
@@ -157,9 +172,15 @@ struct InstrEffects {
  * al leer da 0 y al escribir no cambia nada.
  */
 struct RegSlotDesc {
-    uint8_t use_reg2; ///< 0 = `reg1`, 1 = `reg2`
-    uint8_t shift;    ///< desplazamiento del nibble
-    uint8_t mask;     ///< 0x0F un nibble, 0xFF el byte entero, 0 nada
+    /* El BYTE dentro de la union de operandos, no un booleano reg1/reg2.
+     *
+     * Era booleano, y con eso solo se llegaba a los dos primeros.  Los otros
+     * dos sitios donde vive un numero de registro quedaban fuera: el byte 2
+     * -- tercer registro de la forma de MEMORIA -- y el 8, que es el registro
+     * de la forma con INMEDIATO, detras del inmediato de ocho bytes. */
+    uint8_t byte;  ///< indice dentro de `data_instruction`
+    uint8_t shift; ///< desplazamiento del nibble
+    uint8_t mask;  ///< 0x0F un nibble, 0xFF el byte entero, 0 nada
 };
 
 /// Indexada por `RegSlot`, en el mismo orden que el enum.
@@ -171,22 +192,28 @@ constexpr RegSlotDesc kRegSlotDesc[] = {
     {0, 4, 0x0F}, // RS_REG1_HI
     {1, 0, 0x0F}, // RS_REG2_LO
     {1, 4, 0x0F}, // RS_REG2_HI
+    {2, 0, 0xFF}, // RS_REG3
+    {2, 0, 0x0F}, // RS_REG3_LO
+    {2, 4, 0x0F}, // RS_REG3_HI
+    {8, 0, 0xFF}, // RS_REGI
+    {8, 0, 0x0F}, // RS_REGI_LO
+    {8, 4, 0x0F}, // RS_REGI_HI
 };
 
 /// @return El valor del registro que vive en @p slot.
 inline uint8_t reg_slot_get(const DecodedInstr &d, uint8_t slot) {
     const RegSlotDesc &s = kRegSlotDesc[slot];
-    const uint8_t src = s.use_reg2 ? d.data_instruction.reg_data.reg2
-                                   : d.data_instruction.reg_data.reg1;
-    return static_cast<uint8_t>((src >> s.shift) & s.mask);
+    const uint8_t *base =
+        reinterpret_cast<const uint8_t *>(&d.data_instruction);
+    return static_cast<uint8_t>((base[s.byte] >> s.shift) & s.mask);
 }
 
 /// Escribe @p v en el registro que vive en @p slot.  Es lo que permite
 /// retargetear el destino de una instruccion al fusionarla con la siguiente.
 inline void reg_slot_set(DecodedInstr &d, uint8_t slot, uint8_t v) {
     const RegSlotDesc &s = kRegSlotDesc[slot];
-    uint8_t &dst = s.use_reg2 ? d.data_instruction.reg_data.reg2
-                              : d.data_instruction.reg_data.reg1;
+    uint8_t &dst =
+        reinterpret_cast<uint8_t *>(&d.data_instruction)[s.byte];
     const uint8_t hueco = static_cast<uint8_t>(s.mask << s.shift);
     dst = static_cast<uint8_t>((dst & ~hueco) |
                                ((v & s.mask) << s.shift));
