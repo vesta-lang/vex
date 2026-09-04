@@ -46,16 +46,6 @@ namespace {
 
 const char *const kProducerUseDef = "asa.use_def";
 
-/// El sujeto es el VALOR: se afirma de el, no de la funcion.
-Subject value_subject_(Production &p, const ir::IrFunction &fn,
-                       ir::IrValueId v) {
-    Subject s;
-    s.kind = Subject::Kind::Value;
-    s.function = p.store.intern(fn.name);
-    s.id = v;
-    return s;
-}
-
 /// El nombre legible de un valor, para el detalle del hecho.
 std::string value_name_(const ir::IrFunction &fn, ir::IrValueId v) {
     if (v < fn.values.size() && !fn.values[v].name.empty())
@@ -73,7 +63,7 @@ void produce_use_def(Production &p) {
             sf.kind = Subject::Kind::Function;
             sf.function = p.store.intern(fn.name);
             p.say_unknown(sf, UnknownReason::NothingToSay, "use_def.no_values",
-                          kProducerUseDef, "");
+                          kProducerUseDef, "", Scope::everywhere());
             continue;
         }
         for (ir::IrValueId v = 0; v < u.num_values(); ++v) {
@@ -97,7 +87,7 @@ void produce_use_def(Production &p) {
             f.what.b =
                 n ? static_cast<int64_t>(u.use_pos[u.off[v] + n - 1]) : -1;
             f.what.detail = p.store.intern(value_name_(fn, v));
-            f.about = value_subject_(p, fn, v);
+            f.about = value_subject(p, fn, v);
             /* DEMOSTRADO: contar usos es recorrer la funcion, no estimar.  Aqui
              * no cabe un "no se": o el valor esta en la lista o no esta. */
             f.seal = s;

@@ -45,16 +45,6 @@ namespace {
 
 const char *const kProducerValueShape = "asa.value_shape";
 
-/// El sujeto es el VALOR: la forma es suya, no de la funcion que lo contiene.
-Subject value_subject(Production &p, const ir::IrFunction &fn,
-                      ir::IrValueId v) {
-    Subject s;
-    s.kind = Subject::Kind::Value;
-    s.function = p.store.intern(fn.name);
-    s.id = v;
-    return s;
-}
-
 /// Codigo estable de la forma.  El nombre para volcados lo da el dominio
 /// (`nombre_forma`); esto es el vocabulario del hecho, que viaja al disco.
 const char *shape_code(FormaDeValor f) {
@@ -82,7 +72,7 @@ void produce_value_shape(Production &p) {
             s.kind = Subject::Kind::Function;
             s.function = p.store.intern(fn.name);
             p.say_unknown(s, UnknownReason::NothingToSay, "value_shape.none",
-                          kProducerValueShape, "");
+                          kProducerValueShape, "", Scope::everywhere());
             continue;
         }
 
@@ -106,7 +96,8 @@ void produce_value_shape(Production &p) {
                               kProducerValueShape,
                               f == FormaDeValor::SinEvidencia
                                   ? "no se observo nada de este valor"
-                                  : "lo observado no decide su forma");
+                                  : "lo observado no decide su forma",
+                              Scope::everywhere());
             } else {
                 Fact shape;
                 shape.what.domain = kProducerValueShape;
@@ -166,7 +157,8 @@ void produce_value_shape(Production &p) {
                                       l.reason_code[0] != '\0'
                                   ? l.reason_code
                                   : "value_shape.not_followed",
-                              kProducerValueShape, p.store.intern(o.str()));
+                              kProducerValueShape, p.store.intern(o.str()),
+                              Scope::everywhere());
             }
         }
     }

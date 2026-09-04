@@ -79,7 +79,7 @@ void produce_definite_store(Production &p) {
             s.function = p.store.intern(fn.name);
             p.say_unknown(s, UnknownReason::NothingToSay,
                           "definite_store.no_pointer_params",
-                          kProducerDefiniteStore, "");
+                          kProducerDefiniteStore, "", Scope::everywhere());
             continue;
         }
         for (const auto &e : m.per_pointer) {
@@ -87,7 +87,8 @@ void produce_definite_store(Production &p) {
             const Subject about = pointer_subject(p, fn, e.first);
             if (d.verdict == DefiniteStoreFacts::Verdict::Unknown) {
                 p.say_unknown(about, d.reason, d.reason_code,
-                              kProducerDefiniteStore, "");
+                              kProducerDefiniteStore, "",
+                              Scope::everywhere());
                 continue;
             }
             Fact f;

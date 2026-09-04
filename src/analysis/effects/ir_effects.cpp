@@ -916,7 +916,15 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         e.may_io = true;
         break;
     case IrOp::YIELD:
-    case IrOp::RESUME: e.control.kind = ControlKind::Suspend; break;
+    case IrOp::RESUME:
+    /* Un cambio de contexto entre fibras SUSPENDE igual que ceder el turno:
+     * guarda el estado, salta a otra pila y la ejecucion sigue en codigo que
+     * desde aqui no se ve.  Faltaba, y no se notaba porque quien preguntaba
+     * trataba la memoria compartida como barrera de todas formas; en cuanto un
+     * consumidor empezo a razonar sobre los globales -- que otra fibra alcanza
+     * por definicion --, adelanto una lectura por encima del cambio y devolvio
+     * el valor de antes. */
+    case IrOp::SWAPCTX: e.control.kind = ControlKind::Suspend; break;
 
     // ---- Estado del proceso / entorno (no determinista) ----
     case IrOp::GETPROC:

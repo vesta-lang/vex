@@ -24,6 +24,7 @@
 #include <cstring>
 #include <sstream>
 #include "analysis/asa/observed.h" // el hecho de bucle, armado en UN sitio
+#include "aot/aot_analyze.h" // que operaciones existen en el objetivo nativo
 #include "analysis/facts/alignment.h"
 /* La forma de un bucle, su variable de induccion y cuantas vueltas da: lo que
  * hace falta para que el dominio de bucles diga algo mas que "aqui hay uno". */
@@ -69,7 +70,7 @@ FactId Production::assert_fact(Fact f) {
 
 void Production::say_unknown(Subject about, UnknownReason reason,
                              const char *code, const char *domain,
-                             const char *detail, uint32_t site) {
+                             const char *detail, Scope scope, uint32_t site) {
     ++summary.looked_at;
     ++summary.silent;
     /* El motivo SIEMPRE, aunque no se pidan los hechos uno a uno: un dominio
@@ -98,10 +99,16 @@ void Production::say_unknown(Subject about, UnknownReason reason,
     f.seal.origin.producer = domain;
     f.seal.origin.function = about.function;
     f.seal.origin.site = site;
-    /* Tambien el no-saber lleva momento: no saber cuantas vueltas da un bucle
-     * ANTES de optimizar y no saberlo DESPUES son dos huecos distintos, y solo
-     * el primero se arregla mirando lo que el usuario escribio. */
-    f.scope.stage = stage;
+    /* DONDE vale el no-saber, tal y como lo dijo quien no supo.  Un hueco puede
+     * existir solo en un modo -- no modelar el puntero al proceso no le dice
+     * nada a quien compila a nativo, donde ese puntero no existe --, y hasta
+     * ahora todos salian universales. */
+    f.scope = scope;
+    /* Y el momento, que lo pone el motor: un productor habla del codigo que le
+     * dan y no tiene por que saber en que punto del pipeline se lo dieron.
+     * Se respeta el que venga puesto, igual que en `assert_fact`. */
+    if (f.scope.stage == nullptr || f.scope.stage[0] == '\0')
+        f.scope.stage = stage;
     store.add(std::move(f));
 }
 
@@ -138,32 +145,6 @@ void ensure_registry() {
         return true;
     }();
     (void)done;
-}
-
-Subject function_subject(Production &p, const ir::IrFunction &fn) {
-    Subject s;
-    s.kind = Subject::Kind::Function;
-    s.function = p.store.intern(fn.name);
-    return s;
-}
-
-Subject value_subject(Production &p, const ir::IrFunction &fn,
-                      ir::IrValueId v) {
-    Subject s;
-    s.kind = Subject::Kind::Value;
-    s.function = p.store.intern(fn.name);
-    s.id = v;
-    return s;
-}
-
-/// El hecho de estructura de @p fn si ya se produjo, para apoyarse en EL y no
-/// solo en el nombre de su productor.
-void support_with_structure(Production &p, const ir::IrFunction &fn, Fact &f,
-                            const char *rule) {
-    f.proof.rule = rule;
-    auto it = p.structure_of.find(fn.name);
-    if (it != p.structure_of.end()) f.proof.from.push_back(it->second);
-    f.seal.support.add(kProducerStructure);
 }
 
 /// El intervalo, con sus numeros: un hecho que no ensena su valor obliga a
@@ -265,7 +246,8 @@ void produce_ranges(Production &p) {
                     detalle = "sin dominio: no se miro este valor";
                 }
                 p.say_unknown(value_subject(p, fn, v), por_que,
-                              "range.unbounded", kProducerRanges, detalle);
+                              "range.unbounded", kProducerRanges, detalle,
+                              Scope::everywhere());
                 continue;
             }
             Fact f;
@@ -335,7 +317,8 @@ void produce_boundary(Production &p) {
                           rs.convergio
                               ? "no aparece en el grafo de llamadas"
                               : "el punto fijo del grafo de llamadas paro por "
-                                "presupuesto antes de resumirla");
+                                "presupuesto antes de resumirla",
+                          Scope::everywhere());
             continue;
         }
         Fact f;
@@ -495,7 +478,8 @@ void produce_asm_flow(Production &p) {
                 for (const std::string &mn : cfg.unknown_terminators)
                     p.say_unknown(s, UnknownReason::ShapeNotRecognized,
                                   "asm_flow.unknown_terminator",
-                                  kProducerAsmFlow, p.store.intern(mn));
+                                  kProducerAsmFlow, p.store.intern(mn),
+                                  Scope::everywhere());
             }
         }
         /* Y si no habia ni un bloque `asm`, se DICE.  No es ignorancia: se sabe
@@ -503,7 +487,8 @@ void produce_asm_flow(Production &p) {
          * diferencia entre "no hay" y "no se miro". */
         if (seen == 0)
             p.say_unknown(function_subject(p, fn), UnknownReason::NothingToSay,
-                          "asm_flow.no_asm", kProducerAsmFlow, "");
+                          "asm_flow.no_asm", kProducerAsmFlow, "",
+                          Scope::everywhere());
     }
 }
 
@@ -577,7 +562,8 @@ void produce_layout(Production &p) {
      * resto. */
     if (!has_data) {
         p.say_unknown(subject, UnknownReason::NothingToSay,
-                      "layout.no_static_data", kProducerLayout, "");
+                      "layout.no_static_data", kProducerLayout, "",
+                      Scope::everywhere());
         return;
     }
 
@@ -615,8 +601,48 @@ void produce_layout(Production &p) {
      * indistinguible de no haberlo mirado, asi que se deja constancia del
      * motivo: cuando el guion llegue hasta aqui, este silencio se convierte en
      * el numero que toque. */
+    /* Este hueco es SOLO del nativo: el que coloca ahi es un guion de enlazado
+     * que aqui no se ve, y con bytecode no existe tal cosa -- lo coloca el
+     * cargador de la maquina, que es lo que el hecho de arriba afirma --. */
     p.say_unknown(subject, UnknownReason::OpaqueBoundary,
-                  "layout.placement_is_configurable", kProducerLayout, "");
+                  "layout.placement_is_configurable", kProducerLayout, "",
+                  Scope::only_in_backend(kBackendAot,
+                                         "layout.script_is_the_users"));
+}
+
+/**
+ * @brief DONDE vale un hueco de este dominio, segun la operacion que lo causo.
+ *
+ * Un no-saber puede ser de UN SOLO modo.  "No modelo el puntero al proceso" no
+ * le dice nada a quien compila a nativo: ahi ese puntero no existe, asi que
+ * anunciarle el hueco es describirle un agujero que no esta.  La maquina es una
+ * ISA mas -- `velb` --, asi que restringir a ella es lo mismo que restringir a
+ * x86, no un caso aparte.
+ *
+ * QUE operaciones son NO se enumera aqui: lo dice el analisis que sabe que
+ * subsistema necesita cada una para ir a nativo.  Con una lista escrita en este
+ * fichero, la siguiente operacion que solo valga en un modo entraria anunciada
+ * para los tres y nadie se enteraria.
+ *
+ * @param op    Operacion que CAUSO el hueco.
+ * @param valid false si no lo causo ninguna operacion concreta.
+ *
+ * Se pide la que lo causo y no la que define el valor reportado, que es donde
+ * se me fue la primera vez: el motivo se PROPAGA por las derivaciones, asi que
+ * el valor del que se habla suele venir de un `bitcast` -- que existe en todos
+ * los modos -- aunque el hueco lo causara un `getproc`, que no.  Preguntando
+ * por el valor, el alcance salia universal siempre y el mecanismo no restringia
+ * nada.
+ *
+ * @return El alcance del hueco; universal cuando la operacion existe en todos.
+ */
+Scope gap_scope_for(ir::IrOp op, bool valid) {
+    if (!valid) return Scope::everywhere();
+    aot::AotTarget bare;
+    bare.tier = aot::Tier::BARE;
+    const char *needs = aot::aot_op_requirement(op, bare);
+    if (needs == nullptr || needs[0] == 0) return Scope::everywhere();
+    return Scope::only_in_isa(kIsaVelb, "memory.op_needs_the_machine");
 }
 
 /// Memoria: a que se puede referir cada puntero.
@@ -627,6 +653,10 @@ void produce_memory(Production &p) {
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
         const PointsTo &pt = p.base.memory(fn);
+        /* Los def-use POR LA BASE, que es de donde salen los de todos: sirven
+         * para llegar de un valor a la operacion que lo produjo, y esa
+         * operacion es la que decide en que modos vale lo que se afirma. */
+        const IrFacts &facts_of_fn = p.base.structure(fn);
         const Seal s = p.base.seal(kProducerMemory, fn);
         for (ir::IrValueId v = 0; v < fn.values.size(); ++v) {
             const effects::AbstractLoc l = loc_of(pt, v, 0);
@@ -656,13 +686,50 @@ void produce_memory(Production &p) {
                                   ? e.reason_code
                                   : "memory.not_located",
                               kProducerMemory,
-                              none ? "no es un puntero localizable"
-                                   : "no se pudo localizar a que apunta");
+                              /* Y QUE operacion o QUE valor, cuando se sabe: un
+                               * motivo sin el dato no dice donde ampliar el
+                               * analisis.
+                               *
+                               * Aqui iban dos frases escritas a mano, y eso es
+                               * lo que el catalogo existe para que no pase: el
+                               * hecho lleva DATOS y el texto sale del codigo,
+                               * en el idioma de quien lo lea.  Escritas aqui,
+                               * el volcado y el editor las ensenaban en
+                               * castellano a todo el mundo. */
+                              (e.reason_detail != nullptr &&
+                               e.reason_detail[0] != '\0' && !none)
+                                  ? e.reason_detail
+                                  : "",
+                              /* DONDE falta este conocimiento.  Un hueco puede
+                               * ser de UN SOLO modo: "no modelo el puntero al
+                               * proceso" no le dice nada a quien compila a
+                               * nativo, porque ahi ese puntero no existe.  Lo
+                               * decide el analisis que sabe que necesita cada
+                               * operacion, no una lista escrita aqui. */
+                              gap_scope_for(e.reason_op, e.has_reason_op));
                 continue;
             }
+            const PointsToEntry &pe = pt.at(v);
+            const bool is_global =
+                l.kind == effects::AbstractLoc::Kind::Global;
             Fact f;
             f.what.domain = kProducerMemory;
-            f.what.code = "memory.points_to";
+            /* Dos codigos, porque son dos propiedades distintas y la segunda es
+             * la que decide lo que se puede hacer.
+             *
+             * Un global identificado por su SIMBOLO es una direccion concreta:
+             * dos accesos al mismo global son la misma, y dos globales
+             * distintos no se pisan.  Uno identificado solo por el valor que
+             * dio su direccion no sostiene ninguna de las dos cosas -- el mismo
+             * global tomado dos veces daria dos raices --.
+             *
+             * Va en el CODIGO y no en el texto porque quien decide mira el
+             * codigo y los numeros; el texto es para que lo lea una persona.
+             * Metido en el detalle, cada consumidor tendria que parsearlo, que
+             * es la forma de que dos acaben interpretandolo distinto. */
+            f.what.code = (is_global && pe.root_is_symbol)
+                              ? "memory.points_to_symbol"
+                              : "memory.points_to";
             f.what.a = static_cast<int64_t>(l.id);
             f.what.b = l.off;
             const char *kind_name = "";
@@ -681,8 +748,65 @@ void produce_memory(Production &p) {
             f.what.detail = p.store.intern(o.str());
             f.about = value_subject(p, fn, v);
             f.seal = s;
+            /* DONDE vale.  Casi todo lo de este dominio es propiedad del
+             * intermedio y vale en los tres modos, pero hay operaciones que
+             * solo existen EJECUTANDO -- el puntero al proceso, los accesos a
+             * la memoria de la maquina --, y un hecho sobre ellas leido desde
+             * el nativo no describe nada que exista alli.
+             *
+             * Que operaciones son NO se enumera aqui: lo sabe el analisis que
+             * clasifica cada op contra un objetivo nativo, y se le pregunta por
+             * op -- barato, sin recorrer el modulo --.  Con una lista escrita
+             * en este fichero, la siguiente operacion que solo valga en un modo
+             * entraria sellada como universal y nadie se enteraria.
+             *
+             * El resto sigue sin restringir, y eso tambien es una afirmacion:
+             * vale en todos.  Por eso el motivo se escribe solo cuando se
+             * restringe -- restringir sin decir por que fue lo que costo meses
+             * de silencio en el dominio de disposicion --. */
+            if (const ir::IrInstr *def = facts_of_fn.def(v)) {
+                /* La pregunta es si la operacion SIGNIFICA lo mismo fuera de la
+                 * maquina, no si el backend sabe emitirla.  Son distintas, y
+                 * confundirlas deja el mecanismo mudo: `aot_op_allowed` dice
+                 * que si a `getproc` -- el nativo lo compila plegandolo a
+                 * cero --, asi que preguntando por ahi no se restringia ni un
+                 * hecho.  Lo que hace falta es su CLASE: una op que necesita el
+                 * runtime de la maquina describe memoria que fuera de ella no
+                 * existe. */
+                if (aot::aot_classify_op(def->op) ==
+                    aot::AotOpClass::RUNTIME_DEPENDENT) {
+                    f.scope.isa = kIsaVelb;
+                    f.scope.why = "memory.op_exists_only_at_runtime";
+                }
+            }
             support_with_structure(p, fn, f, "pointer-propagation");
             p.assert_fact(std::move(f));
+
+            /* Y cuando es global pero NO se sabe de cual: se DICE.
+             *
+             * Es una respuesta parcial -- se sabe que apunta a memoria
+             * estatica, no a cual --, y esa mitad que falta es justo la que
+             * impide reusar una lectura o matar una escritura.  Sin dejarla
+             * escrita, quien pregunte por que el optimizador no toco ese acceso
+             * -- el editor, el linter, quien mire el volcado -- solo ve que no
+             * lo toco; y el siguiente analisis que necesite lo mismo volveria a
+             * descubrirlo por su cuenta.
+             *
+             * QUE operacion, ademas: es lo que dice donde ampliar (hoy solo
+             * `str_lit_addr` demuestra su simbolo; `getstatic` lo lleva en un
+             * operando y `label_addr`/`section_ref` en su nombre). */
+            if (is_global && !pe.root_is_symbol) {
+                const ir::IrInstr *d = nullptr;
+                for (const ir::IrBlock &bb : fn.blocks)
+                    for (const ir::IrInstr &in : bb.instrs)
+                        if (in.dst == v) d = &in;
+                p.say_unknown(value_subject(p, fn, v),
+                              UnknownReason::ShapeNotRecognized,
+                              "memory.global_without_symbol", kProducerMemory,
+                              d != nullptr ? ir::ir_op_name(d->op) : "",
+                              gap_scope_for(d != nullptr ? d->op : ir::IrOp{},
+                                            d != nullptr));
+            }
         }
     }
 }
@@ -730,7 +854,8 @@ void produce_loops(Production &p) {
         }
         if (seen == 0) {
             p.say_unknown(function_subject(p, fn), UnknownReason::NothingToSay,
-                          "loop.none", kProducerLoops, "");
+                          "loop.none", kProducerLoops, "",
+                          Scope::everywhere());
             continue;
         }
 
@@ -784,7 +909,7 @@ void produce_loops(Production &p) {
                               (ls.why != nullptr && ls.why[0] != '\0')
                                   ? ls.why
                                   : "loop.shape_unsupported",
-                              kProducerLoops, "", linea);
+                              kProducerLoops, "", Scope::everywhere(), linea);
                 continue;
             }
             /* Los DOS sentidos: aqui solo se CUENTA, y un bucle que baja
@@ -822,7 +947,8 @@ void produce_loops(Production &p) {
                     continue;
                 }
                 p.say_unknown(about, UnknownReason::ShapeNotRecognized,
-                              "loop.no_induction", kProducerLoops, "", linea);
+                              "loop.no_induction", kProducerLoops, "",
+                              Scope::everywhere(), linea);
                 continue;
             }
             /* Con los RANGOS: son una segunda fuente para lo mismo.  Un
@@ -855,7 +981,7 @@ void produce_loops(Production &p) {
                               (tc.code != nullptr && tc.code[0] != '\0')
                                   ? tc.code
                                   : "loop.trip_unknown",
-                              kProducerLoops, "", linea);
+                              kProducerLoops, "", Scope::everywhere(), linea);
                 continue;
             }
             /* El hecho lo arma UN solo sitio (@c loop_trip_fact), el mismo que
@@ -905,6 +1031,19 @@ void register_builtin_producers() {
      * disparaba no habia forma de saber si es que no lo vio o es que decidio
      * no tocarlo -- y las quince razones para no verlo no las contaba nadie. */
     register_bulk_memory_producer();
+    /* Y el de las vistas `@overlay`: lo que el frontend SABE de como esta
+     * puesto un formato, que se quedaba dentro del comprobador de tipos.  Sin
+     * el, "que bytes cubre este campo" no se le podia preguntar a nadie -- ni
+     * desde el linter ni desde el optimizador --, aunque el compilador acabara
+     * de calcularlo para comprobar que dos campos no se pisan. */
+    register_overlays_producer();
+    /* Y la pregunta DUAL de los rangos: cuantos bits de cada valor llega a
+     * mirar alguien.  Los KnownBits contestan que garantiza quien PRODUCE, y
+     * con eso solo no se puede quitar una normalizacion: de un parametro no se
+     * prueba nada por delante, y sin embargo si lo unico que se hace con la
+     * cuenta es escribirla en un campo de cuatro bytes, los bits de arriba no
+     * los mira nadie. */
+    register_demanded_bits_producer();
     /* Y el que dice que NO cabe en cada modo de ejecucion.  El analisis existia
      * desde hace tiempo y lo consumia un solo sitio, el editor: la misma
      * pregunta tenia dos respuestas segun quien la hiciera. */
@@ -912,6 +1051,36 @@ void register_builtin_producers() {
 }
 
 } // namespace
+
+/* Las tres de abajo son PUBLICAS (declaradas en producers.h).  Estuvieron en
+ * el namespace anonimo de este fichero, y el resultado fue que cada dominio
+ * nuevo se copio `value_subject`: habia tres identicas. */
+Subject function_subject(Production &p, const ir::IrFunction &fn) {
+    Subject s;
+    s.kind = Subject::Kind::Function;
+    s.function = p.store.intern(fn.name);
+    return s;
+}
+
+Subject value_subject(Production &p, const ir::IrFunction &fn,
+                      ir::IrValueId v) {
+    Subject s;
+    s.kind = Subject::Kind::Value;
+    s.function = p.store.intern(fn.name);
+    s.id = v;
+    return s;
+}
+
+/// El hecho de estructura de @p fn si ya se produjo, para apoyarse en EL y no
+/// solo en el nombre de su productor.
+void support_with_structure(Production &p, const ir::IrFunction &fn, Fact &f,
+                            const char *rule) {
+    f.proof.rule = rule;
+    auto it = p.structure_of.find(fn.name);
+    if (it != p.structure_of.end()) f.proof.from.push_back(it->second);
+    f.seal.support.add(kProducerStructure);
+}
+
 
 // ===========================================================================
 // Motor

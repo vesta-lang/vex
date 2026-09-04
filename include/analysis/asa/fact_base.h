@@ -47,6 +47,7 @@
 #include "analysis/facts/loop_facts.h"
 #include "analysis/facts/loop_iv_bounds.h"
 #include "analysis/facts/range_summary.h"
+#include "analysis/facts/demanded_bits.h"
 #include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
 #include "analysis/memory/points_to.h"
@@ -96,6 +97,21 @@ extern const char *const kProducerBulkMemory;
 /// se convierte en conocimiento compartido: el mismo hecho lo lee tambien el
 /// linter, y cualquiera que venga despues, sin volver a analizar nada.
 extern const char *const kProducerBackend;
+
+/// La COBERTURA de una vista `@overlay`: que bytes ocupa cada campo, en el
+/// marco de simbolos del que cuelga su offset.  Es conocimiento de TIPO -- lo
+/// unico que lo sabe es el frontend, que tiene la expresion del offset
+/// delante --, y sin publicarlo aqui la pregunta "puede esta escritura pisar a
+/// aquel campo" no tenia a quien hacersela: ni el linter ni el optimizador ven
+/// el layout de una vista.
+extern const char *const kProducerOverlays;
+
+/// Cuantos bits de cada valor LLEGA A MIRAR alguien.  La pregunta dual de los
+/// rangos y los KnownBits: aquellos van hacia adelante -- que garantiza quien
+/// produce --, este hacia atras -- que lee quien consume --.  Vivio escrito a
+/// mano dentro de un pase del optimizador, con su propia lista de consumidores
+/// tolerados, y por eso se quedaba corto sin que nadie lo notara.
+extern const char *const kProducerDemandedBits;
 
 /// Clave con la que se guarda lo que es del MODULO entero y no de una funcion.
 extern const char *const kModuleUnit;
@@ -163,6 +179,21 @@ class FactBase {
      * @return Los rangos por valor SSA, cacheados mientras viva la base.
      */
     const RangeFacts &ranges(const ir::IrFunction &fn);
+
+    /**
+     * @brief Cuantos bits de cada valor de @p fn llega a mirar alguien.
+     *
+     * La pregunta DUAL de los rangos y los KnownBits: aquellos dicen que
+     * garantiza quien produce el valor, y esta que llegan a leer los que lo
+     * consumen.  Ninguna implica a la otra -- de un parametro no se puede
+     * probar nada por delante, y sin embargo si lo unico que se hace con una
+     * cuenta es escribirla en un campo de cuatro bytes, los bits de arriba no
+     * los mira nadie --.
+     *
+     * @param fn Funcion IR a consultar.
+     * @return Los bits demandados por valor, cacheados mientras viva la base.
+     */
+    const DemandedBits &demanded(const ir::IrFunction &fn);
 
     /**
      * @brief A que memoria puede referirse cada puntero de @p fn.

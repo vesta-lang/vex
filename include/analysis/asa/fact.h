@@ -467,6 +467,59 @@ struct Scope {
                (backend == nullptr || backend[0] == '\0') &&
                (stage == nullptr || stage[0] == '\0');
     }
+
+    /**
+     * @brief El alcance que vale EN TODOS los objetivos.
+     *
+     * Universal NO es la ausencia de alcance: es un alcance, y se DICE.
+     * Obtenerlo por omision -- un parametro con valor por defecto -- significa
+     * obtenerlo tambien por descuido, y entonces algo que solo vale en un modo
+     * sale anunciado para los tres sin que nadie lo haya decidido.  Escribirlo
+     * cuesta una llamada y convierte "vale en todos" en una afirmacion.
+     *
+     * Sin motivo por construccion: restringir necesita justificarse, no
+     * restringir no.  Por eso este no admite uno.
+     */
+    static Scope everywhere() { return Scope{}; }
+
+    /**
+     * @brief Solo en una ISA, Y POR QUE.
+     *
+     * El motivo es obligatorio y no un adorno: restringir sin decirlo fue lo
+     * que costo meses de silencio -- un hecho sellado para el interprete valia
+     * tambien con el JIT, nadie tuvo que escribir por que, y al leerlo no habia
+     * nada que hiciera saltar la pregunta --.  Pedido en la firma, no se puede
+     * olvidar.
+     *
+     * @param isa_name Nombre de la ISA donde vale.
+     * @param reason   Nombre estable del vocabulario del dominio.
+     */
+    static Scope only_in_isa(const char *isa_name, const char *reason) {
+        Scope s;
+        s.isa = isa_name;
+        s.why = reason;
+        return s;
+    }
+
+    /**
+     * @brief Solo con un modo de ejecucion, Y POR QUE.
+     *
+     * Eje distinto del de la ISA y hace falta separado: "esto solo vale
+     * compilando a nativo" no es "esto solo vale en x86-64" -- el nativo son
+     * varias arquitecturas --, y al reves, la maquina es UNA ISA (`velb`) que
+     * corre interpretada o con el JIT.  Meterlos en el mismo campo obligaria a
+     * enumerar combinaciones.
+     *
+     * @param backend_name Modo donde vale.
+     * @param reason       Nombre estable del vocabulario del dominio.
+     */
+    static Scope only_in_backend(const char *backend_name,
+                                 const char *reason) {
+        Scope s;
+        s.backend = backend_name;
+        s.why = reason;
+        return s;
+    }
 };
 
 /**

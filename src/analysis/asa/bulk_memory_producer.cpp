@@ -40,6 +40,8 @@
 #include "analysis/facts/bulk_memory.h"
 #include "ir/ssa_ir.h"
 
+#include <cstring>
+
 namespace analysis {
 namespace asa {
 
@@ -60,6 +62,31 @@ void produce_bulk_memory(Production &p) {
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
         const BulkMemoryReport r = analyze_bulk_memory(fn);
+        /* La otra forma de escribir lo mismo: una tirada de escrituras
+         * seguidas.  Va en el MISMO productor porque es el mismo dominio -- lo
+         * que el codigo hace es mover un bloque --, y separarlo daria dos
+         * sitios que contestan a la misma pregunta. */
+        const StraightLineBulkReport sl = analyze_straight_line_bulk(fn);
+        for (const StraightLineBulkFact &b : sl.facts) {
+            Fact f;
+            if (straight_line_bulk_fact(p.store, fn, b, p.stage, Source::Static,
+                                        f))
+                p.assert_fact(std::move(f));
+        }
+        for (const BulkMemoryDecline &d : sl.declines) {
+            /* Y sus renuncias.  Aqui NO son todas la misma clase: que falte
+             * demostrar que dos regiones no se solapan es una DEPENDENCIA que
+             * alguien puede aportar, mientras que un valor calculado campo a
+             * campo simplemente no es una operacion de bloque.  Darles la
+             * misma razon perderia justo lo que dice si hay algo que hacer. */
+            const bool missing_fact =
+                std::strcmp(d.code, "bulk.would_be_a_copy_needs_no_overlap") ==
+                0;
+            p.say_unknown(header_subject(p, fn, d.header),
+                          missing_fact ? UnknownReason::MissingDependency
+                                       : UnknownReason::NothingToSay,
+                          d.code, kProducerBulkMemory, "", Scope::everywhere());
+        }
         if (r.facts.empty() && r.declines.empty()) {
             /* Ni un bucle que mirar.  Se dice, porque "no hay bucles" y "los
              * habia y ninguno era una operacion de bloque" son dos cosas, y
@@ -69,7 +96,7 @@ void produce_bulk_memory(Production &p) {
             s.kind = Subject::Kind::Function;
             s.function = p.store.intern(fn.name);
             p.say_unknown(s, UnknownReason::NothingToSay, "bulk.no_loops",
-                          kProducerBulkMemory, "");
+                          kProducerBulkMemory, "", Scope::everywhere());
             continue;
         }
         for (const BulkMemoryFact &b : r.facts) {
@@ -88,7 +115,7 @@ void produce_bulk_memory(Production &p) {
              * cambiar para que si lo sea. */
             p.say_unknown(header_subject(p, fn, d.header),
                           UnknownReason::ShapeNotRecognized, d.code,
-                          kProducerBulkMemory, "");
+                          kProducerBulkMemory, "", Scope::everywhere());
         }
     }
 }

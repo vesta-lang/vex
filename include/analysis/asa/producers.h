@@ -194,6 +194,22 @@ struct Production {
      * @param detail  Texto para una persona (lo mismo, en cristiano).
      */
     /**
+     * @param scope DONDE vale este no-saber, SIN valor por defecto.
+     *
+     * Un hecho lleva su alcance desde el principio; un no-saber no lo llevaba,
+     * asi que "no lo se" salia siempre universal -- incluso cuando el hueco
+     * solo existe en un modo --.  Que el nativo lea "no modelo `getproc`" es
+     * describirle un agujero que alli no esta: esa operacion no existe fuera de
+     * la maquina.
+     *
+     * Y va SIN defecto a proposito.  `Scope::everywhere()` cuesta una llamada y
+     * convierte "vale en todos" en algo que alguien decidio; con un defecto, lo
+     * universal se obtiene tambien por descuido, y entonces el dia que un
+     * dominio nuevo tenga un hueco de un solo modo saldra anunciado para los
+     * tres sin que nadie se entere.  Es la misma razon por la que un valor por
+     * defecto permisivo esta prohibido en el resto del compilador: no falla,
+     * contesta otra cosa.
+     *
      * @param site Linea de fuente a la que atribuirlo, o 0 si no se sabe.
      *
      * Va aqui y no la busca quien consume porque un identificador de BLOQUE
@@ -203,7 +219,8 @@ struct Production {
      * el usuario no escribio nada.  Una linea de fuente no la renumera nadie.
      */
     void say_unknown(Subject about, UnknownReason reason, const char *code,
-                     const char *domain, const char *detail, uint32_t site = 0);
+                     const char *domain, const char *detail, Scope scope,
+                     uint32_t site = 0);
 };
 
 /// Un dominio que sabe convertir su analisis en hechos.
@@ -279,6 +296,54 @@ void register_bulk_memory_producer();
 
 /// Da de alta el dominio que dice que operaciones no caben en un backend.
 void register_backend_producer();
+
+/**
+ * @brief Da de alta el dominio de las vistas `@overlay`.
+ *
+ * Vive en su propia unidad de traduccion, como los demas que llegaron despues
+ * del nucleo, y se registra el mismo: anadir un dominio no toca el motor.
+ */
+void register_overlays_producer();
+
+/**
+ * @brief Da de alta el dominio de los bits demandados.
+ *
+ * En su propia unidad de traduccion y registrandose el mismo, como los demas
+ * que llegaron despues del nucleo.
+ */
+void register_demanded_bits_producer();
+
+/**
+ * @brief El sujeto de un hecho que habla de UN VALOR.
+ *
+ * Compartida y no una por productor: estaba en el namespace anonimo de
+ * @c producers.cpp, asi que los dominios que llegaron despues se escribieron
+ * su propia copia -- tres identicas -- y la siguiente habria sido la cuarta.
+ * Es literalmente lo que el primer invariante prohibe, aplicado al andamiaje.
+ *
+ * @param p  Produccion en curso (para internar el nombre en el almacen).
+ * @param fn Funcion a la que pertenece el valor.
+ * @param v  Id del valor SSA.
+ */
+Subject value_subject(Production &p, const ir::IrFunction &fn,
+                      ir::IrValueId v);
+
+/**
+ * @brief El sujeto de un hecho que habla de UNA FUNCION.
+ * @param p  Produccion en curso.
+ * @param fn Funcion de la que se habla.
+ */
+Subject function_subject(Production &p, const ir::IrFunction &fn);
+
+/**
+ * @brief Apoya el hecho en la ESTRUCTURA de @p fn, no solo en su productor.
+ * @param p    Produccion en curso.
+ * @param fn   Funcion de la que se habla.
+ * @param f    Hecho al que anadir la prueba.
+ * @param rule Nombre estable de la regla que lo sostiene.
+ */
+void support_with_structure(Production &p, const ir::IrFunction &fn, Fact &f,
+                            const char *rule);
 
 /**
  * @brief Da de alta el dominio `asa.memory_access`.

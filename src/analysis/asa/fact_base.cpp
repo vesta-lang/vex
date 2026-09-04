@@ -37,6 +37,8 @@ const char *const kProducerBoundary = "asa.boundary";
 const char *const kProducerLoops = "asa.loops";
 const char *const kProducerBulkMemory = "asa.bulk_memory";
 const char *const kProducerBackend = "asa.backend";
+const char *const kProducerOverlays = "asa.overlays";
+const char *const kProducerDemandedBits = "asa.demanded_bits";
 const char *const kModuleUnit = "<module>";
 
 void register_asa_canonical_names() {
@@ -56,6 +58,8 @@ void register_asa_canonical_names() {
         register_canonical_name(kProducerLoops);
         register_canonical_name(kProducerBulkMemory);
         register_canonical_name(kProducerBackend);
+        register_canonical_name(kProducerOverlays);
+        register_canonical_name(kProducerDemandedBits);
         register_canonical_name(kModuleUnit);
         return true;
     }();
@@ -134,6 +138,32 @@ const IrFacts &FactBase::structure(const ir::IrFunction &fn) {
     }
     return manager_.get_or_compute<IRFactsAnalysis, IrFacts>(
         key, [&fn]() { return build_ir_facts(fn); });
+}
+
+const DemandedBits &FactBase::demanded(const ir::IrFunction &fn) {
+    ++queries_;
+    const std::string key = key_of(fn);
+    const bool fresh = !manager_.cached<DemandedBitsAnalysis>(key);
+    if (fresh) ++computations_;
+    /* Por el gestor, como los rangos: los tres que preguntan -- el pase que
+     * quita normalizaciones, el productor del dominio y quien venga -- acaban
+     * en la MISMA instancia en vez de recalcularla cada uno.  Esa es la unica
+     * forma de que anadir un consumidor no cueste otro analisis. */
+    const DemandedBits &db =
+        *manager_.get_or_compute<DemandedBitsAnalysis,
+                                 std::shared_ptr<const DemandedBits>>(
+            key, [&fn]() {
+                return std::make_shared<const DemandedBits>(
+                    compute_demanded_bits(fn));
+            });
+    if (fresh) {
+        /* La certeza sale del analisis: llegar a punto fijo es haber visto
+         * todo lo que podia contradecirlo; cortar por la cota deja una cota
+         * valida pero no demostrada al maximo. */
+        mark(kProducerDemandedBits, key,
+             db.converged ? Certainty::Proven : Certainty::Inferred, nullptr);
+    }
+    return db;
 }
 
 const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {

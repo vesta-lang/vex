@@ -66,8 +66,10 @@ void produce_backend(Production &p) {
         Subject s;
         s.kind = Subject::Kind::Function;
         s.function = p.store.intern(kModuleUnit);
+        /* "Todo cabe en nativo" vale mirado desde donde sea: es una propiedad
+         * del modulo, no del sitio desde el que se pregunta. */
         p.say_unknown(s, UnknownReason::NothingToSay, "backend.todo_cabe",
-                      kProducerBackend, "");
+                      kProducerBackend, "", Scope::everywhere());
         return;
     }
 

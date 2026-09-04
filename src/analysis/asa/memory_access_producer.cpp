@@ -122,7 +122,8 @@ void produce_memory_access(Production &p) {
                      * que tocar, que es lo contrario de lo que pasa. */
                     p.say_unknown(about, UnknownReason::OpaqueBoundary,
                                   "memory_access.not_localizable",
-                                  kProducerMemoryAccess, "");
+                                  kProducerMemoryAccess, "",
+                                  Scope::everywhere());
                     continue;
                 }
                 Fact f;
@@ -162,7 +163,7 @@ void produce_memory_access(Production &p) {
             sf.function = p.store.intern(fn.name);
             p.say_unknown(sf, UnknownReason::NothingToSay,
                           "memory_access.no_accesses", kProducerMemoryAccess,
-                          "");
+                          "", Scope::everywhere());
         }
     }
 }

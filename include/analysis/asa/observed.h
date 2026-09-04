@@ -97,6 +97,28 @@ bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
                       const BulkMemoryFact &b, const char *stage, Source source,
                       Fact &out);
 
+/**
+ * @brief El mismo hecho, cuando el movimiento de bloque estaba escrito EN
+ *        RECTA en vez de como un bucle.
+ *
+ * Produce el MISMO vocabulario (@c bulk.fill y companeros) a proposito: lo que
+ * el codigo hace es lo mismo, y un consumidor no deberia tener que preguntar
+ * dos veces segun como estuviera escrito.  Lo que cambia es el SUJETO -- ahi
+ * una cabecera de bucle, aqui un bloque -- y la longitud, que aqui siempre se
+ * sabe porque las direcciones son constantes.
+ *
+ * @param store  Almacen, para internar los nombres.
+ * @param fn     Funcion a la que pertenece el grupo.
+ * @param b      El grupo reconocido.
+ * @param stage  Fase en la que se dice.
+ * @param source De donde sale el conocimiento.
+ * @param out    Sale el hecho armado.
+ * @return false si el grupo no da para un hecho.
+ */
+bool straight_line_bulk_fact(FactStore &store, const ir::IrFunction &fn,
+                             const StraightLineBulkFact &b, const char *stage,
+                             Source source, Fact &out);
+
 } // namespace asa
 } // namespace analysis
 

@@ -63,24 +63,24 @@ namespace analysis {
  */
 struct BulkMemoryFact {
     /// Que hace el bucle.
-    enum class Clase : uint8_t {
-        Relleno, ///< escribe el mismo valor en todo el tramo.
-        Copia,   ///< copia de un tramo a otro.
+    enum class Kind : uint8_t {
+        Fill, ///< escribe el mismo valor en todo el tramo.
+        Copy, ///< copia de un tramo a otro.
     };
 
-    Clase clase = Clase::Relleno;
+    Kind kind = Kind::Fill;
     uint32_t loop_id = 0; ///< bucle del que sale el hecho.
 
     /// Puntero al principio del tramo que se ESCRIBE.
     ir::IrValueId dst_base = ir::IR_NO_VALUE;
-    /// Puntero al principio del tramo que se LEE.  Solo en @c Copia.
+    /// Puntero al principio del tramo que se LEE.  Solo en @c Copy.
     ir::IrValueId src_base = ir::IR_NO_VALUE;
-    /// Valor que se escribe.  Solo en @c Relleno, y es invariante del bucle.
-    ir::IrValueId valor = ir::IR_NO_VALUE;
+    /// Valor que se escribe.  Solo en @c Fill, y es invariante del bucle.
+    ir::IrValueId value = ir::IR_NO_VALUE;
     /// Cuantos elementos: la cota del bucle.  Puede no ser constante.
     ir::IrValueId n_elems = ir::IR_NO_VALUE;
-    /// Bytes por elemento.  El tramo son @c n_elems * @c ancho bytes.
-    int64_t ancho = 0;
+    /// Bytes por elemento.  El tramo son @c n_elems * @c width bytes.
+    int64_t width = 0;
 
     /// Estructura del bucle, para que quien transforme sepa que reemplazar.
     LoopStructure st;
@@ -131,6 +131,73 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn);
 /// Solo lo reconocido, para quien va a TRANSFORMAR y no tiene nada que hacer
 /// con los motivos.
 std::vector<BulkMemoryFact> detect_bulk_memory(const ir::IrFunction &fn);
+
+// ===========================================================================
+//  El mismo movimiento de bloque, pero escrito EN RECTA
+// ===========================================================================
+
+/**
+ * @struct StraightLineBulkFact
+ * @brief Un grupo de accesos SEGUIDOS que, juntos, mueven un tramo contiguo.
+ *
+ * Es la otra forma de escribir lo mismo que @c BulkMemoryFact, y por eso
+ * comparte su vocabulario de @c Kind: lo que el codigo HACE es identico --
+ * rellenar un tramo, o copiarlo --, y un consumidor no deberia tener dos
+ * palabras para la misma cosa segun venga de un bucle o de una tirada de
+ * asignaciones.
+ *
+ * Lo que NO se comparte es la estructura, y a proposito: aquel hecho lleva el
+ * bucle (preheader, cabecera, salida, variable de induccion) porque quien lo
+ * consume tiene que RECABLEAR el grafo.  Aqui no hay grafo que tocar, solo
+ * instrucciones que sustituir.  Meterlo todo en una estructura dejaria la
+ * mitad de los campos sin significado la mitad de las veces, que es la clase
+ * de hueco que no da un error: da un cero que parece un dato.
+ *
+ * De donde sale: los campos de una vista estan pegados por construccion, asi
+ * que ponerlos a cero uno a uno, copiarlos uno a uno o compararlos uno a uno
+ * es escribir largo lo que la maquina hace de una vez.  El bloque de contexto
+ * de un cambio de tarea son diecinueve asignaciones que son 152 bytes.
+ */
+struct StraightLineBulkFact {
+    /// Que hace el grupo.  MISMO vocabulario que el de bucles.
+    BulkMemoryFact::Kind kind = BulkMemoryFact::Kind::Fill;
+    /// Bloque en el que estan todas las instrucciones del grupo.
+    ir::IrBlockId block = 0;
+    /// Puntero base del tramo que se ESCRIBE.
+    ir::IrValueId dst_base = ir::IR_NO_VALUE;
+    /// Puntero base del tramo que se LEE.  Solo en @c Copy.
+    ir::IrValueId src_base = ir::IR_NO_VALUE;
+    /// Primer byte del tramo, relativo a la base.
+    int64_t begin = 0;
+    /// Cuantos bytes cubre.  Aqui SI es un numero: en recta las direcciones
+    /// son constantes, que es justo lo que un bucle no puede prometer.
+    int64_t bytes = 0;
+    /// Byte que se repite en todo el tramo.  Solo en @c Fill.
+    uint8_t fill = 0;
+    /// Indices, dentro del bloque, de las instrucciones que el grupo sustituye.
+    /// En orden ascendente.
+    std::vector<uint32_t> instrs;
+};
+
+/**
+ * @struct StraightLineBulkReport
+ * @brief Lo reconocido y lo descartado, cada cosa con su motivo.
+ */
+struct StraightLineBulkReport {
+    std::vector<StraightLineBulkFact> facts;
+    std::vector<BulkMemoryDecline> declines;
+};
+
+/**
+ * @brief Descubre que grupos de accesos seguidos de @p fn mueven un bloque.
+ *
+ * Reconoce solo lo que EMBALDOSA un tramo sin hueco ni solape: de menos se
+ * pierde una optimizacion, de mas se escribe en bytes que no son del grupo.
+ *
+ * @param fn Funcion a examinar.
+ * @return Lo reconocido y lo descartado.
+ */
+StraightLineBulkReport analyze_straight_line_bulk(const ir::IrFunction &fn);
 
 } // namespace analysis
 

@@ -77,15 +77,15 @@ bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
      * saber que las dos regiones no se solapan.  Y cada uno en dos formas,
      * segun se sepa la longitud o se dimensione al ejecutar: la clase de
      * conocimiento no es la misma y quien decida especializar lo necesita. */
-    const bool relleno = b.clase == BulkMemoryFact::Clase::Relleno;
-    if (relleno)
+    const bool is_fill = b.kind == BulkMemoryFact::Kind::Fill;
+    if (is_fill)
         f.what.code = cuenta_conocida ? "bulk.fill" : "bulk.fill_runtime";
     else
         f.what.code = cuenta_conocida ? "bulk.copy" : "bulk.copy_runtime";
     /* Los numeros por SEPARADO, no ya multiplicados: quien lea el hecho no
      * podria recuperar ninguno de los dos de su producto. */
-    f.what.a = cuenta_conocida ? elementos : b.ancho;
-    f.what.b = b.ancho;
+    f.what.a = cuenta_conocida ? elementos : b.width;
+    f.what.b = b.width;
 
     f.about.kind = Subject::Kind::Block;
     f.about.function = store.intern(fn.name);
@@ -117,6 +117,54 @@ bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
 
     f.scope.stage = stage;
     f.proof.rule = "loop-shape+induction+memory-effects";
+    out = std::move(f);
+    return true;
+}
+
+bool straight_line_bulk_fact(FactStore &store, const ir::IrFunction &fn,
+                             const StraightLineBulkFact &b, const char *stage,
+                             Source source, Fact &out) {
+    if (b.block >= fn.blocks.size() || b.instrs.empty()) return false;
+
+    Fact f;
+    f.what.domain = kProducerBulkMemory;
+    /* Codigo propio, y no el del bucle: la CLASE de conocimiento es la misma
+     * -- de ahi que compartan @c Kind -- pero el sujeto no, y el mensaje lo
+     * nota.  Reusar `bulk.fill` salia diciendo "este bucle escribe..." sobre
+     * una tirada de asignaciones donde no hay ningun bucle, y ademas sus dos
+     * numeros son elementos y ancho, que aqui no significan nada.
+     *
+     * Sin variante `_runtime`: en recta las direcciones son constantes, asi
+     * que la longitud SIEMPRE se sabe.  No es un detalle -- es lo que permite
+     * elegir el ancho de lane al emitir, en vez de llamar a una rutina
+     * dimensionada al ejecutar. */
+    f.what.code = b.kind == BulkMemoryFact::Kind::Fill ? "bulk.fill_run"
+                                                       : "bulk.copy_run";
+    /* Los bytes del tramo y el byte que se repite.  Aqui `a` son BYTES y no
+     * elementos porque en recta no hay elemento: hay un tramo. */
+    f.what.a = b.bytes;
+    f.what.b = b.fill;
+
+    f.about.kind = Subject::Kind::Block;
+    f.about.function = store.intern(fn.name);
+    f.about.id = b.block;
+
+    /* La LINEA, apuntada aqui por lo mismo que en el de bucles: un numero de
+     * bloque solo significa algo en su momento, y el optimizador los renumera.
+     * Se coge la de la PRIMERA escritura del grupo, que es donde el programador
+     * escribio el primero de los campos. */
+    const ir::IrBlock &bb = fn.blocks[b.block];
+    if (b.instrs.front() < bb.instrs.size())
+        f.seal.origin.site = bb.instrs[b.instrs.front()].source_line;
+
+    f.seal.certainty = Certainty::Proven;
+    f.seal.origin.source = source;
+    f.seal.origin.producer = kProducerBulkMemory;
+    f.seal.origin.function = f.about.function;
+    f.seal.support.add(kProducerMemory);
+
+    f.scope.stage = stage;
+    f.proof.rule = "adjacent-stores-tile-the-range";
     out = std::move(f);
     return true;
 }

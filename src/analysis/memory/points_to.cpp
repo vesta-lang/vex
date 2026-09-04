@@ -196,6 +196,74 @@ struct Resolver {
         return v < fn.values.size() && fn.values[v].type == ir::IrType::PTR;
     }
 
+    /**
+     * @brief La raiz CANONICA de la memoria compartida que @p def nombra.
+     *
+     * Una direccion estatica no se identifica por el valor que la produjo sino
+     * por su SIMBOLO: `contador` es el mismo dato lo tomen dos instrucciones
+     * distintas.  Se devuelve el PRIMER valor que lo nombra, de modo que todos
+     * los accesos al mismo simbolo comparten raiz -- y dos simbolos distintos
+     * siguen teniendo raices distintas --.
+     *
+     * Se elige un id de VALOR y no el indice del simbolo a proposito: la clave
+     * con la que razona el DSE es `{raiz, offset}` SIN la clase, asi que todas
+     * las raices comparten espacio de nombres y meter ahi un indice de otra
+     * tabla podria coincidir con el id de un alloca.
+     *
+     * La clave tiene que DEMOSTRAR la identidad, no parecerse a ella: fundir
+     * dos localizaciones que resulten distintas no es conservador -- el
+     * adelanto de almacenamiento a carga entregaria el valor de la otra --.
+     * Por eso `getstatic` se queda fuera: lleva la clase en un OPERANDO, que no
+     * entra en la clave.
+     *
+     * @param def Instruccion que produce la direccion.
+     * @return El primer valor de la funcion que nombra ese mismo simbolo, o
+     *         @c IR_NO_VALUE si esta operacion no demuestra el suyo.
+     */
+    ir::IrValueId symbol_root(const ir::IrInstr &def) const {
+        if (!proves_symbol(def.op)) return ir::IR_NO_VALUE;
+        if (!symbols_ready) {
+            for (const ir::IrBlock &bb : fn.blocks)
+                for (const ir::IrInstr &in : bb.instrs)
+                    if (proves_symbol(in.op) && in.dst != ir::IR_NO_VALUE)
+                        canonical_root.emplace(symbol_key(in), in.dst);
+            symbols_ready = true;
+        }
+        auto it = canonical_root.find(symbol_key(def));
+        return it != canonical_root.end() ? it->second : ir::IR_NO_VALUE;
+    }
+    /// Operaciones cuya identidad se lee de la instruccion SOLA.
+    static bool proves_symbol(ir::IrOp op) {
+        switch (op) {
+        case ir::IrOp::STR_LIT_ADDR: // imm = indice en static_data
+        case ir::IrOp::LABEL_ADDR:   // func_name = la etiqueta
+        case ir::IrOp::SECTION_REF:  // func_name + imm = seccion y extremo
+            return true;
+        /* `getproc` NO entra, aunque la operacion sola diga de que proceso
+         * habla.  Dos razones distintas y las dos bastan:
+         *
+         *  - Solo existe EJECUTANDO.  En nativo no hay tal puntero, asi que un
+         *    hecho sobre el no vale en todos los objetivos -- y este dominio
+         *    sella sin decir en cual, o sea que se leeria donde no toca --.
+         *  - Y donde SI existe, quien lo muta no es solo este codigo: la
+         *    maquina toca el estado del proceso por su cuenta.  Dar por buena
+         *    una lectura anterior exigiria saber entre que puntos no lo toca,
+         *    y eso hoy no lo dice nadie.
+         *
+         * Se queda como estaba: sin modelar, y el dominio lo cuenta como el
+         * hueco que es. */
+        default: return false;
+        }
+    }
+    /// Lo que identifica al simbolo, con la operacion delante para que dos
+    /// familias distintas no compartan clave.
+    static std::string symbol_key(const ir::IrInstr &in) {
+        return std::to_string(static_cast<int>(in.op)) + "|" +
+               std::to_string(in.imm) + "|" + in.func_name;
+    }
+    mutable bool symbols_ready = false;
+    mutable std::unordered_map<std::string, ir::IrValueId> canonical_root;
+
     /// PHI que se esta resolviendo ahora mismo.  Volver a ella por un arg no es
     /// "no se sabe": es el propio bucle, y ese arg simplemente no aporta.
     ir::IrValueId phi_en_curso = ir::IR_NO_VALUE;
@@ -374,9 +442,17 @@ struct Resolver {
         const ir::IrInstr *d = facts.def(v);
         /* Sin definicion dentro de la funcion: viene de fuera.  Quien lo pase
          * es quien sabe a que apunta, y por eso es frontera y no ignorancia. */
-        if (!d)
-            return unknown(asa::UnknownReason::OpaqueBoundary,
-                           "memory.comes_from_outside");
+        if (!d) {
+            PointsToEntry e = unknown(asa::UnknownReason::OpaqueBoundary,
+                                      "memory.comes_from_outside");
+            /* QUIEN viene de fuera.  "Fuera" no es un sitio: un global del
+             * propio programa y algo que entrega otro modulo son cosas
+             * distintas y se amplian distinto, y sin el nombre las dos salen
+             * en el mismo monton. */
+            if (v < fn.values.size() && !fn.values[v].name.empty())
+                e.reason_detail = fn.values[v].name.c_str();
+            return e;
+        }
 
         using Op = ir::IrOp;
         switch (d->op) {
@@ -390,10 +466,22 @@ struct Resolver {
         case Op::ARRAY_ALLOC:
         case Op::STRMAKE:
         case Op::STRRESERVE: return root_loc(K::Heap, v);
-        case Op::GETSTATIC:
+        /* Memoria COMPARTIDA, enraizada en su SIMBOLO cuando la operacion lo
+         * demuestra: el mismo global tomado dos veces es la misma direccion, y
+         * sin esto salian dos raices -- o sea "no aliasan", que es falso --.
+         * Era lo que tenia al DSE tratando toda esta memoria como barrera.
+         *
+         * `getstatic` no lo demuestra (lleva la clase en un operando), asi que
+         * cae aqui sin la marca y se sigue tratando como antes. */
         case Op::STR_LIT_ADDR:
         case Op::LABEL_ADDR:
-        case Op::SECTION_REF: return root_loc(K::Global, v);
+        case Op::SECTION_REF:
+        case Op::GETSTATIC: {
+            const ir::IrValueId r = symbol_root(*d);
+            PointsToEntry e = root_loc(K::Global, r == ir::IR_NO_VALUE ? v : r);
+            e.root_is_symbol = (r != ir::IR_NO_VALUE);
+            return e;
+        }
 
         // --- Derivaciones que preservan raiz Y offset (misma direccion) ---
         case Op::MOV:
@@ -586,12 +674,48 @@ struct Resolver {
         }
 
         default:
-            /* Cargado de memoria, direccion constante, calculo arbitrario...
-             * Una operacion que este resolvedor no modela: el programa esta
-             * bien y lo que hay que ampliar es esto.  Es el caso mas frecuente
-             * de todos, y por eso importa que no se confunda con los demas. */
-            return unknown(asa::UnknownReason::ShapeNotRecognized,
-                           "memory.unmodelled_op");
+            /* Lo primero: puede ESTO ser una direccion siquiera?
+             *
+             * A una constante, a una comparacion o a una multiplicacion de
+             * enteros no hay que localizarles nada -- no apuntan a ningun
+             * sitio --, y contestarles "una forma que no reconozco" no era una
+             * respuesta cara sin mas: esa clase de motivo es la que dice DONDE
+             * ampliar el analisis, y con mil constantes dentro lo accionable
+             * quedaba enterrado.  Medido en `273_overlay_pe_parser`: de las
+             * 2662 renuncias por "no modelo esta operacion", 1020 eran
+             * constantes y 130 comparaciones.
+             *
+             * "Aqui no hay nada que localizar" es una respuesta, y distinta.
+             * Se pregunta por el TIPO y por la marca de memoria del anfitrion,
+             * que son los dos sitios donde vive esa propiedad -- una direccion
+             * del host viaja como `i64` marcado, no como `ptr`.
+             *
+             * Sigue siendo `Unknown` y no `None`: lo que cambia es el MOTIVO,
+             * que es lo que estaba mal.  Devolver "esto no es memoria" cambia
+             * la RESPUESTA que ven los consumidores, y un almacenamiento cuya
+             * direccion no estuviera tipada como puntero pasaria de "puede
+             * tocar cualquier cosa" a "no toca nada".  Eso no da un fallo: da
+             * otro programa. */
+            if (!es_direccion(v) && !fn.values[v].is_host_ptr)
+                return unknown(asa::UnknownReason::NothingToSay,
+                               "memory.not_an_address");
+            /* Y si SI podia serlo, entonces es un hueco de verdad.  Se dice
+             * CUAL, que es la diferencia entre "amplia esto" y un numero
+             * grande sin destino. */
+            {
+                PointsToEntry e =
+                    unknown(asa::UnknownReason::ShapeNotRecognized,
+                            "memory.unmodelled_op");
+                e.reason_detail = ir::ir_op_name(d->op);
+                /* Y la operacion misma, no solo su nombre: quien decida en que
+                 * modos vale este hueco necesita preguntarselo a ELLA, y no al
+                 * valor que se acabe reportando -- el motivo se propaga por las
+                 * derivaciones, asi que ese valor suele venir de un `bitcast`
+                 * que si existe en todos --. */
+                e.reason_op = d->op;
+                e.has_reason_op = true;
+                return e;
+            }
         }
     }
 };

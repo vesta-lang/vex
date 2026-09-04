@@ -33,6 +33,9 @@
 
 namespace ir {
 struct IrFunction;
+/// Declarada, no incluida: `ssa_ir.h` arrastra medio compilador y aqui solo se
+/// necesita nombrar la operacion que causo un hueco.
+enum class IrOp : uint16_t;
 }
 
 namespace analysis {
@@ -102,6 +105,51 @@ struct PointsToEntry {
     asa::UnknownReason reason = asa::UnknownReason::NotAsked;
     /// Codigo estable del caso EXACTO, del vocabulario de este dominio.
     const char *reason_code = "";
+    /// La operacion que CAUSO el hueco, para quien necesite decidir con ella.
+    ///
+    /// No vale mirar la que define el valor que se reporta: el motivo se
+    /// PROPAGA por las derivaciones -- un `bitcast` de un puntero sin resolver
+    /// hereda su motivo entero --, asi que el valor del que se habla suele
+    /// estar definido por otra cosa.  Quien pregunte "en que modos existe esto
+    /// que no sabemos modelar" tiene que preguntarlo de la operacion original,
+    /// y esa es la que se guarda aqui.
+    ///
+    /// `false` = el hueco no lo causo una operacion concreta.
+    ///
+    /// Bandera aparte y no un valor centinela del enum: aqui solo esta
+    /// DECLARADO -- incluir `ssa_ir.h` arrastraria medio compilador --, asi que
+    /// no hay ningun miembro suyo que nombrar.  Y un centinela obligaria ademas
+    /// a que el enum reservara uno, que es acordarse de algo para siempre.
+    bool has_reason_op = false;
+    ir::IrOp reason_op{};
+    /// QUE operacion, cuando el motivo es "no la modelo".
+    ///
+    /// Sin esto, "una operacion que no modelo" era un solo monton -- 2662 de
+    /// golpe en el parser de PE -- y no habia forma de saber cual ampliar
+    /// primero.  Un motivo sin el dato no dice donde trabajar, que es
+    /// justamente para lo que se guardan los motivos.  Literal estatico
+    /// (@c ir_op_name), no cadena propia.
+    const char *reason_detail = "";
+    /**
+     * @brief La raiz identifica un SIMBOLO, no el valor que dio su direccion.
+     *
+     * Un global tiene una identidad que no es la del valor SSA: `contador` es
+     * el mismo dato lo tomen dos instrucciones distintas.  Enraizado en el
+     * valor -- que es lo que se hacia -- dos accesos al MISMO global daban dos
+     * raices, o sea "no aliasan", que es falso; y por eso el DSE trataba toda
+     * memoria global como barrera y `g = g + 1` volvia a leer `g` justo
+     * despues de escribirlo.
+     *
+     * Cuando esto es cierto, la raiz esta CANONICALIZADA: todos los accesos al
+     * mismo simbolo comparten raiz.  Solo se pone donde el simbolo se
+     * DEMUESTRA (hoy, el indice en @c static_data de un `str_lit_addr`), nunca
+     * por parecido: fundir dos localizaciones distintas no es conservador --
+     * el adelanto de almacenamiento a carga entregaria el valor de la otra --.
+     *
+     * Al FINAL, como los de arriba y por lo mismo: media docena de sitios
+     * construyen esta estructura por posicion.
+     */
+    bool root_is_symbol = false;
 };
 
 /**
