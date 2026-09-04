@@ -213,7 +213,18 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 const int sb = ir::type_access_bytes(st),
                           db = ir::type_access_bytes(dt);
                 emit_ld(os, "x9", in.operands[0]);
-                if (db == sb) {
+                if (db == sb && in.op == ir::IrOp::TRUNC && db < 8) {
+                    /* MISMO ancho: NORMALIZAR a el.  Una cuenta que se sale
+                     * de su tipo deja los bits de mas en el registro, y ahi
+                     * el valor miente al compararlo aunque se imprima bien. */
+                    const bool sign = ir::type_is_signed(dt);
+                    if (db == 1)
+                        os << (sign ? "    sxtb x9, w9\n" : "    uxtb x9, w9\n");
+                    else if (db == 2)
+                        os << (sign ? "    sxth x9, w9\n" : "    uxth x9, w9\n");
+                    else // db == 4
+                        os << (sign ? "    sxtw x9, w9\n" : "    mov w9, w9\n");
+                } else if (db == sb) {
                     // Mismo ancho: copia de bits (x9 ya cargado).
                 } else if (db > sb) {
                     // Extension: signo si SEXT (o CAST desde un tipo con

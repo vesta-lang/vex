@@ -3148,7 +3148,32 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         static_cast<uint8_t>(srcw));
                     O.push_back(MInstr::make_unary(mop, vr(in.dst), s));
                 };
-                if (db == sb) {
+                if (db == sb && in.op == ir::IrOp::TRUNC && db < 8) {
+                    /* MISMO ancho, y menos de 64 bits: NORMALIZAR.
+                     *
+                     * No es una copia.  Un valor de tipo estrecho vive en un
+                     * registro de 64, y una cuenta que se sale de su tipo deja
+                     * ahi los bits de mas: `127_i8 + 1` deja 128, no -128.  El
+                     * camino de impresion trunca, asi que SE VE bien, y el de
+                     * comparacion no: el mismo valor responde dos cosas segun
+                     * quien pregunte.
+                     *
+                     * El COMO es el mismo que el de la truncacion de abajo, y
+                     * no por parecido: con 32 bits sin signo NO hay `movzx`
+                     * en x86-64 -- el `mov` de 32 ya pone a cero la mitad
+                     * alta --, asi que pedirlo emite basura.  Escribirlo dos
+                     * veces con dos criterios es como se cuela esa clase de
+                     * fallo, y aqui se colo. */
+                    const bool sign = ir::type_is_signed(dt);
+                    if (db == 4) {
+                        if (sign)
+                            ext(MOp::MOVSX, 4); // i32: replica el bit de signo
+                        else
+                            mov_w(4); // u32: el mov de 32 ya zerifica arriba
+                    } else {          // db == 1 || db == 2
+                        ext(sign ? MOp::MOVSX : MOp::MOVZX, db);
+                    }
+                } else if (db == sb) {
                     O.push_back(MInstr::make_unary(
                         MOp::MOV, vr(in.dst),
                         vr(in.operands[0]))); // copia de bits

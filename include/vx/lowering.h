@@ -2057,6 +2057,17 @@ class Lowering {
     /// un booleano global si es dinamico).
     void lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type);
 
+
+    /**
+     * @brief Deja un valor de tipo estrecho normalizado a SU ancho.
+     *        Ver la definicion para el porque.
+     * @param v El valor recien producido.
+     * @param t Su tipo.
+     * @param line Linea fuente, para la depuracion.
+     * @return El valor normalizado, o @p v si el tipo no lo necesita.
+     */
+    ir::IrValueId normalize_narrow(ir::IrValueId v, ir::IrType t,
+                                   uint32_t line);
     void lower_if(ast::IfStmt *s);
     void lower_return(ast::ReturnStmt *s);
     void lower_while(ast::WhileStmt *s);

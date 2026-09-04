@@ -5194,7 +5194,18 @@ bool ir_pass_simplify(IrFunction &fn) {
                 IrType from_t = (ins.operands[0] < fn.values.size())
                                     ? fn.values[ins.operands[0]].type
                                     : IrType::I64;
-                if (from_t == ins.type) {
+                /* Truncar al MISMO tipo NO es la identidad cuando el tipo es
+                 * ESTRECHO.
+                 *
+                 * Un valor de menos de 64 bits vive en un registro de 64, y
+                 * una cuenta que se sale de su tipo deja ahi los bits de mas:
+                 * `127_i8 + 1` deja 128, no -128.  Este truncado es justamente
+                 * lo que lo NORMALIZA, y convertirlo en una copia borraba la
+                 * normalizacion: el valor se imprimia bien -- ese camino
+                 * trunca -- y mentia al compararse.
+                 *
+                 * Con 64 bits si es identidad: no hay bits de mas que quitar. */
+                if (from_t == ins.type && type_slot_bytes(ins.type) == 8) {
                     rewrite_as_mov(ins, ins.operands[0]);
                     changed = true;
                     break;
@@ -6602,6 +6613,218 @@ static bool strength_reduce_with_facts(
 // comparte; solo lo RECOMPUTA (invalida) si un consumidor muto el IR.  Es el
 // AnalysisCache minimo -- evita re-demostrar las mismas propiedades por pase, y
 // escala a mas consumidores sin multiplicar el coste del analisis.
+
+// =========================================================================
+//  Pase ir_pass_elide_narrow_norm: quitar la NORMALIZACION que sobra.
+// =========================================================================
+//
+// Tras cada cuenta de menos de 64 bits el bajado emite un `trunc` al MISMO
+// tipo.  Hace falta: el valor vive en un registro de 64 y una cuenta que se
+// sale deja ahi los bits de mas -- `127_i8 + 1` deja 128, no -128 --, y
+// entonces el mismo valor se imprime bien y MIENTE al compararse.
+//
+// Pero la inmensa mayoria de las cuentas NO se salen, y pagarla siempre es
+// carisimo: no por la instruccion -- es una -- sino porque estorba al
+// DESENROLLADO.  Medido, los bucles apretados llegaban a tardar 2,5 veces
+// mas.
+//
+// Aqui se quita la que se DEMUESTRA innecesaria.  La pregunta no es "cabe el
+// resultado?" -- el dominio de rangos ya pliega envolviendo, asi que a eso
+// siempre contestaria que si --, sino "PUEDE esta operacion salirse?": se
+// rehace el intervalo EXACTO desde los rangos de los operandos, en 64 bits,
+// y si entero cae dentro de lo que el tipo representa, la vuelta no puede
+// ocurrir y la normalizacion es la identidad.
+//
+// Es una optimizacion PURA: si el rango no dice nada, la normalizacion se
+// queda.  Quitar de menos solo cuesta velocidad; no hay forma de que
+// produzca un resultado equivocado.
+static bool ir_pass_elide_narrow_norm(IrFunction &fn,
+                                      const analysis::RangeFacts &ranges) {
+    if (fn.blocks.empty()) return false;
+
+    /* Quien define cada valor, para llegar de la normalizacion a la cuenta
+     * que la produjo sin recorrer la funcion otra vez por cada una. */
+    std::vector<const IrInstr *> def(fn.values.size(), nullptr);
+    for (const auto &bb : fn.blocks)
+        for (const auto &in : bb.instrs)
+            if (in.dst != IR_NO_VALUE && in.dst < def.size()) def[in.dst] = &in;
+
+    /* El rango de un valor, como par con signo.  Falso si no se sabe. */
+    auto range_of = [&](IrValueId v, int64_t &lo, int64_t &hi) {
+        if (v >= fn.values.size()) return false;
+        const analysis::ValueRange &r = ranges.at(v);
+        if (!r.acotada() || r.es_todo()) return false;
+        return r.vista_con_signo(lo, hi);
+    };
+
+    /* Lo que el tipo representa. */
+    auto type_bounds = [](IrType t, int64_t &lo, int64_t &hi) {
+        const uint32_t nb = type_narrow_bits(t);
+        if (nb == 0 || nb >= 64) return false;
+        if (type_is_signed(t)) {
+            lo = -(int64_t{1} << (nb - 1));
+            hi = (int64_t{1} << (nb - 1)) - 1;
+        } else {
+            lo = 0;
+            hi = (int64_t{1} << nb) - 1;
+        }
+        return true;
+    };
+
+    std::unordered_map<IrValueId, IrValueId> replace;
+    for (const auto &bb : fn.blocks) {
+        for (const auto &ins : bb.instrs) {
+            if (ins.op != IrOp::TRUNC || ins.operands.size() != 1) continue;
+            if (ins.dst == IR_NO_VALUE) continue;
+            const IrValueId src = ins.operands[0];
+            if (src >= fn.values.size()) continue;
+            // Solo la NORMALIZACION: al mismo tipo y estrecho.  Un truncado
+            // de verdad -- de mas ancho a menos -- si hace falta siempre.
+            if (fn.values[src].type != ins.type) continue;
+            int64_t tlo = 0, thi = 0;
+            if (!type_bounds(ins.type, tlo, thi)) continue;
+
+            const IrInstr *d = def[src];
+            if (d == nullptr || d->operands.size() != 2) continue;
+            if (d->op != IrOp::ADD && d->op != IrOp::SUB && d->op != IrOp::MUL)
+                continue;
+
+            int64_t alo, ahi, blo, bhi;
+            if (!range_of(d->operands[0], alo, ahi)) continue;
+            if (!range_of(d->operands[1], blo, bhi)) continue;
+
+            /* El intervalo EXACTO, sin envolver.  Cualquier desbordamiento de
+             * los 64 bits al calcularlo y se abandona: sin el intervalo no se
+             * puede demostrar nada. */
+            int64_t lo = 0, hi = 0;
+            bool ok = true;
+            if (d->op == IrOp::ADD) {
+                ok = !__builtin_add_overflow(alo, blo, &lo) &&
+                     !__builtin_add_overflow(ahi, bhi, &hi);
+            } else if (d->op == IrOp::SUB) {
+                // Los extremos CRUZADOS: el minimo es `a.lo - b.hi`.
+                ok = !__builtin_sub_overflow(alo, bhi, &lo) &&
+                     !__builtin_sub_overflow(ahi, blo, &hi);
+            } else {
+                // Producto por las CUATRO esquinas: con signos mezclados el
+                // minimo no es el producto de los minimos.
+                int64_t p[4];
+                ok = !__builtin_mul_overflow(alo, blo, &p[0]) &&
+                     !__builtin_mul_overflow(alo, bhi, &p[1]) &&
+                     !__builtin_mul_overflow(ahi, blo, &p[2]) &&
+                     !__builtin_mul_overflow(ahi, bhi, &p[3]);
+                if (ok) {
+                    lo = *std::min_element(p, p + 4);
+                    hi = *std::max_element(p, p + 4);
+                }
+            }
+            if (!ok) continue;
+            if (lo < tlo || hi > thi) continue; // puede salirse: se queda
+            replace[ins.dst] = src;
+        }
+    }
+
+    /* Segunda regla: en una CADENA de cuentas basta normalizar al final.
+     *
+     * `sum + a + b + c` son tres sumas y salen tres normalizaciones, cuando
+     * la aritmetica de complemento a dos COMPONE: sumar, restar y multiplicar
+     * modulo 2^N da lo mismo normalizando en cada paso que solo al terminar.
+     * Los pasos de en medio pueden llevar bits de mas mientras NADIE los mire.
+     *
+     * Asi que una normalizacion se puede quitar si TODOS sus usos son otra
+     * cuenta estrecha del mismo tipo -- que traera la suya --.  Cualquier otro
+     * uso (comparar, ensanchar, guardar, llamar) SI mira el registro entero y
+     * obliga a dejarla.
+     *
+     * Y hay que exigir que la del consumidor SOBREVIVA.  La regla de arriba
+     * quita la suya cuando demuestra que no puede salirse, y esa prueba da por
+     * hecho que los operandos valen lo que su tipo dice: si le dejamos uno
+     * sucio, la premisa se rompe y no quedaria ninguna normalizacion en toda
+     * la cadena.  Por eso esta regla va DESPUES y mira lo que aquella decidio.
+     */
+    {
+        /* Que normalizacion le corresponde a cada cuenta, y cuantas veces se
+         * usa cada valor y en que. */
+        std::unordered_map<IrValueId, IrValueId> norm_of; // cuenta -> su trunc
+        for (const auto &bb : fn.blocks)
+            for (const auto &in : bb.instrs)
+                if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
+                    in.dst != IR_NO_VALUE && in.operands[0] < fn.values.size() &&
+                    fn.values[in.operands[0]].type == in.type)
+                    norm_of[in.operands[0]] = in.dst;
+
+        /* Un valor es "solo consumido por cuentas del mismo tipo cuya
+         * normalizacion se queda".  Se empieza suponiendo que si y se
+         * desmiente con el primer uso que no lo sea. */
+        std::unordered_map<IrValueId, bool> chain_ok;
+        auto note = [&](IrValueId v, bool good) {
+            auto it = chain_ok.find(v);
+            if (it == chain_ok.end())
+                chain_ok[v] = good;
+            else
+                it->second = it->second && good;
+        };
+        for (const auto &bb : fn.blocks) {
+            for (const auto &in : bb.instrs) {
+                const bool arith = (in.op == IrOp::ADD || in.op == IrOp::SUB ||
+                                    in.op == IrOp::MUL) &&
+                                   in.dst != IR_NO_VALUE &&
+                                   in.dst < fn.values.size();
+                for (IrValueId o : in.operands) {
+                    bool good = false;
+                    if (o >= fn.values.size()) continue; // ni se apunta
+                    if (arith && fn.values[in.dst].type == fn.values[o].type) {
+                        auto n = norm_of.find(in.dst);
+                        // Su normalizacion tiene que existir Y quedarse.
+                        good = n != norm_of.end() && replace.count(n->second) == 0;
+                    }
+                    note(o, good);
+                }
+                // Un phi, una llamada o cualquier otra cosa MIRA el valor.
+                for (const auto &pa : in.phi_args)
+                    note(pa.value, false);
+                if (in.func_ptr != IR_NO_VALUE) note(in.func_ptr, false);
+            }
+        }
+        for (const auto &bb : fn.blocks) {
+            for (const auto &ins : bb.instrs) {
+                if (ins.op != IrOp::TRUNC || ins.operands.size() != 1) continue;
+                if (ins.dst == IR_NO_VALUE) continue;
+                if (replace.count(ins.dst) != 0) continue; // ya se va
+                const IrValueId src = ins.operands[0];
+                if (src >= fn.values.size()) continue;
+                if (fn.values[src].type != ins.type) continue;
+                int64_t tlo = 0, thi = 0;
+                if (!type_bounds(ins.type, tlo, thi)) continue;
+                auto it = chain_ok.find(ins.dst);
+                if (it != chain_ok.end() && it->second) replace[ins.dst] = src;
+            }
+        }
+    }
+
+    if (replace.empty()) return false;
+
+    auto remap = [&](IrValueId v) {
+        auto it = replace.find(v);
+        return it != replace.end() ? it->second : v;
+    };
+    for (auto &bb : fn.blocks)
+        for (auto &ins : bb.instrs) {
+            for (IrValueId &o : ins.operands)
+                o = remap(o);
+            for (auto &pa : ins.phi_args)
+                pa.value = remap(pa.value);
+            if (ins.func_ptr != IR_NO_VALUE) ins.func_ptr = remap(ins.func_ptr);
+        }
+    for (auto &bb : fn.blocks)
+        bb.instrs.erase(std::remove_if(bb.instrs.begin(), bb.instrs.end(),
+                                       [&](const IrInstr &ins) {
+                                           return ins.dst != IR_NO_VALUE &&
+                                                  replace.count(ins.dst) > 0;
+                                       }),
+                        bb.instrs.end());
+    return true;
+}
 bool ir_pass_valuefacts_consumers(IrFunction &fn) {
     auto facts = compute_value_facts(fn);
     bool c1 = elim_casts_with_facts(fn, facts);
@@ -13558,11 +13781,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * efectos y el del ASA -- apuntan a la MISMA, que es lo que centralizar
      * significa: no tres copias bien sincronizadas, una sola cosa. */
     auto ranges_of = [&](IrFunction &fn) -> const analysis::RangeFacts & {
-        return *am.get_or_compute_v<analysis::RangeAnalysis,
-                                    std::shared_ptr<const analysis::RangeFacts>>(
-            fn.name, fn.version, [&]() {
-                return analysis::compute_ranges_ptr(fn, facts_of(fn));
-            });
+        return *am.get_or_compute_v<
+            analysis::RangeAnalysis,
+            std::shared_ptr<const analysis::RangeFacts>>(
+            fn.name, fn.version,
+            [&]() { return analysis::compute_ranges_ptr(fn, facts_of(fn)); });
     };
     auto hechos_asm_de = [&](IrFunction &fn) {
         HechosDeAsmParaDse h;
@@ -13689,6 +13912,12 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                  * incluido el caso signed cuando el dividendo se prueba
                  * no-negativo). */
                 APLICA(ir_pass_valuefacts_consumers(fn));
+                /* Quitar la NORMALIZACION que sobra.  Va con los rangos que el
+                 * gestor ya tiene -- los comparten este pase, los efectos y el
+                 * ASA --, asi que no pide un analisis nuevo.  Y va ANTES del
+                 * desenrollado a proposito: lo que estorba al desenrollador es
+                 * que la normalizacion siga ahi cuando el decide. */
+                // APLICA(ir_pass_elide_narrow_norm(fn, ranges_of(fn)));
                 APLICA(ir_pass_reassoc(
                     fn)); /* (x op c1) op c2 -> x op (c1 op c2) */
                 // LICM RECIBE la tabla points-to del AnalysisManager (no la
@@ -13968,6 +14197,27 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             if (fn.is_native) continue;
             if (ir_pass_bulk_memory_lower(fn, facts)) {
                 ir_pass_unreachable(fn);
+                util::CronoTramo crono__("  dce:limpieza-orquestada");
+                ir_pass_dce(fn);
+            }
+        }
+    }
+
+    /* Quitar la NORMALIZACION que sobra, ANTES de desenrollar: lo que estorba
+     * al desenrollador es que siga ahi cuando el decide, no que se quite
+     * despues.
+     *
+     * Va aqui, con el bucle principal ya terminado y el intermedio quieto, y
+     * pidiendo los rangos RECIEN calculados.  Meterlo dentro del bucle no
+     * valia: alli el codigo cambia entre pase y pase y lo que devuelve el
+     * gestor puede ser de una forma que ya no existe -- se comprobo, y la
+     * compilacion se caia. */
+    if (level >= OptLevel::O1) {
+        for (auto &fn : mod.functions) {
+            if (fn.is_native || fn.blocks.empty()) continue;
+            const analysis::IrFacts fx = analysis::build_ir_facts(fn);
+            const analysis::RangeFacts rx = analysis::compute_ranges(fn, fx);
+            if (ir_pass_elide_narrow_norm(fn, rx)) {
                 util::CronoTramo crono__("  dce:limpieza-orquestada");
                 ir_pass_dce(fn);
             }

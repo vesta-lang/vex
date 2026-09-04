@@ -106,6 +106,11 @@ VESTA_ENV_FLAG(UnrollStats, "VESTA_UNROLL_STATS", Report, Loop, Bool, Any)
 VESTA_ENV_FLAG(NoVectorize, "VESTA_NO_VECTORIZE", Emitted, Vector, Bool, Any)
 VESTA_ENV_FLAG(NoZmm, "VESTA_NO_ZMM", Emitted, Vector, Bool, Any)
 VESTA_ENV_FLAG(NoBulkMemory, "VESTA_NO_BULK_MEMORY", Emitted, Vector, Bool, Any)
+/* Apaga la NORMALIZACION de las cuentas de menos de 64 bits.  Existe para
+ * poder medir lo que cuesta -- es una instruccion por cuenta estrecha --, no
+ * para trabajar con ella apagada: sin normalizar, un resultado que se sale de
+ * su tipo se imprime bien y MIENTE al compararse. */
+VESTA_ENV_FLAG(NoNarrowNorm, "VESTA_NO_NARROW_NORM", Emitted, Vector, Bool, Any)
 
 /* -- Ramas: SELECT contra salto ------------------------------------------- */
 VESTA_ENV_FLAG(NoIfConversion, "VESTA_NO_IF_CONVERSION", Emitted, Branch, Bool,
@@ -160,6 +165,30 @@ VESTA_ENV_FLAG(SchedShape, "VESTA_SCHED_SHAPE", Emitted, Scheduler, Bool, Any)
 VESTA_ENV_FLAG(SchedStress, "VESTA_SCHED_STRESS", Emitted, Scheduler, Bool, Any)
 VESTA_ENV_FLAG(SchedStats, "VESTA_SCHED_STATS", Report, Scheduler, Bool, Any)
 VESTA_ENV_FLAG(SchedVerify, "VESTA_SCHED_VERIFY", Report, Scheduler, Bool, Any)
+/* Cuenta que OPCODES caen al camino lento del interprete -- el que hace una
+ * llamada indirecta -- y los vuelca ordenados al terminar.  La tabla de rutas
+ * rapidas cubre unas treinta de casi doscientas cuarenta instrucciones, y cual
+ * conviene anadir depende de lo que EJECUTEN los programas, no de lo que uno
+ * suponga: sin esto la lista se elige a ojo y envejece sin que nadie lo note. */
+VESTA_ENV_FLAG(SlowOps, "VESTA_SLOW_OPS", Report, Scheduler, Bool, Any)
+/* Vuelca el ESTADO de las caches del interprete al morir cada proceso: cuanto
+ * ocupa la icache, cuantas cabeceras de paquete hay, que region esta en uso y
+ * cuanto lleva, y cuantos paquetes siguen vivos.
+ *
+ * Cuesta CERO en el camino caliente porque no cuenta nada mientras se ejecuta:
+ * recorre las estructuras cuando se le pide.  Por eso vive en una variable de
+ * entorno y no detras de un `#define` como la telemetria de paquetes -- esa si
+ * incrementa contadores y tiene que poder desaparecer al compilar --, y por eso
+ * se puede usar sobre el binario que se entrega, que es cuando hace falta. */
+VESTA_ENV_FLAG(CacheDump, "VESTA_CACHE_DUMP", Report, Scheduler, Bool, Any)
+
+/* Apaga la reordenacion DENTRO del paquete.  Es una transformacion, asi que lo
+ * que hace falta poder hacer es contrastar el mismo binario con y sin ella: si
+ * un programa da otro resultado al apagarla, la culpa es suya y no hay que
+ * buscar en otro sitio.  No cuesta en el camino caliente -- se mira UNA vez al
+ * formar cada paquete, no al ejecutarlo --. */
+VESTA_ENV_FLAG(NoBundleReorder, "VESTA_NO_BUNDLE_REORDER", Report, Scheduler,
+               Bool, Any)
 
 /* -- Asignacion de registros ---------------------------------------------- */
 VESTA_ENV_FLAG(AsignadorMaquina, "VESTA_ASIGNADOR_MAQUINA", Emitted, RegAlloc,

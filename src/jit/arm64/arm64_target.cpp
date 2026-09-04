@@ -797,6 +797,27 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                                     : "mov " + a64_name(mi.dst.reg, 4) + ", " +
                                           s)
                            << "\n";
+                } else if (db < 8) {
+                    /* MISMO ancho y menos de 64 bits: NORMALIZAR.
+                     *
+                     * No es una copia.  Un valor de tipo estrecho vive en un
+                     * registro de 64, y una cuenta que se sale de su tipo deja
+                     * ahi los bits de mas: `127 + 1` en i8 deja 128, no -128.
+                     * Se ve bien al imprimirlo -- ese camino trunca -- y miente
+                     * al compararlo. */
+                    if (db == 1)
+                        os << "    " << (sign ? "sxtb " : "uxtb ") << d << ", "
+                           << s << "\n";
+                    else if (db == 2)
+                        os << "    " << (sign ? "sxth " : "uxth ") << d << ", "
+                           << s << "\n";
+                    else // db == 4
+                        os << "    "
+                           << (sign ? "sxtw " + a64_name(mi.dst.reg, 8) + ", " +
+                                          s
+                                    : "mov " + a64_name(mi.dst.reg, 4) + ", " +
+                                          s)
+                           << "\n";
                 } else {
                     os << "    mov " << rn(mi.dst) << ", " << rn(mi.src1)
                        << "\n";

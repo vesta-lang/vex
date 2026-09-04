@@ -1,0 +1,125 @@
+namespace ejemplos.entero_estrecho_normalizado;
+
+// Un entero de menos de 64 bits vale lo que su tipo dice, SIEMPRE.
+//
+// Un valor estrecho vive en un registro de 64, y una cuenta que se sale de su
+// tipo dejaba ahi los bits de mas: `127_i8 + 1` dejaba 128, no -128.  El
+// camino de impresion trunca, asi que SE VEIA bien; el de comparacion no.  El
+// mismo valor respondia dos cosas segun quien preguntara:
+//
+//     i8 pasa = (i8)(127_i8 + 1_i8);
+//     println("${pasa}");           // -128   <- el print normalizaba
+//     println("${pasa == -128_i8}"); // false  <- la comparacion NO
+//
+// Y no era un descuido de un sitio: el resto del compilador YA daba por hecho
+// el invariante -- por eso el optimizador borraba un ensanchado creyendolo
+// redundante -- y nadie lo establecia.  Se arreglo en las tres capas que se
+// tapaban entre si: el bajado emite la normalizacion, el pase que la tomaba
+// por una copia deja de hacerlo, y los tres backends la honran.
+//
+// Aqui se comprueban los SEIS anchos y los CINCO caminos por los que el valor
+// puede llegar a mirarse.  Da igual el modo: interprete, JIT y nativo tienen
+// que coincidir, que es justo lo que no pasaba.
+//
+// Resultado esperado: 42.
+
+// Envolver es legitimo si se declara, y estas cuentas se salen a proposito.
+// El valor OPACO (`n`, que vale cero pero el compilador no lo sabe) impide que
+// se plieguen al compilar: asi se comprueba la normalizacion de EJECUCION, que
+// es la que fallaba.
+i8 arriba_i8(i8 n) {
+	return (i8)(127_i8 + 1_i8 + n);
+}
+
+u8 arriba_u8(u8 n) {
+	return (u8)(255_u8 + 1_u8 + n);
+}
+
+i16 arriba_i16(i16 n) {
+	return (i16)(32_767_i16 + 1_i16 + n);
+}
+
+u16 arriba_u16(u16 n) {
+	return (u16)(65_535_u16 + 1_u16 + n);
+}
+
+i32 arriba_i32(i32 n) {
+	return (i32)(2_147_483_647_i32 + 1_i32 + n);
+}
+
+u32 arriba_u32(u32 n) {
+	return (u32)(4_294_967_295_u32 + 1_u32 + n);
+}
+
+i32 main() {
+	i64 z = 0_i64;
+
+	// (1) Los SEIS anchos, con y sin signo.  Cada uno tiene que dar la vuelta
+	// a SU tope, no al de 64 bits.
+	if (arriba_i8((i8)z) != -128_i8) {
+		println("(1) i8: ${arriba_i8((i8)z)}, esperaba -128");
+		return 1_i32;
+	}
+	if (arriba_u8((u8)z) != 0_u8) {
+		println("(1) u8: ${arriba_u8((u8)z)}, esperaba 0");
+		return 2_i32;
+	}
+	if (arriba_i16((i16)z) != -32_768_i16) {
+		println("(1) i16: ${arriba_i16((i16)z)}, esperaba -32768");
+		return 3_i32;
+	}
+	if (arriba_u16((u16)z) != 0_u16) {
+		println("(1) u16: ${arriba_u16((u16)z)}, esperaba 0");
+		return 4_i32;
+	}
+	if (arriba_i32((i32)z) != -2_147_483_648_i32) {
+		println("(1) i32: ${arriba_i32((i32)z)}, esperaba -2147483648");
+		return 5_i32;
+	}
+	if (arriba_u32((u32)z) != 0_u32) {
+		println("(1) u32: ${arriba_u32((u32)z)}, esperaba 0");
+		return 6_i32;
+	}
+
+	// (2) Los CINCO caminos por los que se puede mirar el mismo valor.  El de
+	// memoria ya funcionaba -- guardar y releer normaliza --; los otros no, y
+	// que UNO funcionara y los demas no es lo que hacia el fallo tan dificil
+	// de ver.
+	i8 x = arriba_i8((i8)z);
+
+	if (!(x == -128_i8)) { // comparar
+		println("(2) comparar");
+		return 7_i32;
+	}
+	i8[2] arr;
+	arr[0] = x;
+	if (!(arr[0] == -128_i8)) { // pasar por memoria
+		println("(2) memoria");
+		return 8_i32;
+	}
+	if (!(arriba_i8((i8)z) == -128_i8)) { // cruzar una funcion
+		println("(2) funcion");
+		return 9_i32;
+	}
+	i64 w = (i64)x;
+	if (w != -128) { // ensanchar a mano
+		println("(2) ensanchar: ${w}");
+		return 10_i32;
+	}
+	if (!(x == x)) { // consigo mismo
+		println("(2) consigo mismo");
+		return 11_i32;
+	}
+
+	// (3) Y lo que NO se sale sigue valiendo lo de siempre: la normalizacion
+	// que el compilador demuestra innecesaria se quita, y el resultado no
+	// cambia.
+	i8 cabe = 100_i8 + 27_i8 + (i8)z;
+	if (cabe != 127_i8) {
+		println("(3) cabe: ${cabe}, esperaba 127");
+		return 12_i32;
+	}
+
+	println("estrecho normalizado: ${x} ${arriba_u8((u8)z)} ${cabe}");
+	return 42_i32;
+}

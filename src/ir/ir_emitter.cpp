@@ -2654,7 +2654,33 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     }
                 }
             }
-            // Mismo ancho: solo el mov inicial.
+            /* MISMO ancho y menos de 64 bits: NORMALIZAR.
+             *
+             * No es un caso vacio.  Un valor de tipo estrecho vive en un
+             * registro de 64, y una cuenta que se sale de su tipo deja ahi
+             * los bits de mas: `127_i8 + 1` deja 128, no -128.  Se ve bien al
+             * imprimirlo -- ese camino trunca -- y MIENTE al compararlo, que
+             * es la peor forma de estar mal: el mismo valor responde dos
+             * cosas segun quien pregunte.
+             *
+             * El resto del compilador ya da por hecho que un valor estrecho
+             * esta normalizado: por eso el optimizador borra un ensanchado
+             * que le parece redundante.  El invariante lo establece esto.
+             *
+             * Con el mismo ancho no hay nada que truncar, asi que basta
+             * replicar el bit de signo (o poner a cero los altos): una sola
+             * instruccion. */
+            else if (dst_bytes < 8) {
+                const int dst_bits = static_cast<int>(dst_bytes) * 8;
+                if (dst_signed) {
+                    ctx.out.emit(emmit::Mnemonic::SEXT, rd, dst_bits);
+                } else {
+                    const uint64_t mask = (1ULL << dst_bits) - 1ULL;
+                    emit_mov_scratch_imm(ctx, scratch,
+                                         static_cast<int64_t>(mask));
+                    ctx.out.emit(emmit::Mnemonic::AND, rd, scratch);
+                }
+            }
             ctx.store_spilled(ins.dst);
         }
         break;

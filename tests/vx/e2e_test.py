@@ -5248,6 +5248,16 @@ fails_case("desbordamiento_sin_cast",
            "una cuenta que se sale del tipo, sin declararlo, es un ERROR",
            "538_desbordamiento_sin_cast.vx", "VX2050")
 
+# Y cuando SI envuelve -- porque el cast lo declara --, tiene que envolver
+# BIEN.  Un valor estrecho vive en un registro de 64 y los bits de mas hacian
+# que el mismo valor se imprimiera bien y mintiera al compararse.  Los seis
+# anchos por los cinco caminos, y los tres modos tienen que coincidir: que UNO
+# de los caminos (el de memoria) funcionara y los demas no es lo que hacia el
+# fallo tan dificil de ver.
+modes3_case("entero_estrecho_normalizado",
+            "un entero de menos de 64 bits vale lo que su tipo dice, siempre",
+            "539_entero_estrecho_normalizado.vx", 42)
+
 # El LINTER no tenia ni un caso en la suite, asi que apagar una familia entera
 # no habria hecho fallar nada.  Estas dos fijan las dos que consultan dominios
 # distintos del ASA: la de bucles y la de operaciones de bloque.

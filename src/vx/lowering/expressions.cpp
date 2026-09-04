@@ -17,7 +17,8 @@
  * operandos antes -- con el ancho y el signo correctos -- para que el resultado
  * sea el que el lenguaje promete y no el que la maquina daria por accidente.
  */
-#include "util/fnv.h" // la semilla y el primo, en UN sitio
+#include "util/env_flags.h" // el interruptor para MEDIR la normalizacion
+#include "util/fnv.h"       // la semilla y el primo, en UN sitio
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
@@ -37,13 +38,23 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
      * hay conversion que hacer -- asi que sin marcarlo aqui se perderia, y el
      * compilador rechazaria una vuelta que estaba declarada.
      *
-     * Va antes que todo lo demas porque solo mira la FORMA de lo escrito; el
-     * bajado del operando sigue igual despues. */
-    if (e->target_type && e->operand->kind == ast::NodeKind::BinaryExpr) {
-        auto *b = static_cast<ast::BinaryExpr *>(e->operand.get());
-        if (b->op == ast::BinOp::Add || b->op == ast::BinOp::Sub ||
-            b->op == ast::BinOp::Mul)
+     * Marca el SUBARBOL entero, no solo la operacion de arriba: quien escribe
+     * `(i8)(127 + 1 + n)` lo esta diciendo de toda la cuenta, y exigir un cast
+     * por cada suma intermedia seria pedir ruido para declarar una sola cosa.
+     * Se para en cualquier nodo que no sea aritmetica entera -- una llamada,
+     * un indice --, porque ahi ya empieza otra cuenta. */
+    if (e->target_type && e->operand) {
+        std::function<void(ast::Expr *)> marcar = [&](ast::Expr *x) {
+            if (x == nullptr || x->kind != ast::NodeKind::BinaryExpr) return;
+            auto *b = static_cast<ast::BinaryExpr *>(x);
+            if (b->op != ast::BinOp::Add && b->op != ast::BinOp::Sub &&
+                b->op != ast::BinOp::Mul)
+                return;
             b->wrap_declared = true;
+            marcar(b->lhs.get());
+            marcar(b->rhs.get());
+        };
+        marcar(e->operand.get());
     }
 
     // Compound literal `(Struct){...}`: construir un struct anonimo inline.
@@ -1116,7 +1127,73 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     // comprueba si la cuenta cabe.
     ins.wrap_ok = e->wrap_declared;
     emit(current_block_, std::move(ins));
-    return dst;
+    /* Y si el tipo es ESTRECHO, normalizar el resultado a su ancho.
+     *
+     * Un valor de tipo estrecho vive en un registro de 64, y una cuenta que
+     * se sale deja ahi los bits de mas: `127_i8 + 1` deja 128, no -128.  Se
+     * ve bien al imprimirlo -- ese camino trunca -- y MIENTE al compararlo.
+     * El resto del compilador ya da por hecho que un valor estrecho esta
+     * normalizado (por eso el optimizador borra ensanchados que le parecen
+     * redundantes); esto es lo que lo establece.
+     *
+     * Sale como un TRUNC al MISMO tipo, o sea visible en el intermedio y no
+     * escondido en cada backend: asi lo ven los tres por igual y el
+     * optimizador puede quitar los que demuestre innecesarios. */
+    /* La DIRECCION no se normaliza, aunque su tipo sea estrecho.  El calculo
+     * de un indice sobre una vista con paso de ejecucion sale tipado `u32` y
+     * lleva dentro un puntero del ANFITRION, de 64 bits: recortarlo a 32 no
+     * arregla un valor, destruye una direccion. */
+    const bool toca_direccion =
+        fn_->values[dst].is_host_ptr ||
+        (l < fn_->values.size() && fn_->values[l].is_host_ptr) ||
+        (r < fn_->values.size() && fn_->values[r].is_host_ptr);
+    if (toca_direccion) return dst;
+    return normalize_narrow(dst, result_ir, e->loc.line);
+}
+
+/**
+ * @brief Deja un valor de tipo estrecho normalizado a SU ancho.
+ *
+ * Un valor de menos de 64 bits vive en un registro de 64, y una cuenta que se
+ * sale de su tipo deja ahi los bits de mas: `127_i8 + 1` deja 128, no -128.
+ * El camino de impresion trunca, asi que SE VE bien; el de comparacion no,
+ * asi que el mismo valor responde dos cosas segun quien pregunte.
+ *
+ * Sale como un `TRUNC` al MISMO tipo -- visible en el intermedio, no
+ * escondido dentro de cada backend --: asi lo ven los tres por igual y el
+ * optimizador puede quitar los que demuestre innecesarios.
+ *
+ * @param v El valor recien producido.
+ * @param t Su tipo.
+ * @param line Linea fuente, para la depuracion.
+ * @return El valor normalizado, o @p v tal cual si el tipo no lo necesita.
+ */
+ir::IrValueId Lowering::normalize_narrow(ir::IrValueId v, ir::IrType t,
+                                         uint32_t line) {
+    if (v == ir::IR_NO_VALUE) return v;
+    /* Se puede apagar para MEDIR lo que cuesta; no para trabajar asi.  Sin
+     * normalizar, un resultado que se sale de su tipo se imprime bien y
+     * miente al compararse. */
+    static const bool sin_norm = util::flag_on(util::FlagId::NoNarrowNorm);
+    if (sin_norm) return v;
+    switch (t) {
+    case ir::IrType::I8:
+    case ir::IrType::I16:
+    case ir::IrType::I32:
+    case ir::IrType::U8:
+    case ir::IrType::U16:
+    case ir::IrType::U32: break;
+    default: return v; // 64 bits o no entero: no hay bits de mas
+    }
+    const ir::IrValueId out = fn_->new_value(t);
+    ir::IrInstr tr{};
+    tr.op = ir::IrOp::TRUNC;
+    tr.type = t;
+    tr.dst = out;
+    tr.operands = {v};
+    tr.source_line = line;
+    emit(current_block_, std::move(tr));
+    return out;
 }
 
 ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
