@@ -556,28 +556,18 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
                                  base_id->name + "'");
             return ir::IR_NO_VALUE;
         }
-        // AOT (native_poo_): un campo estatico es almacenamiento por-clase,
-        // sin ClassRegistry.  Lo mapeamos a un GLOBAL plano (slot static_data
-        // unico por <Clase>_<campo>) -> STR_LIT_ADDR + LOAD, igual que un
-        // global runtime.  Evita findclass+getstatic (runtime, no bare).
-        if (native_poo_) {
-            const ir::IrType ir_t = ir_type_from_primitive(s_typ.kind);
-            const uint64_t slot = get_or_create_runtime_global_slot(
-                "__static_" + base_id->name + "_" + e->field_name, 8);
-            ir::IrValueId v_addr = emit_str_lit_addr(slot, e->loc.line, true);
-            ir::IrValueId v_val = fn_->new_value(
-                ir_t == ir::IrType::VOID ? ir::IrType::I64 : ir_t);
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = (ir_t == ir::IrType::VOID) ? ir::IrType::I64 : ir_t;
-                ld.dst = v_val;
-                ld.operands = {v_addr};
-                ld.source_line = e->loc.line;
-                emit(current_block_, std::move(ld));
-            }
-            return v_val;
-        }
+        /* Aqui ya no se decide a donde va el programa.
+         *
+         * Habia una rama que, para el camino nativo, bajaba el campo a un
+         * hueco global -- porque alli no hay registro de clases --, mientras
+         * el interprete y el JIT recibian `findclass` + `getstatic`.  O sea:
+         * el mismo fuente producia un intermedio DISTINTO segun a donde fuera
+         * a parar, y eso es lo que hace que un artefacto guardado no valga
+         * para el otro camino.
+         *
+         * Ahora se emite lo mismo para los tres y quien lo baja es cada
+         * backend, como ya hacia el JIT: `aot/lower/statics.cpp` lo convierte
+         * en el hueco global usando el nombre que la instruccion trae. */
         // 1) Sprint 5: findclass via IR ops (ALLOCA + STORE + FINDCLASS).
         const uint64_t cname_idx = intern_class_name(*out_mod_, base_id->name);
         const uint32_t cname_len = static_cast<uint32_t>(base_id->name.size());
@@ -592,7 +582,8 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         // Emite GETSTATIC IR op; el bytecode lee i64 que truncamos por tipo
         // mas abajo si el SSA val se usa como ancho menor (semantica heredada).
         ir::IrValueId v_val =
-            emit_getstatic(v_cls, static_cast<uint64_t>(s_off), e->loc.line);
+            emit_getstatic(v_cls, static_cast<uint64_t>(s_off), e->loc.line,
+                           "__static_" + base_id->name + "_" + e->field_name);
         // Cast al tipo logico del field si difiere de I64.
         if (ir_t != ir::IrType::I64) {
             v_val = cast_if_needed(v_val, ir::IrType::I64, ir_t, e->loc.line,
@@ -822,15 +813,8 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         const ir::IrType field_ir = ir_type_from_primitive(s_typ.kind);
         const ir::IrValueId rhs_cast =
             cast_if_needed(rhs, fn_->values[rhs].type, field_ir, loc.line);
-        // AOT (native_poo_): campo estatico = global plano -> STR_LIT_ADDR +
-        // STORE (mismo slot que la lectura: <Clase>_<campo>).
-        if (native_poo_) {
-            const uint64_t slot = get_or_create_runtime_global_slot(
-                "__static_" + base_id->name + "_" + target->field_name, 8);
-            ir::IrValueId v_addr = emit_str_lit_addr(slot, loc.line, true);
-            emit_store_typed(v_addr, rhs_cast, field_ir, loc.line);
-            return rhs_cast;
-        }
+        // Escribir tampoco decide a donde va el programa: mismo motivo que en
+        // la lectura, unas lineas mas arriba.
         // 1) Sprint 5: findclass via IR ops.
         const uint64_t cname_idx = intern_class_name(*out_mod_, base_id->name);
         const uint32_t cname_len = static_cast<uint32_t>(base_id->name.size());
@@ -844,7 +828,8 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                                        /*is_explicit=*/true);
         }
         emit_setstatic(v_cls, v_val_i64, static_cast<uint64_t>(s_off),
-                       loc.line);
+                       loc.line,
+                       "__static_" + base_id->name + "_" + target->field_name);
         return rhs_cast;
     }
 

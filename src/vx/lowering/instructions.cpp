@@ -279,7 +279,8 @@ ir::IrValueId Lowering::emit_atomic_add_i64(ir::IrValueId v_addr,
 }
 
 ir::IrValueId Lowering::emit_getstatic(ir::IrValueId v_cls, uint64_t offset,
-                                       uint32_t line) {
+                                       uint32_t line,
+                                       const std::string &slot_name) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
     ir::IrInstr ins{};
     ins.op = ir::IrOp::GETSTATIC;
@@ -287,19 +288,35 @@ ir::IrValueId Lowering::emit_getstatic(ir::IrValueId v_cls, uint64_t offset,
     ins.dst = v;
     ins.operands = {v_cls};
     ins.imm = offset;
+    /* Como se llama el campo, ademas de donde esta.
+     *
+     * El nombre no es una decision de nadie: es un HECHO del programa, y el
+     * intermedio puede llevarlo sin dejar de ser tonto.  Quien lo necesita es
+     * el codigo nativo, donde un campo estatico no vive en ningun registro de
+     * clases sino en un hueco global, y ese hueco hay que saber nombrarlo.
+     *
+     * Sin esto, el unico que podia bajar un estatico a nativo era el frontend
+     * -- porque solo el tenia el nombre --, y de ahi que emitiera un
+     * intermedio DISTINTO segun a donde fuera a parar. */
+    ins.func_name = slot_name;
     ins.source_line = line;
     emit(current_block_, std::move(ins));
     return v;
 }
 
 void Lowering::emit_setstatic(ir::IrValueId v_cls, ir::IrValueId v_val,
-                              uint64_t offset, uint32_t line) {
+                              uint64_t offset, uint32_t line,
+                              const std::string &slot_name) {
     ir::IrInstr ins{};
     ins.op = ir::IrOp::SETSTATIC;
     ins.type = ir::IrType::VOID;
     ins.dst = ir::IR_NO_VALUE;
     ins.operands = {v_cls, v_val};
     ins.imm = offset;
+    // El mismo nombre que en la lectura, y por el mismo motivo: ver
+    // `emit_getstatic`.  Que los dos lo nombren igual es lo que hace que
+    // escribir y leer den en el mismo hueco.
+    ins.func_name = slot_name;
     ins.source_line = line;
     emit(current_block_, std::move(ins));
 }

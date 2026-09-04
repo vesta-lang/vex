@@ -1740,19 +1740,16 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         ir::ir_print(aot_mod, std::cerr);
         std::cerr << "=============================\n";
     }
-    aot::AotCompatReport rep = aot::aot_analyze_module(aot_mod, tgt);
-    std::cout << "[aot] target=" << tier_name
-              << (aot_freestanding ? " --freestanding" : "") << ": "
-              << aot_mod.functions.size() << " funcion(es), "
-              << rep.ok_functions.size() << " compilable(s) a nativo.\n";
-
-    if (!rep.compatible) {
-        std::cerr << rep.render();
-        std::cerr << "[aot] modulo NO compilable a nativo en este target "
-                     "(ver incompatibilidades arriba).\n";
-        return EXIT_FAILURE;
-    }
-
+    /* Que se puede compilar a nativo se decide MAS ABAJO, cuando las ops que
+     * este backend sabe bajar ya estan bajadas.
+     *
+     * Estaba aqui, antes de la bajada, y por eso juzgaba un intermedio que no
+     * es el que se compila: rechazaba `getstatic` -- "necesita el registro de
+     * clases" -- cuando unas lineas despues se convierte en leer un hueco
+     * global, sin registro ninguno.  Con el veredicto delante de la bajada, la
+     * unica forma de que un campo estatico llegara a nativo era que el
+     * FRONTEND lo bajara distinto, que es justo el acoplamiento que se quiere
+     * quitar. */
     //  AOT.2: re-bajar las ops sintetizadas (RAW_ALLOC/RAW_FREE/
     // PANIC) a CALL a simbolos externos (convencion libc; los resuelve
     // el linker -> el .o NO depende de libc).  Tras esto el selector ve
@@ -1898,6 +1895,22 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     }
 
     aot::aot_lower_runtime(aot_mod, lcfg);
+
+    /* Y AHORA se decide si esto se puede compilar a nativo, sobre el
+     * intermedio que de verdad va a compilarse.  Antes se decidia antes de
+     * bajar, asi que se juzgaba a un programa por operaciones que este backend
+     * ya sabe quitarse de encima. */
+    aot::AotCompatReport rep = aot::aot_analyze_module(aot_mod, tgt);
+    std::cout << "[aot] target=" << tier_name
+              << (aot_freestanding ? " --freestanding" : "") << ": "
+              << aot_mod.functions.size() << " funcion(es), "
+              << rep.ok_functions.size() << " compilable(s) a nativo.\n";
+    if (!rep.compatible) {
+        std::cerr << rep.render();
+        std::cerr << "[aot] modulo NO compilable a nativo en este target "
+                     "(ver incompatibilidades arriba).\n";
+        return EXIT_FAILURE;
+    }
 
     // Merge del slab (stdlib/vx/vx_mem.vx, ya compilado en mem_mod)
     // DESPUES de aot_lower: ahora RAW_ALLOC/calloc/RAW_FREE ya son CALL
