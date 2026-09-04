@@ -605,9 +605,9 @@ std::string default_vxdbg_dir() {
 bool emit_vxdbg_source(
     const TypeChecker &tc,
     const std::vector<std::pair<std::string, std::string>> &symbol_links,
-    const std::vector<vxdbg::SourceExtent> &spans,
-    const std::string &source_path, const std::string &source_text,
-    const std::string &out_dir, VxdbgEmitStats &stats, std::string &err) {
+    std::vector<vxdbg::SourceExtent> spans, const std::string &source_path,
+    const std::string &source_text, const std::string &out_dir,
+    VxdbgEmitStats &stats, std::string &err) {
     (void)err;
     /* EMPAQUETADO.  Esta emision escribe un nodo por entidad del programa --
      * medido, 2.030 para 2.004 lineas de fuente --, y con un fichero por nodo
@@ -694,11 +694,17 @@ bool emit_vxdbg_source(
     // reescribir los dos por mover una llave de sitio.
     if (!spans.empty()) {
         vxdbg::SpanMap sm;
-        for (const auto &e : spans)
-            sm.add(e);
-        stats.spans = sm.extents;
+        /* De golpe, no uno a uno.  Anadirlos de uno en uno manteniendo el orden
+         * desplaza la cola del vector en cada insercion, y cada elemento
+         * desplazado arrastra el nombre de su funcion: con un tramo por
+         * sentencia sale cuadratico en el tamano del fichero, y era lo mas caro
+         * de compilar -- mas que optimizar. */
+        sm.build(std::move(spans));
         vxdbg::ContentHash hs;
         if (vxdbg::store_node(store, sm, hs)) stats.span_map = hs;
+        // Y despues de guardarlos, se los lleva: nadie mas mira `sm`, asi que
+        // copiar el vector entero seria reservar otra vez todos los nombres.
+        stats.spans = std::move(sm.extents);
     }
     return true;
 }

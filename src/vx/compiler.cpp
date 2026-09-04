@@ -621,7 +621,7 @@ CompileResult compile_vx_source(const std::string &source,
         if (fd->is_string_concat_override) {
             if (!res.string_concat_override.empty()) {
                 res.ok = false;
-                res.diagnostics.error(SourceLoc{opts.module_name, 0, 0},
+                res.diagnostics.error(SourceLoc{util::intern_name(opts.module_name), 0, 0},
                                       "multiples @StringConcat: '" +
                                           res.string_concat_override + "' y '" +
                                           fd->name + "'");
@@ -632,7 +632,7 @@ CompileResult compile_vx_source(const std::string &source,
         if (fd->is_string_eq_override) {
             if (!res.string_eq_override.empty()) {
                 res.ok = false;
-                res.diagnostics.error(SourceLoc{opts.module_name, 0, 0},
+                res.diagnostics.error(SourceLoc{util::intern_name(opts.module_name), 0, 0},
                                       "multiples @StringEq: '" +
                                           res.string_eq_override + "' y '" +
                                           fd->name + "'");
@@ -667,7 +667,7 @@ CompileResult compile_vx_source(const std::string &source,
                 if (!res.sync_enter_override.empty()) {
                     res.ok = false;
                     res.diagnostics.error(
-                        SourceLoc{opts.module_name, 0, 0},
+                        SourceLoc{util::intern_name(opts.module_name), 0, 0},
                         "multiples @SyncImpl monitor_enter: '" +
                             res.sync_enter_override + "' y '" + fd->name + "'");
                     return res;
@@ -677,7 +677,7 @@ CompileResult compile_vx_source(const std::string &source,
                 if (!res.sync_exit_override.empty()) {
                     res.ok = false;
                     res.diagnostics.error(
-                        SourceLoc{opts.module_name, 0, 0},
+                        SourceLoc{util::intern_name(opts.module_name), 0, 0},
                         "multiples @SyncImpl monitor_exit: '" +
                             res.sync_exit_override + "' y '" + fd->name + "'");
                     return res;
@@ -759,7 +759,7 @@ CompileResult compile_vx_source(const std::string &source,
     if (res.sync_enter_override.empty() != res.sync_exit_override.empty()) {
         res.ok = false;
         res.diagnostics.error(
-            SourceLoc{opts.module_name, 0, 0},
+            SourceLoc{util::intern_name(opts.module_name), 0, 0},
             std::string("@SyncImpl incompleto: se requiere el par "
                         "monitor_enter + monitor_exit (falta '") +
                 (res.sync_enter_override.empty() ? "monitor_enter"
@@ -825,12 +825,18 @@ CompileResult compile_vx_source(const std::string &source,
     {
         VxdbgEmitStats st;
         std::string dbg_err;
+        /* Los tramos se LLEVAN, no se copian.  Cada uno guarda el nombre de su
+         * funcion y hay uno por sentencia, asi que copiarlos era reservar una
+         * cadena por sentencia del fichero para tirar la del bajado justo
+         * despues.  Aqui se acaba de bajar y nadie mas los va a mirar. */
         std::vector<vxdbg::SourceExtent> spans;
-        spans.reserve(lo.emitted_spans().size());
-        for (const auto &e : lo.emitted_spans())
-            spans.push_back({e.symbol, e.line, e.column, e.length});
-        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), spans, filename,
-                               source, opts.vxdbg_dir, st, dbg_err)) {
+        auto emitted = lo.take_emitted_spans();
+        spans.reserve(emitted.size());
+        for (auto &e : emitted)
+            spans.push_back({std::move(e.symbol), e.line, e.column, e.length});
+        if (!emit_vxdbg_source(tc, lo.emitted_symbols(), std::move(spans),
+                               filename, source, opts.vxdbg_dir, st,
+                               dbg_err)) {
             std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
         }
         res.vxdbg_artifact_map = st.artifact_map;
@@ -894,7 +900,7 @@ CompileResult compile_vx_source(const std::string &source,
                 }
             if (vf_path.empty()) {
                 res.diagnostics.warning(
-                    SourceLoc{mod_name, 0, 0},
+                    SourceLoc{util::intern_name(mod_name), 0, 0},
                     "fiber_swapctx: no encuentro stdlib/vx/vx_fiber.vx; el "
                     "context-switch de fibra no estara disponible en JIT");
             } else {
@@ -1113,15 +1119,15 @@ CompileResult compile_vx_source(const std::string &source,
                     res.port_warnings = std::move(ptres.warnings);
                 } else {
                     SourceLoc loc;
-                    loc.file = filename;
+                    loc.set_file(filename);
                     for (const auto &e : ptres.errors) {
-                        res.diagnostics.error(SourceLoc{filename, 0, 0},
+                        res.diagnostics.error(SourceLoc{util::intern_name(filename), 0, 0},
                                               std::string("port-c: ") + e);
                     }
                 }
             } else {
                 SourceLoc loc;
-                loc.file = filename;
+                loc.set_file(filename);
                 res.diagnostics.error(
                     std::move(loc), std::string("port: target '") +
                                         opts.port_target +
@@ -1283,7 +1289,7 @@ CompileResult compile_vx_source(const std::string &source,
                 for (const analyze::IntWrap &w :
                      analyze::find_int_wraparounds(f)) {
                     vx::SourceLoc loc;
-                    loc.file = filename;
+                    loc.set_file(filename);
                     loc.line = static_cast<int>(w.line);
                     res.diagnostics.diag(
                         loc, vx::DiagLevel::ERR, "VX2050",
@@ -1440,8 +1446,14 @@ CompileResult compile_vx_source(const std::string &source,
         /* Sobre el codigo que DE VERDAD se emite, y ANTES de moverlo.  Mismo
          * comprobador que usa el camino de proyecto y que `--analyze`: un solo
          * criterio para los tres. */
+        /* La base de hechos de ESTA compilacion, una sola.  Lo que un
+         * consumidor pida -- el resumen de efectos, los rangos, la memoria --
+         * queda aqui para el siguiente que lo necesite en el mismo momento, en
+         * vez de que cada uno se lo calcule entero. */
+        analysis::asa::FactBase fact_base;
         if (opts.report_bounds)
-            vx_report_bounds(irmod_for_section, res.diagnostics, filename);
+            vx_report_bounds(irmod_for_section, res.diagnostics, filename,
+                             fact_base);
         /* Precondiciones del asm.  SIEMPRE, no bajo opcion: una instruccion
          * cuya exigencia no se cumple no da un resultado peor, hace caer el
          * programa -- y callarselo ya costo descubrirlo ejecutando.
@@ -1574,7 +1586,7 @@ CompileResult compile_vx_source(const std::string &source,
         if (!eres.ok) {
             // Volcar el error del emisor al sumidero unificado.
             SourceLoc loc;
-            loc.file = filename;
+            loc.set_file(filename);
             res.diagnostics.error(
                 std::move(loc), std::string("emisor IR fallo: ") + eres.error);
             res.ok = false;

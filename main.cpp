@@ -404,7 +404,7 @@ static bool warn_unresolved_inject(const vx::CompileResult &cr,
     d.level = vx::DiagLevel::WARN;
     d.code = "VXA052";
     d.args.push_back(vx_path);
-    d.loc.file = vx_path;
+    d.loc.set_file(vx_path);
     vx::print_diagnostic(std::cerr, d);
     return true;
 }
@@ -3702,6 +3702,13 @@ int main(int argc, char *argv[]) {
 #ifdef VESTA_HAS_PREPROCESSOR
         {
             vpp::Preprocessor pp;
+            /* El lexer de Vesta ya se salta los comentarios por su cuenta -- con
+             * su propio diagnostico de bloque sin cerrar --, asi que un fichero
+             * sin directivas y sin macros no necesita que se toque NADA.
+             * Ademas de ahorrar el trabajo, deja las columnas donde estan en el
+             * fichero de verdad: quitar un comentario mueve lo que venia
+             * detras. */
+            pp.options().passthrough_if_nothing_to_expand = true;
             std::string source_dir =
                 std::filesystem::path(vx_path).parent_path().string();
             pp.options().include_paths.push_back(source_dir);
@@ -4891,7 +4898,7 @@ int main(int argc, char *argv[]) {
                 d.code = "VXA051";
                 d.args.push_back(copts.module_name.empty() ? vx_path
                                                            : copts.module_name);
-                d.loc.file = vx_path;
+                d.loc.set_file(vx_path);
                 vx::print_diagnostic(std::cerr, d);
                 std::remove(tmp_vel_path.c_str());
             }
@@ -5419,7 +5426,7 @@ int main(int argc, char *argv[]) {
             d.code = "VXA053";
             d.args.push_back(vx_path);
             d.args.push_back(std::to_string(rc));
-            d.loc.file = vx_path;
+            d.loc.set_file(vx_path);
             vx::print_diagnostic(std::cerr, d);
         }
         return rc;

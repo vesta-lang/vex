@@ -47,8 +47,19 @@ void ArtifactMap::add(std::string symbol, LanguageEntityId entity) {
 namespace {
 /// Orden por (simbolo, linea): el mismo con el que se guardan y se buscan.
 bool extent_less(const SourceExtent &a, const SourceExtent &b) {
-    if (a.symbol != b.symbol) return a.symbol < b.symbol;
+    /* Una sola comparacion de cadenas, no dos.  Preguntar primero si son
+     * distintas y luego cual va antes recorre el nombre DOS veces, y los
+     * nombres que se comparan aqui comparten prefijo casi siempre -- son los
+     * simbolos de un mismo modulo, con su espacio de nombres por delante --,
+     * que es el caso en el que recorrerlo cuesta. */
+    const int c = a.symbol.compare(b.symbol);
+    if (c != 0) return c < 0;
     return a.line < b.line;
+}
+
+/// Dos tramos son EL MISMO sitio si coinciden simbolo y linea.
+bool extent_same_place(const SourceExtent &a, const SourceExtent &b) {
+    return a.line == b.line && a.symbol == b.symbol;
 }
 } // namespace
 
@@ -71,6 +82,14 @@ void SpanMap::add(SourceExtent e) {
     if (it != extents.end() && it->symbol == e.symbol && it->line == e.line)
         return;
     extents.insert(it, std::move(e));
+}
+
+void SpanMap::build(std::vector<SourceExtent> in) {
+    extents = std::move(in);
+    std::stable_sort(extents.begin(), extents.end(), extent_less);
+    extents.erase(
+        std::unique(extents.begin(), extents.end(), extent_same_place),
+        extents.end());
 }
 
 std::string CacheRootRepository::path_for(BuildId build) const {

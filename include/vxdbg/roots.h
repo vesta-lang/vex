@@ -175,6 +175,23 @@ struct SpanMap {
      * @param e Tramo.
      */
     void add(SourceExtent e);
+
+    /**
+     * @brief Construye el mapa de golpe a partir de todos los tramos.
+     *
+     * Hace lo mismo que llamar a @c add con cada uno, pero sin pagar el precio
+     * de ir manteniendo el orden a cada paso: insertar en medio de un vector
+     * ordenado desplaza toda la cola, y cada elemento desplazado arrastra su
+     * cadena.  Con un tramo por sentencia eso es cuadratico en el numero de
+     * sentencias del fichero, y era lo mas caro de compilar.
+     *
+     * Aqui se ordena UNA vez.  El orden es estable a proposito: cuando una
+     * linea tiene varias sentencias se queda la PRIMERA, que es exactamente lo
+     * que hacia el otro camino, y sin estabilidad se quedaria una cualquiera.
+     *
+     * @param in Los tramos, en cualquier orden (se consume).
+     */
+    void build(std::vector<SourceExtent> in);
 };
 
 /**

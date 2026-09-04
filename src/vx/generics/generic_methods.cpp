@@ -130,7 +130,7 @@ std::string TypeChecker::monomorphize_method(const std::string &container,
     mi.is_final = cloned->is_final;
     mi.is_inline = cloned->is_inline;
     mi.defining_class = container;
-    mi.source_file = tmpl->loc.file;
+    mi.source_file = tmpl->loc.file();
     mi.source_line = tmpl->loc.line;
     mi.return_type = cloned->return_type
                          ? type_from_node(cloned->return_type.get())

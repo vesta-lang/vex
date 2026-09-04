@@ -44,6 +44,7 @@
 #include <utility>
 #include <vector>
 
+#include "util/name_pool.h"       // la ruta del fichero, compartida
 #include "vx/diag/diag_catalog.h" // catalogo multi-idioma (formateo por codigo)
 
 namespace vx {
@@ -100,8 +101,18 @@ struct ExpansionInfo {
 };
 
 struct SourceLoc {
-    std::string
-        file; ///< Ruta o nombre logico del fichero (puede ser "<stdin>").
+    /// Ruta o nombre logico del fichero (puede ser "<stdin>"), COMPARTIDA.
+    ///
+    /// No se guarda por valor: una posicion va en cada nodo del arbol, en cada
+    /// token y en cada instruccion del intermedio, y una ruta no cabe en el
+    /// buffer pequeno de `std::string`, asi que por valor reservaba memoria en
+    /// cada COPIA -- y copiar posiciones es de lo que mas hace el compilador.
+    /// El pozo la reparte una vez (@c util::intern_name) y aqui solo viaja el
+    /// puntero.  Nunca nulo: sin fichero apunta a la cadena vacia compartida.
+    ///
+    /// Es el mismo arreglo que el preprocesador ya tenia en su
+    /// `vpp::SourceLocation`, por el mismo motivo y con los mismos numeros.
+    const std::string *file_name = util::empty_name();
     uint32_t line = 1;   ///< Numero de linea (1-based).
     uint32_t column = 1; ///< Numero de columna (1-based, en bytes).
     uint32_t offset =
@@ -110,6 +121,19 @@ struct SourceLoc {
     /// De que expansion vino, o @c nullptr si se escribio tal cual.  No
     /// propietario: lo posee quien expandio.
     const ExpansionInfo *expansion = nullptr;
+
+    /// @brief La ruta del fichero.  @return El nombre; vacio si no consta.
+    const std::string &file() const noexcept { return *file_name; }
+
+    /**
+     * @brief Apunta a un fichero por su nombre, internandolo.
+     *
+     * Toma el cerrojo del pozo, asi que NO vale por nodo: quien produce muchas
+     * posiciones interna una vez y copia @c file_name.
+     *
+     * @param f Ruta o nombre logico.
+     */
+    void set_file(const std::string &f) { file_name = util::intern_name(f); }
 };
 
 /**
@@ -288,7 +312,7 @@ class Diagnostics {
 inline void print_diagnostic(std::ostream &os, const Diagnostic &d) {
     // Prefijo file:line:col compatible con la salida gcc/clang
     // para que editores como VSCode reconozcan el "click-to-jump".
-    os << d.loc.file << ":" << d.loc.line << ":" << d.loc.column << ": ";
+    os << d.loc.file() << ":" << d.loc.line << ":" << d.loc.column << ": ";
     // Etiqueta de severidad legible.
     switch (d.level) {
     case DiagLevel::ERR: os << "error: "; break;
@@ -312,7 +336,7 @@ inline void print_diagnostic(std::ostream &os, const Diagnostic &d) {
     for (const ExpansionInfo *ex = d.loc.expansion; ex != nullptr;) {
         std::string sitio = "?";
         if (ex->site)
-            sitio = ex->site->file + ":" + std::to_string(ex->site->line) +
+            sitio = ex->site->file() + ":" + std::to_string(ex->site->line) +
                     ":" + std::to_string(ex->site->column);
         os << "  " << diag::format("VX7015", {ex->macro, sitio}) << "\n";
         ex = ex->site ? ex->site->expansion : nullptr;

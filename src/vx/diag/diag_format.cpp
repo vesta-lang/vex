@@ -68,7 +68,7 @@ void render_json(std::ostream &os, const Diagnostics &diags) {
         os << "    {\n";
         os << "      \"code\": \"" << json_esc(d.code) << "\",\n";
         os << "      \"severity\": \"" << severity_name(d.level) << "\",\n";
-        os << "      \"file\": \"" << json_esc(d.loc.file) << "\",\n";
+        os << "      \"file\": \"" << json_esc(d.loc.file()) << "\",\n";
         os << "      \"line\": " << d.loc.line << ",\n";
         os << "      \"column\": " << d.loc.column << ",\n";
         os << "      \"offset\": " << d.loc.offset << ",\n";
@@ -121,7 +121,7 @@ void render_sarif(std::ostream &os, const Diagnostics &diags) {
         os << "          \"locations\": [\n";
         os << "            {\n              \"physicalLocation\": {\n";
         os << "                \"artifactLocation\": {\"uri\": \""
-           << json_esc(d.loc.file) << "\"},\n";
+           << json_esc(d.loc.file()) << "\"},\n";
         os << "                \"region\": {\"startLine\": " << d.loc.line
            << ", \"startColumn\": " << d.loc.column << "}\n";
         os << "              }\n            }\n          ]\n";

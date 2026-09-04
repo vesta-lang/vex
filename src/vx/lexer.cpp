@@ -374,7 +374,10 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
 
 Lexer::Lexer(std::string source, std::string filename, Diagnostics &diags,
              const ExpansionInfo *expansion)
-    : source_(std::move(source)), filename_(std::move(filename)), diags_(diags),
+    : source_(std::move(source)),
+      // El nombre se interna AQUI, una sola vez, y de ahi en adelante cada
+      // posicion que salga de este lexer copia un puntero y nada mas.
+      file_name_(util::intern_name(filename)), diags_(diags),
       expansion_(expansion) {
     // Reservar capacidad del lexema cacheado para evitar relocaciones
     // tipicas (la mayoria de los identificadores caben en SSO).
@@ -436,7 +439,7 @@ void Lexer::skip_trivia() {
                 // Comentario de bloque: avanzar hasta "*/" o EOF.
                 // Mantenemos el track de linea para diagnosticar
                 // comentarios sin cerrar.
-                const SourceLoc start{filename_, line_, column_, (uint32_t)pos_,
+                const SourceLoc start{file_name_, line_, column_, (uint32_t)pos_,
                                       2};
                 pos_ += 2;
                 column_ += 2;
@@ -493,7 +496,7 @@ void Lexer::error_at(SourceLoc loc, std::string msg) {
 // Los separadores '_' se ignoran a efectos de valor numerico.
 // -----------------------------------------------------------------------
 Token Lexer::lex_number() {
-    const SourceLoc start{filename_, line_, column_, (uint32_t)pos_, 0};
+    const SourceLoc start{file_name_, line_, column_, (uint32_t)pos_, 0};
     const size_t begin = pos_;
 
     bool is_float = false;
@@ -530,7 +533,7 @@ Token Lexer::lex_number() {
 
         const std::string text = source_.substr(pos_, end - pos_);
         const uint32_t width = (uint32_t)(end - pos_);
-        SourceLoc loc{filename_, line_, column_, (uint32_t)pos_, width};
+        SourceLoc loc{file_name_, line_, column_, (uint32_t)pos_, width};
 
         // Se consume SIEMPRE, aunque no valga: dejar el resto suelto
         // convertiria un error en una cascada de errores sin relacion.
@@ -783,7 +786,7 @@ Token Lexer::lex_number() {
 // identificables sin reglas de normalizacion).
 // -----------------------------------------------------------------------
 Token Lexer::lex_identifier() {
-    const SourceLoc start{filename_, line_, column_, (uint32_t)pos_, 0};
+    const SourceLoc start{file_name_, line_, column_, (uint32_t)pos_, 0};
     const size_t begin = pos_;
 
     while (pos_ < source_.size()) {
@@ -809,10 +812,11 @@ Token Lexer::lex_identifier() {
 // -----------------------------------------------------------------------
 static uint64_t decode_escape(Lexer * /*self*/, const std::string &source,
                               size_t &pos, uint32_t &line, uint32_t &column,
-                              Diagnostics &diags, const std::string &filename) {
+                              Diagnostics &diags,
+                              const std::string *file_name) {
     // Asume que pos apunta al caracter SIGUIENTE al backslash.
     if (pos >= source.size()) {
-        diags.error({filename, line, column, (uint32_t)pos, 1},
+        diags.error({file_name, line, column, (uint32_t)pos, 1},
                     "secuencia de escape incompleta");
         return 0;
     }
@@ -855,7 +859,7 @@ static uint64_t decode_escape(Lexer * /*self*/, const std::string &source,
             ++count;
         }
         if (count == 0) {
-            diags.error({filename, line, column, (uint32_t)pos, 1},
+            diags.error({file_name, line, column, (uint32_t)pos, 1},
                         "esperado digito hex tras \\x");
         }
         return v;
@@ -884,7 +888,7 @@ static uint64_t decode_escape(Lexer * /*self*/, const std::string &source,
         return v;
     }
     default:
-        diags.error({filename, line, column, (uint32_t)pos, 1},
+        diags.error({file_name, line, column, (uint32_t)pos, 1},
                     std::string("secuencia de escape desconocida: \\") + e);
         return (uint64_t)e;
     }
@@ -894,7 +898,7 @@ static uint64_t decode_escape(Lexer * /*self*/, const std::string &source,
 // Lectura de literales de caracter '...'.
 // -----------------------------------------------------------------------
 Token Lexer::lex_char() {
-    const SourceLoc start{filename_, line_, column_, (uint32_t)pos_, 0};
+    const SourceLoc start{file_name_, line_, column_, (uint32_t)pos_, 0};
     const size_t begin = pos_;
     // Consumir la comilla simple inicial.
     advance();
@@ -906,14 +910,14 @@ Token Lexer::lex_char() {
         ++pos_;
         ++column_;
         value = decode_escape(this, source_, pos_, line_, column_, diags_,
-                              filename_);
+                              file_name_);
     } else {
         value = (uint64_t)(unsigned char)source_[pos_++];
         ++column_;
     }
     // Cierre obligatorio.
     if (pos_ >= source_.size() || source_[pos_] != '\'') {
-        error_at({filename_, line_, column_, (uint32_t)pos_, 1},
+        error_at({file_name_, line_, column_, (uint32_t)pos_, 1},
                  "esperado ''' para cerrar literal de caracter");
     } else {
         ++pos_;
@@ -938,7 +942,7 @@ Token Lexer::lex_char() {
 // unico @c StringLitExpr con partes literales + expresiones.
 // -----------------------------------------------------------------------
 Token Lexer::lex_string(bool raw) {
-    const SourceLoc start{filename_, line_, column_, (uint32_t)pos_, 0};
+    const SourceLoc start{file_name_, line_, column_, (uint32_t)pos_, 0};
     const size_t begin = pos_;
 
     if (raw) {
@@ -998,7 +1002,7 @@ Token Lexer::lex_string(bool raw) {
                 }
                 // Loop principal de interpolacion + tramos texto.
                 while (pos_ < source_.size()) {
-                    SourceLoc loc_dollar{filename_, line_, column_,
+                    SourceLoc loc_dollar{file_name_, line_, column_,
                                          (uint32_t)pos_, 2};
                     advance(); // '$'
                     advance(); // '{'
@@ -1067,7 +1071,7 @@ Token Lexer::lex_string(bool raw) {
                                     tfmt.str_val = std::move(fmt);
                                     string_emit_queue_.push_back(
                                         std::move(tfmt));
-                                    SourceLoc rb_loc{filename_, line_, column_,
+                                    SourceLoc rb_loc{file_name_, line_, column_,
                                                      (uint32_t)pos_, 1};
                                     advance();
                                     Token tend = make_token(
@@ -1116,7 +1120,7 @@ Token Lexer::lex_string(bool raw) {
                             advance();
                             const uint64_t cp =
                                 decode_escape(this, source_, pos_, line_,
-                                              column_, diags_, filename_);
+                                              column_, diags_, file_name_);
                             chunk.push_back(static_cast<char>(cp & 0xFF));
                             continue;
                         }
@@ -1136,7 +1140,7 @@ Token Lexer::lex_string(bool raw) {
                         string_emit_queue_.push_back(std::move(tt));
                     }
                     if (string_done) {
-                        SourceLoc loc_end{filename_, line_, column_,
+                        SourceLoc loc_end{file_name_, line_, column_,
                                           (uint32_t)pos_, 0};
                         string_emit_queue_.push_back(
                             make_token(TokenKind::ISTR_END, "", loc_end));
@@ -1147,7 +1151,7 @@ Token Lexer::lex_string(bool raw) {
                     if (!nested_interp) {
                         error_at(start,
                                  "string triple-quoted interpolado sin cerrar");
-                        SourceLoc loc_end{filename_, line_, column_,
+                        SourceLoc loc_end{file_name_, line_, column_,
                                           (uint32_t)pos_, 0};
                         string_emit_queue_.push_back(
                             make_token(TokenKind::ISTR_END, "", loc_end));
@@ -1158,7 +1162,7 @@ Token Lexer::lex_string(bool raw) {
                 }
                 error_at(start,
                          "string triple-quoted interpolado sin cerrar (EOF)");
-                SourceLoc loc_end{filename_, line_, column_, (uint32_t)pos_, 0};
+                SourceLoc loc_end{file_name_, line_, column_, (uint32_t)pos_, 0};
                 string_emit_queue_.push_back(
                     make_token(TokenKind::ISTR_END, "", loc_end));
                 Token first = std::move(string_emit_queue_.front());
@@ -1168,7 +1172,7 @@ Token Lexer::lex_string(bool raw) {
             if (!raw && c == '\\') {
                 advance();
                 const uint64_t cp = decode_escape(this, source_, pos_, line_,
-                                                  column_, diags_, filename_);
+                                                  column_, diags_, file_name_);
                 value.push_back(static_cast<char>(cp & 0xFF));
                 continue;
             }
@@ -1211,7 +1215,7 @@ Token Lexer::lex_string(bool raw) {
         if (!raw && c == '\\') {
             advance();
             const uint64_t cp = decode_escape(this, source_, pos_, line_,
-                                              column_, diags_, filename_);
+                                              column_, diags_, file_name_);
             // Caracter ASCII directo; codepoints >127 se truncan al byte
             // bajo.  Codepoints multi-byte UTF-8 se expresan como
             // secuencias de bytes literales @c \xHH; el sistema de
@@ -1247,7 +1251,7 @@ Token Lexer::lex_string(bool raw) {
             // Loop principal: alternar entre tramos ${expr} y texto
             // literal hasta cerrar el string con ".
             while (pos_ < source_.size()) {
-                SourceLoc loc_dollar{filename_, line_, column_, (uint32_t)pos_,
+                SourceLoc loc_dollar{file_name_, line_, column_, (uint32_t)pos_,
                                      2};
                 advance(); // consumir '$'
                 advance(); // consumir '{'
@@ -1343,7 +1347,7 @@ Token Lexer::lex_string(bool raw) {
                                 tfmt.str_val = std::move(fmt);
                                 string_emit_queue_.push_back(std::move(tfmt));
                                 // Consumir `}` y emitir ISTR_EXPR_END.
-                                SourceLoc rb_loc{filename_, line_, column_,
+                                SourceLoc rb_loc{file_name_, line_, column_,
                                                  (uint32_t)pos_, 1};
                                 advance(); // consumir '}'
                                 Token tend = make_token(
@@ -1396,13 +1400,13 @@ Token Lexer::lex_string(bool raw) {
                         advance();
                         const uint64_t cp =
                             decode_escape(this, source_, pos_, line_, column_,
-                                          diags_, filename_);
+                                          diags_, file_name_);
                         chunk.push_back(static_cast<char>(cp & 0xFF));
                         continue;
                     }
                     if (tc == '\n' && !raw) {
                         error_at(
-                            {filename_, line_, column_, (uint32_t)pos_, 1},
+                            {file_name_, line_, column_, (uint32_t)pos_, 1},
                             "salto de linea dentro de string literal no raw");
                     }
                     chunk.push_back(tc);
@@ -1414,7 +1418,7 @@ Token Lexer::lex_string(bool raw) {
                     string_emit_queue_.push_back(std::move(tt));
                 }
                 if (string_done) {
-                    SourceLoc loc_end{filename_, line_, column_, (uint32_t)pos_,
+                    SourceLoc loc_end{file_name_, line_, column_, (uint32_t)pos_,
                                       0};
                     string_emit_queue_.push_back(
                         make_token(TokenKind::ISTR_END, "", loc_end));
@@ -1428,7 +1432,7 @@ Token Lexer::lex_string(bool raw) {
                 if (!nested_interp) {
                     error_at(start, "string literal interpolado sin cerrar");
                     // Cierre defensivo: ISTR_END para mantener parser sano.
-                    SourceLoc loc_end{filename_, line_, column_, (uint32_t)pos_,
+                    SourceLoc loc_end{file_name_, line_, column_, (uint32_t)pos_,
                                       0};
                     string_emit_queue_.push_back(
                         make_token(TokenKind::ISTR_END, "", loc_end));
@@ -1441,7 +1445,7 @@ Token Lexer::lex_string(bool raw) {
             }
             // Si llegamos aqui es por EOF mid-interpolacion.
             error_at(start, "string interpolado sin cerrar (EOF)");
-            SourceLoc loc_end{filename_, line_, column_, (uint32_t)pos_, 0};
+            SourceLoc loc_end{file_name_, line_, column_, (uint32_t)pos_, 0};
             string_emit_queue_.push_back(
                 make_token(TokenKind::ISTR_END, "", loc_end));
             Token first = std::move(string_emit_queue_.front());
@@ -1450,7 +1454,7 @@ Token Lexer::lex_string(bool raw) {
         }
         if (c == '\n') {
             if (!raw) {
-                error_at({filename_, line_, column_, (uint32_t)pos_, 1},
+                error_at({file_name_, line_, column_, (uint32_t)pos_, 1},
                          "salto de linea dentro de string literal no raw");
             }
             value.push_back(c);
@@ -1480,7 +1484,7 @@ Token Lexer::lex_string(bool raw) {
 // y consumen 1 o 2 (3 para <<= y >>=) bytes.
 // -----------------------------------------------------------------------
 Token Lexer::lex_symbol() {
-    const SourceLoc start{filename_, line_, column_, (uint32_t)pos_, 0};
+    const SourceLoc start{file_name_, line_, column_, (uint32_t)pos_, 0};
     const size_t begin = pos_;
     const char c = source_[pos_];
 
@@ -1622,7 +1626,7 @@ Token Lexer::lex_one_raw_inner() {
     }
     skip_trivia();
     if (pos_ >= source_.size()) {
-        SourceLoc loc{filename_, line_, column_, (uint32_t)pos_, 0};
+        SourceLoc loc{file_name_, line_, column_, (uint32_t)pos_, 0};
         return make_token(TokenKind::END_OF_FILE, "", loc);
     }
     const char c = source_[pos_];

@@ -2875,7 +2875,7 @@ CompileResult compile_vx_project(
                     // sitio -- o peor, dando un resultado equivocado.  Quien
                     // escribio el import merece enterarse aqui.
                     SourceLoc iloc;
-                    iloc.file = pm.canonical_path;
+                    iloc.set_file(pm.canonical_path);
                     /* Al saco del MODULO, que es el que el bucle de mas abajo
                      * vuelca en el del proyecto.  Escribir directamente en el
                      * global desde aqui es lo mismo que hacia el conjunto
@@ -3271,13 +3271,17 @@ CompileResult compile_vx_project(
         {
             VxdbgEmitStats st;
             std::string dbg_err;
+            /* Se LLEVAN, no se copian: ver el mismo sitio en `compiler.cpp`.
+             * Aqui pesa mas todavia, porque esto corre una vez por MODULO. */
             std::vector<vxdbg::SourceExtent> spans;
-            spans.reserve(lo.emitted_spans().size());
-            for (const auto &e : lo.emitted_spans())
-                spans.push_back({e.symbol, e.line, e.column, e.length});
-            if (!emit_vxdbg_source(*pm.tc, lo.emitted_symbols(), spans,
-                                   pm.canonical_path, pm.source, opts.vxdbg_dir,
-                                   st, dbg_err)) {
+            auto emitted = lo.take_emitted_spans();
+            spans.reserve(emitted.size());
+            for (auto &e : emitted)
+                spans.push_back(
+                    {std::move(e.symbol), e.line, e.column, e.length});
+            if (!emit_vxdbg_source(*pm.tc, lo.emitted_symbols(),
+                                   std::move(spans), pm.canonical_path,
+                                   pm.source, opts.vxdbg_dir, st, dbg_err)) {
                 std::cerr << "[vxdbg] no se pudo emitir " << pm.canonical_path
                           << ": " << dbg_err << "\n";
             }
@@ -4347,8 +4351,11 @@ CompileResult compile_vx_project(
     /* Sobre el codigo que DE VERDAD se va a emitir: lo que el analisis puede
      * demostrar fuera de su region no puede quedarse en `--analyze`, tiene que
      * salir al compilar, que es cuando se lee. */
+    /* La base de hechos de ESTA compilacion, una sola: ver la nota del camino
+     * de fichero suelto.  Los dos entran por el mismo sitio a proposito. */
+    analysis::asa::FactBase fact_base;
     if (opts.report_bounds)
-        vx_report_bounds(merged, res.diagnostics, root_path);
+        vx_report_bounds(merged, res.diagnostics, root_path, fact_base);
     /* Precondiciones del asm.  SIEMPRE, no bajo opcion: una instruccion cuya
      * exigencia no se cumple no da un resultado peor, hace caer el programa --
      * y callarselo ya costo descubrirlo ejecutando.
@@ -4631,7 +4638,7 @@ CompileResult compile_vx_project(
         }
         if (!eres.ok) {
             SourceLoc loc;
-            loc.file = root_path;
+            loc.set_file(root_path);
             res.diagnostics.error(
                 std::move(loc), std::string("emisor IR fallo: ") + eres.error);
             res.ok = false;
@@ -5033,7 +5040,8 @@ static void vx_warn_call_site_with_asm(const ir::IrModule &mod,
             touched += r;
         }
         if (touched.empty()) continue;
-        diags.diag(SourceLoc{file, asm_block->source_line, 1}, DiagLevel::WARN,
+        diags.diag(SourceLoc{util::intern_name(file), asm_block->source_line, 1},
+                   DiagLevel::WARN,
                    "VXW934", {fn.name, touched});
     }
 }
@@ -5090,7 +5098,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
      * respuesta buena y no hay nada que contrastar. */
     if (found && static_cast<uint32_t>(found.fact->what.a) != computed) {
         SourceLoc loc;
-        loc.file = file;
+        loc.set_file(file);
         diags.diag(loc, DiagLevel::WARN,
                    analysis::asa::unknown_reason_code(
                        analysis::asa::UnknownReason::SourcesDisagree),
@@ -5368,7 +5376,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
         SourceLoc loc;
         loc.line = s.line;
         loc.column = s.column;
-        loc.file = file;
+        loc.set_file(file);
         switch (s.v) {
         case Veredicto::Cumple: break; // demostrado: no hay nada que decir.
         case Veredicto::Falla:
@@ -5436,7 +5444,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                         SourceLoc loc;
                         loc.line = in.source_line;
                         loc.column = in.source_column;
-                        loc.file = file;
+                        loc.set_file(file);
                         const std::vector<std::string> args = {
                             in.func_name, std::to_string(e->param),
                             std::to_string(e->bytes), e->mnemonic};
@@ -5512,7 +5520,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                 SourceLoc loc;
                 loc.line = in.source_line;
                 loc.column = in.source_column;
-                loc.file = file;
+                loc.set_file(file);
                 const std::string razon =
                     vx::diag::format(motivo, {std::string()});
                 diags.diag(loc, DiagLevel::WARN, "VXA014", {razon});
@@ -5522,15 +5530,20 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
 }
 
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
-                      const std::string &file) {
+                      const std::string &file, analysis::asa::FactBase &base) {
     // Medicion del dominio de FORMA, apagada salvo que se pida explicitamente.
     // Todavia no la consume nadie: primero hay que saber si distingue algo.
     analysis::asa::volcar_formas(mod, "post-opt");
+    /* El motor sale de la BASE, no de aqui.  Construir uno propio rehace el
+     * escape y los resumenes del modulo entero, y quien ya lo hubiera pedido
+     * para este mismo momento lo habria pagado dos veces. */
+    analysis::effects::EffectAnalysis &ea =
+        base.effects(mod, analysis::asa::kStagePostOpt);
     for (const analysis::effects::BoundsViolation &v :
-         analysis::effects::check_region_bounds(mod)) {
+         analysis::effects::check_region_bounds(mod, &ea)) {
         SourceLoc loc;
         loc.line = v.line;
-        loc.file = file;
+        loc.set_file(file);
         diags.diag(loc, DiagLevel::ERR, "VX3001",
                    {vx::diag::format(v.write ? "VX3002" : "VX3003", {}),
                     std::to_string(v.width), v.region, std::to_string(v.limite),

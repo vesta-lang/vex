@@ -69,7 +69,7 @@ bool collect_diags(const vx::CompileResult &res, std::vector<Diag> &out) {
         e.line = d.loc.line;
         e.column = d.loc.column;
         e.message = d.message;
-        e.file = d.loc.file;
+        e.file = d.loc.file();
         if (e.level == DiagLevel::Error) had_error = true;
         out.push_back(std::move(e));
     }

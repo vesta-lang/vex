@@ -809,7 +809,7 @@ ContractReport report_contract_checks(const std::vector<ContractCheck> &checks,
     ContractReport r;
     for (const ContractCheck &ck : checks) {
         vx::SourceLoc loc;
-        loc.file = file;
+        loc.set_file(file);
         switch (ck.status) {
         case ContractCheck::VIOLATED:
             /* Demostrado que no se cumple: es un error del programa, y por eso

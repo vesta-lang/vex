@@ -124,7 +124,15 @@ class Lexer {
      * @brief Acceso al fichero asociado (para construir SourceLoc fuera).
      */
     [[nodiscard]] const std::string &filename() const noexcept {
-        return filename_;
+        return *file_name_;
+    }
+
+    /**
+     * @brief El nombre ya compartido, para quien produzca muchas posiciones.
+     * @return Puntero al nombre del pozo; nunca nulo.
+     */
+    [[nodiscard]] const std::string *file_name_ptr() const noexcept {
+        return file_name_;
     }
 
     /**
@@ -215,8 +223,13 @@ class Lexer {
      */
     void error_at(SourceLoc loc, std::string msg);
 
-    std::string source_;   ///< Codigo fuente completo (owner).
-    std::string filename_; ///< Nombre logico para diagnosticos.
+    std::string source_; ///< Codigo fuente completo (owner).
+    /// Nombre logico para diagnosticos, COMPARTIDO (@c util::intern_name).
+    ///
+    /// Se interna UNA vez al construir el lexer y desde ahi cada token copia
+    /// solo el puntero.  Por valor, cada `SourceLoc` que sale de aqui reservaba
+    /// memoria -- y de aqui sale una por token.
+    const std::string *file_name_;
     Diagnostics &diags_;   ///< Sumidero de diagnosticos (no-owner).
 
     size_t pos_ = 0; ///< Indice de byte en source_.

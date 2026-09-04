@@ -197,8 +197,8 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // warnings se imprimirian sin nombre de fichero.
     for (auto &d : mod_.decls) {
         if (!d) continue;
-        if (!d->loc.file.empty()) {
-            current_file_ = d->loc.file;
+        if (!d->loc.file().empty()) {
+            current_file_ = d->loc.file();
             break;
         }
     }
@@ -1133,6 +1133,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         fn.params.push_back(v_retbuf);
         push_abi(""); // retbuf SRET: ABI estandar (primer arg-reg)
     }
+    /* Cuantos parametros llevan ya puestos, para saber la casilla de cada uno.
+     * Arranca donde acaba lo que el bajado puso por su cuenta -- un buffer de
+     * retorno, que nadie declara --, asi que sigue alineado con `fn.params`. */
+    size_t declared_pos = fn.params.size();
     for (const DeclaredParam &d :
          declare_params(fn, fd->params, param_bindings,
                         /*reserved_slots=*/0, &by_ref_params)) {
@@ -1143,6 +1147,172 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         if (d.decl && !d.decl->abi_reg.empty())
             custom_abi_params.push_back(
                 {d.decl->name, d.value, d.decl->abi_reg, d.type});
+        /* El contrato del parametro, al IR.  Se apunta AQUI y no recorriendo el
+         * fuente aparte, porque es aqui donde se sabe en que posicion de
+         * `fn.params` acabo cada uno: delante puede ir un buffer de retorno, y
+         * en medio la cuenta oculta de un variadico, que no los declara nadie y
+         * por tanto no tienen contrato que llevar.
+         *
+         * Las tres formas del lenguaje escriben en el MISMO eje -- son formas
+         * de escribir lo mismo, no tres mecanismos --, y lo que las separa es
+         * QUIEN responde por la exclusividad: la direccion es un contrato del
+         * que llama, el prestamo exclusivo y el dueno unico los demuestra el
+         * compilador. */
+        /* La posicion REAL de este parametro, contada aqui.
+         *
+         * No vale `fn.params.size() - 1`: `declare_params` devuelve el vector
+         * ya completo, asi que cuando este bucle corre los parametros YA estan
+         * todos puestos y ese tamano es el final para todas las vueltas.  Con
+         * el, los contratos se escribian todos en la ultima casilla y solo
+         * sobrevivia el del ultimo parametro. */
+        const size_t pos = declared_pos++;
+        if (d.decl != nullptr) {
+            ir::IrParamContract c;
+            using Claim = ir::IrParamClaim;
+            /* Dos niveles de entrada: [0] el puntero que se recibe, [1] lo que
+             * apunta.  Casi todo lo que se declara habla del segundo -- "por
+             * aqui se lee", "por aqui se escribe" son sobre el CONTENIDO --, y
+             * el primero solo lo toca `T* const`. */
+            c.levels.resize(2);
+            ir::IrParamLevel &ptr = c.levels[0];
+            ir::IrParamLevel &pointee = c.levels[1];
+            /* La DIRECCION es un contrato del que llama, asi que lo que
+             * afirma queda DECLARADO: hay que comprobarlo donde se vea la
+             * llamada, y avisar si se incumple.  Y habla de lo APUNTADO, que
+             * es lo que dice su propia definicion. */
+            switch (d.decl->dir) {
+            case ParamDir::In:
+                pointee.set(Claim::MayRead, false);
+                /* `in` no solo dice que se lee: dice que SOLO se lee.  Negar la
+                 * escritura es la mitad util -- sin ella, "no consta que
+                 * escriba" y "declarado que no escribe" serian el mismo bit
+                 * ausente. */
+                pointee.deny(Claim::MayWrite, false);
+                break;
+            case ParamDir::Out:
+                pointee.set(Claim::MayWrite, false);
+                pointee.set(Claim::ExclusiveCall, false);
+                break;
+            case ParamDir::InOut:
+                pointee.set(Claim::MayRead, false);
+                pointee.set(Claim::MayWrite, false);
+                pointee.set(Claim::ExclusiveCall, false);
+                break;
+            case ParamDir::None: break;
+            }
+            /* Y lo que dice el TIPO, que no es una alternativa a lo anterior
+             * sino otra forma de escribirlo -- y la unica que llega
+             * DEMOSTRADA, porque detras hay un comprobador que la hace
+             * cumplir. */
+            if (d.decl->type) {
+                const Type sem = tc_.resolve_type_node(d.decl->type.get());
+                switch (sem.kind) {
+                case PrimitiveKind::BORROW:
+                    pointee.set(Claim::MayRead, true);
+                    /* Un prestamo compartido no escribe, y eso lo hace cumplir
+                     * el comprobador de prestamos: negado y DEMOSTRADO. */
+                    pointee.deny(Claim::MayWrite, true);
+                    /* Y mientras dura el prestamo no escribe NADIE MAS: el
+                     * comprobador prohibe que coexista un prestamo exclusivo y
+                     * que se mute el dueno.  Es justo lo que permite sacar una
+                     * lectura de un bucle que contenga llamadas.
+                     *
+                     * Sin demostrar a proposito: el comprobador razona sobre
+                     * NOMBRES dentro de una funcion, no sobre hilos, asi que
+                     * otro hilo con el mismo dueno se le escapa.  Como
+                     * "apunta ahi pero pudo quedar algo sin ver" sirve para
+                     * especular con red; como demostrado autorizaria a quitar
+                     * la comprobacion, y ahi un fallo daria otro resultado. */
+                    pointee.set(Claim::ImmutableDuringCall, false);
+                    break;
+                case PrimitiveKind::BORROW_MUT:
+                case PrimitiveKind::UNIQUE_PTR:
+                    pointee.set(Claim::MayRead, true);
+                    pointee.set(Claim::MayWrite, true);
+                    pointee.set(Claim::ExclusiveCall, true);
+                    /* Las DOS exclusividades, que no son la misma promesa y por
+                     * eso no llevan la misma certeza:
+                     *
+                     *   - en la LLAMADA no la alcanza otro parametro: eso lo
+                     *     demuestra el comprobador, que ve todos los nombres de
+                     *     la funcion.  Va DEMOSTRADA (arriba).
+                     *   - en la EJECUCION no la alcanza nadie mas -- ni otro
+                     *     hilo, ni un puntero guardado antes --: eso el
+                     *     comprobador NO lo mira, porque no razona sobre hilos.
+                     *     Va sin demostrar.
+                     *
+                     * Es la que responde a si dos escrituras pueden ser una
+                     * carrera y a si dos regiones comparten linea de cache, asi
+                     * que hacia falta poder decirla aunque hoy llegue con menos
+                     * certeza que su hermana. */
+                    pointee.set(Claim::ExclusiveRun, false);
+                    break;
+                default: break;
+                }
+                if (d.decl->type->is_nonnull) ptr.set(Claim::NonNull, true);
+                /* `const` es POR NIVEL, y el sistema de tipos ya lo modela asi:
+                 * `is_const` es de ESTE nivel y el del apuntado vive en su
+                 * `pointee`.  `const T*` niega escribir lo APUNTADO; `T* const`
+                 * niega escribir el PUNTERO.  Colapsarlos haria inexpresable lo
+                 * segundo, que es lo que ya avisa el propio tipo.
+                 *
+                 * Va DEMOSTRADO: la correccion de const la hace cumplir el
+                 * compilador, no es una palabra que haya que creerse. */
+                if (sem.is_const) ptr.deny(Claim::MayWrite, true);
+                if (sem.pointee != nullptr && sem.pointee->is_const)
+                    pointee.deny(Claim::MayWrite, true);
+                /* `volatile`, por el mismo eje y el mismo nivel.  Va SIN
+                 * demostrar y como cosa DECLARADA porque eso es lo que es: una
+                 * afirmacion del programador sobre de donde se ve esa region,
+                 * que el compilador no puede comprobar leyendo el programa.
+                 *
+                 * Y no apaga nada por si sola.  Lo demostrado de esa region
+                 * sigue ahi al lado; cuando las dos cosas se contradigan -- una
+                 * region que provablemente no sale de aqui declarada observable
+                 * desde fuera -- lo interesante es DECIRLO, no obedecer sin
+                 * mirar: casi siempre significa que el `volatile` sobra o que
+                 * tapa otro problema. */
+                if (sem.is_volatile) ptr.set(Claim::Observable, false);
+                if (sem.pointee != nullptr && sem.pointee->is_volatile)
+                    pointee.set(Claim::Observable, false);
+                /* Hasta DONDE vale, cuando el tipo lo dice.  Un `T[N]` de
+                 * parametro decae a puntero, pero la N no se pierde: es la
+                 * promesa de que hay N elementos ahi, y sin ella el
+                 * comprobador de limites tiene que dar por buena cualquier
+                 * posicion.
+                 *
+                 * El calculo sale del mismo sitio que el de un array global,
+                 * no de una cuenta escrita otra vez aqui: son la misma
+                 * pregunta ("cuantos bytes ocupa `T[N]`") y dos respuestas
+                 * acaban discrepando en cuanto una de las dos aprenda algo. */
+                const uint64_t bytes =
+                    vx_global_array_bytes(d.decl->type.get(), tc_);
+                if (bytes > 0)
+                    pointee.extent_bytes = static_cast<int64_t>(bytes);
+                /* Y COMO esta alineada, que sale del tipo y no hace falta que
+                 * nadie lo escriba: un `T*` apunta a algo alineado a lo que
+                 * pida T.  Lo pregunta la vectorizacion -- una lane ancha
+                 * quiere saber si puede usar la carga alineada -- y hasta ahora
+                 * el dato existia en el sistema de tipos y no llegaba a quien
+                 * decide.  La cuenta es la de `alignof<T>`, la misma que ve el
+                 * programador. */
+                if (sem.pointee != nullptr) {
+                    const uint64_t al = comptime_type_align(tc_, *sem.pointee);
+                    if (al > 1 && al <= 0xFFFFu)
+                        pointee.align_bytes = static_cast<uint32_t>(al);
+                }
+            }
+            /* Solo se materializa el vector cuando ALGUIEN promete algo: en
+             * casi ninguna funcion lo hace nadie, y un vector vacio no cuesta
+             * nada.  Se rellena hasta la posicion actual con contratos vacios
+             * para que siga alineado con `params` -- delante puede ir un buffer
+             * de retorno, que no promete nada por no declararlo nadie. */
+            if (!c.empty() && pos < fn.params.size()) {
+                if (fn.param_contracts.size() < fn.params.size())
+                    fn.param_contracts.resize(fn.params.size());
+                fn.param_contracts[pos] = c;
+            }
+        }
     }
 
     // Bloque entry.

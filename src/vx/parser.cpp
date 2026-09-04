@@ -952,7 +952,7 @@ void Parser::collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
 
 std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
     auto mod = std::make_unique<ast::ModuleNode>();
-    mod->loc.file = lex_.filename();
+    mod->loc.file_name = lex_.file_name_ptr();
     mod->loc.line = 1;
     mod->loc.column = 1;
 
@@ -3792,13 +3792,15 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
     // Qualifiers C que preceden al tipo base (`const T`, `volatile T`).  El
     // `const` de un const-var-decl se consume ANTES (statement/decl parser),
     // asi que aqui solo aparece como qualifier DE TIPO.  `const` marca el nivel
-    // base como inmutable (const-correctness A); `volatile` se parsea pero se
-    // ignora.
+    // base como inmutable (const-correctness A) y `volatile` como observable
+    // desde fuera; los dos van al mismo sitio y por nivel.
     bool base_const = false;
+    bool base_volatile = false;
     while (current_.kind == TokenKind::KW_CONST ||
            (current_.kind == TokenKind::IDENTIFIER &&
             current_.lexeme == "volatile")) {
         if (current_.kind == TokenKind::KW_CONST) base_const = true;
+        else base_volatile = true;
         (void)consume();
     }
     bool nonnull = false;
@@ -4002,8 +4004,10 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         }
         return nullptr;
     }
-    // const del nivel BASE (`const char`): marca el nodo del tipo apuntado.
+    // Qualifiers del nivel BASE (`const char`, `volatile char`): marcan el nodo
+    // del tipo apuntado, que es el nivel del que hablan.
     if (base && base_const) base->is_const = true;
+    if (base && base_volatile) base->is_volatile = true;
     // Postfix: cada '*' apila un PointerTypeNode adicional.
     // Ejemplo: 'i32**' -> Pointer(Pointer(Primitive(i32))).
     // C permite `const`/`volatile` TRAS cada '*' (`char * const * const`):
@@ -4018,6 +4022,7 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
                (current_.kind == TokenKind::IDENTIFIER &&
                 current_.lexeme == "volatile")) {
             if (current_.kind == TokenKind::KW_CONST) pn->is_const = true;
+            else pn->is_volatile = true;
             (void)consume();
         }
         base = std::move(pn);
@@ -5363,6 +5368,71 @@ std::unique_ptr<ast::BytesDecl> Parser::parse_bytes_decl() {
 // para padding/firma se usa un bloque `bytes` con @at/times.  Reusa toda la
 // maquinaria de placement de @c bytes (@section/@at/@order).
 // -----------------------------------------------------------------
+namespace {
+
+/**
+ * @brief El texto del fuente entre @p from y @p to, SIN los comentarios.
+ *
+ * El cuerpo de un `asm` se toma como texto crudo -- el ensamblador necesita los
+ * saltos de linea tal cual --, y por ahi entraban tambien los comentarios de
+ * Vesta.  Un `// ...` detras de una instruccion no es codigo maquina: el
+ * ensamblador no lo entiende, y el analizador de asm lo tomaria por una linea
+ * mas.  Antes no llegaban porque el preprocesador los quitaba, cosa de la que
+ * este camino dependia sin saberlo.
+ *
+ * NO trae una idea propia de que es un comentario: usa la del lexer.  Lo que
+ * queda ENTRE dos tokens es lo que el lexer se salto, asi que si ahi hay algo
+ * que no es espacio, es un comentario.  Un `//` dentro de una cadena queda
+ * dentro de su token y se conserva, que es lo correcto.
+ *
+ * De un comentario se conservan sus SALTOS DE LINEA: el texto sobra, su sitio
+ * no.  Sin eso, lo de abajo se corre hacia arriba y cualquier mensaje que cite
+ * una linea del asm cita la equivocada.
+ *
+ * @param src    Fuente completo.
+ * @param from   Primer byte del cuerpo.
+ * @param to     Byte siguiente al ultimo.
+ * @param tokens Rangos [inicio, fin) de los tokens que el lexer produjo dentro,
+ *               en orden.
+ * @return El cuerpo listo para el ensamblador.
+ */
+std::string body_without_comments(
+    const std::string &src, uint32_t from, uint32_t to,
+    const std::vector<std::pair<uint32_t, uint32_t>> &tokens) {
+    if (from > to || to > src.size()) return std::string();
+    std::string out;
+    out.reserve(to - from);
+    const auto copy_gap = [&](uint32_t a, uint32_t b) {
+        bool only_space = true;
+        for (uint32_t i = a; i < b; ++i)
+            if (!std::isspace(static_cast<unsigned char>(src[i]))) {
+                only_space = false;
+                break;
+            }
+        if (only_space) {
+            out.append(src, a, b - a);
+            return;
+        }
+        for (uint32_t i = a; i < b; ++i)
+            if (src[i] == '\n') out += '\n';
+    };
+    uint32_t cur = from;
+    for (const auto &r : tokens) {
+        uint32_t a = r.first, b = r.second;
+        if (b <= from || a >= to) continue;
+        if (a < from) a = from;
+        if (b > to) b = to;
+        if (a < cur) continue; // solapado o repetido: no retroceder
+        copy_gap(cur, a);
+        out.append(src, a, b - a);
+        cur = b;
+    }
+    copy_gap(cur, to);
+    return out;
+}
+
+} // namespace
+
 std::unique_ptr<ast::BytesDecl> Parser::parse_asm_block_decl() {
     auto bd = std::make_unique<ast::BytesDecl>();
     bd->loc = current_.loc;
@@ -5386,6 +5456,9 @@ std::unique_ptr<ast::BytesDecl> Parser::parse_asm_block_decl() {
     const uint32_t start_off = current_.loc.offset;
     uint32_t end_off = start_off;
     int brace_depth = 1;
+    // Donde cae cada token: lo que quede FUERA de ellos y no sea espacio es un
+    // comentario, y al ensamblador no le sirve.  Ver `body_without_comments`.
+    std::vector<std::pair<uint32_t, uint32_t>> body_tokens;
     while (current_.kind != TokenKind::END_OF_FILE) {
         if (current_.kind == TokenKind::RBRACE) {
             if (--brace_depth == 0) {
@@ -5396,6 +5469,8 @@ std::unique_ptr<ast::BytesDecl> Parser::parse_asm_block_decl() {
         } else if (current_.kind == TokenKind::LBRACE) {
             ++brace_depth;
         }
+        body_tokens.emplace_back(current_.loc.offset,
+                                   current_.loc.offset + current_.loc.length);
         (void)consume();
     }
     if (brace_depth != 0) {
@@ -5408,7 +5483,8 @@ std::unique_ptr<ast::BytesDecl> Parser::parse_asm_block_decl() {
         --end_off;
     if (start_off <= src.size() && end_off >= start_off &&
         end_off <= src.size())
-        bd->asm_body = src.substr(start_off, end_off - start_off);
+        bd->asm_body =
+            body_without_comments(src, start_off, end_off, body_tokens);
     return bd;
 }
 
@@ -8296,6 +8372,9 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
     s->body_loc = current_.loc; // inicio del cuerpo: base para mapear errores
     uint32_t end_off = start_off;
     int brace_depth = 1; // ya consumimos el '{' de apertura
+    // Igual que en el bloque con nombre: lo que quede fuera de los tokens y no
+    // sea espacio es un comentario.  Ver `body_without_comments`.
+    std::vector<std::pair<uint32_t, uint32_t>> body_tokens;
     while (current_.kind != TokenKind::END_OF_FILE) {
         if (current_.kind == TokenKind::RBRACE) {
             --brace_depth;
@@ -8307,6 +8386,8 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
         } else if (current_.kind == TokenKind::LBRACE) {
             ++brace_depth;
         }
+        body_tokens.emplace_back(current_.loc.offset,
+                                   current_.loc.offset + current_.loc.length);
         (void)consume();
     }
     if (brace_depth != 0) {
@@ -8321,7 +8402,8 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
     }
     if (start_off <= src.size() && end_off >= start_off &&
         end_off <= src.size()) {
-        s->body = src.substr(start_off, end_off - start_off);
+        s->body =
+            body_without_comments(src, start_off, end_off, body_tokens);
     }
 
     // Clausula opcional `clobbers("rdx", "memory", "flags")`.  `clobbers`

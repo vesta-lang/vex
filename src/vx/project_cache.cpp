@@ -436,7 +436,7 @@ bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
         }
         f.what.detail = almacen.intern(junto);
         f.about.kind = analysis::asa::Subject::Kind::Symbol;
-        f.about.function = almacen.intern(d.loc.file);
+        f.about.function = almacen.intern(d.loc.file());
         f.about.id = static_cast<uint32_t>(d.level);
         /* Certeza demostrada: no es una suposicion sobre el programa, es lo que
          * el compilador dijo.  Y la fuente es lo que lo distingue de un hecho
@@ -480,7 +480,7 @@ bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
         const analysis::asa::Fact &f = almacen.at(i);
         Diagnostic d;
         d.level = static_cast<DiagLevel>(f.about.id);
-        d.loc.file = f.about.function;
+        d.loc.set_file(f.about.function);
         const uint64_t pa = static_cast<uint64_t>(f.what.a);
         const uint64_t pb = static_cast<uint64_t>(f.what.b);
         d.loc.line = static_cast<uint32_t>(pa & 0xFFFFFFFFu);

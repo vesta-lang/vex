@@ -3390,6 +3390,23 @@ class Lowering {
         return emitted_spans_;
     }
 
+    /**
+     * @brief Se lleva los tramos, dejando vacia la lista de dentro.
+     *
+     * Cada tramo lleva el nombre de la funcion a la que pertenece, y hay uno
+     * por SENTENCIA: llevarselos copiando significa reservar una cadena por
+     * sentencia del fichero para tirar la de aqui a continuacion.  El nombre se
+     * reserva una vez, al bajar, y de ahi en adelante solo se mueve.
+     *
+     * Se llama "llevarse" y no "leer" porque despues de esto aqui no queda
+     * nada: quien lo use tiene que ser el ultimo.
+     *
+     * @return Los tramos.
+     */
+    std::vector<StmtSpan> take_emitted_spans() noexcept {
+        return std::move(emitted_spans_);
+    }
+
     uint32_t macro_lowered_count() const noexcept {
         return macro_lowered_count_;
     }
@@ -4387,10 +4404,21 @@ class Lowering {
                                       ir::IrType wt = ir::IrType::I64);
 
     // --- Static fields + AOP proceed + Async fusion + Intrinsics ---
+    /**
+     * @brief Lee un campo estatico.
+     * @param slot_name Como se llama el hueco donde vive, para quien lo baje a
+     *        codigo nativo: alli no hay registro de clases y el campo acaba en
+     *        un global, que hay que saber nombrar.  Es un HECHO del programa,
+     *        no una decision de backend, asi que el intermedio puede llevarlo
+     *        sin dejar de ser neutral.
+     */
     ir::IrValueId emit_getstatic(ir::IrValueId v_cls, uint64_t offset,
-                                 uint32_t line);
+                                 uint32_t line,
+                                 const std::string &slot_name);
+    /// @copydoc emit_getstatic
     void emit_setstatic(ir::IrValueId v_cls, ir::IrValueId v_val,
-                        uint64_t offset, uint32_t line);
+                        uint64_t offset, uint32_t line,
+                        const std::string &slot_name);
     ir::IrValueId emit_proceed(uint32_t line);
     ir::IrValueId emit_getpid(uint32_t line);
     ir::IrValueId emit_getargc(uint32_t line);

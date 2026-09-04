@@ -128,7 +128,7 @@ void attach_complexity_warnings(vx::CompileResult &result,
             if (line == 0) continue; // sin linea fiable: no ubicar el warning.
 
             vx::SourceLoc loc;
-            loc.file = filename;
+            loc.set_file(filename);
             loc.line = line;
             loc.column = 1;
             loc.length = 1;
@@ -402,7 +402,7 @@ AnalysisEngine::analyze_document(const std::string &uri,
         analysis->result = vx::CompileResult{};
         analysis->result.ok = false;
         vx::SourceLoc loc;
-        loc.file = uri;
+        loc.set_file(uri);
         loc.line = 1; // LSP es 0-based; el mapeo restara 1 -> linea 0.
         loc.column = 1;
         loc.length = 1;
@@ -414,7 +414,7 @@ AnalysisEngine::analyze_document(const std::string &uri,
         analysis->result = vx::CompileResult{};
         analysis->result.ok = false;
         vx::SourceLoc loc;
-        loc.file = uri;
+        loc.set_file(uri);
         loc.line = 1;
         loc.column = 1;
         loc.length = 1;

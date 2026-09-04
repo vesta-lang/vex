@@ -104,7 +104,7 @@ vx::SourceLoc where_is(const LintInput &in, const std::string &function) {
     vx::SourceLoc loc;
     /* El fichero, sin el cual la posicion no se puede pinchar en el editor y el
      * hallazgo sale con un `:4:1` que no dice de que fichero habla. */
-    loc.file = in.file;
+    loc.set_file(in.file);
     const ir::IrModule &mod = in.mod;
     for (const ir::IrFunction &fn : mod.functions) {
         if (fn.name != function) continue;
@@ -653,7 +653,7 @@ void family_overlay_gaps(const LintInput &in, vx::Diagnostics &diags) {
         /* La posicion sale del hecho: una vista no es una funcion y no se puede
          * localizar recorriendo el codigo. */
         vx::SourceLoc loc;
-        loc.file = in.file;
+        loc.set_file(in.file);
         loc.line = huella->seal.origin.site;
         if (!cabe_en_el_fichero(in, loc.line)) continue;
 

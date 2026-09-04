@@ -270,7 +270,7 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
     // inicio (columna 1) de la linea.  Los call sites de alto impacto pasan el
     // SourceLoc de la expresion para apuntar a su columna real.
     SourceLoc loc;
-    loc.file = current_file_;
+    loc.set_file(current_file_);
     loc.line = source_line;
     loc.column = 1;
     return cast_if_needed(v, from, to, loc, is_explicit);

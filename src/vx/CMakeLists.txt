@@ -56,6 +56,10 @@ file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/linker/*.cpp  ${CMAKE_SOURCE_DIR}/include/linker/*.h
     ${CMAKE_SOURCE_DIR}/src/util/assembler_multiprocess.cpp
     ${CMAKE_SOURCE_DIR}/include/util/assembler_multiprocess.h
+    # El pozo de nombres: de el sale la ruta que lleva cada posicion de fuente,
+    # asi que lo necesita cualquiera que construya un `SourceLoc`.
+    ${CMAKE_SOURCE_DIR}/src/util/name_pool.cpp
+    ${CMAKE_SOURCE_DIR}/include/util/name_pool.h
     # --- preprocesador: corre como primera etapa sobre cada .vx ---
     ${CMAKE_SOURCE_DIR}/preprocessor/src/*.c
     ${CMAKE_SOURCE_DIR}/preprocessor/src/*.cpp

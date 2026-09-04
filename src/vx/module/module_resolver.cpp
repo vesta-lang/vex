@@ -737,7 +737,7 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     }
     if (!got_source && !read_file_(canonical_path, source)) {
         SourceLoc l;
-        l.file = canonical_path;
+        l.set_file(canonical_path);
         diags_.error(l, "no se pudo leer el modulo: '" + canonical_path + "'");
         return UINT32_MAX;
     }
@@ -863,7 +863,7 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     auto ast = parser.parse_program();
     if (!ast) {
         SourceLoc l;
-        l.file = canonical_path;
+        l.set_file(canonical_path);
         diags_.error(l, "error al parsear el modulo: '" + canonical_path + "'");
         return UINT32_MAX;
     }
@@ -1246,7 +1246,7 @@ void ModuleGraph::build_namespace_index_() {
             return s;
         };
         SourceLoc loc;
-        loc.file = legible(c.pierde);
+        loc.set_file(legible(c.pierde));
         diags_.diag(loc, DiagLevel::WARN, "VX4003",
                     {c.ejemplo, legible(c.gana), legible(c.pierde),
                      std::to_string(c.cuantos)});
@@ -1388,7 +1388,7 @@ uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
      * dejarlo en el arbol donde competiria con la stdlib por su namespace. */
     if (!file_exists_(canonical) && source_overlay_.count(canonical) == 0) {
         SourceLoc l;
-        l.file = root_file;
+        l.set_file(root_file);
         diags_.error(l, "el fichero raiz no existe: '" + root_file + "'");
         return UINT32_MAX;
     }
@@ -1510,7 +1510,7 @@ std::vector<uint32_t> ModuleGraph::topological_order() const {
                     }
                     cycle_msg += child->module_name;
                     SourceLoc l;
-                    l.file = m->canonical_path;
+                    l.set_file(m->canonical_path);
                     self->diags_.error(l, cycle_msg);
                     // No re-entramos: marcamos el child como BLACK temporal
                     // para que el resto del topo no vuelva a quejarse.

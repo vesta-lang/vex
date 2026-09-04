@@ -142,6 +142,10 @@ bool publish_vxdbg_artifact(
  *        el lowering al crear los nombres (@c Lowering::emitted_symbols).  Es
  * lo que permite ir de una direccion de ejecucion a una declaracion; vacio
  *        emite el grafo pero sin forma de entrar en el.
+ * @param spans Los tramos de fuente, uno por sentencia bajada.  Se toman POR
+ *        VALOR y quien llama los mueve: cada uno lleva el nombre de su funcion,
+ *        asi que copiarlos es reservar una cadena por sentencia del fichero
+ *        para tirar la del que llama justo despues.
  * @param source_path Ruta del fuente principal.
  * @param source_text Su contenido, para resumirlo y poder detectar despues que
  *        el fichero de disco ya no es el que se compilo.  Vacio = sin resumen.
@@ -153,9 +157,9 @@ bool publish_vxdbg_artifact(
 bool emit_vxdbg_source(
     const TypeChecker &tc,
     const std::vector<std::pair<std::string, std::string>> &symbol_links,
-    const std::vector<vxdbg::SourceExtent> &spans,
-    const std::string &source_path, const std::string &source_text,
-    const std::string &out_dir, VxdbgEmitStats &stats, std::string &err);
+    std::vector<vxdbg::SourceExtent> spans, const std::string &source_path,
+    const std::string &source_text, const std::string &out_dir,
+    VxdbgEmitStats &stats, std::string &err);
 
 } // namespace vx
 

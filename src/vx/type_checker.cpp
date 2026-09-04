@@ -233,7 +233,7 @@ extern "C" uint64_t vx_comptime_type_kind(const char *name) {
 void report_comptime_fatal(const std::string &msg) {
     if (g_active_typechecker) {
         SourceLoc loc;
-        loc.file = "<comptime>";
+        loc.set_file("<comptime>");
         g_active_typechecker->diagnostics().error(loc, msg);
     } else {
         std::fprintf(stderr, "[vx] %s (sin TypeChecker activo)\n", msg.c_str());
@@ -2701,6 +2701,13 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
     // const-correctness A: propagar el const de ESTE nivel.  La recursion sobre
     // pointee/element ya marco los niveles interiores.
     if (tn && tn->is_const) t.is_const = true;
+    /* Y `volatile`, que va por el mismo eje y por nivel.  No apaga nada por si
+     * solo: es lo que el programador AFIRMA de la region, y viaja al contrato
+     * como una promesa declarada mas.  Lo que el compilador demuestre de esa
+     * misma region sigue estando, y si las dos cosas se contradicen -- una
+     * local que no sale de la funcion declarada observable -- eso se DICE, que
+     * es mas util que obedecer sin mirar. */
+    if (tn && tn->is_volatile) t.is_volatile = true;
     return t;
 }
 
@@ -3771,7 +3778,7 @@ void TypeChecker::collect_globals() {
                 // Registrar conversiones permitidas + fichero de
                 // declaracion (para module-privacy de @opaque).
                 NewtypeInfo info;
-                info.source_file = a->loc.file;
+                info.source_file = a->loc.file();
                 for (auto &ec : a->explicit_from) {
                     if (!ec.type) continue;
                     Type t = type_from_node(ec.type.get());
@@ -5315,7 +5322,7 @@ void TypeChecker::collect_globals() {
         mi.is_destructor = true;
         mi.defining_class = sd->name;
         mi.return_type = Type{PrimitiveKind::VOID};
-        mi.source_file = sd->loc.file;
+        mi.source_file = sd->loc.file();
         mi.source_line = sd->loc.line;
         lay.methods.push_back(std::move(mi));
     }
@@ -5429,7 +5436,7 @@ void TypeChecker::collect_globals() {
         mi_info.defining_class = cd->name;
         mi_info.return_type = Type{PrimitiveKind::VOID};
         mi_info.vtable_index = static_cast<uint32_t>(lay.methods.size());
-        mi_info.source_file = cd->loc.file;
+        mi_info.source_file = cd->loc.file();
         mi_info.source_line = cd->loc.line;
         lay.methods.push_back(std::move(mi_info));
         lay.has_destructor = true;
@@ -6131,7 +6138,7 @@ ClassMethodInfo TypeChecker::make_method_info(const ast::ClassMethodDecl &m,
     mi.is_virtual = m.is_virtual;
     mi.is_comptime = m.is_comptime;
     mi.defining_class = class_name;
-    mi.source_file = m.loc.file;
+    mi.source_file = m.loc.file();
     mi.source_line = m.loc.line;
     mi.return_type = m.return_type ? type_from_node(m.return_type.get())
                                    : Type{PrimitiveKind::VOID};
@@ -9226,7 +9233,7 @@ Type TypeChecker::check_expr(ast::Expr *e) {
                 if (!info) return false;
                 const auto &lst =
                     from_dir ? info->from_conversions : info->to_conversions;
-                const bool same_file = (ce->loc.file == info->source_file);
+                const bool same_file = (ce->loc.file() == info->source_file);
                 for (const auto &ec : lst) {
                     // Match estricto: kind + nominal_id + (struct_name
                     // si aplica).  No usamos types_assignable porque
@@ -17092,7 +17099,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 std::vector<uint64_t> arg_words;
                 if (marshal_const_args(*e, arg_words)) {
                     const std::string src_loc =
-                        e->loc.file + ":" + std::to_string(e->loc.line) + ":" +
+                        e->loc.file() + ":" + std::to_string(e->loc.line) +
+                        ":" +
                         std::to_string(e->loc.column);
                     comptime_runtime_.record_expectation(
                         id->name, std::move(arg_words), r.str, src_loc);

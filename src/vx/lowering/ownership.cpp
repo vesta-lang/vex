@@ -161,7 +161,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // un bug del frontend que olvido setear el kind; emitir
             // diagnostico claro en lugar de raw_asm opaco.
             error_at(
-                SourceLoc{"", it->source_line, 1},
+                SourceLoc{util::empty_name(), it->source_line, 1},
                 "internal: CleanupAction con Kind::RAW_ASM (default) "
                 "alcanzado al exit del scope; el frontend debe setear "
                 "un kind especifico (CALL_DTOR/CALLN_FREE/SMARTPTR_FREE/etc.)");
