@@ -57,6 +57,7 @@
 #include "runtime/exception_runtime.h"
 #include "runtime/exec_instruction.h"
 #include "runtime/proceso_runtime.h"
+#include "runtime/vm_block_mem.h" // el recorrido por paginas, en UN sitio
 
 #include <cstddef>
 #include <cstdint>
@@ -227,7 +228,7 @@ __attribute__((target("avx2"))) void fill_avx2(uint8_t *d, uint8_t v,
         *d++ = v;
 }
 
-/// ¿Tiene AVX2 esta CPU?  Se consulta UNA vez (el resultado no cambia).
+/// Tiene AVX2 esta CPU?  Se consulta UNA vez (el resultado no cambia).
 bool cpu_has_avx2() noexcept {
     static const bool yes = [] {
         __builtin_cpu_init();
@@ -355,60 +356,62 @@ void exec_instr_memcpyh(ProcessVM *vm, const DecodedInstr &instr) {
     move_fast(dst, src, n);
 }
 
+void vm_block_fill(ProcessVM &vm, uint64_t vaddr, uint8_t value, uint64_t len) {
+    if (len == 0) return;
+    uint8_t buf[kChunk];
+    /* El patron se construye UNA vez y se reusa en cada pagina. */
+    fill_fast(buf, value, len < kChunk ? len : kChunk);
+    while (len > 0) {
+        const size_t k = static_cast<size_t>(len < kChunk ? len : kChunk);
+        vm.vm_mem.write_bytes(vaddr, buf, k);
+        vaddr += k;
+        len -= k;
+    }
+}
+
+void vm_block_copy(ProcessVM &vm, uint64_t dst, uint64_t src, uint64_t len) {
+    if (len == 0 || dst == src) return;
+    uint8_t buf[kChunk];
+    /* Con solape y destino POR DELANTE se recorre HACIA ATRAS: es el
+     * equivalente por trozos de lo que hace @c move_fast dentro de un bloque, y
+     * lo que impide pisar lo que aun falta por leer. */
+    if (dst > src && dst < src + len) {
+        uint64_t rem = len;
+        while (rem > 0) {
+            const size_t k = static_cast<size_t>(rem < kChunk ? rem : kChunk);
+            rem -= k;
+            vm.vm_mem.read_bytes(src + rem, buf, k);
+            vm.vm_mem.write_bytes(dst + rem, buf, k);
+        }
+        return;
+    }
+    uint64_t off = 0;
+    while (off < len) {
+        const size_t k =
+            static_cast<size_t>((len - off) < kChunk ? (len - off) : kChunk);
+        vm.vm_mem.read_bytes(src + off, buf, k);
+        vm.vm_mem.write_bytes(dst + off, buf, k);
+        off += k;
+    }
+}
+
 /** @brief @c memset r_dst, r_val, r_len -- relleno en memoria VIRTUAL. */
 void exec_instr_memset(ProcessVM *vm, const DecodedInstr &instr) {
     const MemOperands o = decode_mem_ops(instr);
     uint64_t n = 0;
     if (!bulk_len(vm, o.c, n)) return;
-    uint64_t vaddr = vm->registers.regs[o.a].qword();
-    const uint8_t v =
-        static_cast<uint8_t>(vm->registers.regs[o.b].qword() & 0xFF);
-
-    uint8_t buf[kChunk];
-    fill_fast(buf, v,
-              n < kChunk ? n : kChunk); // el patron se construye UNA vez
-    while (n > 0) {
-        const size_t k = static_cast<size_t>(n < kChunk ? n : kChunk);
-        vm->vm_mem.write_bytes(vaddr, buf, k);
-        vaddr += k;
-        n -= k;
-    }
+    vm_block_fill(*vm, vm->registers.regs[o.a].qword(),
+                  static_cast<uint8_t>(vm->registers.regs[o.b].qword() & 0xFF),
+                  n);
 }
 
-/**
- * @brief @c memcpy r_dst, r_src, r_len -- copia dentro de memoria VIRTUAL.
- *
- * Con solape y @c dst>src se recorre HACIA ATRAS, el equivalente por trozos de
- * lo que hace @c move_fast dentro de un bloque.
- */
+/** @brief @c memcpy r_dst, r_src, r_len -- copia dentro de memoria VIRTUAL. */
 void exec_instr_memcpy(ProcessVM *vm, const DecodedInstr &instr) {
     const MemOperands o = decode_mem_ops(instr);
     uint64_t n = 0;
     if (!bulk_len(vm, o.c, n)) return;
-    const uint64_t dst0 = vm->registers.regs[o.a].qword();
-    const uint64_t src0 = vm->registers.regs[o.b].qword();
-    if (dst0 == src0) return;
-
-    uint8_t buf[kChunk];
-    const bool backward = dst0 > src0 && dst0 < src0 + n;
-    if (!backward) {
-        uint64_t off = 0;
-        while (off < n) {
-            const size_t k =
-                static_cast<size_t>((n - off) < kChunk ? (n - off) : kChunk);
-            vm->vm_mem.read_bytes(src0 + off, buf, k);
-            vm->vm_mem.write_bytes(dst0 + off, buf, k);
-            off += k;
-        }
-    } else {
-        uint64_t rem = n;
-        while (rem > 0) {
-            const size_t k = static_cast<size_t>(rem < kChunk ? rem : kChunk);
-            rem -= k;
-            vm->vm_mem.read_bytes(src0 + rem, buf, k);
-            vm->vm_mem.write_bytes(dst0 + rem, buf, k);
-        }
-    }
+    vm_block_copy(*vm, vm->registers.regs[o.a].qword(),
+                  vm->registers.regs[o.b].qword(), n);
 }
 
 } // namespace runtime

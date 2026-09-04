@@ -27,21 +27,33 @@ namespace runtime {
 
 namespace {
 
-#if VM_BUNDLE_STATS
-#define BSTAT(p, field) (++(p)->bundle_stats.field)
-/* Suma una cantidad en vez de uno: hace falta para lo que no se cuenta por
- * veces sino por unidades -- cuantas instrucciones cambiaron de sitio --.
+/* La telemetria se pide en EJECUCION, no al construir.
  *
- * OJO: sin telemetria el argumento SE SIGUE EVALUANDO, y tiene que ser asi.
- * Ahi dentro va la llamada que hace el trabajo, no solo la que produce el
+ * Antes vivia detras de `VM_BUNDLE_STATS`, y eso significaba que para MIRAR por
+ * que un programa forma los paquetes que forma habia que reconstruir el
+ * proyecto entero -- y entonces lo que se mira ya no es el binario que se
+ * ejecuta --.  Una medida que obliga a cambiar de binario para tomarla mide
+ * otro binario.
+ *
+ * Y no cuesta lo que parece: NINGUNO de estos contadores va por instruccion.
+ * Van por paquete formado, por despacho o por encadenamiento, o sea una vez
+ * cada treinta y tantas instrucciones ejecutadas.  Una rama que casi siempre no
+ * se toma ahi no se mide.
+ *
+ * OJO: apagada, el argumento de `BSTAT_ADD` SE SIGUE EVALUANDO, y tiene que ser
+ * asi.  Ahi dentro va la llamada que hace el trabajo, no solo la que produce el
  * numero; que la cuenta desaparezca no puede hacer desaparecer el reorden. */
-#define BSTAT_ADD(p, field, n) ((p)->bundle_stats.field += (n))
-#else
-/* Sin telemetria no queda ni la suma: medir el coste no puede cambiar lo que se
- * mide. */
-#define BSTAT(p, field) ((void)0)
-#define BSTAT_ADD(p, field, n) ((void)(n))
-#endif
+#define BSTAT(p, field)                                                        \
+    do {                                                                       \
+        if (__builtin_expect((p)->bundle_stats_on, 0))                         \
+            ++(p)->bundle_stats.field;                                         \
+    } while (0)
+#define BSTAT_ADD(p, field, n)                                                 \
+    do {                                                                       \
+        const uint64_t vm_bstat_n = (uint64_t)(n);                             \
+        if (__builtin_expect((p)->bundle_stats_on, 0))                         \
+            (p)->bundle_stats.field += vm_bstat_n;                             \
+    } while (0)
 
 /**
  * @brief Si esta instruccion NO puede ir dentro de un paquete.
@@ -101,7 +113,15 @@ bool is_reentrant(const DecodedInstr &d) {
 }
 
 BundleArena *arena_of(ProcessVM *p) {
-    if (p->bundle_arena == nullptr) p->bundle_arena = new BundleArena();
+    if (p->bundle_arena == nullptr) {
+        p->bundle_arena = new BundleArena();
+        /* Quien pide la telemetria DESDE FUERA la pide una vez, aqui: la
+         * variable de entorno se lee una sola vez por proceso y no en cada
+         * incremento.  Un test que la quiera la enciende por su cuenta y no
+         * necesita variable ninguna. */
+        if (::util::flag_on(::util::FlagId::BundleStats))
+            p->bundle_stats_on = true;
+    }
     return static_cast<BundleArena *>(p->bundle_arena);
 }
 
@@ -343,15 +363,30 @@ void bundle_release(ProcessVM *process) {
     // sombrearia al del proyecto.
     if (__builtin_expect(::util::flag_on(::util::FlagId::CacheDump), 0))
         bundle_dump_state(process);
-#if VM_BUNDLE_STATS
     /* La telemetria de paquetes existia y NO LA IMPRIMIA NADIE: los contadores
      * se llenaban y morian con el proceso.  Una medida que no se puede leer no
      * es una medida, asi que se vuelca aqui, que es donde el proceso termina.
      *
-     * Va dentro del mismo `#if` que los incrementos: con la telemetria apagada
-     * -- que es el defecto -- esto no existe, igual que ellos. */
+     * NADA de esto va ya bajo `#if VM_BUNDLE_STATS`: los contadores se piden en
+     * EJECUCION -- `bundle_stats_on` o `VESTA_BUNDLE_STATS` -- y por tanto se
+     * pueden ver sin reconstruir.  Atarlo al perfil de construccion obligaba a
+     * cambiar de binario para tomar la medida, y entonces se mide otro binario.
+     *
+     * Hubo un paso intermedio peor que ninguno de los dos extremos: los del
+     * reordenamiento en ejecucion y el resto al compilar, con una nota
+     * diciendo cuales faltaban.  Media telemetria es la que hace perder el
+     * tiempo, porque el que la lee no sabe si un cero es "no paso" o "no se
+     * midio".
+     *
+     * PERO RECOGER Y VOLCAR SON DOS COSAS, y confundirlas se nota enseguida:
+     * esto corre una vez POR PROCESO, asi que un banco que crea decenas
+     * escupia el bloque decenas de veces en medio de su propia tabla.  Se
+     * vuelca solo si lo pidieron DESDE FUERA -- la variable de entorno --;
+     * quien enciende `bundle_stats_on` por codigo es porque va a leer los
+     * contadores el mismo y no quiere que nadie los imprima por su cuenta. */
     const auto &s = process->bundle_stats;
-    if (s.dispatches != 0 || s.formed != 0) {
+    if (::util::flag_on(::util::FlagId::BundleStats) &&
+        (s.dispatches != 0 || s.formed != 0)) {
         std::fprintf(
             stderr,
             "\n[paquetes] formados=%llu no_formados=%llu aplazados=%llu "
@@ -387,7 +422,6 @@ void bundle_release(ProcessVM *process) {
             (unsigned long long)s.reorder_wins[3],
             (unsigned long long)s.reorder_choices);
     }
-#endif
     delete static_cast<BundleArena *>(process->bundle_arena);
     process->bundle_arena = nullptr;
 }
@@ -558,6 +592,14 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
      * vuelve a formar nunca, porque vaciar aqui invalidaria las entradas de
      * icache que apuntan a paquetes muertos.  El diseno acordado para eso son
      * dos arenas que se turnan con copia dirigida por la icache. */
+    /* La instruccion de ESTA direccion, guardada ANTES de reordenar.
+     *
+     * Es la que se devuelve a la entrada de icache si el paquete no compensa y
+     * se retira.  Tiene que copiarse aqui y no leerse de `instr[0]` mas tarde,
+     * porque el planificador puede poner otra en el hueco cero.  Ver
+     * `Bundle::head`. */
+    b.head = b.instr[0];
+
     /* REORDENAR antes de publicar.  Aqui y no al ejecutar: se paga una vez por
      * sitio y se cobra en cada una de las miles de entradas siguientes.
      *
@@ -566,7 +608,10 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
     if (__builtin_expect(process->bundle_reorder_on &&
                              !::util::flag_on(::util::FlagId::NoBundleReorder),
                          1))
-        BSTAT_ADD(process, reordered, bundle_reorder(process, b));
+        /* Sin `BSTAT_ADD`: la telemetria del reordenamiento la lleva el propio
+         * `bundle_reorder`, que sabe ademas QUE criterio decidio cada posicion.
+         * Sumarla tambien aqui contaba dos veces lo mismo. */
+        (void)bundle_reorder(process, b);
 
     Bundle *rec = arena->alloc();
     *rec = b;
@@ -640,6 +685,10 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
      * Es la unica forma de separarlos: entre benchmarks no correlaciona nada.
      */
     {
+        /* OJO si se enciende con el reordenamiento puesto: `instr[0]` es la
+         * PRIMERA DEL ORDEN DE EJECUCION, que ya no tiene por que ser la de
+         * esta direccion (esa es `b->head`).  La biseccion sigue midiendo lo
+         * que dice -- ejecutar una sola --, pero no necesariamente la misma. */
         DecodedInstr &ins = b->instr[0];
 
         *dp = &ins;
@@ -696,6 +745,15 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
             if (instrs > 1)
                 process->scheduler.profiler_instr_counter += instrs - 1;
 
+            /* Las instrucciones ejecutadas DENTRO de paquetes, una vez por
+             * despacho en vez de una por instruccion.  `instrs` ya las lleva
+             * contadas -- se incrementa haya telemetria o no --, asi que
+             * volver a contarlas en el bucle caliente era pagar dos veces por
+             * el mismo dato.  Y esto corre lo PRIMERO del destructor por la
+             * misma razon que la linea de arriba: de `exec_bundle` se sale por
+             * cinco sitios y hay salidas tempranas mas abajo. */
+            BSTAT_ADD(process, instrs_in_bundles, instrs);
+
             Bundle *hb = head_bundle;
             if (hb->retired) return;
             hb->entries += entries;
@@ -719,7 +777,10 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
             // instante -- salia como un "-100% de tiempo".
             const bool jumped = entry->flags_info.did_jump;
             const bool blocked = entry->flags_info.blocking;
-            *entry = hb->instr[0];
+            /* De `head`, no de `instr[0]`: el planificador reordena antes de
+             * publicar, asi que en el hueco cero puede haber una instruccion de
+             * OTRA direccion.  Ver `Bundle::head`. */
+            *entry = hb->head;
             entry->flags_info.did_jump = jumped;
             entry->flags_info.blocking = blocked;
             hb->retired = true;
@@ -788,7 +849,12 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
 #else
         ins.exec_cached(process, ins);
 #endif
-        BSTAT(process, instrs_in_bundles);
+        /* Sin `BSTAT` aqui: esto es el bucle POR INSTRUCCION, y una rama por
+         * instruccion ejecutada se nota -- medido, 17% en las filas de
+         * paquetes del banco --.  El contador se deriva al salir, de
+         * `profit.instrs`, que ya lleva exactamente la misma cuenta y se
+         * incrementa igual haya telemetria o no.  Contar dos veces lo mismo,
+         * una de ellas en el sitio caro, era el error. */
         ++profit.instrs;
 
         const bool blocked = ins.flags_info.blocking;

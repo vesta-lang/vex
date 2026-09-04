@@ -305,20 +305,49 @@ extern const uint16_t kHotExtended[256];
  * con los efectos solos, `add r2, 3` y `add r3, 1` parecen iguales y no se
  * puede decir que no chocan.
  *
- * Un bit por (campo, parte), en cada byte:
+ * Un bit por (campo, parte), en cada campo de dieciseis (ver @ref VmForm):
  *
  *     0: reg1 entero    1: reg1 nibble bajo   2: reg1 nibble alto
  *     3: reg2 entero    4: reg2 nibble bajo   5: reg2 nibble alto
+ *     6: reg3 entero    7: reg3 nibble bajo   8: reg3 nibble alto
+ *     9: regI entero   10: regI nibble bajo  11: regI nibble alto
  *
- * Empaquetado: byte 0 = lee del banco general, byte 1 = escribe en el general,
- * byte 2 = lee del vectorial, byte 3 = escribe en el vectorial.
+ * Empaquetado, de bajo a alto: lee del banco general, escribe en el general,
+ * lee del vectorial, escribe en el vectorial.
  *
  * CERO NO ES "no toca registros": es que el recorrido no lo vio, igual que en
  * los efectos.  Quien reordene tiene que tratarlo como desconocido, no como
  * vacio -- confundirlos es exactamente el fallo que da otro resultado.
  */
-extern const uint32_t kFormPrimary[256];
-extern const uint32_t kFormExtended[256];
+extern const uint64_t kFormPrimary[256];
+extern const uint64_t kFormExtended[256];
+
+/**
+ * @brief Si la FORMA de cada opcode se puede CREER.  Un bit por opcode.
+ *
+ * Sin esto, una mascara a cero tiene dos lecturas opuestas -- "no nombra
+ * registros" y "no se vio que registros nombra" -- y el que reordena no puede
+ * distinguirlas.  Las consecuencias no son simetricas: creerse de mas una
+ * lectura cuesta un reordenamiento que no se hace, y creerse de menos una
+ * ESCRITURA deja mover por encima a quien leia ese registro, que no da un
+ * error sino otro resultado.
+ *
+ * Vale 1 cuando el recorrido del manejador llego al final Y ni un solo acceso
+ * al banco quedo sin atribuir a un campo del operando.  Es la misma disciplina
+ * que `VE_EXACT` para los efectos, aplicada a la forma.
+ *
+ * Va como mapa de bits y no como `uint8_t[256]` porque se consulta una vez por
+ * instruccion al formar un paquete: 32 bytes por tabla caben en media linea de
+ * cache, y 256 no caben en ninguna.
+ */
+extern const uint64_t kFormExactPrimary[4];
+extern const uint64_t kFormExactExtended[4];
+
+/// @return true si la forma de @p opcode es de fiar (ver @ref kFormExactPrimary).
+inline bool vm_form_exact(bool extended, uint8_t opcode) {
+    const uint64_t *mapa = extended ? kFormExactExtended : kFormExactPrimary;
+    return ((mapa[opcode >> 6] >> (opcode & 63)) & 1u) != 0;
+}
 
 /**
  * @brief Opcodes cuyos campos vienen DECLARADOS, no derivados.
@@ -338,29 +367,60 @@ extern const uint32_t kFormExtended[256];
 extern const uint8_t kFixedPrimary[256];
 extern const uint8_t kFixedExtended[256];
 
-/// Bits de la forma dentro de cada byte de @ref kFormPrimary.
-enum VmForm : uint8_t {
+/**
+ * @brief Bits de la forma: uno por cada `RegSlot`, desplazado uno.
+ *
+ * El bit `i` corresponde a la ranura `i + 1` de `RegSlot`, porque `RS_NONE`
+ * es la ranura 0 y no gasta bit.  El nombre de cada una sale de ahi, asi que
+ * anadir una ranura es anadir una fila EN LOS DOS SITIOS: aqui y en
+ * `kRegSlotDesc` de `effects_decode.h`.
+ *
+ * Las tres ultimas no son un adorno.  `RS_REG3` es el tercer registro de la
+ * forma de MEMORIA, y `RS_REGI` el registro de la forma con INMEDIATO, que
+ * vive en el byte 8 detras del inmediato de ocho bytes: es donde `add r, imm`
+ * guarda su unico registro.
+ */
+enum VmForm : uint16_t {
     VF_REG1 = 1u << 0,    ///< reg1 entero
     VF_REG1_LO = 1u << 1, ///< nibble bajo de reg1
     VF_REG1_HI = 1u << 2, ///< nibble alto de reg1
     VF_REG2 = 1u << 3,    ///< reg2 entero
     VF_REG2_LO = 1u << 4, ///< nibble bajo de reg2
     VF_REG2_HI = 1u << 5, ///< nibble alto de reg2
+    VF_REG3 = 1u << 6,    ///< reg3 entero (forma de memoria)
+    VF_REG3_LO = 1u << 7, ///< nibble bajo de reg3
+    VF_REG3_HI = 1u << 8, ///< nibble alto de reg3
+    VF_REGI = 1u << 9,     ///< registro de la forma con inmediato
+    VF_REGI_LO = 1u << 10, ///< nibble bajo de ese registro
+    VF_REGI_HI = 1u << 11, ///< nibble alto de ese registro
 };
 
-/// @return La forma empaquetada de @p opcode.
-inline uint32_t vm_form(bool extended, uint8_t opcode) {
+/**
+ * @return La forma empaquetada de @p opcode.
+ *
+ * Son SESENTA Y CUATRO bits, cuatro campos de dieciseis, y no treinta y dos
+ * de a ocho como fue al principio.  Con ocho no cabian las doce ranuras: los
+ * bits de `RS_REGI` para arriba se perdian al empaquetar, y lo que se perdia
+ * era justo la forma con INMEDIATO de `add`, `sub`, `mul`, `div`, `cmp`,
+ * `mov`, `movc` y `mod` -- ocho de los opcodes mas ejecutados que hay --.
+ * Truncados, `add r3, 5` declaraba no tocar ningun registro, y un modelo que
+ * dice eso deja intercambiar dos instrucciones que si dependian.  No da un
+ * error: da otro resultado.
+ */
+inline uint64_t vm_form(bool extended, uint8_t opcode) {
     return extended ? kFormExtended[opcode] : kFormPrimary[opcode];
 }
 
-/// Los cuatro bytes de @ref vm_form, por separado.
-inline uint8_t vm_form_read(uint32_t f) { return (uint8_t)(f & 0xFF); }
-inline uint8_t vm_form_write(uint32_t f) { return (uint8_t)((f >> 8) & 0xFF); }
-inline uint8_t vm_form_vec_read(uint32_t f) {
-    return (uint8_t)((f >> 16) & 0xFF);
+/// Los cuatro campos de @ref vm_form, por separado.
+inline uint16_t vm_form_read(uint64_t f) { return (uint16_t)(f & 0xFFFF); }
+inline uint16_t vm_form_write(uint64_t f) {
+    return (uint16_t)((f >> 16) & 0xFFFF);
 }
-inline uint8_t vm_form_vec_write(uint32_t f) {
-    return (uint8_t)((f >> 24) & 0xFF);
+inline uint16_t vm_form_vec_read(uint64_t f) {
+    return (uint16_t)((f >> 32) & 0xFFFF);
+}
+inline uint16_t vm_form_vec_write(uint64_t f) {
+    return (uint16_t)((f >> 48) & 0xFFFF);
 }
 
 /// Desplazamiento del estrechamiento dentro de la palabra caliente.

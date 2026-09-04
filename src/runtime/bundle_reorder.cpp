@@ -30,15 +30,22 @@
  *
  * COMO SE EXTIENDE
  * ----------------
- * Los tres objetivos de arriba no estan cosidos al algoritmo: son entradas de
- * @ref kCriteria, una tabla plana de (nombre, peso, funcion).  Anadir una
- * capacidad nueva -- vectorizar, evitar un puerto del anfitrion, lo que venga
- * -- es anadir una fila, no tocar el planificador.  El bucle no sabe cuantos
- * criterios hay ni que miden.
+ * Los tres objetivos de arriba no estan cosidos al algoritmo: son filas de
+ * @ref VM_REORDER_CRITERIA, una lista de (identificador, nombre, peso,
+ * funcion).  Anadir una capacidad -- vectorizar, evitar un puerto del
+ * anfitrion, lo que venga -- es anadir UNA fila, y de ella salen a la vez el
+ * enumerado, la tabla de pesos y el codigo que puntua.  No hay ningun sitio
+ * donde acordarse de dar de alta el criterio por segunda vez.
  *
  * Los pesos deciden que gana cuando dos criterios piden cosas distintas, y
- * estan juntos y a la vista por eso mismo: repartidos por el codigo, ajustar el
+ * estan en esa misma fila por eso: repartidos por el codigo, ajustar el
  * comportamiento seria ir a buscarlos de uno en uno.
+ *
+ * Y NO HAY DESPACHO.  La lista se expande en el sitio, asi que los cuatro
+ * cuerpos quedan dentro del bucle: ni tabla de punteros -- que serian miles de
+ * llamadas indirectas que el anfitrion no puede predecir ni inlinar -- ni
+ * `switch`, que ademas obliga al compilador a mantener los cuerpos como
+ * funciones separadas para poder saltar a ellas.
  *
  * DE DONDE SALE LO QUE PUEDE MOVERSE
  * ----------------------------------
@@ -47,27 +54,53 @@
  *   - los EFECTOS IMPLICITOS -- banderas, pila, marco, contador de programa, si
  *     toca memoria, si transfiere control, si puede abortar -- salen de
  *     `instr_db_vm`, que se DERIVA del codigo maquina de los manejadores;
- *   - los REGISTROS que nombra salen del DESENSAMBLADOR, porque su indice es
- *     variable (`regs[instr.reg1]`) y solo el formato lo sabe.
+ *   - los REGISTROS que nombra salen de la FORMA (`kFormPrimary`), que dice
+ *     QUE CAMPO del operando lleva el numero -- su indice es variable
+ *     (`regs[instr.reg1]`) y solo el formato lo sabe --, y `regs_of_form` lo
+ *     resuelve sobre la instancia ya descodificada.
  *
- * El reparto lo explica la cabecera de `instr_db_vm.h`.  La forma que la base
- * SI trae (`kFormPrimary`) es COTA INFERIOR: si el recorrido no vio un acceso,
- * sale cero, y cero no distingue "no toca registros" de "no se supo".  Una
- * ESCRITURA que falta permite un reorden que rompe el programa, asi que para
- * DECIDIR no vale; sirve para informar.
+ * Los dos son un indexado en una tabla que cabe en cache.  AQUI NO SE
+ * DESENSAMBLA: formar un paquete son 32 instrucciones, y abrir Capstone y
+ * reservar 32 cadenas por paquete es carisimo justo donde no se puede pagar.
+ *
+ * La forma solo se cree cuando `vm_form_exact` lo dice.  Una mascara a cero
+ * tiene dos lecturas opuestas -- "no nombra registros" y "no se vio que
+ * nombra" -- y confundirlas no cuesta lo mismo en los dos sentidos: una
+ * ESCRITURA que falta permite un reorden que rompe el programa.  Ese bit es lo
+ * que separa las dos, y sin el la forma solo servia para informar.
+ *
+ * LOS CORTES, DE MAS BARATO A MAS CARO
+ * ------------------------------------
+ * El caso comun de un paquete es que NO se pueda reordenar, asi que lo que hay
+ * que hacer bien es salir pronto.  En orden, cada uno evita el trabajo del
+ * siguiente:
+ *
+ *   1. menos de tres instrucciones: con dos no hay nada que mover;
+ *   2. menos de dos MOVIBLES: una barrera no se mueve y una sola movible no
+ *      tiene con quien intercambiarse.  Corta antes de la matriz, que son 496
+ *      comparaciones en un paquete lleno;
+ *   3. cadena FORZADA: si cada instruccion depende de la anterior, el unico
+ *      orden topologico valido es el que ya trae.  Corta antes del
+ *      planificador, que es lo caro.
  *
  * ES CONSERVADOR, Y A PROPOSITO
  * -----------------------------
- *   - Un opcode que no sea movible es BARRERA: no se mueve nada a su alrededor.
- *     Lo decide `vm_instr_movable`, que exige efectos EXACTOS y descarta las
- *     cuatro barreras (control, aborto, destino solo conocido al ejecutar, y
- *     salida a codigo ajeno).
+ *   - Un opcode que no sea movible es BARRERA.  Lo decide `vm_instr_movable`,
+ *     que exige efectos EXACTOS y descarta las cuatro barreras (control,
+ *     aborto, destino solo conocido al ejecutar, y salida a codigo ajeno).
  *   - El DESTINO cuenta tambien como LECTURA.  Distinguir `mov` de `add`
  *     pediria saber si el opcode lee su destino; no saberlo cuesta un reorden
  *     perdido, suponerlo puede costar un resultado.
  *   - Toda la memoria de la VM es UN recurso: sin desambiguacion, dos accesos
  *     cualesquiera se ordenan entre si.
- *   - Si el desensamblador no entiende una instruccion, barrera.
+ *   - Si la forma de un opcode no es de fiar, barrera.
+ *
+ * Barrera NO quiere decir que el paquete se congele.  Una barrera se fija a SI
+ * MISMA: lo que queda por encima se sigue reordenando entre si, y lo que queda
+ * por debajo tambien.  La matriz de dependencias es por PARES, asi que sale
+ * solo; el test lo comprueba, porque un planificador que se rindiera al ver la
+ * primera barrera pasaria todas las comprobaciones de correccion sin hacer
+ * nada -- no cruzar nada es trivialmente correcto --.
  *
  * POR QUE ES SEGURO REORDENAR AQUI
  * --------------------------------
@@ -80,14 +113,21 @@
  * El `pc` viaja DENTRO de cada instruccion desde que se forma, asi que moverlas
  * no descoloca ninguna direccion: la traza de un fallo sigue senalando la que
  * de verdad se estaba ejecutando.
+ *
+ * LO QUE NO ESTA AQUI
+ * -------------------
+ * Ni el volcado, ni los contadores, ni una sola cadena de texto: eso vive en
+ * `bundle_reorder_report.cpp`, detras de `bundle_reorder_report.h`.  El
+ * planificador se instancia DOS veces desde esta misma implementacion
+ * (`Explain`), y la caliente no contiene ni una instruccion de telemetria.
  */
 
 #include "runtime/bundle.h"
 
-#include <cstdio>
 #include <cstring>
 
-#include "disasm/disasm.h"
+#include "runtime/bundle_reorder_report.h"
+#include "runtime/effects_decode.h"
 #include "runtime/instr_db_vm.h"
 #include "util/env_flags.h"
 
@@ -104,6 +144,59 @@ enum : uint8_t {
     kFrame = 1u << 2,
     kPc = 1u << 3,
 };
+
+/// Cuantos registros tiene el banco general.  Sale del ancho de las mascaras.
+constexpr uint32_t kRegs = 16;
+/// Cuantos campos implicitos hay: banderas, pila, marco y contador.
+constexpr uint32_t kFieldCount = 4;
+
+/* PENDIENTE: puntuar con SIMD, y entonces sin ventana.
+ *
+ * Los cuatro criterios son aritmetica sobre mascaras de dieciseis bits, o sea
+ * que ocho candidatas caben en un registro SSE y las 32 de un paquete lleno
+ * salen en cuatro pasos.  `score_order` es aritmetica pura sobre indices,
+ * `score_independence` un desplazamiento de `clash`, y `fusion` y `locality`
+ * ANDs.  Todo con SSE2, que es LINEA BASE de x86-64: sin despacho por CPU y sin
+ * subir `-march`, que es la condicion para que entre en este proyecto.
+ *
+ * Pide un cambio previo: `Touch` tiene que pasar de vector de estructuras a
+ * estructura de vectores (`uint16_t reg_read[BUNDLE_MAX]`, `reg_write[...]`,
+ * ...), porque hoy los campos de una candidata estan juntos y lo que hace falta
+ * es que esten juntos los de TODAS.
+ *
+ * Y no seria solo mas rapido: puntuar las 32 en cuatro pasos sale mas barato
+ * que recorrer ocho dispersas en escalar, asi que @ref kWindow -- que es una
+ * aproximacion -- se sustituiria por el calculo exacto.
+ *
+ * NO SE HA HECHO, y el motivo esta medido, no supuesto: en la carga que se
+ * hundia, `fusion` y `locality` ganaron CERO elecciones de ocho millones, y
+ * `independence` decidio el 94%.  Vectorizar aqui es acelerar un calculo cuyo
+ * resultado es "no muevas nada" ocho millones de veces.  Antes van dos cosas
+ * que quitan trabajo en vez de acelerarlo: no analizar los sitios que se
+ * forman una vez y mueren -- la icache se desaloja a si misma y se reforman
+ * 250.000 paquetes para cambiar UNO --, y saltarse los criterios que no pueden
+ * puntuar.  Cuando eso este, esto es lo siguiente.
+ */
+
+/**
+ * @brief Cuantas candidatas LISTAS mira el planificador en cada paso.
+ *
+ * Un planificador de lista mira todas las que estan listas y se queda con la
+ * mejor.  Eso es `k` pasos por `k` pendientes: mil evaluaciones de los cuatro
+ * criterios en un paquete lleno, y medido con VTune era el coste dominante del
+ * reordenamiento -- nueve mil millones de instrucciones del anfitrion --.
+ *
+ * Mirar solo las primeras no pierde casi nada, y no por corazonada: el criterio
+ * de orden YA declara que a partir de cierta distancia su aportacion es cero,
+ * asi que una candidata lejana solo puede ganar por fusion o por localidad, y
+ * para eso tendria que ser la unica lista que consume lo que la ultima acaba de
+ * producir -- que es tanto como decir que las de en medio no estaban listas y
+ * no gastaron ventana --.
+ *
+ * Ocho y no cuatro porque el sesgo de orden se apaga a distancia cuatro: con la
+ * ventana justo ahi, la unica candidata capaz de desempatar quedaria fuera.
+ */
+constexpr uint32_t kWindow = 8;
 
 /// Lo que una instruccion del paquete toca.  Se calcula una vez al formar.
 struct Touch {
@@ -143,8 +236,8 @@ struct Touch {
      * el reorden pasaba los siete programas sinteticos y fallaba tres de los
      * SIETE REALES: los sinteticos no llevan `push`. */
     if ((eff & vm_isa::VE_R_PC) != 0) return false;
-    // Deja de serlo POR SUS EFECTOS.  Todavia puede volver a marcarse si el
-    // desensamblador no la entiende, que es lo que decide `touch_all`.
+    // Deja de serlo POR SUS EFECTOS.  Todavia puede volver a marcarse si su
+    // FORMA no es de fiar, que es lo que decide `touch_one`.
     t.barrier = false;
 
     t.field_write = (uint8_t)(((eff & vm_isa::VE_W_FLAGS) ? kFlags : 0) |
@@ -160,136 +253,70 @@ struct Touch {
 }
 
 /**
- * @brief Rellena `t[0..k)` con lo que toca cada instruccion del paquete.
+ * @brief Rellena @p t con lo que toca @p d.
  *
- * Los registros salen del DESENSAMBLADOR porque su indice es variable
- * (`regs[instr.reg1]`) y solo el formato sabe de que campo sale y cual ocupa la
- * posicion de destino.
+ * SIN DESENSAMBLAR NADA.  Los efectos dicen que toca sin nombrarlo; la forma
+ * dice QUE CAMPO del operando lleva el numero de registro, y `regs_of_form` lo
+ * resuelve sobre esta instancia.  Dos indexados en tablas de cache y doce
+ * iteraciones sin ramas dependientes de datos.
  *
- * Y se desensambla el paquete ENTERO de una vez, no instruccion a instruccion.
- * Puede hacerse porque un paquete es un tramo RECTO: sus bytes son contiguos en
- * la memoria de la VM.  La diferencia no es de estilo -- `disasm_bytes`
- * devuelve un vector de cadenas, o sea que por instruccion habria 32 reservas
- * de monton y 32 aperturas de Capstone por cada paquete que se forma --.
- *
- * Si el desensamblador parte los bytes de otra forma que el descodificador, las
- * direcciones dejan de casar y esa instruccion queda como BARRERA: es la unica
- * respuesta honesta cuando dos partes no ven lo mismo.
- *
- * @param process Proceso, para leer los bytes.
- * @param b       Paquete recien formado, todavia en orden de direccion.
- * @param t       Salida: que toca cada una.
+ * @return true si la instruccion se puede mover.
  */
-void touch_all(ProcessVM *process, const Bundle &b, Touch *t) {
-    // Los efectos implicitos primero: son los que deciden quien es barrera, y
-    // no hacen falta los bytes para saberlo.
-    for (uint32_t i = 0; i < b.k; ++i) effects_of(b.instr[i], t[i]);
-
-    // Un paquete lleno son 32 instrucciones de como mucho 16 bytes.
-    constexpr uint32_t kMaxBytes = BUNDLE_MAX * 16;
-    uint8_t buf[kMaxBytes];
-    const uint64_t base = b.instr[0].pc;
-    const DecodedInstr &ultima = b.instr[b.k - 1];
-    const uint64_t fin = ultima.pc + (ultima.flags_info.size_instr != 0
-                                          ? ultima.flags_info.size_instr
-                                          : 16u);
-    if (fin <= base) return; // sin bytes que mirar: todas quedan barrera
-    const uint64_t len = fin - base;
-    if (len > kMaxBytes) return; // no cabe: igual
-    process->vm_mem.read_bytes(base, buf, (size_t)len);
-
-    disasm::DisasmOptions opts;
-    opts.show_hex = false;
-    opts.use_color = false;
-    // `hlt` no corta el recorrido: aqui se quiere TODO lo que hay en el
-    // paquete, y si dentro hubiera un `hlt` sus efectos ya lo hacen barrera.
-    opts.stop_at_hlt = false;
-    const auto out = disasm::disasm_bytes(buf, (size_t)len, base, opts);
-
-    /* Se casan por DIRECCION y avanzando los dos a la vez: las dos listas van
-     * en orden creciente, asi que basta un indice que no retrocede.  Buscar
-     * cada una seria cuadratico para nada. */
-    size_t n = 0;
-    for (uint32_t i = 0; i < b.k; ++i) {
-        while (n < out.size() && out[n].address < b.instr[i].pc) ++n;
-        if (n >= out.size() || out[n].address != b.instr[i].pc) {
-            t[i].barrier = true; // no casa: no se sabe que toca
-            continue;
-        }
-        if (t[i].barrier) { // ya lo era por sus efectos; no hace falta mas
-            ++n;
-            continue;
-        }
-        /* SEGUNDA fuente para "toca memoria", y hace falta.
-         *
-         * El bit de la base es COTA INFERIOR: se deriva de que el manejador
-         * toque `proc->vm_mem`, y hay opcodes que llegan a la memoria por un
-         * puntero LEIDO de ahi -- `loadz` y `loadzh` --, con lo que el rastro
-         * se pierde y salen sin marcar.  Fiarse solo de eso dejaba intercambiar
-         * una carga con un almacen: no da un error, da otro resultado.
-         *
-         * El desensamblador lo sabe por otro camino -- imprime el operando
-         * entre corchetes --, asi que se pregunta a los dos y se queda lo mas
-         * conservador.  Dos fuentes independientes que se suman, no una que
-         * sustituye a la otra.
-         *
-         * El arreglo de fondo es que el derivador propague que un puntero
-         * sacado de `vm_mem` sigue siendo memoria; hasta entonces, esto. */
-        if (out[n].operands.find('[') != std::string::npos) t[i].mem = true;
-
-        bool ok = true;
-        for (const disasm::RegOperand &r : out[n].regs) {
-            if (r.index > 15) { // fuera del banco: no se sabe
-                ok = false;
-                break;
-            }
-            const uint16_t bit = (uint16_t)(1u << r.index);
-            uint16_t &rd = r.floating ? t[i].vec_read : t[i].reg_read;
-            uint16_t &wr = r.floating ? t[i].vec_write : t[i].reg_write;
-            /* El destino cuenta como lectura ADEMAS de escritura.  `add rd, rs`
-             * lo lee de verdad; `mov rd, rs` no, pero distinguirlos pediria
-             * saber por opcode si lee su destino.  Sobrar una lectura cuesta un
-             * reorden; faltar una cuesta un resultado. */
-            rd |= bit;
-            if (r.dest) wr |= bit;
-        }
-        t[i].barrier = !ok;
-        ++n;
+[[gnu::always_inline]] inline bool touch_one(const DecodedInstr &d, Touch &t) {
+    if (!effects_of(d, t)) return false;
+    const bool ext = (d.flags_info.is_not_extended == 0x00);
+    const uint8_t op =
+        ext ? (uint8_t)d.flags_info.opcode_index : d.flags_info.is_not_extended;
+    if (!vm_isa::vm_form_exact(ext, op)) {
+        t.barrier = true; // no se sabe que registros nombra
+        return false;
     }
-}
-
-/// @return true si @p a y @p b NO se pueden intercambiar.
-[[gnu::always_inline]] inline bool conflict(const Touch &a, const Touch &b) {
-    if (a.barrier || b.barrier) return true;
-    // Las tres formas de chocar sobre un recurso: escribe-lee, lee-escribe y
-    // escribe-escribe.  Que los dos LEAN no es conflicto.
-    if ((a.reg_write & (b.reg_read | b.reg_write)) != 0) return true;
-    if ((b.reg_write & a.reg_read) != 0) return true;
-    if ((a.vec_write & (b.vec_read | b.vec_write)) != 0) return true;
-    if ((b.vec_write & a.vec_read) != 0) return true;
-    if ((a.field_write & (b.field_read | b.field_write)) != 0) return true;
-    if ((b.field_write & a.field_read) != 0) return true;
-    // Sin desambiguacion de memoria, dos accesos cualesquiera se ordenan.
-    if (a.mem && b.mem) return true;
-    return false;
+    const uint64_t f = vm_isa::vm_form(ext, op);
+    t.reg_read = regs_of_form(vm_isa::vm_form_read(f), d);
+    t.reg_write = regs_of_form(vm_isa::vm_form_write(f), d);
+    t.vec_read = regs_of_form(vm_isa::vm_form_vec_read(f), d);
+    t.vec_write = regs_of_form(vm_isa::vm_form_vec_write(f), d);
+    /* Lo que se ESCRIBE se lee tambien, salvo que se pise entero.
+     *
+     * `add rd, rs` lee rd de verdad; `mov rd, rs` no.  La base lo sabe -- es el
+     * estrechamiento que ya distingue una escritura parcial de una total --,
+     * pero mientras la forma no lo separe por campo, sobrar la lectura es el
+     * lado barato de equivocarse. */
+    t.reg_read |= t.reg_write;
+    t.vec_read |= t.vec_write;
+    return true;
 }
 
 /* -------------------------------------------------------------------------
  * Los CRITERIOS
  *
  * Cada uno puntua a una candidata en el estado actual del planificador.  El
- * bucle suma `peso * puntuacion` de todos y se queda con la mejor: no sabe
- * cuantos hay ni que miden, asi que anadir una capacidad es anadir una fila.
+ * bucle suma `peso * puntuacion` de todos y se queda con la mejor.
  * ------------------------------------------------------------------------- */
 
 /// Lo que un criterio puede mirar para puntuar.
 struct Ctx {
-    const Touch *t;         ///< lo que toca cada instruccion, por indice
+    const Touch *t; ///< lo que toca cada instruccion, por indice
+    /**
+     * @brief Con quien choca cada una, EN LOS DOS SENTIDOS.
+     *
+     * `clash[i]` lleva un bit por cada j -- anterior o posterior -- que no se
+     * puede cruzar con i.  Se calcula una vez, y de ella sale tambien la mitad
+     * de abajo, que es la que dice si una candidata esta lista.
+     *
+     * Estar aqui es lo que quita el coste dominante.  La independencia se
+     * preguntaba llamando otra vez a `conflict`, o sea una vez por candidata y
+     * por paso: mil largas por paquete, ADEMAS de las 496 de construir la
+     * matriz.  Medido con VTune sobre el caso que se hundia, `conflict` se
+     * llevaba 0,41 s de los 0,41 s del reordenamiento entero.  Mirar el bit ya
+     * calculado es un desplazamiento y un AND.
+     */
+    const uint32_t *clash;
     uint32_t k;             ///< cuantas hay
     uint32_t pending;       ///< mascara de las que faltan por emitir
     int32_t last;           ///< indice de la ultima emitida, -1 si ninguna
     uint16_t pend_reg_read; ///< registros que leen las que faltan
-    uint32_t orden;         ///< cuantas van emitidas (para el sesgo de orden)
+    uint32_t emitted;       ///< cuantas van emitidas (para el sesgo de orden)
 };
 
 /**
@@ -300,17 +327,16 @@ struct Ctx {
  * medido, y por eso pesa mas que los demas.  Un temporal que alguien de mas
  * adelante lee no vale: la primera instruccion sigue haciendo falta.
  */
-int score_fusion(const Ctx &c, uint32_t i) {
+[[gnu::always_inline]] inline int score_fusion(const Ctx &c, uint32_t i) {
     if (c.last < 0) return 0;
     const Touch &prod = c.t[c.last];
     const Touch &cons = c.t[i];
-    const uint16_t pasa = (uint16_t)(prod.reg_write & cons.reg_read);
-    if (pasa == 0) return 0;
+    const uint16_t forwarded = (uint16_t)(prod.reg_write & cons.reg_read);
+    if (forwarded == 0) return 0;
     // Lo lee alguien mas de los que faltan?  Entonces no es un temporal muerto.
-    const uint16_t otros =
+    const uint16_t other_readers =
         (uint16_t)(c.pend_reg_read & ~cons.reg_read); // sin contar a la propia
-    if ((pasa & otros) != 0) return 0;
-    return 1;
+    return (forwarded & other_readers) != 0 ? 0 : 1;
 }
 
 /**
@@ -324,9 +350,10 @@ int score_fusion(const Ctx &c, uint32_t i) {
  * Va por debajo de la fusion a proposito: fusionar quita una instruccion, y
  * quitarla gana siempre mas que poder solaparla.
  */
-int score_independence(const Ctx &c, uint32_t i) {
+[[gnu::always_inline]] inline int score_independence(const Ctx &c, uint32_t i) {
     if (c.last < 0) return 0;
-    return conflict(c.t[c.last], c.t[i]) ? 0 : 1;
+    // Del bit ya calculado, no volviendo a comparar: ver `Ctx::clash`.
+    return (int)((c.clash[i] >> (uint32_t)c.last) & 1u) ^ 1;
 }
 
 /**
@@ -341,16 +368,13 @@ int score_independence(const Ctx &c, uint32_t i) {
  * Cuando exista la desambiguacion de memoria, este criterio es el que la
  * aprovecha: la misma fila, otra funcion.
  */
-int score_locality(const Ctx &c, uint32_t i) {
+[[gnu::always_inline]] inline int score_locality(const Ctx &c, uint32_t i) {
     if (c.last < 0) return 0;
     const Touch &a = c.t[c.last];
     const Touch &b = c.t[i];
-    int s = 0;
-    if (a.mem && b.mem) s += 1; // dos accesos seguidos, no separados
-    const uint16_t comun = (uint16_t)((a.reg_read | a.reg_write) &
-                                      (b.reg_read | b.reg_write));
-    if (comun != 0) s += 1;
-    return s;
+    const uint16_t shared =
+        (uint16_t)((a.reg_read | a.reg_write) & (b.reg_read | b.reg_write));
+    return (int)(a.mem && b.mem) + (int)(shared != 0);
 }
 
 /**
@@ -361,49 +385,37 @@ int score_locality(const Ctx &c, uint32_t i) {
  * algo va mal.  Ademas el orden original ya suele ser bueno: lo escribio el
  * emisor del intermedio, que sabe mas que este planificador.
  */
-int score_order(const Ctx &c, uint32_t i) {
+[[gnu::always_inline]] inline int score_order(const Ctx &c, uint32_t i) {
     // Cuanto mas cerca de donde le tocaba, mejor.  Acotado para que nunca gane
     // a un criterio de verdad.
-    const int32_t d = (int32_t)i - (int32_t)c.orden;
+    const int32_t d = (int32_t)i - (int32_t)c.emitted;
     const int32_t dist = d < 0 ? -d : d;
     return dist >= 4 ? 0 : 4 - dist;
 }
 
-/// Que criterios hay.  Anadir uno son tres lineas: aqui, en @ref kCriteria y
-/// un `case` en @ref score_one.
-enum CriterionId : uint8_t {
-    CR_FUSION,
-    CR_INDEPENDENCE,
-    CR_LOCALITY,
-    CR_ORDER,
-    CR_COUNT,
-};
-
 /**
- * @brief Puntua a la candidata @p i segun el criterio @p id.
+ * @brief LA lista de criterios: identificador, nombre, peso y funcion.
  *
- * El despacho es un `switch` sobre un entero pequeno y denso -- o sea una tabla
- * de saltos -- y no un puntero a funcion, que es lo que habia antes.  La
- * diferencia no es teorica: esto se evalua una vez por criterio, por candidata
- * y por paso, o sea del orden de `k * k * CR_COUNT` veces al formar un paquete.
- * Con puntero a funcion son 4096 llamadas indirectas que el anfitrion no puede
- * predecir ni inlinar; con el `switch`, el compilador ve los cuatro cuerpos y
- * los mete dentro del bucle.
+ * De ella salen el enumerado, la tabla de nombres y pesos, y el codigo que
+ * puntua.  Anadir una capacidad es anadir UNA fila; no hay ningun otro sitio
+ * donde darla de alta, que es justo lo que se olvida.
  *
- * Y la tabla sigue estando (@ref kCriteria): lo que se despacha por ella son
- * los PESOS y el nombre, que es lo que se ajusta; el codigo se elige por
- * identificador.
+ * El peso de la fusion domina por diseno: quitar una instruccion vale mas que
+ * solapar dos o que agrupar accesos.
  */
-[[gnu::always_inline]] inline int score_one(uint8_t id, const Ctx &c,
-                                            uint32_t i) {
-    switch (id) {
-    case CR_FUSION: return score_fusion(c, i);
-    case CR_INDEPENDENCE: return score_independence(c, i);
-    case CR_LOCALITY: return score_locality(c, i);
-    case CR_ORDER: return score_order(c, i);
-    default: return 0;
-    }
-}
+#define VM_REORDER_CRITERIA(X)                                                 \
+    X(FUSION, "fusion", 100, score_fusion)                                     \
+    X(INDEPENDENCE, "independence", 20, score_independence)                    \
+    X(LOCALITY, "locality", 8, score_locality)                                 \
+    X(ORDER, "order", 1, score_order)
+
+/// Que criterios hay.  Se genera de @ref VM_REORDER_CRITERIA.
+enum CriterionId : uint8_t {
+#define VM_REORDER_ENUM(id, name, weight, fn) CR_##id,
+    VM_REORDER_CRITERIA(VM_REORDER_ENUM)
+#undef VM_REORDER_ENUM
+        CR_COUNT,
+};
 
 /// Un criterio: como se llama y cuanto pesa.
 struct Criterion {
@@ -411,136 +423,371 @@ struct Criterion {
     int weight;
 };
 
-/* La tabla, indexada por @ref CriterionId.  Plana y en el orden del enum, no un
- * mapa: se recorre entera por cada candidata de cada paso.
- *
- * Los PESOS estan aqui juntos porque son lo que decide quien gana cuando dos
- * criterios piden cosas distintas, y ajustarlos es lo que se hace a menudo.  El
- * de fusion domina por diseno: quitar una instruccion vale mas que solapar dos
- * o que agrupar accesos. */
+/// La tabla, indexada por @ref CriterionId.  Solo la lee quien informa: el
+/// planificador lleva los pesos DENTRO del codigo, expandidos de la lista.
 constexpr Criterion kCriteria[CR_COUNT] = {
-    {"fusion", 100},
-    {"independence", 20},
-    {"locality", 8},
-    {"order", 1},
+#define VM_REORDER_ROW(id, name, weight, fn) {name, weight},
+    VM_REORDER_CRITERIA(VM_REORDER_ROW)
+#undef VM_REORDER_ROW
 };
 
 static_assert(CR_COUNT == kBundleReorderCriteria,
-              "la cuenta publicada en bundle.h y la tabla tienen que coincidir: "
+              "la cuenta publicada en bundle.h y la lista tienen que coincidir: "
               "quien lee `why` indexa por ella");
 
-} // namespace
-
-const char *bundle_reorder_criterion(uint8_t id) {
-    return id < CR_COUNT ? kCriteria[id].name : "orden natural";
+/**
+ * @brief Puntua a la candidata @p i con TODOS los criterios.
+ *
+ * La lista se expande aqui, asi que los cuerpos quedan dentro del bucle: sin
+ * despacho, sin llamada y con los pesos como constantes que el compilador
+ * puede plegar.  Esto se evalua del orden de `k * k` veces por paquete, que es
+ * donde una llamada indirecta por criterio se nota.
+ *
+ * @tparam Explain Si hay que averiguar QUE criterio decidio.  Con `false` no se
+ *                 genera ni una instruccion de eso.
+ * @param top      Salida: el criterio de mas peso que puntuo.  Solo con
+ *                 @p Explain.
+ */
+template <bool Explain>
+[[gnu::always_inline]] inline int score_all(const Ctx &c, uint32_t i,
+                                            int *parts) {
+    int s = 0;
+#define VM_REORDER_EVAL(id, name, weight, fn)                                  \
+    {                                                                          \
+        const int v = fn(c, i);                                                \
+        s += (weight) * v;                                                     \
+        if constexpr (Explain) parts[CR_##id] = v;                             \
+    }
+    VM_REORDER_CRITERIA(VM_REORDER_EVAL)
+#undef VM_REORDER_EVAL
+    if constexpr (!Explain) (void)parts;
+    return s;
 }
 
-uint32_t bundle_reorder(ProcessVM *process, Bundle &b, uint8_t *why) {
-    if (b.k < 3) return 0; // con dos no hay nada que mover
+/**
+ * @brief Que criterio DECIDIO entre la ganadora y la segunda.
+ *
+ * El que desempata, no "el de mas peso que puntuo".  No es lo mismo y la
+ * diferencia enganya: si `independence` puntua en las dos candidatas, sumaba
+ * lo mismo a las dos y no decidio nada -- pero se llevaba el credito, y
+ * `locality`, que era quien de verdad rompia el empate, salia con CERO
+ * victorias en ocho millones de elecciones.  Con ese numero delante se concluye
+ * que el criterio es inerte y se le quita peso, o se deja de optimizar por el:
+ * un contador mal etiquetado no es un contador de menos, es uno que lleva a la
+ * decision contraria.
+ *
+ * Se recorre de mas peso a menos y gana el primero donde las dos difieren, que
+ * es exactamente el que inclina la suma.
+ *
+ * @param win Puntuaciones por criterio de la elegida.
+ * @param run Las de la segunda.  Si no hubo segunda, no hubo desempate.
+ * @return El criterio, o `CR_COUNT` si empatan en todos.
+ */
+[[gnu::always_inline]] inline uint8_t decided_by(const int *win,
+                                                 const int *run) {
+    for (uint32_t n = 0; n < CR_COUNT; ++n)
+        if (win[n] != run[n]) return (uint8_t)n;
+    return CR_COUNT;
+}
 
+/**
+ * @brief El planificador.  Una implementacion, dos instanciaciones.
+ *
+ * @tparam Explain Genera el rastreo del motivo y llama al informe.  La
+ *                 instancia con `false` no lleva NADA de eso: ni la variable,
+ *                 ni las ramas, ni las llamadas.
+ * @return Cuantas instrucciones cambiaron de sitio; 0 = el paquete no se toco.
+ */
+template <bool Explain>
+uint32_t reorder_impl(ProcessVM *process, Bundle &b, uint8_t *why) {
+    // CORTE 1: con dos no hay nada que mover.
+    if (b.k < 3) return 0;
+
+    /* Lo que toca cada una, y de paso cuantas se pueden mover.
+     *
+     * CORTE 2: una barrera no se mueve, y una sola movible no tiene con quien
+     * intercambiarse.  Sale antes de la matriz, que son 496 comparaciones en un
+     * paquete lleno. */
     Touch t[BUNDLE_MAX];
-    touch_all(process, b, t);
+    uint32_t movable = 0;
+    for (uint32_t i = 0; i < b.k; ++i) movable += touch_one(b.instr[i], t[i]);
+    if (movable < 2) return 0;
 
-    /* GRAFO DE DEPENDENCIAS, una mascara de predecesores por instruccion.
+    /* La matriz de choques, en MASCARAS DE BITS y en los DOS sentidos:
+     * `clash[i]` lleva un bit por cada j que no se puede cruzar con i.  Con 32
+     * como maximo cabe en un `uint32_t`, y de ella salen las DOS preguntas del
+     * planificador: "esta lista?" es la mitad de abajo contra las pendientes, y
+     * "es independiente de la ultima?" es un bit.
      *
-     * `dep[i]` lleva un bit por cada j < i con la que i choca.  Con 32 como
-     * maximo cabe en un `uint32_t`, asi que preguntar "esta lista?" es un AND
-     * contra las que faltan: una instruccion se puede emitir cuando ninguno de
-     * sus predecesores sigue pendiente.
+     * Y NO SE CONSTRUYE POR PARES.  Dos instrucciones chocan cuando coinciden
+     * en un RECURSO -- un registro, un campo implicito, la memoria --, asi que
+     * en vez de preguntar por cada par se apunta, por recurso, QUIEN lo lee y
+     * QUIEN lo escribe.  Despues la fila de cada una es la union de los
+     * apuntes de los recursos que ella toca.
      *
-     * Se construye una vez -- 496 comparaciones para un paquete lleno, cada una
-     * un punado de ANDs -- y despues el planificador no vuelve a mirar el
-     * modelo. */
-    uint32_t dep[BUNDLE_MAX] = {};
+     * El cambio es de orden: `k*(k-1)/2` comparaciones de ocho pruebas cada una
+     * -- 496 pares y casi cuatro mil pruebas en un paquete lleno -- pasan a dos
+     * pasadas de `k` por los recursos que cada una toca, que son uno o dos.  El
+     * perfilador senalaba `conflict` como el 100% del coste del reordenamiento
+     * (0,41 s de 0,41 s); asi no se llama ni una vez.
+     *
+     * Una BARRERA choca con todas por definicion: va en su propia mascara y no
+     * pasa por los recursos.
+     *
+     * CORTE 3: si cada una depende de la ANTERIOR, el unico orden topologico
+     * valido es el que ya trae.  Sale antes del planificador, que es lo caro. */
+    const uint32_t all = (b.k >= 32) ? 0xFFFFFFFFu : ((1u << b.k) - 1u);
+    uint32_t w_reg[kRegs] = {}, r_reg[kRegs] = {};
+    uint32_t w_vec[kRegs] = {}, r_vec[kRegs] = {};
+    uint32_t w_fld[kFieldCount] = {}, r_fld[kFieldCount] = {};
+    uint32_t mem_mask = 0, barrier_mask = 0;
+    for (uint32_t i = 0; i < b.k; ++i) {
+        const uint32_t bit = 1u << i;
+        if (t[i].barrier) {
+            barrier_mask |= bit;
+            continue;
+        }
+        for (uint16_t m = t[i].reg_write; m != 0; m &= (uint16_t)(m - 1))
+            w_reg[__builtin_ctz(m)] |= bit;
+        for (uint16_t m = t[i].reg_read; m != 0; m &= (uint16_t)(m - 1))
+            r_reg[__builtin_ctz(m)] |= bit;
+        for (uint16_t m = t[i].vec_write; m != 0; m &= (uint16_t)(m - 1))
+            w_vec[__builtin_ctz(m)] |= bit;
+        for (uint16_t m = t[i].vec_read; m != 0; m &= (uint16_t)(m - 1))
+            r_vec[__builtin_ctz(m)] |= bit;
+        for (uint32_t m = t[i].field_write; m != 0; m &= m - 1)
+            w_fld[__builtin_ctz(m)] |= bit;
+        for (uint32_t m = t[i].field_read; m != 0; m &= m - 1)
+            r_fld[__builtin_ctz(m)] |= bit;
+        if (t[i].mem) mem_mask |= bit;
+    }
+
+    uint32_t clash[BUNDLE_MAX];
+    for (uint32_t i = 0; i < b.k; ++i) {
+        if (t[i].barrier) {
+            clash[i] = all & ~(1u << i);
+            continue;
+        }
+        /* Escribir choca con quien lee Y con quien escribe; leer, solo con
+         * quien escribe.  Que dos LEAN no es conflicto, y es justo lo que hace
+         * que el orden tenga margen. */
+        uint32_t c = barrier_mask;
+        for (uint16_t m = t[i].reg_write; m != 0; m &= (uint16_t)(m - 1)) {
+            const int r = __builtin_ctz(m);
+            c |= w_reg[r] | r_reg[r];
+        }
+        for (uint16_t m = t[i].reg_read; m != 0; m &= (uint16_t)(m - 1))
+            c |= w_reg[__builtin_ctz(m)];
+        for (uint16_t m = t[i].vec_write; m != 0; m &= (uint16_t)(m - 1)) {
+            const int r = __builtin_ctz(m);
+            c |= w_vec[r] | r_vec[r];
+        }
+        for (uint16_t m = t[i].vec_read; m != 0; m &= (uint16_t)(m - 1))
+            c |= w_vec[__builtin_ctz(m)];
+        for (uint32_t m = t[i].field_write; m != 0; m &= m - 1) {
+            const int f = __builtin_ctz(m);
+            c |= w_fld[f] | r_fld[f];
+        }
+        for (uint32_t m = t[i].field_read; m != 0; m &= m - 1)
+            c |= w_fld[__builtin_ctz(m)];
+        // Sin desambiguacion de memoria, dos accesos cualesquiera se ordenan.
+        if (t[i].mem) c |= mem_mask;
+        clash[i] = c & ~(1u << i);
+    }
+
+    bool forced = true;
+    for (uint32_t i = 1; i < b.k && forced; ++i)
+        if ((clash[i] & (1u << (i - 1))) == 0) forced = false;
+    if (forced) return 0;
+
+    // Solo las ANTERIORES: es lo que decide si una candidata esta lista.
+    uint32_t dep[BUNDLE_MAX];
     for (uint32_t i = 0; i < b.k; ++i)
-        for (uint32_t j = 0; j < i; ++j)
-            if (conflict(t[j], t[i])) dep[i] |= (1u << j);
+        dep[i] = clash[i] & ((1u << i) - 1u);
+
+    /* Los registros que leen las que FALTAN, y cuantas los leen.
+     *
+     * El contador por registro es lo que permite mantenerlo al emitir en vez de
+     * recalcularlo: antes se recorrian todas las pendientes en CADA paso, o sea
+     * `k*k/2` uniones para un dato que solo cambia en lo que aporta la que se
+     * acaba de emitir.  Ahora cuesta lo que lea esa: se decrementa su cuenta y
+     * el bit se apaga cuando llega a cero. */
+    uint8_t read_count[kRegs] = {};
+    uint16_t pend_reg_read = 0;
+    for (uint32_t i = 0; i < b.k; ++i) {
+        pend_reg_read |= t[i].reg_read;
+        for (uint16_t m = t[i].reg_read; m != 0; m &= (uint16_t)(m - 1))
+            ++read_count[__builtin_ctz(m)];
+    }
+
+    /* CUANTOS predecesores le faltan a cada una, y quienes estan LISTAS.
+     *
+     * Es lo que quita la otra mitad del coste cuadratico.  Antes, cada paso
+     * recorria las pendientes preguntando `dep[i] & pending` -- `k` preguntas
+     * por paso, `k*k` en total -- para un dato que solo cambia en las que
+     * dependian de la que se acaba de emitir.
+     *
+     * Emitir una solo puede desbloquear a sus SUCESORAS, y esas se sacan de la
+     * matriz que ya esta: `clash[pick]` por encima de `pick`.  A cada una se le
+     * baja el contador y entra en `ready` cuando llega a cero.  El recorrido
+     * entero pasa a costar los nodos mas las aristas, en vez de los nodos al
+     * cuadrado. */
+    uint8_t npred[BUNDLE_MAX];
+    uint32_t ready = 0;
+    for (uint32_t i = 0; i < b.k; ++i) {
+        npred[i] = (uint8_t)__builtin_popcount(dep[i]);
+        if (npred[i] == 0) ready |= (1u << i);
+    }
 
     DecodedInstr out[BUNDLE_MAX];
-    uint32_t pending = (b.k >= 32) ? 0xFFFFFFFFu : ((1u << b.k) - 1u);
+    uint32_t pending = all;
     uint32_t emitted = 0, moved = 0;
     int32_t last = -1;
 
     while (pending != 0) {
-        /* Lo que leen las que faltan.  Es lo que permite saber si un valor es
-         * un temporal MUERTO sin recorrer la cola por cada candidata.
-         *
-         * Se recorren SOLO los bits puestos, sacandolos con `ctz` y quitandolos
-         * uno a uno.  Barrer de 0 a k daria 32 vueltas siempre, tambien al
-         * final cuando quedan dos. */
-        uint16_t pend_reg_read = 0;
-        for (uint32_t m = pending; m != 0; m &= m - 1)
-            pend_reg_read |= t[(uint32_t)__builtin_ctz(m)].reg_read;
-
-        const Ctx c{t, b.k, pending, last, pend_reg_read, emitted};
+        const Ctx c{t, clash, b.k, pending, last, pend_reg_read, emitted};
 
         int best = 0;
         int32_t pick = -1;
-        /* QUE criterio decidio.  Se queda el de mayor peso que puntuo en la
-         * elegida: es la respuesta a "por que se movio esta", y sin ella la
-         * telemetria solo dice cuanto se movio.  Solo se calcula con la
-         * telemetria encendida; sin ella la variable ni existe. */
         uint8_t winner = CR_COUNT;
-        // Solo hace falta averiguarlo si alguien lo va a leer.
-        const bool need_reason = (why != nullptr) || VM_BUNDLE_STATS;
-        for (uint32_t m = pending; m != 0; m &= m - 1) {
+        uint32_t looked = 0;
+
+        /* UNA SOLA LISTA: no hay nada que decidir.
+         *
+         * Es el caso comun de largo -- una cadena de dependencias no ofrece
+         * alternativa en ningun paso --, y ahi puntuar los cuatro criterios es
+         * trabajo cuyo resultado no puede cambiar la eleccion.  Se salta
+         * entero.
+         *
+         * El motivo que se apunta es el orden: no se movio porque no habia
+         * otra, que es distinto de "gano el sesgo de orden frente a otras". */
+        if ((ready & (ready - 1)) == 0) {
+            pick = (int32_t)__builtin_ctz(ready);
+            winner = CR_ORDER;
+        }
+        /* Sobre `ready`, que ya son solo las que se pueden emitir: ni una
+         * pregunta por candidata descartada.
+         *
+         * Y de esas, las kWindow primeras.  El criterio de orden ya declara que
+         * a partir de cierta distancia no aporta nada, asi que una candidata
+         * lejana solo puede ganar por fusion o por localidad -- y para eso
+         * tendria que ser la unica lista que consume lo que la ultima acaba de
+         * producir, que es tanto como decir que las de en medio no estaban
+         * listas y no gastaron ventana --. */
+        /* Las puntuaciones por criterio de la mejor y de la SEGUNDA.  Hacen
+         * falta las dos para saber quien desempato, que es lo unico que
+         * contesta "por que se movio esta"; con la de la mejor sola, el credito
+         * se lo lleva el criterio de mas peso que puntuo aunque sumara igual en
+         * las dos y no decidiera nada. */
+        int win_parts[CR_COUNT] = {}, run_parts[CR_COUNT] = {};
+        int parts[CR_COUNT] = {};
+        int second = INT32_MIN; ///< puntuacion de la mejor que NO gana
+        for (uint32_t m = (pick < 0) ? ready : 0u; m != 0 && looked < kWindow;
+             m &= m - 1) {
             const uint32_t i = (uint32_t)__builtin_ctz(m);
-            if ((dep[i] & pending) != 0) continue; // le falta un predecesor
-            int s = 0;
-            uint8_t top = CR_COUNT;
-            for (uint32_t n = 0; n < CR_COUNT; ++n) {
-                const int v = score_one((uint8_t)n, c, i);
-                s += kCriteria[n].weight * v;
-                if (need_reason && v > 0 && top == CR_COUNT)
-                    top = (uint8_t)n; // el primero es el de mas peso
-            }
+            ++looked;
+            const int s = score_all<Explain>(c, i, parts);
             if (pick < 0 || s > best) {
+                if constexpr (Explain) {
+                    // La que reinaba baja a segunda: era la mejor de las que
+                    // ahora no ganan, asi que es con quien hay que comparar.
+                    if (pick >= 0) {
+                        second = best;
+                        for (uint32_t n = 0; n < CR_COUNT; ++n)
+                            run_parts[n] = win_parts[n];
+                    }
+                    for (uint32_t n = 0; n < CR_COUNT; ++n)
+                        win_parts[n] = parts[n];
+                }
                 best = s;
                 pick = (int32_t)i;
-                winner = top;
+            } else if constexpr (Explain) {
+                if (s > second) { // mejor de las que no ganan
+                    second = s;
+                    for (uint32_t n = 0; n < CR_COUNT; ++n)
+                        run_parts[n] = parts[n];
+                }
             }
         }
-#if VM_BUNDLE_STATS
-        ++process->bundle_stats.reorder_choices;
-        if (winner < CR_COUNT) ++process->bundle_stats.reorder_wins[winner];
-#endif
+        /* Sin segunda no hubo desempate: no es que ganara el orden, es que no
+         * habia con quien competir.  Se apunta como "ninguno" y por eso las
+         * victorias NO suman las elecciones -- la diferencia es justo cuantas
+         * veces no habia alternativa, que tambien es un dato. */
+        if constexpr (Explain)
+            winner = (second == INT32_MIN) ? CR_COUNT
+                                           : decided_by(win_parts, run_parts);
+
         /* Sin candidata no se puede seguir, y eso solo pasa si el grafo tuviera
          * un ciclo -- imposible, porque solo hay aristas de j < i --.  Se sale
          * dejando el paquete como estaba en vez de emitir medio. */
         if (pick < 0) return 0;
 
         if ((uint32_t)pick != emitted) ++moved;
-        if (why != nullptr) why[emitted] = winner;
+        if constexpr (Explain) why[emitted] = winner;
         out[emitted] = b.instr[pick];
-        pending &= ~(1u << (uint32_t)pick);
+        const uint32_t pick_bit = 1u << (uint32_t)pick;
+        pending &= ~pick_bit;
+        ready &= ~pick_bit;
+
+        /* A quien acaba de desbloquear.  Solo las de INDICE MAYOR pueden
+         * tenerla de predecesora: `dep` solo lleva aristas hacia atras. */
+        const uint32_t higher = pending & ~((pick_bit << 1) - 1u);
+        for (uint32_t s = clash[pick] & higher; s != 0; s &= s - 1) {
+            const uint32_t j = (uint32_t)__builtin_ctz(s);
+            if (--npred[j] == 0) ready |= (1u << j);
+        }
+
+        // Lo que dejaba de aportar a las pendientes, ahora que ya salio.
+        for (uint16_t m = t[pick].reg_read; m != 0; m &= (uint16_t)(m - 1)) {
+            const uint32_t r = (uint32_t)__builtin_ctz(m);
+            if (--read_count[r] == 0)
+                pend_reg_read &= (uint16_t)~(1u << r);
+        }
         last = pick;
         ++emitted;
     }
 
-    if (moved == 0) return 0; // nada que hacer: no se toca el paquete
-#if VM_BUNDLE_STATS
-    ++process->bundle_stats.reorder_bundles;
-#endif
-
-    /* QUE se movio, cuando se pide.  Un reordenador que no se puede mirar no se
-     * puede depurar: lo que sale de aqui es el orden en que se va a ejecutar, y
-     * si esta mal el sintoma aparece lejisimos -- otro valor en un registro, al
-     * final del programa --.  Aqui se ve el paquete antes y despues.
-     *
-     * Va detras de la misma bandera que el volcado de caches y no cuesta nada
-     * cuando esta apagada: se mira UNA vez por paquete formado, no al
-     * ejecutarlo. */
-    if (__builtin_expect(::util::flag_on(::util::FlagId::CacheDump), 0)) {
-        std::fprintf(stderr, "\n[reorden] paquete en 0x%08llx  k=%u  movidas=%u\n",
-                     (unsigned long long)b.instr[0].pc, b.k, moved);
-        for (uint32_t i = 0; i < emitted; ++i)
-            std::fprintf(stderr, "    %2u: 0x%08llx%s\n", i,
-                         (unsigned long long)out[i].pc,
-                         out[i].pc != b.instr[i].pc ? "   <- cambia" : "");
+    if constexpr (Explain) {
+        reorder_report_stats(process, moved, why, emitted);
+        /* El volcado va ANTES de escribir el paquete: necesita los dos ordenes
+         * a la vez, y el de partida sigue en `b.instr` hasta la copia. */
+        if (moved != 0 &&
+            __builtin_expect(::util::flag_on(::util::FlagId::CacheDump), 0))
+            reorder_report_dump(b.instr, out, emitted, moved, why);
+    } else {
+        (void)process;
     }
 
+    if (moved == 0) return 0; // nada que hacer: no se toca el paquete
     std::memcpy(b.instr, out, (size_t)emitted * sizeof(DecodedInstr));
     return moved;
+}
+
+} // namespace
+
+const char *bundle_reorder_criterion(uint8_t id) {
+    return id < CR_COUNT ? kCriteria[id].name : "natural order";
+}
+
+uint32_t bundle_reorder(ProcessVM *process, Bundle &b, uint8_t *why) {
+    /* Que instancia toca.  Se decide aqui, UNA vez por paquete formado, y nunca
+     * dentro del bucle: la instancia caliente no lleva ni la pregunta.
+     *
+     * Los tres que piden el motivo -- quien pasa `why` (el test), quien pide la
+     * telemetria y quien vuelca las caches -- van por la que explica.  Ninguno
+     * depende del perfil de construccion: se piden en EJECUCION, porque atarlo
+     * a como se compilo obliga a reconstruir para mirar, y entonces lo que se
+     * mira ya no es el binario que se ejecuta. */
+    if (__builtin_expect(why != nullptr, 0))
+        return reorder_impl<true>(process, b, why);
+    if (__builtin_expect(process->bundle_stats_on ||
+                             ::util::flag_on(::util::FlagId::BundleStats) ||
+                             ::util::flag_on(::util::FlagId::CacheDump),
+                         0)) {
+        uint8_t local[BUNDLE_MAX];
+        return reorder_impl<true>(process, b, local);
+    }
+    return reorder_impl<false>(process, b, nullptr);
 }
 
 } // namespace runtime

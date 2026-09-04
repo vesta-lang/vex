@@ -188,8 +188,8 @@ struct Bundle {
      * (`branch_unpredict` 25,67 -> -64%).
      *
      * Asi que el paquete se mide a si mismo y, si no llega, se retira: la
-     * entrada de icache vuelve a ser la instruccion normal -- que esta guardada
-     * en `instr[0]` -- y el interprete la despacha otra vez por su manejador
+     * entrada de icache vuelve a ser la instruccion normal -- la que guarda
+     * @ref head -- y el interprete la despacha otra vez por su manejador
      * rapido.  No hace falta acertar el umbral por programa ni decidirlo al
      * formar: cada sitio lo demuestra con su propia ejecucion.
      *
@@ -206,6 +206,29 @@ struct Bundle {
     static constexpr uint32_t JUDGE_AFTER = 64;
     /// Instrucciones por entrada por debajo de las cuales no compensa.
     static constexpr uint32_t MIN_PER_ENTRY = 6;
+
+    /**
+     * @brief La instruccion que habia en la entrada de icache al formar.
+     *
+     * Es lo que se devuelve al retirar el paquete, y va APARTE porque `instr[0]`
+     * ya no sirve para eso: el planificador reordena el paquete antes de
+     * publicarlo, y entonces en el hueco cero hay OTRA instruccion -- la que
+     * mejor puntuo --, no la de esta direccion.
+     *
+     * Restaurando `instr[0]` la entrada quedaba con una instruccion de otro
+     * sitio, y eso rompe la CADENA: un paquete encadena mirando si el destino
+     * del salto es cabecera de otro, y una entrada envenenada deja de serlo.
+     * Un solo paquete reordenado corta el eslabon y todo lo que va detras se
+     * vuelve a formar desde cero.  Medido en un tramo recto de 8192: 65
+     * paquetes formados y 7806 encadenamientos pasaban a 513 y 970, con UN solo
+     * paquete reordenado de 513.
+     *
+     * No se ve como un error porque la entrada lleva su propio `pc`: la
+     * busqueda siguiente falla y se vuelve a formar, o sea que sale caro en vez
+     * de salir mal.  Es justo el modo de fallo que no se detecta mirando si el
+     * programa da el resultado correcto.
+     */
+    DecodedInstr head;
 
     DecodedInstr instr[BUNDLE_MAX]; ///< ya descodificadas, en orden de ejec.
 };
@@ -550,10 +573,10 @@ void bundle_dump_one(ProcessVM *process, const Bundle *b);
  */
 void bundle_dump_asm(ProcessVM *process, const Bundle *b);
 
-#if VM_BUNDLE_STATS
 /**
  * @struct BundleStats
- * @brief Contadores de telemetria.  Solo existen con @c VM_BUNDLE_STATS=1.
+ * @brief Contadores de telemetria.  Existen SIEMPRE; lo que se pide en
+ *        ejecucion es que se llenen (`ProcessVM::bundle_stats_on`).
  *
  * Van en el proceso y son enteros normales, no atomicos: cada proceso lleva los
  * suyos y se agregan al final.  Un contador atomico por instruccion falsearia
@@ -574,7 +597,6 @@ struct BundleStats {
     /// sirve para algo.
     uint64_t saved() const { return instrs_in_bundles - dispatches; }
 };
-#endif // VM_BUNDLE_STATS
 
 } // namespace runtime
 

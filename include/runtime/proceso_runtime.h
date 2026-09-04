@@ -447,9 +447,10 @@ static constexpr uint32_t ICACHE_SIZE = VESTA_ICACHE_SIZE;
 #ifndef VM_BUNDLES
 #define VM_BUNDLES 1
 #endif
-#ifndef VM_BUNDLE_STATS
-#define VM_BUNDLE_STATS 0
-#endif
+/* `VM_BUNDLE_STATS` YA NO EXISTE.  La telemetria de paquetes se pide en
+ * EJECUCION (`ProcessVM::bundle_stats_on` o `VESTA_BUNDLE_STATS`), porque
+ * atarla al perfil de construccion obligaba a reconstruir para tomar la medida
+ * -- y entonces lo que se mide es otro binario --. */
 
 /// Conjuntos = entradas / vias.  Con 1 via es la tabla entera, como antes.
 static constexpr uint32_t ICACHE_SETS = ICACHE_SIZE / ICACHE_WAYS;
@@ -485,6 +486,32 @@ static_assert((ICACHE_SETS & (ICACHE_SETS - 1)) == 0,
  */
 #ifndef ICACHE_HASH
 #define ICACHE_HASH 0
+#endif
+
+/**
+ * @brief Si la icache se PARTE en dos mitades por clase de tamano.
+ *
+ * 0 = una sola tabla, el comportamiento de siempre.  1 = una mitad para las
+ * instrucciones de la tabla PRIMARIA (un byte, indexadas por `pc>>0`) y otra
+ * para las de la EXTENDIDA (cuatro o mas, por `pc>>2`).  Ver @ref icache_set.
+ *
+ * POR QUE EXISTE.  El problema del indice es que la ventana son `SETS` BYTES y
+ * no `SETS` entradas, asi que un bucle mas largo que eso alias siempre.  Un
+ * desplazamiento unico no lo arregla porque el paso VARIA con el programa: con
+ * instrucciones de 4 bytes `pc>>2` es optimo y con las de 1 byte las colapsa de
+ * dos en dos.  Partiendo, cada mitad usa el suyo.
+ *
+ * Simulado en `tests/coste/test_icache_conflictos.cpp`: sobre un tramo recto de
+ * 8529 bytes los fallos pasan de 2091 (94,1%) a 44 (2,0%), y es lo mejor de
+ * todo lo probado sin gastar mas memoria -- mejor que la mezcla (172) y que
+ * doblar la tabla a 512 KB (98) --.  A diferencia de la mezcla, NO DISPERSA:
+ * dentro de una mitad el mapeo sigue siendo contiguo.
+ *
+ * Y va detras de un mando porque cuesta LEER `vm_mem[pc]` en el camino mas
+ * caliente, y eso la simulacion no lo mide: cuenta conflictos, no tiempo.
+ */
+#ifndef ICACHE_SIZE_CLASS
+#define ICACHE_SIZE_CLASS 0
 #endif
 
 /**
@@ -817,6 +844,23 @@ class ProcessVM {
     bool bundle_reorder_on = true;
 
     /**
+     * @brief Contar lo que hace la maquinaria de paquetes: TODO, no solo el
+     *        reordenamiento.
+     *
+     * Se pide en EJECUCION -- este campo, o `VESTA_BUNDLE_STATS` --, no al
+     * compilar.  Atarlo al perfil de construccion obligaba a reconstruir el
+     * proyecto para mirar por que un programa forma los paquetes que forma, y
+     * entonces lo que se mira ya no es el binario que se ejecuta.
+     *
+     * Apagado no cuesta: ninguno de estos contadores va por INSTRUCCION -- van
+     * por paquete formado, por despacho o por encadenamiento --, asi que es una
+     * rama que casi siempre no se toma cada treinta y tantas instrucciones.  Y
+     * el reordenador ni eso: tiene dos instanciaciones y esto elige cual se
+     * llama, de modo que la de por defecto no lleva ni el contador ni la rama.
+     */
+    bool bundle_stats_on = false;
+
+    /**
      * @brief Anidamiento actual en paquetes.  Cero = no hay ninguno en curso.
      *
      * CUENTA, no es un booleano, porque se anida: una instruccion de dentro de
@@ -840,8 +884,8 @@ class ProcessVM {
 #endif
 
 #if VM_BUNDLES
-    /// Telemetria de paquetes.  El CAMPO existe siempre; lo que desaparece con
-    /// `VM_BUNDLE_STATS=0` son los INCREMENTOS (ver bundle.cpp).
+    /// Telemetria de paquetes.  Existe siempre y se llena solo cuando se pide
+    /// con @ref bundle_stats_on (ver `BSTAT` en bundle.cpp).
     ///
     /// Podria ir tambien bajo la bandera, pero entonces un test compilado con
     /// la telemetria encendida y enlazado contra un `vmcore` sin ella veria un
@@ -1285,8 +1329,85 @@ class ProcessVM {
  * @param pc Direccion buscada.
  * @return   La entrada valida, o nullptr si no esta (hay que descodificar).
  */
+/**
+ * @brief Conjunto de la icache, con la variante que reparte por TAMANO.
+ *
+ * Con `ICACHE_SIZE_CLASS=0` (el defecto) es exactamente @ref icache_index y el
+ * codigo generado no cambia.
+ *
+ * Con 1, la tabla se parte en DOS mitades y cada una se indexa con el
+ * desplazamiento que le toca a su paso: las instrucciones de la tabla PRIMARIA
+ * -- de un byte -- con `pc>>0`, y las de la EXTENDIDA -- de cuatro o mas -- con
+ * `pc>>2`.  Asi cada mitad alcanza tantos BYTES de programa como su paso, que
+ * es la unica forma de que la ventana deje de valer `SETS` bytes.
+ *
+ * El discriminante no cuesta una tabla: el byte 0x00 ES el prefijo de la tabla
+ * extendida, asi que separa las dos familias con una comparacion.  Lo que si
+ * cuesta es LEERLO -- `vm_mem[pc]`, en el camino mas caliente que hay --, y
+ * medir eso es justo para lo que existe este interruptor: la simulacion de
+ * `tests/coste/test_icache_conflictos.cpp` dice que los conflictos caen un 98%,
+ * pero cuenta conflictos, no tiempo.
+ *
+ * @param p  Proceso, para poder leer el byte de opcode.
+ * @param pc Direccion del contador de programa.
+ */
+[[gnu::always_inline]] inline uint32_t icache_set(ProcessVM *p, uint64_t pc) {
+#if ICACHE_SIZE_CLASS
+    /* Mitad alta = EXTENDIDAS, y esas son las que EMPIEZAN por 0x00 -- ese byte
+     * es el prefijo de la tabla extendida, no un opcode --.  Escrito al reves
+     * (`!= 0x00`) la mitad de cuatro bytes recibe desplazamiento 0 y la de un
+     * byte desplazamiento 2: las dos con el que no les toca, y sale PEOR que no
+     * partir.  Medido asi por error: +8% en vez de la mejora esperada.
+     *
+     * Sin rama: la clase ES el resultado de la comparacion, y el
+     * desplazamiento sale de ella con un producto que el compilador convierte
+     * en un `shl`. */
+    constexpr uint32_t kHalf = ICACHE_SETS / 2;
+    const uint32_t cls = (p->vm_mem[pc] == 0x00) ? 1u : 0u;
+    return cls * kHalf + (uint32_t)((pc >> (cls * 2u)) & (kHalf - 1));
+#else
+    (void)p;
+    return icache_index(pc);
+#endif
+}
+
+#if ICACHE_SIZE_CLASS == 2 && ICACHE_WAYS > 1
+static_assert(false, "ICACHE_SIZE_CLASS=2 con varias vias no esta escrito: la "
+                     "busqueda recorreria las vias de UNA mitad y de la otra "
+                     "solo la via 0, o sea que perderia entradas validas sin "
+                     "dar ningun error");
+#endif
+
+/// El conjunto dentro de la mitad @p cls, sin leer nada de memoria.
+[[gnu::always_inline]] inline uint32_t icache_half(uint64_t pc, uint32_t cls) {
+    constexpr uint32_t kHalf = ICACHE_SETS / 2;
+    return cls * kHalf + (uint32_t)((pc >> (cls * 2u)) & (kHalf - 1));
+}
+
 inline DecodedInstr *icache_lookup(ProcessVM *p, uint64_t pc) {
-    DecodedInstr *v = &p->icache[icache_index(pc) * ICACHE_WAYS];
+#if ICACHE_SIZE_CLASS == 2
+    /* LAS DOS MITADES COMO SI FUERAN DOS VIAS.
+     *
+     * Colocar bien exige saber el tamano, pero BUSCAR no: la etiqueta -- el
+     * `pc` guardado en la entrada -- ya distingue, asi que se puede mirar en
+     * las dos mitades y quedarse con la que case.  Una instruccion vive en UNA
+     * sola, porque quien inserta si conoce su tamano.
+     *
+     * Con eso el camino caliente no lee `vm_mem[pc]`.  Y eso importa mas de lo
+     * que parece: medido, la lectura en si cuesta poco -- `operator[]` sumaba
+     * 51 M --, pero meter un acceso a memoria en el despacho obliga a recargar
+     * lo que estaba en registros y `icache_lookup` pasaba de 68 M a 407 M.  El
+     * precio no era el byte: era el codigo de alrededor.
+     *
+     * Se prueba primero la mitad de las PRIMARIAS porque son la mayoria del
+     * codigo real (68% de un byte, 26% de cuatro).  Fallar la primera cuesta
+     * una comparacion mas, no una descodificacion. */
+    DecodedInstr *a = &p->icache[icache_half(pc, 0) * ICACHE_WAYS];
+    if (a[0].pc == pc) return &a[0];
+    DecodedInstr *v = &p->icache[icache_half(pc, 1) * ICACHE_WAYS];
+#else
+    DecodedInstr *v = &p->icache[icache_set(p, pc) * ICACHE_WAYS];
+#endif
     // La via 0 primero y sin bucle: es el caso comun y tiene que costar una
     // sola comparacion, igual que antes.
     if (v[0].pc == pc) return &v[0];
@@ -1308,7 +1429,7 @@ inline DecodedInstr *icache_lookup(ProcessVM *p, uint64_t pc) {
  * @return   Entrada a sobrescribir.
  */
 inline DecodedInstr *icache_victim(ProcessVM *p, uint64_t pc) {
-    const uint32_t s = icache_index(pc);
+    const uint32_t s = icache_set(p, pc);
 #if ICACHE_WAYS > 1
     const uint8_t v = p->icache_way[s];
     p->icache_way[s] = static_cast<uint8_t>((v + 1u) % ICACHE_WAYS);

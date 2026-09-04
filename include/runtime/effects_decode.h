@@ -220,6 +220,50 @@ inline void reg_slot_set(DecodedInstr &d, uint8_t slot, uint8_t v) {
 }
 
 /**
+ * @brief El `RegSlot` de cada bit de la FORMA derivada del codigo maquina.
+ *
+ * El derivador responde en campos del operando -- reg1 entero, nibble bajo de
+ * reg2... -- y el descodificador en `RegSlot`.  Son la misma nocion con dos
+ * nombres, y esta tabla es el puente.  El orden es el que produce
+ * `operand_field_bit`: campo (reg1, reg2, reg3, regI) por parte (entero, bajo,
+ * alto), que es tambien el de `VmForm` en la base generada.
+ *
+ * Vive aqui, y no en quien la usa, porque la usan DOS: el que reordena dentro
+ * de un paquete y el que comprueba que la tabla generada dice lo mismo que el
+ * descodificador.  Dos copias de la misma correspondencia acaban separandose,
+ * y la que se separa deja de comparar nada.
+ */
+constexpr RegSlot kFormSlot[12] = {
+    RS_REG1, RS_REG1_LO, RS_REG1_HI, RS_REG2, RS_REG2_LO, RS_REG2_HI,
+    RS_REG3, RS_REG3_LO, RS_REG3_HI, RS_REGI, RS_REGI_LO, RS_REGI_HI};
+
+/**
+ * @brief Los registros del banco a los que apunta @p form sobre @p d.
+ *
+ * La forma dice QUE CAMPO lleva el numero de registro; la instancia dice que
+ * numero es.  Sin las dos no se puede afirmar que dos instrucciones no chocan:
+ * con los efectos solos, `add r2, 3` y `add r3, 1` parecen la misma cosa.
+ *
+ * Recorre SOLO los bits puestos, sacandolos con `ctz` y quitandolos uno a uno.
+ * Barrer los doce daba doce vueltas siempre, y la forma tipica tiene uno o dos:
+ * con cuatro llamadas por instruccion -- general y vectorial, lectura y
+ * escritura -- eran 48 iteraciones para mirar tres campos, y las dos del banco
+ * vectorial casi siempre sobre una mascara VACIA.
+ *
+ * Sin tocar memoria fuera de la propia instruccion, que es lo que permite
+ * llamarlo al formar el paquete sin desensamblar nada.
+ */
+[[gnu::always_inline]] inline uint16_t
+regs_of_form(uint16_t form, const DecodedInstr &d) {
+    uint16_t m = 0;
+    for (uint16_t f = form; f != 0; f &= static_cast<uint16_t>(f - 1)) {
+        const int b = __builtin_ctz(f);
+        m |= static_cast<uint16_t>(1u << (reg_slot_get(d, kFormSlot[b]) & 0x0F));
+    }
+    return m;
+}
+
+/**
  * @brief Que toca @p d.
  *
  * Un indexado y un salto.  Se llama al formar un paquete, que es el 0,57% de
