@@ -41,7 +41,7 @@ static_assert(sizeof(kFlags) / sizeof(kFlags[0]) == kFlagCount,
 /// Lo leido del entorno para UN mando.
 struct FlagValue {
     std::string text;     ///< tal cual venia; vacio si no estaba puesto.
-    long number = 0;      ///< ya convertido, para no repetir el parseo.
+    int64_t number = 0;   ///< ya convertido, para no repetir el parseo.
     bool present = false; ///< estaba definido (aunque fuera a "0").
     bool on = false;      ///< definido, no vacio y distinto de "0".
 };
@@ -66,7 +66,12 @@ struct FlagTable {
              * mandos y dejaba otros apagados. */
             fv.on = raw[0] != '\0' && !(raw[0] == '0' && raw[1] == '\0');
             char *fin = nullptr;
-            const long n = std::strtol(raw, &fin, 10);
+            /* `strtoll` y no `strtol`: en Windows un `long` mide 32 bits y
+             * `strtol("4294967295")` se queda en 2147483647 SIN DECIRLO.  Ese
+             * recorte callado es la mitad de por que `VESTA_JIT_THRESHOLD` no
+             * funcionaba; la otra mitad estaba en su comprobacion de rango
+             * (ver la nota en `auto_jit.cpp`). */
+            const int64_t n = static_cast<int64_t>(std::strtoll(raw, &fin, 10));
             if (fin != raw) fv.number = n;
         }
     }
@@ -119,7 +124,7 @@ bool flag_present(FlagId id) {
     return table().v[idx(id)].present;
 }
 
-long flag_int(FlagId id, long si_falta) {
+int64_t flag_int(FlagId id, int64_t si_falta) {
     const FlagValue &fv = table().v[idx(id)];
     return fv.present ? fv.number : si_falta;
 }

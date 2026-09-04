@@ -181,9 +181,20 @@ bool flag_on(FlagId id);
 
 /**
  * @brief Valor de un mando de tipo @c Int.
+ *
+ * `int64_t` y no `long`, y no es un detalle de estilo: `long` mide lo que quiera
+ * la plataforma -- 32 bits en Windows, 64 en Linux --, asi que no cabe ni un
+ * `UINT32_MAX` ni una fecha Unix posterior a 2038, y el codigo se comporta
+ * distinto segun donde se compile.  Un ancho FIJO no tiene ese problema.
+ *
+ * `VESTA_JIT_THRESHOLD` no funciono NUNCA por eso: su comprobacion de rango era
+ * `v <= static_cast<long>(UINT32_MAX)`, ese cast vale -1 en Windows, y la
+ * condicion `v >= 0 && v <= -1` es falsa hasta para el valor 1.  Un mando que
+ * esta en la tabla y no hace nada es peor que no tenerlo: se confia en el.
+ *
  * @param si_falta Lo que se devuelve si no esta puesto o no es un numero.
  */
-long flag_int(FlagId id, long si_falta);
+int64_t flag_int(FlagId id, int64_t si_falta);
 
 /**
  * @brief Valor de un mando de tipo @c Text.  Cadena vacia si no esta puesto.

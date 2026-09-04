@@ -182,9 +182,15 @@ int64_t stack_delta(const std::vector<std::string> &toks, size_t mi,
                 (!x86 && mi + 3 < toks.size()) ? toks[mi + 3] : toks[mi + 2];
             if (!imm.empty() && imm[0] == '#') imm = imm.substr(1);
             char *end = nullptr;
-            const long v = std::strtol(imm.c_str(), &end, 0);
+            /* Ancho FIJO, no `long`.  En Windows un `long` mide 32 bits y
+             * `strtol` recorta a 2147483647 SIN DECIRLO, asi que un `sub rsp,
+             * <inmediato grande>` daba un tamano de marco equivocado en vez de
+             * un error.  Mismo fallo que tenia el umbral del JIT: ver la nota
+             * en `src/jit/auto_jit.cpp`. */
+            const int64_t v =
+                static_cast<int64_t>(std::strtoll(imm.c_str(), &end, 0));
             if (end != imm.c_str() && *end == '\0') {
-                const int64_t d = static_cast<int64_t>(v);
+                const int64_t d = v;
                 return (m == "sub") ? d : -d;
             }
             ok = false; // sp movido con algo no literal.

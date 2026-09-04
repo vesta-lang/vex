@@ -143,9 +143,24 @@ std::once_flag g_env_init_flag;
 void init_threshold_from_env() {
     {
         /* Fuera de rango o no numerico -> se queda el umbral de siempre, que
-         * es lo que hacia antes al no poder convertirlo. */
-        const long v = util::flag_int(util::FlagId::JitThreshold, -1);
-        if (v >= 0 && v <= static_cast<long>(UINT32_MAX))
+         * es lo que hacia antes al no poder convertirlo.
+         *
+         * FALLO CRITICO, y estuvo vivo hasta el 2026-09-04: esto era
+         * `const long v` comparado con `static_cast<long>(UINT32_MAX)`.  En
+         * Windows un `long` mide 32 BITS, asi que ese cast vale -1 y la
+         * condicion `v >= 0 && v <= -1` es falsa SIEMPRE -- hasta para el valor
+         * 1 --.  `VESTA_JIT_THRESHOLD` no se aplico nunca, y como es el unico
+         * mando que separa interprete de JIT, el banco media las dos columnas
+         * con el MISMO motor: `tight_loop` daba 0 instrucciones y 9,5 ms donde
+         * el interprete de verdad ejecuta 250 millones y tarda 812 ms, y salian
+         * "aceleraciones" del JIT por debajo de 1.
+         *
+         * De ahi que `flag_int` devuelva `int64_t` y no `long`: un ancho FIJO
+         * vale lo mismo en toda plataforma.  `long` no -- 32 bits en Windows,
+         * 64 en Linux --, asi que el mismo codigo se comporta distinto segun
+         * donde se compile, y ese es justo el fallo que estuvo aqui. */
+        const int64_t v = util::flag_int(util::FlagId::JitThreshold, -1);
+        if (v >= 0 && v <= static_cast<int64_t>(UINT32_MAX))
             g_jit_threshold = static_cast<uint32_t>(v);
     }
     /* Tambien leer VESTA_JIT_WARN_UNSUPPORTED para activar el
@@ -160,8 +175,10 @@ void init_threshold_from_env() {
     /* C2 tier-up (opt-in).  VESTA_C2_THRESHOLD=N activa el tier-up con
      * umbral N; ausente o 0 = C2 apagado (default). */
     {
-        const long v = util::flag_int(util::FlagId::C2Threshold, -1);
-        if (v >= 0 && v <= static_cast<long>(UINT32_MAX))
+        /* Mismo fallo que el umbral del JIT, y por eso mismo `VESTA_C2_THRESHOLD`
+         * tampoco encendia nunca el C2.  Ver la nota de arriba. */
+        const int64_t v = util::flag_int(util::FlagId::C2Threshold, -1);
+        if (v >= 0 && v <= static_cast<int64_t>(UINT32_MAX))
             g_c2_threshold = static_cast<uint32_t>(v);
     }
     if (util::flag_on(util::FlagId::C2Log)) g_c2_log = true;

@@ -540,8 +540,13 @@ static bool when_atomo_(const std::string &at, const vxgen::GenSubst &g,
             ok = false;
             return false;
         }
-        const long n = std::strtol(resto.c_str() + a, nullptr, 10);
-        const long b = static_cast<long>(bytes);
+        /* Ancho FIJO, no `long`: en Windows mide 32 bits, asi que un tamano por
+         * encima de 2 GB se recortaba SIN DECIRLO y el contrato se comprobaba
+         * contra otro numero.  Mismo fallo que tenia el umbral del JIT: ver la
+         * nota en `src/jit/auto_jit.cpp`. */
+        const int64_t n =
+            static_cast<int64_t>(std::strtoll(resto.c_str() + a, nullptr, 10));
+        const int64_t b = static_cast<int64_t>(bytes);
         if (op == "==" || op == "=") return b == n;
         if (op == "!=") return b != n;
         if (op == "<") return b < n;
