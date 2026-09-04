@@ -61,7 +61,50 @@ struct ExprNode;
  * - Gestion automatica de memoria (RAII)
  * - Extensibilidad para nuevas construcciones sintacticas
  */
+/**
+ * @enum NodeKind
+ * @brief De que clase es un nodo, sin preguntarselo al sistema de tipos.
+ *
+ * El emisor de bytecode desentierra la clase de cada operando para codificarlo,
+ * y lo hacia con `dynamic_cast`: 184 veces, y recorriendo la jerarquia de tipos
+ * en EJECUCION cada una.  Medido con VTune sobre un fuente de 21k lineas, eran
+ * 91 millones de instrucciones -- el 4,6 % de todo lo que ejecuta el compilador
+ * -- para responder algo que el nodo sabe de si mismo desde que se construyo.
+ *
+ * Solo llevan etiqueta las clases HOJA, que son las que se preguntan.  Para las
+ * bases (@ref ExprNode) sigue valiendo `dynamic_cast`: ahi la pregunta es "y
+ * alguna de sus derivadas?", que una etiqueta suelta no responde.
+ */
+enum class NodeKind : uint8_t {
+    Unknown = 0, ///< nodo sin etiquetar: nadie pregunta por el
+    Register,
+    Number,
+    Memory,
+    LabelOperandK,
+    Annotation,
+    LabelNodeK,
+    InstructionK,
+    DataDeclK,
+    ImportK,
+    NumberExprK,
+    StringExprK,
+    LabelExprK,
+    BinaryExprK,
+    AbsRefExprK,
+};
+
 struct ASTNode {
+    /**
+     * @brief De que clase es este nodo.
+     *
+     * Devuelve una constante, asi que preguntarlo son dos lecturas y un salto,
+     * frente a las docenas de instrucciones que cuesta recorrer la jerarquia de
+     * tipos.  Ver @ref NodeKind.
+     *
+     * @return La etiqueta; @c Unknown en las clases que nadie pregunta.
+     */
+    virtual NodeKind node_kind() const { return NodeKind::Unknown; }
+
     /**
      * @brief Destructor virtual para polimorfismo correcto.
      *
@@ -108,6 +151,8 @@ struct LabelDecl : ASTNode {
  * @brief Instruccion generica de la VM (mov, add, jmp, call, etc.)
  */
 struct Instruction : ASTNode {
+    static constexpr NodeKind kKind = NodeKind::InstructionK;
+    NodeKind node_kind() const override { return kKind; }
     std::string opcode;                             // "mov", "add", "jmp", "db"
     std::vector<std::unique_ptr<ASTNode>> operands; // r0, 1, "msg", etc.
     // Linea fuente Vesta que origino esta instruccion (capturada del
@@ -147,6 +192,8 @@ struct Instruction : ASTNode {
  * Nodo que indica la importacion de un archivo
  */
 struct ImportNode : ASTNode {
+    static constexpr NodeKind kKind = NodeKind::ImportK;
+    NodeKind node_kind() const override { return kKind; }
     std::string filename;
 
     ImportNode(const std::string &f) : filename(f) {}
@@ -192,6 +239,8 @@ struct ExprNode : ASTNode {
 };
 
 struct StringExpr : ExprNode {
+    static constexpr NodeKind kKind = NodeKind::StringExprK;
+    NodeKind node_kind() const override { return kKind; }
     std::string value;
 
     explicit StringExpr(std::string v) : value(std::move(v)) {}
@@ -207,6 +256,8 @@ struct StringExpr : ExprNode {
  * @brief Expresion que representa un literal numerico.
  */
 struct NumberExpr : ExprNode {
+    static constexpr NodeKind kKind = NodeKind::NumberExprK;
+    NodeKind node_kind() const override { return kKind; }
     std::string value;
 
     explicit NumberExpr(std::string v) : value(std::move(v)) {}
@@ -222,6 +273,8 @@ struct NumberExpr : ExprNode {
  * @brief Expresion que representa un identificador (label).
  */
 struct LabelExpr : ExprNode {
+    static constexpr NodeKind kKind = NodeKind::LabelExprK;
+    NodeKind node_kind() const override { return kKind; }
     std::string name;
 
     explicit LabelExpr(std::string n) : name(std::move(n)) {}
@@ -242,6 +295,8 @@ struct LabelExpr : ExprNode {
  * (reloc datos->codigo).
  */
 struct AbsRefExpr : ExprNode {
+    static constexpr NodeKind kKind = NodeKind::AbsRefExprK;
+    NodeKind node_kind() const override { return kKind; }
     std::string symbol; ///< nombre completo del simbolo, p.ej. "code.Tipo__m".
 
     explicit AbsRefExpr(std::string s) : symbol(std::move(s)) {}
@@ -257,6 +312,8 @@ struct AbsRefExpr : ExprNode {
  * @brief Expresion binaria (expr + expr, expr - expr, etc.).
  */
 struct BinaryExpr : ExprNode {
+    static constexpr NodeKind kKind = NodeKind::BinaryExprK;
+    NodeKind node_kind() const override { return kKind; }
     char op;
     std::unique_ptr<ExprNode> left;
     std::unique_ptr<ExprNode> right;
@@ -296,6 +353,8 @@ struct UnaryExpr : ExprNode {
  * Ahora soporta expresiones completas gracias a ExprNode.
  */
 struct DataDecl : ASTNode {
+    static constexpr NodeKind kKind = NodeKind::DataDeclK;
+    NodeKind node_kind() const override { return kKind; }
     std::string label;     ///< Nombre del simbolo (msg, bytes, count)
     std::string directive; ///< Directiva de datos (db, dw, dd, dq, ptr)
     std::vector<std::unique_ptr<ExprNode>> values; ///< Lista de expresiones
@@ -325,6 +384,8 @@ struct DataDecl : ASTNode {
 };
 
 struct LabelNode : ASTNode {
+    static constexpr NodeKind kKind = NodeKind::LabelNodeK;
+    NodeKind node_kind() const override { return kKind; }
     std::string name;
     std::vector<std::unique_ptr<ASTNode>> body;
 
@@ -356,6 +417,8 @@ struct Operand : ASTNode {
 };
 
 struct RegisterOperand : public Operand {
+    static constexpr NodeKind kKind = NodeKind::Register;
+    NodeKind node_kind() const override { return kKind; }
     std::string name; // "r0", "r15d", "rp"
     int size_bits;    // 8, 16, 32, 64
 
@@ -369,6 +432,8 @@ struct RegisterOperand : public Operand {
 };
 
 struct NumberOperand : public Operand {
+    static constexpr NodeKind kKind = NodeKind::Number;
+    NodeKind node_kind() const override { return kKind; }
     std::string value;
     TokenType type; // NUMBER_DEC, NUMBER_HEX, etc.
 
@@ -399,6 +464,8 @@ struct StringOperand : public Operand {
  * -> [r1 + r2 * 4 + 0x100]
  */
 struct MemoryOperand : ASTNode {
+    static constexpr NodeKind kKind = NodeKind::Memory;
+    NodeKind node_kind() const override { return kKind; }
     std::unique_ptr<ASTNode> expr; // expresion dentro de los corchetes
 
     MemoryOperand(std::unique_ptr<ASTNode> e) : expr(std::move(e)) {}
@@ -410,6 +477,8 @@ struct MemoryOperand : ASTNode {
 };
 
 struct LabelOperand : Operand {
+    static constexpr NodeKind kKind = NodeKind::LabelOperandK;
+    NodeKind node_kind() const override { return kKind; }
     std::string name;
 
     LabelOperand(std::string n) : name(std::move(n)) {}
@@ -420,6 +489,8 @@ struct LabelOperand : Operand {
 };
 
 struct AnnotationNode : ASTNode {
+    static constexpr NodeKind kKind = NodeKind::Annotation;
+    NodeKind node_kind() const override { return kKind; }
     std::string key;
     std::string value;
     std::vector<std::unique_ptr<AnnotationNode>> children;
@@ -443,6 +514,37 @@ struct AnnotationNode : ASTNode {
         }
     }
 };
+
+/**
+ * @brief @p n visto como @p T, o @c nullptr si no es de esa clase.
+ *
+ * Sustituye a `dynamic_cast` donde lo que se pregunta es por una clase HOJA,
+ * que es casi siempre: el emisor de bytecode lo hace 184 veces para saber que
+ * clase de operando esta codificando.  Hace lo mismo -- devuelve nulo si no
+ * coincide -- pero comparando una etiqueta en vez de recorrer la jerarquia de
+ * tipos en ejecucion.
+ *
+ * Solo compila con clases que tengan @c kKind, asi que preguntar por una que no
+ * lleva etiqueta es un error de compilacion y no un nulo silencioso.  Para las
+ * clases BASE sigue haciendo falta `dynamic_cast`: ahi la pregunta incluye a
+ * las derivadas, y una etiqueta suelta no la responde.
+ *
+ * @tparam T Clase hoja por la que se pregunta.
+ * @param n  Nodo, puede ser nulo.
+ * @return El nodo como @p T, o @c nullptr.
+ */
+template <typename T> inline T *node_as(ASTNode *n) {
+    return (n != nullptr && n->node_kind() == T::kKind) ? static_cast<T *>(n)
+                                                        : nullptr;
+}
+
+/// @copydoc node_as
+template <typename T> inline const T *node_as(const ASTNode *n) {
+    return (n != nullptr && n->node_kind() == T::kKind)
+               ? static_cast<const T *>(n)
+               : nullptr;
+}
+
 } // namespace vm
 
 #endif // AST_H

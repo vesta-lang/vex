@@ -1781,7 +1781,7 @@ static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode>> &ast,
     std::vector<std::unique_ptr<vm::ASTNode>> result;
 
     for (auto &node : ast) {
-        if (auto imp = dynamic_cast<vm::ImportNode *>(node.get())) {
+        if (auto imp = vm::node_as<vm::ImportNode>(node.get())) {
             const std::string &raw = imp->filename;
 
             // resolver la ruta del archivo importado con orden de busqueda:

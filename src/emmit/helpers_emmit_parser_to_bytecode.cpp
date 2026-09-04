@@ -59,7 +59,7 @@ void Assembler::emit_directive(const std::string &dir, uint64_t value) {
  */
 void Assembler::emit_data(const vm::DataDecl *data) {
     for (auto &expr : data->values) {
-        if (auto s = dynamic_cast<vm::StringExpr *>(expr.get())) {
+        if (auto s = vm::node_as<vm::StringExpr>(expr.get())) {
             for (char c : s->value)
                 output.emit8(static_cast<uint8_t>(c));
             continue;
@@ -70,7 +70,7 @@ void Assembler::emit_data(const vm::DataDecl *data) {
         // una relocacion @c Absolute64 que el linker rebasa a la direccion VM
         // final del simbolo y emite 8 bytes placeholder (el linker los
         // parchea).
-        if (auto ar = dynamic_cast<vm::AbsRefExpr *>(expr.get())) {
+        if (auto ar = vm::node_as<vm::AbsRefExpr>(expr.get())) {
             Relocation rel;
             rel.symbol = ar->symbol;
             rel.section = current_section ? current_section->name : "";
@@ -114,7 +114,7 @@ const InstrInfo &Assembler::select_variant(
     // si no tiene operandos, suponemos que es una instruccion sin tal
     if (ops.size() == 0) goto search_variante_None;
 
-    if (auto s = dynamic_cast<vm::RegisterOperand *>(ops[0].get())) {
+    if (auto s = vm::node_as<vm::RegisterOperand>(ops[0].get())) {
         mode = AddressingMode::REG;
     }
 
@@ -124,10 +124,10 @@ const InstrInfo &Assembler::select_variant(
     if (ops.size() >= 2) {
         // si el segundo operando es de tipo memoria, el modo de
         // direccionamiento es este u SIB
-        if (auto s = dynamic_cast<vm::MemoryOperand *>(ops[1].get())) {
+        if (auto s = vm::node_as<vm::MemoryOperand>(ops[1].get())) {
             mode = AddressingMode::MEM;
 
-            if (auto bin = dynamic_cast<vm::BinaryExpr *>(s->expr.get())) {
+            if (auto bin = vm::node_as<vm::BinaryExpr>(s->expr.get())) {
                 if (bin->op == '-' || bin->op == '+' || bin->op == '*') {
                     mode = AddressingMode::SIB;
                 }
@@ -136,9 +136,9 @@ const InstrInfo &Assembler::select_variant(
 
         // si el op2 es un registro, el modo de direcionamiento confirmado es
         // registro
-        else if (auto s = dynamic_cast<vm::RegisterOperand *>(ops[1].get())) {
+        else if (auto s = vm::node_as<vm::RegisterOperand>(ops[1].get())) {
             mode = AddressingMode::REG;
-        } else if (auto s = dynamic_cast<vm::AnnotationNode *>(ops[1].get())) {
+        } else if (auto s = vm::node_as<vm::AnnotationNode>(ops[1].get())) {
             // si el segundo operando es una notacion
             if (s->key == "Method" || s->key == "Relative" ||
                 s->key == "Absolute") {
@@ -155,17 +155,17 @@ const InstrInfo &Assembler::select_variant(
         }
 
         // es de tipo inmed [0x1000]
-        else if (auto s = dynamic_cast<vm::NumberOperand *>(ops[1].get())) {
+        else if (auto s = vm::node_as<vm::NumberOperand>(ops[1].get())) {
             mode = AddressingMode::INMED;
         }
 
         // si el operando 1 es de tipo memoria, el resto de operandos da igual
         // de que tipo sea, ya que siempre sera memoria. por eso usar if y no
         // else if aqui
-        if (auto s = dynamic_cast<vm::MemoryOperand *>(ops[0].get())) {
+        if (auto s = vm::node_as<vm::MemoryOperand>(ops[0].get())) {
             mode = AddressingMode::MEM;
 
-            if (auto bin = dynamic_cast<vm::BinaryExpr *>(s->expr.get())) {
+            if (auto bin = vm::node_as<vm::BinaryExpr>(s->expr.get())) {
                 if (bin->op == '-' || bin->op == '+' || bin->op == '*') {
                     mode = AddressingMode::SIB;
                 }
@@ -177,13 +177,13 @@ const InstrInfo &Assembler::select_variant(
         // si solo hay un operando, y fue un registro, entonces, es correcto
 
         // si no hubo registro, y solo hay un operando, debe ser un inmediato
-        if (auto s = dynamic_cast<vm::NumberOperand *>(ops[0].get())) {
+        if (auto s = vm::node_as<vm::NumberOperand>(ops[0].get())) {
             mode = AddressingMode::INMED;
-        } else if (auto s = dynamic_cast<vm::LabelOperand *>(ops[0].get())) {
+        } else if (auto s = vm::node_as<vm::LabelOperand>(ops[0].get())) {
             // un label como destino de salto se trata como inmediato (direccion
             // absoluta)
             mode = AddressingMode::INMED;
-        } else if (auto s = dynamic_cast<vm::AnnotationNode *>(ops[0].get())) {
+        } else if (auto s = vm::node_as<vm::AnnotationNode>(ops[0].get())) {
             // si el segundo operando es una notacion
             if (s->key == "Method" || s->key == "Relative" ||
                 s->key == "Absolute") {
@@ -205,9 +205,9 @@ const InstrInfo &Assembler::select_variant(
     // @Absolute/@Relative/@Method como inmediatos (el linker sobreescribe el
     // placeholder al resolver el simbolo).
     if (mode == AddressingMode::MEM) {
-        if (auto s = dynamic_cast<vm::NumberOperand *>(ops[1].get())) {
+        if (auto s = vm::node_as<vm::NumberOperand>(ops[1].get())) {
             mode = AddressingMode::INMED;
-        } else if (auto s = dynamic_cast<vm::AnnotationNode *>(ops[1].get())) {
+        } else if (auto s = vm::node_as<vm::AnnotationNode>(ops[1].get())) {
             if (s->key == "Method" || s->key == "Relative" ||
                 s->key == "Absolute") {
                 mode = AddressingMode::INMED;

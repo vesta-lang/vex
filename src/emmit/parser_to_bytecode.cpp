@@ -29,12 +29,12 @@
 namespace Assembly::Bytecode {
 uint64_t Assembler::eval_operand(const vm::ASTNode *op) {
     // numero inmediato como operando
-    if (auto num = dynamic_cast<const vm::NumberOperand *>(op)) {
+    if (auto num = vm::node_as<vm::NumberOperand>(op)) {
         return vm::parse_number(num->value);
     }
 
     // label como operando
-    if (auto lab = dynamic_cast<const vm::LabelOperand *>(op)) {
+    if (auto lab = vm::node_as<vm::LabelOperand>(op)) {
         auto it = symbol_table.find(lab->name);
         if (it == symbol_table.end())
             throw std::runtime_error("Label no definido: " + lab->name);
@@ -52,13 +52,13 @@ uint64_t Assembler::eval_operand(const vm::ASTNode *op) {
 }
 
 uint64_t Assembler::eval_expr(vm::ExprNode *expr) {
-    if (auto n = dynamic_cast<vm::NumberExpr *>(expr))
+    if (auto n = vm::node_as<vm::NumberExpr>(expr))
         return vm::parse_number(n->value);
 
-    if (auto l = dynamic_cast<vm::LabelExpr *>(expr))
+    if (auto l = vm::node_as<vm::LabelExpr>(expr))
         return symbol_table[l->name]->address;
 
-    if (auto b = dynamic_cast<vm::BinaryExpr *>(expr)) {
+    if (auto b = vm::node_as<vm::BinaryExpr>(expr)) {
         uint64_t L = eval_expr(b->left.get());
         uint64_t R = eval_expr(b->right.get());
         switch (b->op) {
@@ -152,7 +152,7 @@ Assembler::assemble(const std::vector<std::unique_ptr<vm::ASTNode>> &ast) {
 
 void Assembler::emit_pass(const vm::ASTNode *node) {
     // Si el nodo es una etiqueta (LabelNode)
-    if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
+    if (auto lab = vm::node_as<vm::LabelNode>(node)) {
         if (current_section == nullptr)
             throw std::runtime_error("Label no definido: " + lab->name);
         current_label = current_section->get_label(lab->name);
@@ -163,13 +163,13 @@ void Assembler::emit_pass(const vm::ASTNode *node) {
     }
 
     // Si el nodo es una declaracion de datos
-    else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
+    else if (auto data = vm::node_as<vm::DataDecl>(node)) {
         emit_data(data); // Llama al manejador especifico para datos
     }
 
     // debemos evaluar las notaciones section, para poder averiguar en que
     // seccion y label se encuentra el codigo.
-    else if (auto annotation = dynamic_cast<const vm::AnnotationNode *>(node)) {
+    else if (auto annotation = vm::node_as<vm::AnnotationNode>(node)) {
         if (annotation->key == "Section") {
             std::string section_name;
             for (const auto &child : annotation->children) {
@@ -206,7 +206,7 @@ void Assembler::emit_pass(const vm::ASTNode *node) {
         }
     }
     // Si el nodo es una instruccion
-    else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
+    else if (auto instr = vm::node_as<vm::Instruction>(node)) {
         // Si la instruccion es una pseudo-instruccion (directiva)
         if (PseudoInstructions.count(instr->opcode)) {
             apply_directive(instr); // Aplica la directiva correspondiente
@@ -246,7 +246,7 @@ void Assembler::begin_section_layout(uint64_t &offset) {
 
 void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
     // --- LABELS ---
-    if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
+    if (auto lab = vm::node_as<vm::LabelNode>(node)) {
         // solo aplicar si el formato es velb
         if (!current_section && ctx.format_output == "velb")
             throw std::runtime_error("Label fuera de una seccion");
@@ -283,7 +283,7 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
 
     // para nodos de tipo anotacion, no todos los nodos de este tipo, se tienen
     // en cuenta.
-    else if (auto data = dynamic_cast<const vm::AnnotationNode *>(node)) {
+    else if (auto data = vm::node_as<vm::AnnotationNode>(node)) {
         // @Section declara Y activa una seccion: marca la frontera entre el
         // tramo de flujo de la seccion anterior y el de la nueva.
         const bool is_section = (data->key == "Section");
@@ -299,7 +299,7 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
     }
 
     // --- DECLARACION DE DATOS CON SUS DIRECTIVAS ---
-    else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
+    else if (auto data = vm::node_as<vm::DataDecl>(node)) {
         if (!current_section && ctx.format_output == "velb")
             throw std::runtime_error("Label fuera de una seccion");
 
@@ -322,7 +322,7 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
         // guarda el tamano real de la label
         size_t size_of_label = 0;
         for (auto &expr : data->values) {
-            if (auto s = dynamic_cast<vm::StringExpr *>(expr.get())) {
+            if (auto s = vm::node_as<vm::StringExpr>(expr.get())) {
                 size_of_label += s->value.size();
                 offset += s->value.size();
             } else {
@@ -349,7 +349,7 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
     }
 
     // --- INSTRUCCIONES Y DIRECTIVAS ---
-    else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
+    else if (auto instr = vm::node_as<vm::Instruction>(node)) {
         {
             /* Es una instruccion real?  Por indice: esto corre por cada nodo
              * del programa, y el nombre ya no se hashea -- se traduce una vez a
@@ -372,7 +372,7 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
                          */
                         // No ocupan espacio, configuran el entorno / emisor
                         vm::NumberOperand *number =
-                            dynamic_cast<vm::NumberOperand *>(
+                            vm::node_as<vm::NumberOperand>(
                                 instr->operands[0].get());
                         uint64_t align = eval_operand(number);
 
@@ -432,15 +432,15 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
                 auto n0 = instr->operands[0].get();
                 auto n1 = instr->operands[1].get();
 
-                auto inmmed_str = dynamic_cast<vm::NumberOperand *>(n1);
+                auto inmmed_str = vm::node_as<vm::NumberOperand>(n1);
 
-                auto reg = dynamic_cast<vm::RegisterOperand *>(n0);
-                auto mem = dynamic_cast<vm::MemoryOperand *>(n0);
+                auto reg = vm::node_as<vm::RegisterOperand>(n0);
+                auto mem = vm::node_as<vm::MemoryOperand>(n0);
 
                 // si no se obtuvo un registro, y se obtuvo un operando memoria
                 // esto es true.
                 if (reg == nullptr) {
-                    reg = dynamic_cast<vm::RegisterOperand *>(mem->expr.get());
+                    reg = vm::node_as<vm::RegisterOperand>(mem->expr.get());
                     if (reg == nullptr) {
                         std::cout << "Error instruccion: " + instr->opcode +
                                          " esperaba un registro para acceder a "
@@ -517,7 +517,7 @@ void Assembler::apply_directive(const vm::Instruction *instr) {
             throw std::runtime_error("Error: align requiere 1 operando.");
 
         vm::NumberOperand *number =
-            dynamic_cast<vm::NumberOperand *>(instr->operands[0].get());
+            vm::node_as<vm::NumberOperand>(instr->operands[0].get());
         uint64_t align = eval_operand(number);
 
         if (align == 0 || (align & (align - 1)) != 0)
