@@ -74,20 +74,25 @@ def _medir(vm, fuente, tmp_dir, corridas):
     except OSError:
         return None
 
+    # El combinado vive en el arbol de EJEMPLOS, asi que se borra pase lo que
+    # pase: saliendo por la rama de error se quedaba ahi, y con el barrido
+    # entero acababan ciento y pico ficheros sueltos que recogerian la suite y
+    # el formateador.
     try:
-        r = subprocess.run(
-            [vm, "-m", "aot", "--vesta", juntos, "--format", "pe", "--emit",
-             "exe", "-o", binario],
-            capture_output=True, text=True, timeout=300)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    ok = (r.returncode == 0 and os.path.exists(binario))
-    try:
-        os.remove(juntos)
-    except OSError:
-        pass
-    if not ok:
-        return None
+        try:
+            r = subprocess.run(
+                [vm, "-m", "aot", "--vesta", juntos, "--format", "pe",
+                 "--emit", "exe", "-o", binario],
+                capture_output=True, text=True, timeout=300)
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        if r.returncode != 0 or not os.path.exists(binario):
+            return None
+    finally:
+        try:
+            os.remove(juntos)
+        except OSError:
+            pass
 
     mejor = None
     for _ in range(corridas):
