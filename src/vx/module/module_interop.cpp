@@ -131,9 +131,9 @@ static std::string canonical_typename_of(const Type &t) {
         // a lambda -> el CALLIND llamaba al slot en vez de a la funcion
         // (crash).
         std::string s = t.fn_is_raw ? "cfn(" : "fn(";
-        for (size_t i = 0; i < t.fn_params.size(); ++i) {
+        for (size_t i = 0; i < t.fn_params().size(); ++i) {
             if (i) s += ", ";
-            s += canonical_typename_of(t.fn_params[i]);
+            s += canonical_typename_of(t.fn_params()[i]);
         }
         s += ") -> ";
         s += t.pointee ? canonical_typename_of(*t.pointee) : "void";

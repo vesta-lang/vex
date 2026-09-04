@@ -79,12 +79,12 @@ std::string c_decl(const Type &t, const std::string &name, bool as_field) {
         std::ostringstream os;
         const Type ret = t.pointee ? *t.pointee : Type{PrimitiveKind::VOID};
         os << c_base_type(ret) << " (*" << name << ")(";
-        if (t.fn_params.empty()) {
+        if (t.fn_params().empty()) {
             os << "void";
         } else {
-            for (size_t i = 0; i < t.fn_params.size(); ++i) {
+            for (size_t i = 0; i < t.fn_params().size(); ++i) {
                 if (i) os << ", ";
-                os << c_decl(t.fn_params[i], "", /*as_field=*/false);
+                os << c_decl(t.fn_params()[i], "", /*as_field=*/false);
             }
         }
         os << ")";

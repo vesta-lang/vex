@@ -3259,8 +3259,8 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                 diags_.error(fn->loc, "register(\"" + r +
                                           "\") en el tipo funcion: '" + r +
                                           "' no es un registro reconocido");
-        ft.fn_param_abi_regs = fn->param_abi_regs;
-        ft.fn_param_dirs = fn->param_dirs;
+        ft.fn_mut().param_abi_regs = fn->param_abi_regs;
+        ft.fn_mut().param_dirs = fn->param_dirs;
         ft.fn_param_by_ref_mask = by_ref_mask;
         return ft;
     }
@@ -9203,14 +9203,14 @@ Type TypeChecker::check_expr(ast::Expr *e) {
             // truncada a la aridad del target -- toma los N primeros registros.
             // El cast solo fija aridad/tipos/orden; los REGISTROS vienen de la
             // funcion apuntada (contrato del ctx pattern).  El lowering del
-            // CALLIND consume t.fn_param_abi_regs (multi-ABI como un CALL).
+            // CALLIND consume t.fn_param_abi_regs() (multi-ABI como un CALL).
             if (t.kind == PrimitiveKind::FUNCTION &&
                 to.kind == PrimitiveKind::FUNCTION &&
-                !to.fn_param_abi_regs.empty()) {
-                std::vector<std::string> abi = to.fn_param_abi_regs;
-                if (abi.size() > t.fn_params.size())
-                    abi.resize(t.fn_params.size());
-                t.fn_param_abi_regs = std::move(abi);
+                !to.fn_param_abi_regs().empty()) {
+                std::vector<std::string> abi = to.fn_param_abi_regs();
+                if (abi.size() > t.fn_params().size())
+                    abi.resize(t.fn_params().size());
+                t.fn_mut().param_abi_regs = std::move(abi);
             }
             // Function pointer: `(u64) foo` / `(fn(...)->R) foo` -- foo es una
             // funcion (check_ident la marca is_func_ref y devuelve void).  El
@@ -9878,7 +9878,7 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
     Type lam_t =
         Type::make_function(std::move(param_types), std::move(return_t));
     lam_t.fn_is_variadic = lam_variadic;
-    if (lam_any_dir) lam_t.fn_param_dirs = std::move(lam_dirs);
+    if (lam_any_dir) lam_t.fn_mut().param_dirs = std::move(lam_dirs);
     lam_t.fn_param_by_ref_mask = lam_by_ref;
     return lam_t;
 }
@@ -10288,8 +10288,8 @@ Type TypeChecker::field_type_with_abi(const StructFieldInfo &f) const {
     // usa multi-ABI igual que un CALL directo.
     if (t.kind == PrimitiveKind::FUNCTION && f.default_init &&
         f.default_init->result_type.kind == PrimitiveKind::FUNCTION &&
-        !f.default_init->result_type.fn_param_abi_regs.empty()) {
-        t.fn_param_abi_regs = f.default_init->result_type.fn_param_abi_regs;
+        !f.default_init->result_type.fn_param_abi_regs().empty()) {
+        t.fn_mut().param_abi_regs = f.default_init->result_type.fn_param_abi_regs();
     }
     return t;
 }
@@ -11045,7 +11045,7 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
             /* La direccion viaja con la funcion tambien por aqui: el nombre
              * desnudo tiene que valer lo mismo que `&nombre`, o el mismo
              * argumento pasaria por una via y no por la otra. */
-            fnv.fn_param_dirs = arg_sig.param_dirs;
+            fnv.fn_mut().param_dirs = arg_sig.param_dirs;
             fnv.fn_param_by_ref_mask = arg_sig.param_by_ref_mask;
             if (types_assignable(tp, fnv)) {
                 ta = fnv;
@@ -11826,7 +11826,7 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                                                        method->return_type);
                         // Aqui el receptor va CAPTURADO, no delante, asi que
                         // las marcas se copian sin desplazar.
-                        fnt.fn_param_dirs = method->param_dirs;
+                        fnt.fn_mut().param_dirs = method->param_dirs;
                         fnt.fn_param_by_ref_mask = method->param_by_ref_mask;
                         // Construir y type-checkear el lambda desugarado.
                         e->desugared_bound_method = build_bound_method_lambda(
@@ -11966,10 +11966,10 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                     // el hueco del `this` delante para que siga alineada con
                     // `params`.
                     if (!m.param_dirs.empty()) {
-                        cfnt.fn_param_dirs.reserve(m.param_dirs.size() + 1);
-                        cfnt.fn_param_dirs.push_back(ParamDir::None);
+                        cfnt.fn_mut().param_dirs.reserve(m.param_dirs.size() + 1);
+                        cfnt.fn_mut().param_dirs.push_back(ParamDir::None);
                         for (const auto d : m.param_dirs)
-                            cfnt.fn_param_dirs.push_back(d);
+                            cfnt.fn_mut().param_dirs.push_back(d);
                         cfnt.fn_param_by_ref_mask = m.param_by_ref_mask << 1;
                     }
                     fa->is_func_ref = true;
@@ -12151,7 +12151,7 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                     Type cfnt = Type::make_function(fsig->param_types,
                                                     fsig->return_type);
                     cfnt.fn_is_raw = true; // cfn, no lambda
-                    cfnt.fn_param_dirs = fsig->param_dirs;
+                    cfnt.fn_mut().param_dirs = fsig->param_dirs;
                     cfnt.fn_param_by_ref_mask = fsig->param_by_ref_mask;
                     e->result_type = cfnt;
                     return cfnt;
@@ -12369,10 +12369,10 @@ std::unique_ptr<ast::Expr> TypeChecker::build_bound_method_lambda(
 void TypeChecker::propagate_fn_type_to_lambda(ast::LambdaExpr *lam,
                                               const Type &fn_type) {
     if (!lam || fn_type.kind != PrimitiveKind::FUNCTION) return;
-    if (lam->params.size() != fn_type.fn_params.size()) return;
+    if (lam->params.size() != fn_type.fn_params().size()) return;
     for (size_t i = 0; i < lam->params.size(); ++i) {
         if (lam->params[i]->type) continue;
-        const Type &pt = fn_type.fn_params[i];
+        const Type &pt = fn_type.fn_params()[i];
         if (pt.kind == PrimitiveKind::CLASS ||
             pt.kind == PrimitiveKind::STRUCT) {
             auto nt = std::make_unique<ast::NamedTypeNode>();
@@ -12425,13 +12425,13 @@ Type TypeChecker::maybe_promote_func_ref(ast::Expr *val, const Type &target,
     // firma de la funcion.  types_assignable (via operator==) exige que el tipo
     // destino declare la MISMA ABI -> asignar &f_abiA a un cfn-de-abiB (o a un
     // cfn sin ABI) es un error de tipos claro.
-    ft.fn_param_abi_regs = fsig->param_abi_regs;
+    ft.fn_mut().param_abi_regs = fsig->param_abi_regs;
     // Y la direccion, por lo mismo: `&escribe` sobre `void escribe(out i64 r)`
     // vale para un `cfn(out i64) -> void` y NO para un `cfn(i64*) -> void`.
     // Los dos llaman igual -- un `out T` ya viaja como `T*` --, asi que la
     // diferencia es solo la PROMESA; por eso la salida es un cast, que la
     // deja escrita en el fuente en vez de perderla en silencio.
-    ft.fn_param_dirs = fsig->param_dirs;
+    ft.fn_mut().param_dirs = fsig->param_dirs;
     ft.fn_param_by_ref_mask = fsig->param_by_ref_mask;
     val->result_type = ft;
     return ft;
@@ -13829,17 +13829,17 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         if (indirect) {
             e->is_indirect_call = true;
             // Validar el numero de argumentos contra la firma.
-            if (e->args.size() != ftype.fn_params.size()) {
+            if (e->args.size() != ftype.fn_params().size()) {
                 diags_.error(e->loc,
                              "llamada indirecta: numero de argumentos (" +
                                  std::to_string(e->args.size()) +
                                  ") distinto de la firma (" +
-                                 std::to_string(ftype.fn_params.size()) + ")");
+                                 std::to_string(ftype.fn_params().size()) + ")");
             }
             for (size_t i = 0; i < e->args.size(); ++i) {
                 Type at = check_expr(e->args[i].get());
-                if (i < ftype.fn_params.size() &&
-                    !types_assignable(ftype.fn_params[i], at)) {
+                if (i < ftype.fn_params().size() &&
+                    !types_assignable(ftype.fn_params()[i], at)) {
                     diags_.warning(e->loc,
                                    "llamada indirecta: argumento " +
                                        std::to_string(i + 1) +
@@ -14435,18 +14435,18 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         auto funcptr_field_call = [&](const Type &ftype) -> Type {
             e->is_indirect_call = true;
             fa->result_type = ftype;
-            if (e->args.size() != ftype.fn_params.size())
+            if (e->args.size() != ftype.fn_params().size())
                 diags_.error(e->loc,
                              "llamada a campo-funcion '" + fa->field_name +
                                  "': numero de argumentos (" +
                                  std::to_string(e->args.size()) +
                                  ") distinto de la firma (" +
-                                 std::to_string(ftype.fn_params.size()) + ")");
-            const size_t n = std::min(e->args.size(), ftype.fn_params.size());
+                                 std::to_string(ftype.fn_params().size()) + ")");
+            const size_t n = std::min(e->args.size(), ftype.fn_params().size());
             for (size_t i = 0; i < n; ++i) {
                 const Type ta = check_expr(e->args[i].get());
                 if (ta.kind != PrimitiveKind::COUNT &&
-                    !types_assignable(ftype.fn_params[i], ta))
+                    !types_assignable(ftype.fn_params()[i], ta))
                     diags_.warning(e->args[i]->loc,
                                    "argumento " + std::to_string(i + 1) +
                                        " del campo-funcion '" + fa->field_name +
@@ -14971,8 +14971,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             const Type cbt = check_expr(e->args[0].get());
             /* El callback debe ser FUNCTION tomando 1 string. */
             if (cbt.kind != PrimitiveKind::FUNCTION ||
-                cbt.fn_params.size() != 1 ||
-                cbt.fn_params[0].kind != PrimitiveKind::STRING) {
+                cbt.fn_params().size() != 1 ||
+                cbt.fn_params()[0].kind != PrimitiveKind::STRING) {
                 diags_.error(
                     e->args[0]->loc,
                     id->name +
@@ -17323,9 +17323,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         /* Con un variadico la aridad no es exacta: los de delante son
          * obligatorios y de ahi en adelante vale cualquier cantidad. */
         const size_t fn_fixed =
-            (fn_type.fn_is_variadic && !fn_type.fn_params.empty())
-                ? fn_type.fn_params.size() - 1
-                : fn_type.fn_params.size();
+            (fn_type.fn_is_variadic && !fn_type.fn_params().empty())
+                ? fn_type.fn_params().size() - 1
+                : fn_type.fn_params().size();
         // Validar aridad y tipos de los argumentos contra fn_params.
         if (fn_type.fn_is_variadic) {
             if (e->args.size() < fn_fixed)
@@ -17335,43 +17335,43 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                  id->name + "': minimo " +
                                  std::to_string(fn_fixed) + ", recibidos " +
                                  std::to_string(e->args.size()));
-        } else if (e->args.size() != fn_type.fn_params.size()) {
+        } else if (e->args.size() != fn_type.fn_params().size()) {
             diags_.error(
                 e->loc,
                 std::string(
                     "numero de argumentos incorrecto en llamada al closure '") +
                     id->name + "': esperados " +
-                    std::to_string(fn_type.fn_params.size()) + ", recibidos " +
+                    std::to_string(fn_type.fn_params().size()) + ", recibidos " +
                     std::to_string(e->args.size()));
         }
         const size_t n =
             fn_type.fn_is_variadic
                 ? e->args.size()
-                : std::min(e->args.size(), fn_type.fn_params.size());
+                : std::min(e->args.size(), fn_type.fn_params().size());
         /* El que sobra se compara con el tipo del ELEMENTO: el parametro
          * declarado es ya la direccion del array. */
         const Type var_elem =
-            (fn_type.fn_is_variadic && !fn_type.fn_params.empty() &&
-             fn_type.fn_params.back().pointee)
-                ? *fn_type.fn_params.back().pointee
+            (fn_type.fn_is_variadic && !fn_type.fn_params().empty() &&
+             fn_type.fn_params().back().pointee)
+                ? *fn_type.fn_params().back().pointee
                 : Type{};
         /* La direccion y el "viaja por referencia" salen del TIPO, que es lo
          * unico que hay por esta via -- no hay firma --, y de ahi en adelante
          * es la MISMA comprobacion que en una llamada directa: contra lo
          * apuntado, y exigiendo un sitio donde escribir. */
         for (size_t i = 0; i < n; ++i) {
-            const ParamDir d = i < fn_type.fn_param_dirs.size()
-                                   ? fn_type.fn_param_dirs[i]
+            const ParamDir d = i < fn_type.fn_param_dirs().size()
+                                   ? fn_type.fn_param_dirs()[i]
                                    : ParamDir::None;
             const bool by_ref =
                 i < 64 && (fn_type.fn_param_by_ref_mask & (1ull << i)) != 0;
             check_call_arg(e->args[i].get(),
-                           (i >= fn_fixed) ? var_elem : fn_type.fn_params[i], i,
+                           (i >= fn_fixed) ? var_elem : fn_type.fn_params()[i], i,
                            std::string(), d, by_ref);
         }
         /* Y las reglas de prestamo tambien: un `inout` por puntero a funcion
          * es un prestamo exclusivo igual que uno por llamada directa. */
-        check_call_arg_borrows_(e, fn_type.fn_param_dirs, fn_type.fn_params,
+        check_call_arg_borrows_(e, fn_type.fn_param_dirs(), fn_type.fn_params(),
                                 fn_type.fn_param_by_ref_mask, std::string());
         for (size_t i = n; i < e->args.size(); ++i)
             (void)check_expr(e->args[i].get());

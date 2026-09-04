@@ -466,14 +466,14 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
          * se pasa su direccion y cuantos son.  El uno de mas es el entorno, que
          * va delante de todo por la convencion del opcode. */
         if (id->result_type.fn_is_variadic &&
-            !id->result_type.fn_params.empty() &&
-            id->result_type.fn_params.back().pointee) {
-            const size_t fixed = id->result_type.fn_params.size() - 1;
+            !id->result_type.fn_params().empty() &&
+            id->result_type.fn_params().back().pointee) {
+            const size_t fixed = id->result_type.fn_params().size() - 1;
             if (arg_ids.size() >= 1 + fixed)
                 pack_variadic_args(
                     arg_ids, 1 + fixed,
                     ir_type_from_primitive(
-                        id->result_type.fn_params.back().pointee->kind),
+                        id->result_type.fn_params().back().pointee->kind),
                     e->loc.line);
         }
 
@@ -1812,8 +1812,8 @@ bool Lowering::lower_indirect_call_args(const ast::CallExpr *e,
         if (ai < 64 && (fnty.fn_param_by_ref_mask & (1ull << ai)) != 0) {
             av = lower_addr_of_lvalue(a);
         } else if (a && a->kind == ast::NodeKind::StringLitExpr &&
-                   ai < fnty.fn_params.size() &&
-                   fnty.fn_params[ai].kind == PrimitiveKind::STRING) {
+                   ai < fnty.fn_params().size() &&
+                   fnty.fn_params()[ai].kind == PrimitiveKind::STRING) {
             /* Promocion del literal a StringObject segun lo que DECLARA el
              * cfn.  Una llamada directa mira la firma; aqui el tipo dice lo
              * mismo.  Sin esto, un literal en posicion `string` llegaba como
@@ -2554,7 +2554,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
                 // puede ser un `invoke` @Naked SIN register en sus params
                 // (la ABI vive solo en el cfn).  Sin esto el CALL usaria la
                 // ABI estandar y el marshalling seria incorrecto.
-                di.call_abi_regs = e->callee->result_type.fn_param_abi_regs;
+                di.call_abi_regs = e->callee->result_type.fn_param_abi_regs();
                 di.source_line = e->loc.line;
                 emit(current_block_, std::move(di));
                 out = ddst;
@@ -2651,7 +2651,7 @@ bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
     // en la instruccion en compile-time (el codegen coloca cada arg en su
     // registro).  Aunque el valor del puntero cambie en runtime, todas las
     // funciones asignables comparten esta ABI (garantia del type checker).
-    ins.call_abi_regs = e->callee->result_type.fn_param_abi_regs;
+    ins.call_abi_regs = e->callee->result_type.fn_param_abi_regs();
     ins.source_line = e->loc.line;
     emit(current_block_, std::move(ins));
     out = dst;

@@ -505,34 +505,34 @@ struct Type {
     /// libstdc++) que se queda sin alocar nada en heap.  Para llamar a
     /// un function value, el call site recorre esta lista para validar
     /// aridad y tipos en compile time.
-    std::vector<Type> fn_params;
+    /* Los tres viven en un bloque APARTE, reservado solo cuando el tipo es una
+     * funcion.  Son 72 bytes de los 160 que tenia un `Type`, y un `i32` los
+     * pagaba enteros sin usarlos -- construir y destruir tres vectores vacios
+     * en cada copia, y un `Type` se copia constantemente porque el comprobador
+     * de tipos lo devuelve por valor de cada expresion que mira.
+     *
+     * Se leen por accesor CONST a proposito: asi leerlos desde un tipo que no
+     * es funcion no reserva nada, y quien quiera ESCRIBIR tiene que pedir el
+     * bloque explicitamente (@ref fn_mut).  Los catorce sitios que escriben
+     * los senyala el compilador; si el accesor fuera mutable, cualquier
+     * lectura por descuido reservaria un bloque vacio. */
+    struct FnInfo;
+    std::unique_ptr<FnInfo> fn_;
 
-    /// ABI custom por-parametro cuando @c kind == FUNCTION: registro fisico de
-    /// entrada por parametro, alineado con @c fn_params.  Cadena vacia = ABI
-    /// estandar.  Forma parte de la IDENTIDAD del tipo (ver operator==): dos
-    /// @c cfn con abi_regs distintos son tipos DISTINTOS, asi una CALLIND
-    /// conoce la ABI en compile-time desde el tipo del puntero.  Vacio cuando
-    /// ningun parametro tiene ABI custom (caso comun; no aloca heap).
-    std::vector<std::string> fn_param_abi_regs;
-    /// Direccion declarada por parametro (`in`/`out`/`inout`), alineada con
-    /// @c fn_params.  Vacio = ninguno la lleva.
+    /// @return Los tipos de los parametros; vacio si no es una funcion.
+    const std::vector<Type> &fn_params() const;
+    /// @return La ABI por parametro; vacio si no consta.
+    const std::vector<std::string> &fn_param_abi_regs() const;
+    /// @return La direccion declarada por parametro; vacio si no consta.
+    const std::vector<ParamDir> &fn_param_dirs() const;
+    /// @brief El bloque para ESCRIBIR, creandolo si aun no existe.
+    FnInfo &fn_mut();
+    /// @brief Fija los tipos de los parametros.
     ///
-    /// FORMA PARTE DE LA IDENTIDAD DEL TIPO, igual que la ABI de arriba, y por
-    /// la misma razon de fondo: lo que el tipo de un puntero a funcion dice es
-    /// todo lo que quien llama por el va a saber.  Sin esto, al guardar la
-    /// funcion en una variable la marca se BORRABA -- `&escribe` sobre un
-    /// `out i64` salia como `cfn(i64*)` --, y con ella se iban las dos cosas
-    /// que la marca da: el `&` automatico en el sitio de llamada, y las reglas
-    /// de prestamo (dos `inout` al mismo dueno por un puntero no los veia
-    /// nadie).
-    ///
-    /// Lo que NO cambia es COMO VIAJA el valor: un `out T` se convierte a `T*`,
-    /// que es lo que la otra forma ya es.  Por eso dos tipos que solo difieran
-    /// en las marcas tienen la MISMA convencion de llamada, y forzar de uno a
-    /// otro con un cast es renunciar a una comprobacion -- no llamar de otra
-    /// manera.  Esa es justo la diferencia con la ABI de registro, donde el
-    /// tipo si lleva por donde entra cada argumento.
-    std::vector<ParamDir> fn_param_dirs;
+    /// Existe para poder usarlo DENTRO de la clase, donde @ref FnInfo todavia
+    /// esta incompleto y no se le puede nombrar un miembro.
+    void set_fn_params(std::vector<Type> p);
+
     /// Que parametros del tipo viajan POR REFERENCIA (bit i = parametro i).
     ///
     /// Hay que GUARDARLO, no se puede volver a deducir: tras la conversion,
@@ -635,6 +635,16 @@ struct Type {
     bool fn_is_variadic = false;
 
     Type() = default;
+    ~Type();
+    Type(Type &&) noexcept = default;
+    Type &operator=(Type &&) noexcept = default;
+    /* Copiar es COPIAR: el bloque de funcion va detras de un puntero que no se
+     * copia solo, asi que hay que duplicarlo.  Compartirlo seria otra cosa --
+     * dos tipos que se creen distintos y compartan la lista de parametros --,
+     * y ahi cambiar uno cambiaria el otro sin que nadie lo viera. */
+    Type(const Type &o);
+    Type &operator=(const Type &o);
+
     explicit Type(PrimitiveKind k) : kind(k) {}
     Type(PrimitiveKind k, std::string sn)
         : kind(k), struct_name(std::move(sn)) {}
@@ -722,9 +732,9 @@ struct Type {
             // aunque compartan firma (representacion 16B vs 8B).
             if (fn_is_raw != o.fn_is_raw) return false;
             if (fn_is_variadic != o.fn_is_variadic) return false;
-            if (fn_params.size() != o.fn_params.size()) return false;
-            for (size_t i = 0; i < fn_params.size(); ++i) {
-                if (!(fn_params[i] == o.fn_params[i])) return false;
+            if (fn_params().size() != o.fn_params().size()) return false;
+            for (size_t i = 0; i < fn_params().size(); ++i) {
+                if (!(fn_params()[i] == o.fn_params()[i])) return false;
             }
             // La ABI custom por-parametro forma parte de la identidad del tipo:
             // dos cfn con abi_regs distintos son tipos INCOMPATIBLES (asi una
@@ -733,12 +743,12 @@ struct Type {
             // Se comparan posicionalmente, normalizando "vector vacio" == "todo
             // ABI estandar" para que un tipo sin ABI custom (vector vacio)
             // iguale a uno con la lista de "" explicita.
-            for (size_t i = 0; i < fn_params.size(); ++i) {
-                const std::string a = i < fn_param_abi_regs.size()
-                                          ? fn_param_abi_regs[i]
+            for (size_t i = 0; i < fn_params().size(); ++i) {
+                const std::string a = i < fn_param_abi_regs().size()
+                                          ? fn_param_abi_regs()[i]
                                           : std::string();
-                const std::string b = i < o.fn_param_abi_regs.size()
-                                          ? o.fn_param_abi_regs[i]
+                const std::string b = i < o.fn_param_abi_regs().size()
+                                          ? o.fn_param_abi_regs()[i]
                                           : std::string();
                 if (a != b) return false;
             }
@@ -750,11 +760,12 @@ struct Type {
              * Que sean incompatibles no deja el caso sin salida: el cast
              * explicito los convierte, y entonces la renuncia queda ESCRITA en
              * el fuente en vez de ocurrir sola. */
-            for (size_t i = 0; i < fn_params.size(); ++i) {
-                const ParamDir a = i < fn_param_dirs.size() ? fn_param_dirs[i]
-                                                            : ParamDir::None;
-                const ParamDir b = i < o.fn_param_dirs.size()
-                                       ? o.fn_param_dirs[i]
+            for (size_t i = 0; i < fn_params().size(); ++i) {
+                const ParamDir a = i < fn_param_dirs().size()
+                                       ? fn_param_dirs()[i]
+                                       : ParamDir::None;
+                const ParamDir b = i < o.fn_param_dirs().size()
+                                       ? o.fn_param_dirs()[i]
                                        : ParamDir::None;
                 if (a != b) return false;
             }
@@ -801,7 +812,7 @@ struct Type {
         Type t;
         t.kind = PrimitiveKind::FUNCTION;
         t.pointee = std::make_shared<Type>(std::move(ret));
-        t.fn_params = std::move(params);
+        t.set_fn_params(std::move(params));
         return t;
     }
 
@@ -851,6 +862,97 @@ struct Type {
 
     bool operator!=(const Type &o) const noexcept { return !(*this == o); }
 };
+
+/**
+ * @struct Type::FnInfo
+ * @brief Lo que solo tiene un tipo FUNCION.
+ *
+ * Aparte del @ref Type y detras de un puntero: son 72 bytes que un `i32` no
+ * usa, y aun asi pagaba -- tres vectores que construir y destruir en cada
+ * copia.
+ */
+struct Type::FnInfo {
+    /// Tipos de los parametros.  Para llamar a un function value, el sitio de
+    /// llamada recorre esta lista y valida aridad y tipos al compilar.
+    std::vector<Type> params;
+
+    /// ABI custom por-parametro: registro fisico de entrada por parametro,
+    /// alineado con @c params.  Cadena vacia = ABI estandar.  Forma parte de la
+    /// IDENTIDAD del tipo (ver @c Type::operator==): dos @c cfn con abi_regs
+    /// distintos son tipos DISTINTOS, y asi una CALLIND conoce la ABI al
+    /// compilar desde el tipo del puntero.
+    std::vector<std::string> param_abi_regs;
+
+    /// Direccion declarada por parametro (`in`/`out`/`inout`), alineada con
+    /// @c params.  Vacio = ninguno la lleva.
+    ///
+    /// FORMA PARTE DE LA IDENTIDAD DEL TIPO, igual que la ABI de arriba, y por
+    /// la misma razon de fondo: lo que el tipo de un puntero a funcion dice es
+    /// todo lo que quien llama por el va a saber.  Sin esto, al guardar la
+    /// funcion en una variable la marca se BORRABA -- `&escribe` sobre un
+    /// `out i64` salia como `cfn(i64*)` --, y con ella se iban las dos cosas
+    /// que la marca da: el `&` automatico en el sitio de llamada, y las reglas
+    /// de prestamo (dos `inout` al mismo dueno por un puntero no los veia
+    /// nadie).
+    ///
+    /// Lo que NO cambia es COMO VIAJA el valor: un `out T` se convierte a `T*`,
+    /// que es lo que la otra forma ya es.  Por eso dos tipos que solo difieran
+    /// en las marcas tienen la MISMA convencion de llamada, y forzar de uno a
+    /// otro con un cast es renunciar a una comprobacion -- no llamar de otra
+    /// manera.  Esa es justo la diferencia con la ABI de registro, donde el
+    /// tipo si lleva por donde entra cada argumento.
+    std::vector<ParamDir> param_dirs;
+};
+
+/// Los tres, vacios, para cuando el tipo no es una funcion: asi leerlos no
+/// reserva nada y devuelve algo valido en vez de tener que preguntar antes.
+inline const Type::FnInfo &empty_fn_info() {
+    static const Type::FnInfo kVacio;
+    return kVacio;
+}
+
+inline const std::vector<Type> &Type::fn_params() const {
+    return fn_ ? fn_->params : empty_fn_info().params;
+}
+inline const std::vector<std::string> &Type::fn_param_abi_regs() const {
+    return fn_ ? fn_->param_abi_regs : empty_fn_info().param_abi_regs;
+}
+inline const std::vector<ParamDir> &Type::fn_param_dirs() const {
+    return fn_ ? fn_->param_dirs : empty_fn_info().param_dirs;
+}
+inline Type::FnInfo &Type::fn_mut() {
+    if (!fn_) fn_.reset(new FnInfo());
+    return *fn_;
+}
+inline void Type::set_fn_params(std::vector<Type> p) {
+    fn_mut().params = std::move(p);
+}
+
+/* Fuera de linea, y aqui: el destructor de `unique_ptr<FnInfo>` necesita que
+ * FnInfo este COMPLETO, y dentro de `Type` todavia no lo esta. */
+inline Type::~Type() = default;
+
+inline Type::Type(const Type &o)
+    : struct_name(o.struct_name), pointee(o.pointee), pointee2(o.pointee2),
+      is_virtual(o.is_virtual), is_const(o.is_const),
+      is_volatile(o.is_volatile), array_size(o.array_size),
+      fn_param_by_ref_mask(o.fn_param_by_ref_mask),
+      nominal_name(o.nominal_name), deleter_name(o.deleter_name),
+      align_override(o.align_override), kind(o.kind),
+      gc_managed(o.gc_managed), is_valued_enum(o.is_valued_enum),
+      nominal_id(o.nominal_id), is_opaque(o.is_opaque), fn_is_raw(o.fn_is_raw),
+      fn_is_variadic(o.fn_is_variadic) {
+    // Solo hay bloque que duplicar si el otro lo tenia: un tipo que no es una
+    // funcion no reserva nada al copiarse, que es de lo que iba todo esto.
+    if (o.fn_) fn_.reset(new FnInfo(*o.fn_));
+}
+
+inline Type &Type::operator=(const Type &o) {
+    if (this == &o) return *this;
+    Type copia(o);
+    *this = std::move(copia);
+    return *this;
+}
 
 /**
  * @brief Un `out T x` / `inout T x` que viaja POR REFERENCIA.
@@ -1257,19 +1359,19 @@ inline std::string type_to_string(const Type &t) {
         // (que de otro modo se veian identicos: "fn(i64) -> i64" en ambos
         // lados).
         std::string s = t.fn_is_raw ? "cfn(" : "fn(";
-        for (size_t i = 0; i < t.fn_params.size(); ++i) {
+        for (size_t i = 0; i < t.fn_params().size(); ++i) {
             if (i) s += ", ";
             // Y por lo mismo la direccion: sin ella, el error de asignar un
             // `cfn(out i64)` a un `cfn(i64*)` enseñaba el MISMO texto en los
             // dos lados y no se entendia que estaba mal.
-            if (i < t.fn_param_dirs.size() &&
-                t.fn_param_dirs[i] != ParamDir::None) {
-                s += param_dir_name(t.fn_param_dirs[i]);
+            if (i < t.fn_param_dirs().size() &&
+                t.fn_param_dirs()[i] != ParamDir::None) {
+                s += param_dir_name(t.fn_param_dirs()[i]);
                 s += ' ';
             }
-            if (i < t.fn_param_abi_regs.size() &&
-                !t.fn_param_abi_regs[i].empty())
-                s += "register(\"" + t.fn_param_abi_regs[i] + "\") ";
+            if (i < t.fn_param_abi_regs().size() &&
+                !t.fn_param_abi_regs()[i].empty())
+                s += "register(\"" + t.fn_param_abi_regs()[i] + "\") ";
             // Un parametro por referencia se enseña como se ESCRIBIO (`out
             // i64`), deshaciendo la conversion a puntero.  Enseñarlo como
             // viaja daria el mismo texto que un `out i64*` escrito a mano, que
@@ -1277,21 +1379,21 @@ inline std::string type_to_string(const Type &t) {
             // son incompatibles.
             const bool by_ref =
                 i < 64 && (t.fn_param_by_ref_mask & (1ull << i)) != 0;
-            if (by_ref && t.fn_params[i].pointee) {
-                s += type_to_string(*t.fn_params[i].pointee);
-            } else if (i < t.fn_param_dirs.size() &&
-                       t.fn_param_dirs[i] == ParamDir::In &&
-                       t.fn_params[i].kind == PrimitiveKind::PTR &&
-                       t.fn_params[i].pointee &&
-                       t.fn_params[i].pointee->is_const) {
+            if (by_ref && t.fn_params()[i].pointee) {
+                s += type_to_string(*t.fn_params()[i].pointee);
+            } else if (i < t.fn_param_dirs().size() &&
+                       t.fn_param_dirs()[i] == ParamDir::In &&
+                       t.fn_params()[i].kind == PrimitiveKind::PTR &&
+                       t.fn_params()[i].pointee &&
+                       t.fn_params()[i].pointee->is_const) {
                 // `in` SOBRE UN PUNTERO ES ese const, asi que enseñar los dos
                 // (`in const i64*`) es enseñar el mecanismo dos veces.  Se
                 // imprime como se escribio.
-                Type sin_const = *t.fn_params[i].pointee;
+                Type sin_const = *t.fn_params()[i].pointee;
                 sin_const.is_const = false;
                 s += type_to_string(sin_const) + "*";
             } else {
-                s += type_to_string(t.fn_params[i]);
+                s += type_to_string(t.fn_params()[i]);
             }
         }
         s += ") -> ";
