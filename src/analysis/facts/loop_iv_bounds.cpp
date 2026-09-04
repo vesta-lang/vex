@@ -15,8 +15,11 @@
 
 #include "analysis/facts/loop_iv.h"
 #include "analysis/facts/loop_structure.h"
+#include "util/env_flags.h" // para poder MIRAR lo que este analisis no supo
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 
 namespace analysis {
 
@@ -26,6 +29,37 @@ using ir::IrOp;
 using ir::IrValueId;
 
 namespace {
+
+/**
+ * @brief Cuanto se deja sin acotar, y por que.  Se cuenta y NO se calla.
+ *
+ * Este analisis renuncia cuando el arranque o el limite del bucle no es una
+ * constante ESCRITA.  Para despejar esos casos harian falta los rangos, y
+ * pedirselos cerraria el circulo -- son ellos los que reciben esto --, asi que
+ * el corte se paga renunciando.
+ *
+ * Lo que NO puede pasar es que se pague en silencio: cada variable que se
+ * queda sin cota es una optimizacion que no se hace, y sin este recuento no
+ * habia forma de saber si eran cuatro o la mitad.  Los contadores existian ya
+ * en @c LoopIvBounds; lo que faltaba era que alguien los mirase.
+ */
+void report_giveups(const LoopIvBounds &out) {
+    static const bool on = util::flag_on(util::FlagId::RangeStats);
+    if (!on) return;
+    static std::atomic<long long> acotadas{0}, sin_forma{0}, no_contados{0};
+    acotadas += static_cast<long long>(out.bounds.size());
+    sin_forma += out.no_shape;
+    no_contados += out.not_counted;
+    static std::atomic<long long> n{0};
+    if ((++n % 100) != 0) return;
+    const long long a = acotadas.load(), s = sin_forma.load(),
+                    c = no_contados.load();
+    const long long tot = a + s;
+    std::fprintf(stderr,
+                 "[cotas-iv] acotadas=%lld | sin forma que despejar=%lld"
+                 " (%.1f%% de los contados) | no son bucles contados=%lld\n",
+                 a, s, tot ? 100.0 * s / tot : 0.0, c);
+}
 
 /// El valor CONSTANTE de @p v, si lo define un `CONST`.  Solo lo ESCRITO: si
 /// hubiera que preguntarle a los rangos, esto dependeria de ellos y ellos de
@@ -173,6 +207,7 @@ LoopIvBounds compute_loop_iv_bounds(const ir::IrFunction &fn,
     std::sort(
         out.bounds.begin(), out.bounds.end(),
         [](const IvBound &a, const IvBound &b) { return a.value < b.value; });
+    report_giveups(out);
     return out;
 }
 

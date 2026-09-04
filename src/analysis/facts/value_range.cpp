@@ -1612,12 +1612,20 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
      * su lista vacia pasa el bucle sin mirar nada.  Es el guardia lo que
      * cambia, no lo que se leyo detras de el. */
     if (d.had_summaries != (sum != nullptr)) return false;
-    /* Y lo mismo con las cotas de induccion.  QUE dicen no hace falta releerlo
-     * -- salen de la funcion, y la huella de arriba ya cubre la funcion --,
-     * pero HABERLAS MIRADO si: un resultado calculado a ciegas es mas flojo, y
-     * servirlo a quien si las trae es dar el peor de los dos en silencio.  Es
-     * el mismo fallo que ya mordio con los resumenes, y la misma guarda. */
-    if (d.had_iv_bounds != (ivb != nullptr && !ivb->empty())) return false;
+    /* Las cotas de induccion NO se comparan, y no por descuido.
+     *
+     * El guardia existia para no servirle a quien trae cotas un resultado
+     * calculado a ciegas, que seria dar el peor de los dos en silencio.  Ya no
+     * hay resultados a ciegas: si el llamante no las trae, las saca el propio
+     * motor (ver @c calcular_rangos), y salen igual que las sacaria el
+     * llamante -- de la forma del bucle y de constantes escritas, que la
+     * huella de la funcion ya cubre --.
+     *
+     * Mantenerlo ahora PARTIRIA la cache en vez de protegerla: quien pregunta
+     * sin cotas las obtiene igualmente, asi que su entrada tendria
+     * `had_iv_bounds` puesto y su consulta lo compararia con `false`, y la
+     * misma funcion con el mismo codigo se analizaria una vez por cada forma
+     * de preguntar. */
     // Se RELEE cada resumen que se consulto, contra el estado de ahora.
     for (const auto &leida : d.resumenes) {
         const FnRangeSummary *s = sum ? sum->buscar(leida.first) : nullptr;
@@ -1642,6 +1650,35 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
                                   const IrFacts &facts, const RangeOptions &op,
                                   const RangeSummaries *sum,
                                   const LoopIvBounds *ivb) {
+    /* Si quien pregunta no trae las cotas de induccion, se sacan AQUI.
+     *
+     * Antes dependia del llamante, y de los ocho consumidores solo UNO las
+     * pasaba.  Los otros siete recibian un analisis mas flojo -- con la
+     * variable de un bucle valiendo todo su tipo -- sin que nada lo dijera:
+     * el mismo hecho tenia dos calidades segun la puerta por la que se
+     * entrara, que es justo lo que el ASA no puede permitirse.  Y encima
+     * costaba el doble, porque las dos calidades no comparten entrada de
+     * cache: la misma funcion con el mismo codigo se analizaba dos veces.
+     *
+     * Producirlas aqui es lo correcto y no una comodidad: quien SABE que los
+     * rangos necesitan las cotas es el productor de rangos, no cada uno de sus
+     * consumidores.  Y se calculan solo cuando de verdad hay que analizar:
+     * esto corre tras fallar la cache.
+     *
+     * Llamarlas desde aqui es seguro, pero NO porque no dependan de los
+     * rangos: dependen.  `compute_loop_iv_bounds` querria preguntarles -- un
+     * arranque o un limite que no sea un `CONST` escrito no se despeja sin
+     * ellos --, y lo que hace es NEGARSE a preguntar y RENUNCIAR en esos
+     * casos, contandolo en `no_shape`.  El ciclo esta cortado a mano y se
+     * paga con precision.  Quien vaya a "mejorar" las cotas dandoles rangos
+     * cierra el circulo: son ellas las que alimentan a los rangos. */
+    LoopFacts loops_propios;
+    LoopIvBounds ivb_propias;
+    if (ivb == nullptr) {
+        loops_propios = compute_loop_facts(fn);
+        ivb_propias = compute_loop_iv_bounds(fn, facts, loops_propios);
+        ivb = &ivb_propias;
+    }
     const uint64_t t = util::reloj::ahora();
     RangeFacts r = calcular_rangos_impl(fn, facts, op, sum, ivb);
     g_ns_motor += util::reloj::a_ns(util::reloj::ahora() - t);
