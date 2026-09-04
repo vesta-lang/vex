@@ -1052,6 +1052,16 @@ class Spinner:
 # compilador hubiera fallado -- mandando a mirar el sitio equivocado.
 NO_ARRANCA = -4.0
 
+# Los otros dos estados, con nombre.  Se comparan por IGUALDAD, nunca con `<=`:
+# a la tabla llegan tiempos de CoDIGO (medido menos el arranque del lenguaje), y
+# un bench mas rapido que ese arranque da un numero NEGATIVO de verdad.  Con
+# `t <= -2` esos caian en "NO COMPILA" -- `array_sum` bajo el JIT media 41 ms
+# con un suelo de 50 y salia como si el compilador hubiera fallado, cuando lo
+# que pasaba es que iba demasiado rapido para medirse.  Y de paso tapaba el caso
+# real: un `NO COMPILA` de verdad no se distinguia de uno inventado.
+NO_COMPILA = -2.0
+FALLO_EJECUCION = -1.0
+
 # Por que no arranco el ultimo intento.  Lo pone `run_timed` y lo lee
 # `una_medida`, que es la que sabe si el caso se pudo recuperar: avisar en el
 # sitio donde se detecta daria un "no se pudo lanzar" de algo que se lanza
@@ -2412,9 +2422,9 @@ def print_results_table(rows: list[dict], tc: dict[str, Toolchain],
                 # de abajo y salia `NO COMPILA`, que manda a mirar el
                 # compilador cuando el problema esta en el programa.
                 cols.append(f"{C.RED}{'MURIO':>14}{C.RESET}")
-            elif t <= -2 and ln not in dudosas:
+            elif t == NO_COMPILA and ln not in dudosas:
                 cols.append(f"{C.RED}{'NO COMPILA':>14}{C.RESET}")
-            elif t < 0 and ln not in dudosas:
+            elif t == FALLO_EJECUCION and ln not in dudosas:
                 cols.append(f"{C.RED}{'TIMEOUT':>14}{C.RESET}")
             elif ln in dudosas:
                 # Se muestra el numero -- es lo que se midio -- con la marca de
@@ -2844,7 +2854,7 @@ def generate_html_report(rows: list[dict], active_langs: list[str],
                 estado = ("SIN TURNO" if t == SIN_TURNO else
                           "NO ARRANCA" if t == NO_ARRANCA else
                           "MURIO" if t == MURIO else
-                          "NO COMPILA" if t <= -2 else "TIMEOUT")
+                          "NO COMPILA" if t == NO_COMPILA else "TIMEOUT")
                 cols.append('<td class="timeout">%s</td>' % estado)
             else:
                 cls = ' class="winner"' if t == min_time else ""
@@ -3455,15 +3465,21 @@ def main() -> int:
                 continue
             cmd, cwd, factor = compiled
 
-            # Env: forzar el threshold explicito por modo.  El DEFAULT del vm
-            # ahora es JIT (threshold=1500), asi que vx_interp debe forzar
-            # UINT32_MAX para medir interp puro (sin esto la columna interp
-            # seria JIT-para-metodos-hot y la comparacion no tendria sentido).
+            # El MODO se pide por la linea de ordenes, no por variable de
+            # entorno.  `VESTA_JIT_THRESHOLD` no se aplica -- se pida el valor
+            # que se pida, `--jit-stats` sigue diciendo `threshold=1500` --,
+            # asi que las dos columnas median LO MISMO: `tight_loop` daba 0
+            # instrucciones y 9,5 ms en la columna del interprete cuando el
+            # interprete de verdad ejecuta 250 millones y tarda 812 ms, y de
+            # ahi salian "aceleraciones" del JIT por debajo de 1.
+            #
+            #   -m vm  -> umbral UINT32_MAX, interprete puro
+            #   -m jit -> umbral 1, compila en la primera llamada
             env = os.environ.copy()
             if ln == "vx_jit":
-                env["VESTA_JIT_THRESHOLD"] = "1"
+                cmd = cmd + ["-m", "jit"]
             elif ln == "vx_interp":
-                env["VESTA_JIT_THRESHOLD"] = "4294967295"
+                cmd = cmd + ["-m", "vm"]
 
             # Los no interpretados se miden mas veces (rapidos + ruidosos); los
             # interpretados pocas (lentos).  --runs / --runs-slow lo overridean.
@@ -3712,11 +3728,14 @@ def main() -> int:
                 text, color = "NO ARRANCA", C.RED
             elif v == MURIO:
                 text, color = "MURIO", C.RED
-            elif v <= -2:
+            elif v == NO_COMPILA:
                 text, color = "NO COMPILA", C.RED
-            elif v < 0:
+            elif v == FALLO_EJECUCION:
                 text, color = "TIMEOUT", C.RED
             else:
+                # Aqui entra tambien un negativo REAL: el bench fue mas rapido
+                # que el arranque del lenguaje.  Se ensena tal cual -- es lo que
+                # se midio -- y la tabla final ya lo marca con `~`.
                 text, color = f"{ln}={v:.0f}ms", tc[ln].color
             # Pad-ear el texto visible a ancho fijo y luego aplicar color.
             line += f"  {color}{text.ljust(col_w)}{C.RESET}"
