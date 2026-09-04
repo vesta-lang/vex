@@ -390,9 +390,21 @@ struct TypeNode : Node {
     bool is_nonnull = false;
     /// const-correctness C-style POR NIVEL: `const T` marca el nodo del tipo
     /// base; `T *const` marca el PointerTypeNode de ese nivel.  Se propaga a
-    /// @c Type::is_const en type_from_node.  (volatile se parsea pero se
-    /// ignora: Vesta no tiene semantica volatile.)
+    /// @c Type::is_const en type_from_node.
     bool is_const = false;
+    /// `volatile`, POR NIVEL igual que @c is_const y en los mismos dos sitios
+    /// del parser (`volatile T` y `T *volatile`).
+    ///
+    /// Dice que la region es OBSERVABLE desde fuera del programa -- hardware
+    /// mapeado en memoria --, o sea que cada acceso es un evento y no se puede
+    /// reordenar, fundir ni quitar.  Se propaga a @c Type::is_volatile y de ahi
+    /// a la promesa @c Observable del contrato del parametro.
+    ///
+    /// Antes se parseaba y se TIRABA, asi que el programador podia escribirlo y
+    /// no significaba nada.  Hoy llega al contrato; que un consumidor lo
+    /// respete al optimizar es trabajo aparte, y hasta que lo haga el hecho
+    /// sirve para verlo (`--asa`) en vez de para que el compilador se calle.
+    bool is_volatile = false;
     explicit TypeNode(NodeKind k) : Node(k) {}
 };
 
@@ -551,13 +563,16 @@ struct Expr : Node {
     ///   - identity_borrow(p): si la firma tiene 1 input borrow, el
     ///     resultado hereda el source del arg
     ///   - reborrow lend(b): borrow_owner_source = b's source
-    std::string borrow_owner_source;
+    /// Compartido: es un NOMBRE de variable, y lo lleva cada expresion del
+    /// programa aunque casi ninguna sea un prestamo.  Ver @ref vx::PooledName.
+    PooledName borrow_owner_source;
 
     /// Borrow checker (F3 ext - suspend semantics): si esta Expr es
     /// un lend()/lend_mut() cuya fuente es un borrow_mut, aqui se
     /// guarda el nombre de la fuente para que @c check_var_decl
     /// pueda llamar @c mark_as_reborrow tras registrar el binding.
-    std::string borrow_reborrow_source_name;
+    /// Compartido, por lo mismo que @c borrow_owner_source.
+    PooledName borrow_reborrow_source_name;
     /// Flag asociado: true si la fuente era borrow_mut (necesita
     /// restore al drop).  False si era borrow shared o owner directo.
     bool borrow_reborrow_source_is_mut = false;
@@ -569,8 +584,38 @@ struct Expr : Node {
     /// al pop_comptime_scope() del type checker antes del lowering.
     bool comptime_const_resolved = false;
     bool comptime_const_is_str = false;
-    int64_t comptime_const_int = 0;
-    std::string comptime_const_str;
+
+    /**
+     * @brief El VALOR resuelto al compilar, cuando lo hay.
+     *
+     * Detras de un puntero porque son 40 bytes -- un entero y una cadena --
+     * que llevaba CADA expresion del programa, y solo los usa la minoria que
+     * resuelve a una constante de compilacion.  Construir y destruir esa
+     * cadena en cada nodo era el precio de tenerla a mano en unos pocos.
+     *
+     * A diferencia de un nombre, esto es un valor ARBITRARIO del usuario, asi
+     * que no va a un pozo: un pozo no se vacia nunca, y ahi acabarian todas
+     * las cadenas del programa.
+     *
+     * @c nullptr = no hay valor; lo dice tambien @c comptime_const_resolved,
+     * que se queda como bandera porque cabe en el relleno y se consulta antes.
+     */
+    struct ComptimeConst {
+        int64_t i = 0;    ///< el valor, si no es cadena
+        std::string s;    ///< el valor, si @c comptime_const_is_str
+    };
+    std::unique_ptr<ComptimeConst> comptime_const;
+
+    /// @return El valor resuelto, o el vacio si no lo hay.
+    const ComptimeConst &comptime_value() const {
+        static const ComptimeConst kNada;
+        return comptime_const ? *comptime_const : kNada;
+    }
+    /// @brief El valor para ESCRIBIRLO, creandolo si aun no existe.
+    ComptimeConst &comptime_mut() {
+        if (!comptime_const) comptime_const.reset(new ComptimeConst());
+        return *comptime_const;
+    }
 
     explicit Expr(NodeKind k) : Node(k) {}
 };

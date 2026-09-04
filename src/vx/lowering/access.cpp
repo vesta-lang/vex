@@ -592,8 +592,8 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
         if (e->comptime_const_is_str) {
             /* Construir StringObject inline desde los bytes del
              * comptime string -- mismo patron que typename<T>(). */
-            std::vector<uint8_t> bytes(e->comptime_const_str.begin(),
-                                       e->comptime_const_str.end());
+            std::vector<uint8_t> bytes(e->comptime_value().s.begin(),
+                                       e->comptime_value().s.end());
             const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
             // v4: propagar atributos (@align/@hot/@cold/@section)
             // al static_data_meta del idx recien interno.  Lookup
@@ -619,14 +619,14 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             ir::IrValueId v_addr = emit_str_lit_addr(idx, e->loc.line);
             ir::IrValueId v_len =
                 emit_const(ir::IrType::I64,
-                           static_cast<uint64_t>(e->comptime_const_str.size()),
+                           static_cast<uint64_t>(e->comptime_value().s.size()),
                            e->loc.line);
             ir::IrValueId v_str =
                 emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
             return v_str;
         }
         ir::IrType t = ir_type_from_primitive(e->result_type.kind);
-        return emit_const(t, static_cast<uint64_t>(e->comptime_const_int),
+        return emit_const(t, static_cast<uint64_t>(e->comptime_value().i),
                           e->loc.line);
     }
 
@@ -906,18 +906,18 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     // que un comptime const desnudo -- cero overhead runtime.
     if (e->comptime_const_resolved) {
         if (e->comptime_const_is_str) {
-            std::vector<uint8_t> bytes(e->comptime_const_str.begin(),
-                                       e->comptime_const_str.end());
+            std::vector<uint8_t> bytes(e->comptime_value().s.begin(),
+                                       e->comptime_value().s.end());
             const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
             ir::IrValueId v_addr = emit_str_lit_addr(idx, e->loc.line);
             ir::IrValueId v_len =
                 emit_const(ir::IrType::I64,
-                           static_cast<uint64_t>(e->comptime_const_str.size()),
+                           static_cast<uint64_t>(e->comptime_value().s.size()),
                            e->loc.line);
             return emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
         }
         ir::IrType t = ir_type_from_primitive(e->result_type.kind);
-        return emit_const(t, static_cast<uint64_t>(e->comptime_const_int),
+        return emit_const(t, static_cast<uint64_t>(e->comptime_value().i),
                           e->loc.line);
     }
     // ADTs: variante sin payload `Color.Red` (sin parens).  El

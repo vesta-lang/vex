@@ -10159,9 +10159,9 @@ Type TypeChecker::check_ident(ast::IdentExpr *e) {
                 e->comptime_const_resolved = true;
                 if (it->second.is_str) {
                     e->comptime_const_is_str = true;
-                    e->comptime_const_str = it->second.str_value;
+                    e->comptime_mut().s =it->second.str_value;
                 } else {
-                    e->comptime_const_int = it->second.value;
+                    e->comptime_mut().i =it->second.value;
                 }
                 e->result_type = it->second.type;
                 return e->result_type;
@@ -10173,9 +10173,9 @@ Type TypeChecker::check_ident(ast::IdentExpr *e) {
             e->comptime_const_resolved = true;
             if (it->second.is_str) {
                 e->comptime_const_is_str = true;
-                e->comptime_const_str = it->second.str_value;
+                e->comptime_mut().s =it->second.str_value;
             } else {
-                e->comptime_const_int = it->second.value;
+                e->comptime_mut().i =it->second.value;
             }
             e->result_type = it->second.type;
             return e->result_type;
@@ -10364,9 +10364,9 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                             e->comptime_const_resolved = true;
                             if (itcc->second.is_str) {
                                 e->comptime_const_is_str = true;
-                                e->comptime_const_str = itcc->second.str_value;
+                                e->comptime_mut().s =itcc->second.str_value;
                             } else {
-                                e->comptime_const_int = itcc->second.value;
+                                e->comptime_mut().i =itcc->second.value;
                             }
                             e->result_type = itcc->second.type;
                             return e->result_type;
@@ -10491,9 +10491,9 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                             e->comptime_const_resolved = true;
                             if (itcc->second.is_str) {
                                 e->comptime_const_is_str = true;
-                                e->comptime_const_str = itcc->second.str_value;
+                                e->comptime_mut().s =itcc->second.str_value;
                             } else {
-                                e->comptime_const_int = itcc->second.value;
+                                e->comptime_mut().i =itcc->second.value;
                             }
                             e->result_type = itcc->second.type;
                             return e->result_type;
