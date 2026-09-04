@@ -1609,7 +1609,8 @@ void Lowering::collect_hook_providers() {
             // Lo que la tabla ofrece pero el tejido todavia no sabe rellenar
             // se DICE aqui, una sola vez.  Callarlo seria pasar un cero que
             // parece un dato: el gancho mediria y el resultado seria mentira.
-            if (pd->name != "fn_id" && pd->name != "ret_value") {
+            if (pd->name != "fn_id" && pd->name != "ret_value" &&
+                pd->name != "call_site") {
                 diags_.diag(fd->loc, DiagLevel::WARN, "VXW930",
                             {pd->name});
             }
@@ -1732,6 +1733,17 @@ void Lowering::emit_hook_calls(HookPoint point, const std::string &fn_name,
                 args.push_back(v_ret != ir::IR_NO_VALUE
                                    ? v_ret
                                    : emit_const(ir::IrType::I64, 0, line));
+            } else if (name == "call_site") {
+                // Una instruccion, y solo si el gancho lo pide: la direccion
+                // ya esta en la pila porque la puso la llamada.
+                ir::IrInstr ra{};
+                ra.op = ir::IrOp::RETURN_ADDR;
+                ra.type = ir::IrType::I64;
+                ra.dst = fn_->new_value(ir::IrType::I64);
+                ra.source_line = line;
+                const ir::IrValueId v_ra = ra.dst;
+                emit(current_block_, std::move(ra));
+                args.push_back(v_ra);
             } else {
                 // `call_site` y `depth` necesitan apoyo que todavia no existe
                 // (la direccion de retorno y un contador de anidamiento).  El

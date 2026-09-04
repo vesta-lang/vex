@@ -108,6 +108,12 @@ inline constexpr HookFieldInfo kHookFields[] = {
      hook_mask(HookPoint::Enter) | hook_mask(HookPoint::Exit) |
          hook_mask(HookPoint::Unwind),
      "identificador de la funcion instrumentada"},
+    /* La direccion es la del espacio donde se EJECUTA, y eso no es un defecto:
+     * interpretado es una direccion de la maquina virtual y compilado una del
+     * proceso, porque el codigo esta en sitios distintos.  Sirve para comparar
+     * e identificar sitios de llamada -- eso si coincide entre modos --, no
+     * para imprimirla esperando el mismo numero.  Es la misma distincion que
+     * el volcado del intermedio marca con `@host`. */
     {"call_site", "u64",
      hook_mask(HookPoint::Enter) | hook_mask(HookPoint::Exit),
      "direccion de retorno: QUIEN llamo"},

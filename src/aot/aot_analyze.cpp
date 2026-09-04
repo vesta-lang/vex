@@ -200,6 +200,11 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     // -- jump table densa (match/switch sobre enum): el selector HOST_LEAF la
     //    baja a una tabla SELF-RELATIVE (PIC-safe, sin reloc) + dispatch nativo
     //    (lea+movsxd+add+jmp).  PURE_NATIVE. --
+    // -- a donde volvera la funcion: la dejo ahi la propia instruccion `call`,
+    //    y el prologo (`push rbp; mov rbp, rsp`) la deja en [rbp+8].  Un MOV.
+    //    No pide runtime NI mantener ninguna cadena de marcos, asi que vale
+    //    igual en un binario sin libc.  PURE_NATIVE. --
+    case IrOp::RETURN_ADDR:
     case IrOp::SWITCH_DENSE: return AotOpClass::PURE_NATIVE;
 
     // -- dependencias de libc que el COMPILADOR sintetiza por

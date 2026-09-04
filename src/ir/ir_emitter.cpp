@@ -5324,6 +5324,29 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
 
     // --- Intrinsics VM ---
+    case IrOp::RETURN_ADDR:
+        if (ins.dst != IR_NO_VALUE) {
+            /* La direccion de retorno esta en la PILA, no en ninguna cadena de
+             * marcos: `exec_instr_callvm` la empuja ahi antes de saltar, igual
+             * que hace `call` en x86.  Por eso se lee en UNA instruccion y no
+             * cuesta nada mantenerla -- el dato ya esta puesto.
+             *
+             * Donde exactamente depende de si la funcion reservo marco.  Con
+             * marco, `enter` hace `push rbp; mov rbp, rsp`, asi que la
+             * direccion queda en [rbp+8] -- el MISMO sitio que en el codigo
+             * nativo.  Sin marco no hay prologo (una funcion sin locales
+             * arranca directa en su cuerpo), y sigue en la cima: [rsp].
+             *
+             * El ctrlword empaqueta base en los bits [4:0] y el ancho en
+             * [10:8]: rbp es 16 y rsp 17, y el codigo de ancho 3 son ocho
+             * bytes.  De ahi 784 y 785. */
+            const unsigned ctrl = ctx.has_frame ? 784u : 785u;
+            const unsigned disp = ctx.has_frame ? 8u : 0u;
+            ctx.out << "    mld " << ctx.dst_of(ins.dst) << ", r0, " << ctrl
+                    << ", " << disp << "\n";
+            ctx.store_spilled(ins.dst);
+        }
+        break;
     case IrOp::GETPROC:
         if (ins.dst != IR_NO_VALUE) {
             ctx.out.emit(emmit::Mnemonic::GETPROC, ctx.dst_of(ins.dst));

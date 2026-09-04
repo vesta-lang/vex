@@ -6908,6 +6908,26 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            case ir::IrOp::RETURN_ADDR: {
+                /* %dst = a donde volvera esta funcion.  El prologo hace
+                 * `push rbp; mov rbp, rsp`, asi que la direccion que dejo la
+                 * instruccion `call` queda justo encima del rbp guardado: en
+                 * [rbp+8].  Una instruccion, y no hay NADA que mantener --
+                 * el dato ya esta ahi porque la llamada lo puso.
+                 *
+                 * Que haya puntero de marco no se supone, se deduce: las dos
+                 * formas de quedarse sin el -- hoja sin marco y marco por rsp
+                 * (fpo) -- exigen las DOS que la funcion no llame a nadie
+                 * (`!has_calls`, en regalloc_rewrite).  Y quien pide esto es
+                 * un gancho, que es precisamente una llamada dentro de la
+                 * funcion.  Pedir la direccion de retorno implica, por tanto,
+                 * tener rbp apuntando a la pila. */
+                flush_pending();
+                if (in.dst == ir::IrValueId(ir::IR_NO_VALUE)) break;
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, vr(in.dst), MOperand::make_mem(MReg::RBP, 8)));
+                break;
+            }
             case ir::IrOp::GETPROC: {
                 /* %dst = ProcessVM* del proceso actual.  En VM_ABI el
                  * proc esta en RBX (reservado, preservado por el

@@ -38,6 +38,13 @@ void al_entrar(u32 fn_id) {
 	println("-> entra ${fn_id}");
 }
 
+// `call_site` es la direccion a la que volvera la funcion, o sea QUIEN la
+// llamo.  No cuesta mantenerla: la dejo ahi la propia llamada, y se lee en una
+// instruccion.  Es la direccion del espacio donde se EJECUTA -- de la maquina
+// virtual al interpretar, del proceso al compilar --, asi que sirve para
+// distinguir sitios de llamada, no para imprimirla esperando el mismo numero
+// en los tres modos.  Aqui no se pide, para que la traza sea reproducible.
+
 // En `exit` hay ademas `ret_value`, que en `enter` todavia no existe: pedirlo
 // alli es un error de compilacion con la lista de lo que si hay.
 @Hook(exit)
