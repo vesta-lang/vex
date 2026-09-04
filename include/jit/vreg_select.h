@@ -181,6 +181,14 @@ struct VregEntries {
     uint64_t vm_write_u16 = 0; ///< vrt_vm_write_u16(proc, vaddr, val)
     uint64_t vm_write_u32 = 0; ///< vrt_vm_write_u32(proc, vaddr, val)
     uint64_t vm_write_u64 = 0; ///< vrt_vm_write_u64(proc, vaddr, val)
+    /* Y las de BLOQUE sobre la memoria de la maquina.  Faltaban, y lo que
+     * pasaba no era que el codigo compilado fuera mas lento: es que rellenaba
+     * o copiaba en OTRO SITIO, porque se emitia la variante del ANFITRION
+     * sobre una direccion virtual sin mirar de que memoria era.  0 = no
+     * disponible -> el selector se RINDE en vez de emitir la del anfitrion,
+     * que es lo que hacia. */
+    uint64_t vm_memset = 0; ///< vrt_vm_memset(proc, vaddr, byte, len)
+    uint64_t vm_memcpy = 0; ///< vrt_vm_memcpy(proc, dst, src, len)
 };
 
 /**

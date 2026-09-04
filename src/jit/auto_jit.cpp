@@ -343,6 +343,10 @@ VregEntries make_vreg_entries() {
             reinterpret_cast<uint64_t>(g_runtime_entries->vm_write_u32);
         e.vm_write_u64 =
             reinterpret_cast<uint64_t>(g_runtime_entries->vm_write_u64);
+        e.vm_memset =
+            reinterpret_cast<uint64_t>(g_runtime_entries->vm_memset);
+        e.vm_memcpy =
+            reinterpret_cast<uint64_t>(g_runtime_entries->vm_memcpy);
     }
     return e;
 }
@@ -406,7 +410,8 @@ uint64_t cb_preserving_get_proc() {
             b.push_back((v >> (i * 8)) & 0xFF);
     };
     /* Prologo comun: alinear rsp a 16 via rbp (agnostico a la alineacion de
-     * entrada, que depende del nº de callee-saved del frame del callback). */
+     * entrada, que depende de cuantos callee-saved tenga el frame del
+     * callback). */
     const uint8_t pro[] = {
         0x55,                   /* push rbp */
         0x48, 0x89, 0xE5,       /* mov rbp, rsp */

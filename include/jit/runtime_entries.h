@@ -131,6 +131,14 @@ struct RuntimeEntries {
     void (*vm_write_u32)(vrt_proc *, uint64_t, uint32_t) = nullptr;
     void (*vm_write_u16)(vrt_proc *, uint64_t, uint16_t) = nullptr;
     void (*vm_write_u8)(vrt_proc *, uint64_t, uint8_t) = nullptr;
+    /* Y las de BLOQUE sobre la memoria de la maquina.  Faltaban, y lo que
+     * pasaba no era que el codigo compilado fuera mas lento: es que rellenaba
+     * o copiaba en OTRO SITIO, porque se emitia la variante del ANFITRION
+     * sobre una direccion virtual sin mirar de que memoria era.  Una direccion
+     * virtual no es un puntero del proceso -- hay traduccion y paginas por
+     * medio --, asi que no da un error, da otro resultado. */
+    void (*vm_memset)(vrt_proc *, uint64_t, uint64_t, uint64_t) = nullptr;
+    void (*vm_memcpy)(vrt_proc *, uint64_t, uint64_t, uint64_t) = nullptr;
     /*  D.jit-mem-model FULL: translate VM-addr/host_ptr -> host_ptr. */
     uint8_t *(*vm_translate)(vrt_proc *, uint64_t) = nullptr;
 

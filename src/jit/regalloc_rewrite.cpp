@@ -111,7 +111,7 @@ struct Lowerer {
     const codegen::AllocationResult
         &ar; ///< frame + timeline (lo que consume el Rewrite)
     AllocationResolver
-        resolver; ///< "¿donde vive un vreg?" (delega en el timeline)
+        resolver; ///< "donde vive un vreg?" (delega en el timeline)
     const TargetRegInfo &tri;
     bool vm_abi = false;   ///< VM_ABI (salva RBX=ProcessVM*) vs host leaf
     bool no_frame = false; ///< hoja frameless: sin push/mov rbp ni sub rsp
@@ -540,7 +540,7 @@ struct Lowerer {
      * @c ValueLocation -- @c resolver.resolve_def(vid).is_memory() /
      * .stack_slot(), o
      * @c resolver.resolve_at(v, pos) para los GC roots vivos en un CALL.  Asi
-     * el Rewrite habla del modelo TEMPORAL ("¿donde vive este valor en este
+     * el Rewrite habla del modelo TEMPORAL ("donde vive este valor en este
      * momento?"), no de spills. */
 
     /** @brief True si @p o es un valor de coma flotante (vreg de clase FP o
@@ -1728,26 +1728,103 @@ struct Lowerer {
      * @param out Donde se acumula lo emitido.
      * @return true si la instruccion era suya y ya esta tratada.
      */
+    /**
+     * @brief Construye el operando de memoria de un acceso, con lo que el
+     *        selector fusiono dentro: base, desplazamiento, indice y paso.
+     *
+     * Es el UNICO sitio que sabe leer el hueco libre de un acceso, y por eso
+     * existe.  El criterio estuvo escrito CUATRO veces -- carga y almacen, por
+     * entero y por flotante -- y las dos copias de la rama flotante se
+     * quedaron con la mitad: leian el desplazamiento e ignoraban el indice.
+     * Eso no da un error de compilacion ni revienta: escribe en `[base]` en
+     * vez de en `[base+indice*paso]`, o sea SIEMPRE en el elemento cero, con
+     * un valor perfectamente plausible.  Un producto escalar de diez terminos
+     * devolvia 114 en vez de 441.
+     *
+     * Lo que el hueco lleva lo dice su CLASE: un inmediato de 32 bits es el
+     * desplazamiento; un registro es el INDICE, y entonces el desplazamiento
+     * -- que ya no tiene sitio propio -- viaja en @p variant, con un byte.
+     *
+     * Solo hay DOS registros de rascar (R10/R11) y en el caso peor los dos
+     * estan pedidos, asi que el indice no siempre tiene sitio.  Cuando no lo
+     * tiene NO se puede renunciar a la fusion: el selector ya borro la suma
+     * original, asi que aqui hay que producirla.  Sumarla a la base cuesta
+     * exactamente lo que costaba antes de fusionar; nunca sale peor.
+     *
+     * @param out      Donde emitir lo que haga falta para formar la direccion.
+     * @param addr     Operando de la base (registro virtual o fisico).
+     * @param slot     Hueco libre del acceso (`src2` en la carga, `dst` en el
+     *                 almacen).
+     * @param variant  Desplazamiento de un byte, valido solo con indice.
+     * @return El operando de memoria listo para el codificador.
+     */
+    MOperand folded_mem_operand(std::vector<MInstr> &out, const MOperand &addr,
+                                const MOperand &slot, uint8_t variant) {
+        MOperand a = resolve_use(addr);
+        MReg addr_reg;
+        if (a.kind == MOperandKind::MEM) {
+            out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), a));
+            addr_reg = scr1();
+        } else {
+            addr_reg = static_cast<MReg>(a.reg);
+        }
+        /* Sin fusionar, o solo con desplazamiento. */
+        if (slot.kind == MOperandKind::NONE)
+            return MOperand::make_mem(addr_reg, 0);
+        if (slot.kind == MOperandKind::IMM32)
+            return MOperand::make_mem(addr_reg, slot.value);
+        /* Con indice.  La escala viene en el byte `reg` del operando SIN
+         * resolver: al resolverlo ese byte pasa a ser el registro fisico, asi
+         * que hay que leerla antes.  Cero = el selector no la puso. */
+        const int32_t disp = static_cast<int8_t>(variant);
+        uint8_t scale = slot.reg == 0 ? uint8_t{1} : slot.reg;
+        MOperand ix = resolve_use(slot);
+        if (ix.kind != MOperandKind::MEM)
+            return MOperand::make_mem(addr_reg, disp,
+                                      static_cast<MReg>(ix.reg), scale);
+        /* DERRAMADO.  Hay que traerlo a un registro y sumarlo a la base, y el
+         * unico libre aqui es scr1 -- scr0 se lo puede haber quedado el valor
+         * de un almacenamiento --.  Con paso, ademas, no basta sumar: hay que
+         * MULTIPLICAR antes.  Por eso el indice entra en scr1 ANTES que la
+         * base:
+         *
+         *     mov scr1, ranura_del_indice
+         *     shl scr1, log2(paso)         (solo con paso > 1)
+         *     add scr1, base               (registro o ranura)
+         *
+         * Cargando la base primero, el caso de base E indice derramados a la
+         * vez se quedaba sin sitio para escalar y el indice se perdia entero.
+         *
+         * El paso se aplica con un DESPLAZAMIENTO y no con `lea reg,
+         * [reg*paso]`, que seria la forma natural de multiplicar sin tocar
+         * nada mas: ese modo de direccionamiento no lleva base, y el
+         * codificador no sabe representar "sin base" -- @c MReg::NONE vale 63
+         * y sus tres bits bajos son los de un registro de verdad --, asi que
+         * salia `lea r11, [r15 + r11*8]`, con una base que nadie habia puesto.
+         * La direccion resultante era otra y el fallo aparecia lejos, en el
+         * primer acceso que se saliera de la region.
+         *
+         * Y la suma se emite en forma de DOS operandos -- `dst` y `src1`, que
+         * es lo que el codificador lee tras la reescritura --.  Con
+         * `make_binary` el sumando cae en `src2` y el codificador lo IGNORA:
+         * salia `add r11, r11`, la base sumada a si misma. */
+        const MOperand base_op = (addr_reg == scr1()) ? a : reg(addr_reg);
+        out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), ix));
+        if (scale != 1) {
+            const int32_t log2_scale = (scale == 8) ? 3 : (scale == 4) ? 2 : 1;
+            out.push_back(MInstr::make_unary(MOp::SHL, reg(scr1()),
+                                             MOperand::make_imm32(log2_scale)));
+        }
+        out.push_back(MInstr::make_unary(MOp::ADD, reg(scr1()), base_op));
+        return MOperand::make_mem(scr1(), disp);
+    }
+
     bool lower_memoria(const MInstr &in, std::vector<MInstr> &out) {
         const MOp op = in.op;
         if (op == MOp::LOAD && is_fp_operand(in.dst)) {
             const uint8_t width = static_cast<uint8_t>(in.flags >> 1);
-            MOperand a = resolve_use(in.src1);
-            MReg addr_reg;
-            if (a.kind == MOperandKind::MEM) {
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), a));
-                addr_reg = scr1();
-            } else {
-                addr_reg = static_cast<MReg>(a.reg);
-            }
-            /* P2 SIB: si src2 es IMM32, es el disp fusionado (`[base+disp]`),
-             * igual que en la ruta GP de abajo.  Ignorarlo (disp 0) hacia que
-             * TODOS los campos float de un struct se leyeran del offset 0: un
-             * `struct Rect { Punto min; Punto max; }` con f64 devolvia
-             * min.x para max.x, etc. -- silencioso y con valores plausibles. */
-            const int32_t fld_disp =
-                (in.src2.kind == MOperandKind::IMM32) ? in.src2.value : 0;
-            const MOperand mem = MOperand::make_mem(addr_reg, fld_disp);
+            const MOperand mem =
+                folded_mem_operand(out, in.src1, in.src2, in.variant);
             const MOp mv = fp_mov_for_width(width ? width : 8);
             const bool dst_spilled =
                 in.dst.is_vreg() &&
@@ -1767,27 +1844,14 @@ struct Lowerer {
         /* STORE float HOST: el valor (src2) es un vreg FP -> MOVSD/MOVSS. */
         if (op == MOp::STORE && is_fp_operand(in.src2)) {
             const uint8_t width = static_cast<uint8_t>(in.flags);
-            MOperand a = resolve_use(in.src1);
-            MReg addr_reg;
-            if (a.kind == MOperandKind::MEM) {
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), a));
-                addr_reg = scr1();
-            } else {
-                addr_reg = static_cast<MReg>(a.reg);
-            }
+            const MOperand mem =
+                folded_mem_operand(out, in.src1, in.dst, in.variant);
             const MOp mv = fp_mov_for_width(width ? width : 8);
             MOperand v = resolve_use(in.src2);
             if (v.kind == MOperandKind::MEM) {
                 out.push_back(MInstr::make_unary(mv, xmm(fscr0()), v));
                 v = xmm(fscr0());
             }
-            /* P2 SIB: mismo disp fusionado que el STORE entero.  Esta rama
-             * es la de un valor FLOTANTE, y olvidarla no daria un error de
-             * compilacion: escribiria el f64 en `[base]` en vez de en
-             * `[base+disp]` -- otro sitio, sin avisar. */
-            const int32_t st_disp =
-                (in.dst.kind == MOperandKind::IMM32) ? in.dst.value : 0;
-            const MOperand mem = MOperand::make_mem(addr_reg, st_disp);
             out.push_back(MInstr::make_unary(mv, mem, v));
             return true;
         }
@@ -1796,22 +1860,11 @@ struct Lowerer {
             /* dst = [addr].  addr y dst pueden estar spilled. */
             const uint8_t width = static_cast<uint8_t>(in.flags >> 1);
             const bool sgn = (in.flags & 1u) != 0u;
-            MOperand a = resolve_use(in.src1);
-            MReg addr_reg;
-            if (a.kind == MOperandKind::MEM) {
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), a));
-                addr_reg = scr1();
-            } else {
-                addr_reg = static_cast<MReg>(a.reg);
-            }
-            /* NO tocar mem.width: empaqueta scale|index del MEM.  El
-             * ancho de un MOV [mem] lo da el reg; el de MOVSX/MOVZX va
-             * en mem.flags (mem_size override).
-             * P2 SIB: si src2 es IMM32, es el disp fusionado (`[base+disp]`).
-             */
-            const int32_t ld_disp =
-                (in.src2.kind == MOperandKind::IMM32) ? in.src2.value : 0;
-            MOperand mem = MOperand::make_mem(addr_reg, ld_disp);
+            /* NO tocar mem.width salvo por el index: ahi es donde el MEM
+             * empaqueta scale|index.  El ancho de un MOV [mem] lo da el reg; el
+             * de MOVSX/MOVZX va en mem.flags (mem_size override). */
+            MOperand mem =
+                folded_mem_operand(out, in.src1, in.src2, in.variant);
             const bool dst_spilled =
                 in.dst.is_vreg() &&
                 resolver.resolve_def(in.dst.vreg_id()).is_memory();
@@ -1845,27 +1898,17 @@ struct Lowerer {
              * spilled.
              */
             const uint8_t width = static_cast<uint8_t>(in.flags);
-            MOperand a = resolve_use(in.src1);
-            MReg addr_reg;
-            if (a.kind == MOperandKind::MEM) {
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1()), a));
-                addr_reg = scr1();
-            } else {
-                addr_reg = static_cast<MReg>(a.reg);
-            }
+            /* NO tocar mem.width salvo por el index (ahi va empaquetado).  El
+             * STORE no usa `dst` para nada mas (ver la nota del pre-pase en
+             * vreg_select.cpp). */
+            const MOperand mem =
+                folded_mem_operand(out, in.src1, in.dst, in.variant);
             MOperand v = resolve_use(in.src2);
             if (v.kind == MOperandKind::MEM) {
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0()), v));
                 v = reg(scr0());
             }
             v.width = width; // ancho del store lo da el reg src
-            /* NO tocar mem.width (index packing).
-             * P2 SIB: si dst es IMM32, es el disp fusionado (`[base+disp]`) --
-             * el STORE no usa `dst` para nada mas (ver la nota del pre-pase en
-             * vreg_select.cpp). */
-            const int32_t st_disp =
-                (in.dst.kind == MOperandKind::IMM32) ? in.dst.value : 0;
-            MOperand mem = MOperand::make_mem(addr_reg, st_disp);
             out.push_back(MInstr::make_unary(MOp::MOV, mem, v));
             return true;
         }

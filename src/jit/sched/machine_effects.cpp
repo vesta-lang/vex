@@ -472,17 +472,23 @@ bool generic_pseudo(const MInstr &mi, MEffects &e) {
     case MOp::ARG: add(e.reads, reg_key(mi.src1)); break;
 
     /* PUSH src: lee src + rsp, escribe rsp + memoria. */
-    case MOp::LOAD:    // dst, src1=addr
+    /* El hueco libre puede llevar el INDICE de la direccion fusionada, y
+     * entonces se LEE.  Anadirlo sin mas es correcto tambien cuando lleva el
+     * desplazamiento o el indice de imm64: `reg_key` devuelve UINT32_MAX para
+     * lo que no es un registro y `add` lo descarta. */
+    case MOp::LOAD:    // dst, src1=addr, src2=disp | indice
     case MOp::LOAD_VM: // dst, src1=addr, src2=imm64_idx (fallback)
         add(e.writes, reg_key(mi.dst));
         add(e.reads, reg_key(mi.src1));
+        add(e.reads, reg_key(mi.src2));
         e.reads_mem = true;
         break;
     /* Stores pseudo: [addr] = val. */
-    case MOp::STORE:    // src1=addr, src2=val
+    case MOp::STORE:    // src1=addr, src2=val, dst=disp | indice
     case MOp::STORE_VM: // src1=addr, src2=val, dst=imm64_idx
         add(e.reads, reg_key(mi.src1));
         add(e.reads, reg_key(mi.src2));
+        add(e.reads, reg_key(mi.dst));
         e.writes_mem = true;
         break;
 

@@ -158,11 +158,20 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::ARG: r.src1 = R::USE; break;
 
     /* LOAD: dst = [addr].  STORE: [addr] = val (commit 7). */
+    /* El hueco libre de cada forma puede llevar el INDICE de la direccion
+     * fusionada, y entonces es un USO como cualquier otro: si no se declara, su
+     * intervalo muere antes de tiempo y el registro se reparte a otro.
+     *
+     * Declararlo cuando lleva el desplazamiento no molesta: un IMM32 no es un
+     * vreg y el constructor lo ignora via `is_vreg()`, igual que ya hacia con
+     * el indice de imm64 de LOAD_VM/STORE_VM. */
     case MOp::LOAD:
         r.dst = R::DEF;
         r.src1 = R::USE;
+        r.src2 = R::USE;
         break;
     case MOp::STORE:
+        r.dst = R::USE;
         r.src1 = R::USE;
         r.src2 = R::USE;
         break;

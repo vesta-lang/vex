@@ -134,6 +134,8 @@ void RuntimeEntries::resolve() {
     vm_write_u32 = &vrt_vm_write_u32;
     vm_write_u16 = &vrt_vm_write_u16;
     vm_write_u8 = &vrt_vm_write_u8;
+    vm_memset = &vrt_vm_memset;
+    vm_memcpy = &vrt_vm_memcpy;
     vm_translate = &vrt_vm_translate;
     findclass = &vrt_findclass;
     newobj = &vrt_newobj;

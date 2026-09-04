@@ -631,6 +631,167 @@ static bool packed_binop_mop(ir::IrType t, uint64_t subop, MOp &out) {
     }
 }
 
+/**
+ * @brief Es @p v un puntero del ANFITRION?
+ *
+ * Es el mismo criterio que usa el emisor del intermedio para elegir entre las
+ * dos operaciones de bloque, y se pregunta igual aqui para que las dos vias
+ * decidan lo mismo.  Cuando el valor no se puede mirar se contesta que NO: la
+ * variante de la maquina es correcta sobre las dos memorias -- traduce, y una
+ * direccion del anfitrion no se traduce --, mientras que la del anfitrion sobre
+ * memoria de la maquina escribe en otro sitio.  Ante la duda, la que no puede
+ * equivocarse.
+ *
+ * @param fn Funcion IR.
+ * @param v  Valor del puntero.
+ * @return true si es memoria del proceso.
+ */
+bool is_host_bulk_ptr(const ir::IrFunction &fn, ir::IrValueId v) {
+    return v < fn.values.size() && fn.values[v].is_host_ptr;
+}
+
+/**
+ * @brief Emite una operacion de bloque sobre memoria de la MAQUINA.
+ *
+ * La memoria de la maquina va por paginas, con traduccion y asignacion
+ * perezosa, asi que una direccion virtual no es un puntero del proceso y la
+ * instruccion de bloque del anfitrion no se puede usar sobre ella en crudo.
+ * El movimiento de bytes en si SIGUE siendo el de siempre: lo hace la memoria
+ * virtual pagina a pagina, con la copia real del sistema.  Lo que se paga aqui
+ * es la traduccion, no la copia.
+ *
+ * PENDIENTE: meter la traduccion EN LINEA, con la misma cache de pagina de una
+ * entrada que ya usan @c LOAD_VM y @c STORE_VM, y dejar el ayudante solo para
+ * el bloque que cruza pagina.  Con eso el caso comun -- un bloque corto, que es
+ * el que sale de juntar campos de una vista -- queda sin ninguna llamada.
+ *
+ * @param O       Donde emitir.
+ * @param out     Funcion maquina, para internar la direccion del ayudante.
+ * @param ent     Entradas del runtime.
+ * @param dst     Destino, ya resuelto a operando maquina.
+ * @param val     Byte de relleno, u origen si es copia.
+ * @param len     Longitud en bytes.
+ * @param is_copy true para copia, false para relleno.
+ * @return false si el ayudante no esta disponible -- en nativo no hay maquina
+ *         que traducir --, y entonces el llamador se rinde en vez de emitir
+ *         algo que escriba donde no debe.
+ */
+bool emit_bulk_vm(std::vector<MInstr> &O, MFunction &out,
+                  const VregEntries &ent, const MOperand &dst,
+                  const MOperand &val, const MOperand &len, bool is_copy) {
+    const uint64_t helper = is_copy ? ent.vm_memcpy : ent.vm_memset;
+    if (helper == 0) return false;
+    /* El ABI es el del ANFITRION: este codigo corre en el proceso.  Mismo
+     * criterio que la llamada de `callind`, aqui al lado. */
+#if defined(_WIN32)
+    const MReg a0 = MReg::RCX, a1 = MReg::RDX, a2 = MReg::R8, a3 = MReg::R9;
+#else
+    const MReg a0 = MReg::RDI, a1 = MReg::RSI, a2 = MReg::RDX, a3 = MReg::RCX;
+#endif
+    /* Los dos que hay que preservar mientras se colocan los demas van a los
+     * scratch reservados (R10/R11), que el reparto de registros no asigna.  El
+     * tercero se lee DESPUES, y antes de escribir su propio registro destino:
+     * asi ningun operando se pisa por el orden en que se colocan. */
+    O.push_back(
+        MInstr::make_unary(MOp::MOV, MOperand::make_reg(MReg::R10, 8), dst));
+    O.push_back(
+        MInstr::make_unary(MOp::MOV, MOperand::make_reg(MReg::R11, 8), len));
+    O.push_back(MInstr::make_unary(MOp::MOV, MOperand::make_reg(a2, 8), val));
+    O.push_back(MInstr::make_unary(MOp::MOV, MOperand::make_reg(a3, 8),
+                                   MOperand::make_reg(MReg::R11, 8)));
+    O.push_back(MInstr::make_unary(MOp::MOV, MOperand::make_reg(a1, 8),
+                                   MOperand::make_reg(MReg::R10, 8)));
+    /* El proceso vive en RBX durante todo el codigo compilado. */
+    O.push_back(MInstr::make_unary(MOp::MOV, MOperand::make_reg(a0, 8),
+                                   MOperand::make_reg(MReg::RBX, 8)));
+    O.push_back(MInstr::make_call_abs(out.intern_imm64(helper)));
+    return true;
+}
+
+/**
+ * @brief Escribe un tramo CORTO de longitud conocida por LANES.
+ *
+ * El bucle de bloque de la maquina esta pensado para tramos grandes: su
+ * arranque cuesta decenas de ciclos y ademas hay que salvar y restaurar tres
+ * registros fijos.  Para los dieciseis bytes que salen de juntar los campos
+ * contiguos de una vista eso es todo coste y nada de trabajo -- la misma
+ * escritura cabe en UNA instruccion ancha --, asi que por debajo de un umbral
+ * se emiten lanes.
+ *
+ * El ancho NO esta escrito aqui: lo da @p lane_w, que sale del banco del
+ * objetivo.  La misma longitud sale en una pieza donde hay lanes de 64 y en
+ * cuatro donde solo las hay de 16, y el codigo de aqui es el mismo.  Es el
+ * mismo eje que usa la vectorizacion.
+ *
+ * Solo el byte CERO.  Repetir otro byte exige construir el patron
+ * (`b * 0x0101...`) y difundirlo, tres o cuatro instrucciones mas que se
+ * comerian la ventaja en los tramos que interesan; y el cero es el que sale
+ * siempre de poner una vista a cero.  Cuando no aplica se contesta que no y el
+ * llamador emite lo de siempre.
+ *
+ * @param O       Donde emitir.
+ * @param addr    Direccion del tramo, ya resuelta a operando maquina.
+ * @param len     Longitud en bytes, conocida al compilar.
+ * @param value   Byte que se repite.
+ * @param lane_w  Ancho de lane del objetivo (16/32/64).
+ * @param fp_ok   Si se puede usar el banco ancho en este contexto.
+ * @param tri     Registros del objetivo, de donde salen los de rascar.
+ * @return false si este tramo no va por aqui.
+ */
+bool emit_short_fill(std::vector<MInstr> &O, const MOperand &addr, int64_t len,
+                     uint8_t value, uint64_t lane_w, bool fp_ok,
+                     const TargetRegInfo &tri) {
+    /* El umbral: cuatro lanes de 16, que es donde el bucle de la maquina
+     * empieza a compensar su arranque.  Es una cota RAZONADA, no medida, y por
+     * eso se queda corta a proposito -- pasarse aqui cambia codigo caliente que
+     * hoy funciona. */
+    constexpr int64_t kMaxBytes = 64;
+    if (!fp_ok || value != 0 || len <= 0 || len > kMaxBytes) return false;
+    const auto &gpsc = tri.scratch[static_cast<size_t>(RegClass::GP)];
+    const auto &fpsc = tri.scratch[static_cast<size_t>(RegClass::FP)];
+    if (gpsc.empty() || fpsc.empty()) return false;
+    const MReg gp0 = static_cast<MReg>(gpsc[0]);
+    const MReg fp0 = static_cast<MReg>(fpsc[0]);
+
+    O.push_back(MInstr::make_unary(MOp::MOV, MOperand::make_reg(gp0, 8), addr));
+    /* Un registro a cero contra si mismo: es la forma corta de tener el patron,
+     * y la maquina la reconoce como que no depende de su valor anterior. */
+    const MOperand z16 = MOperand::make_reg(fp0, 16);
+    O.push_back(MInstr::make_binary(MOp::XORPD, z16, z16, z16));
+
+    int64_t off = 0, rem = len;
+    /* Piezas del ancho mas grande que quepa, de mayor a menor.  Con lanes de
+     * 64 un bloque de 64 bytes es UNA escritura; con las de 16, cuatro. */
+    for (uint64_t w = lane_w; w >= 16; w /= 2) {
+        while (rem >= static_cast<int64_t>(w)) {
+            O.push_back(MInstr::make_unary(
+                MOp::MOVUPD,
+                MOperand::make_mem(gp0, static_cast<int32_t>(off)),
+                MOperand::make_reg(fp0, static_cast<uint8_t>(w))));
+            off += static_cast<int64_t>(w);
+            rem -= static_cast<int64_t>(w);
+        }
+    }
+    /* Y la cola, con registro entero: por debajo de una lane no hay lane que
+     * usar.  El cero se deja en el otro registro de rascar. */
+    if (rem > 0) {
+        O.push_back(MInstr::make_unary(MOp::MOV,
+                                       MOperand::make_reg(MReg::R11, 8),
+                                       MOperand::make_imm32(0)));
+        for (uint8_t w = 8; w >= 1; w = static_cast<uint8_t>(w / 2)) {
+            while (rem >= static_cast<int64_t>(w)) {
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV,
+                    MOperand::make_mem(gp0, static_cast<int32_t>(off)),
+                    MOperand::make_reg(MReg::R11, w)));
+                off += w;
+                rem -= w;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 // Watchdog CTPE: direccion del handler de safepoint (0 = desactivado).  Es
@@ -1187,7 +1348,31 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * ya tira @c STORE_VM para su indice de imm64, y por eso ni el constructor
      * de intervalos ni el modelo de efectos lo confunden con una definicion
      * (ambos ignoran el `dst` de un STORE). */
-    std::unordered_map<uint32_t, std::pair<uint32_t, int64_t>> fold_disp;
+    /**
+     * @brief Una direccion fusionada: `base + indice + desplazamiento`.
+     *
+     * Las tres partes que x86 sabe hacer DENTRO del propio acceso.  El indice
+     * se anadio despues del desplazamiento y por un motivo medido: en los seis
+     * ejemplos de vistas del corpus hay 342 sumas de registro con registro y
+     * 231 de ellas se consumen acto seguido como direccion -- 68 solo en el
+     * parser de PE --.  El caso tipico es un array de vistas, donde el indice
+     * es el MISMO para los cuatro campos y se sumaba cuatro veces.
+     *
+     * El desplazamiento va aparte del indice a proposito: con indice cabe en un
+     * byte (ver donde viaja), sin el en cuatro.
+     */
+    struct FoldedAddr {
+        uint32_t base = 0;
+        uint32_t index = 0;
+        int64_t disp = 0;
+        bool has_index = false;
+        /// 1/2/4/8.  Un array de vistas se indexa por su PASO, y cuando ese
+        /// paso es potencia de dos x86 lo hace dentro del propio acceso: la
+        /// multiplicacion desaparece entera.  Medido en el corpus, 7 de los 12
+        /// pasos constantes son `stride(8)`.
+        uint8_t scale = 1;
+    };
+    std::unordered_map<uint32_t, FoldedAddr> fold_disp;
     {
         static const bool sib_off = util::flag_on(util::FlagId::NoSib);
         const uint32_t NVAL = static_cast<uint32_t>(fn.values.size());
@@ -1219,31 +1404,102 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 for (const ir::IrInstr &in : blk.instrs)
                     if (in.op == ir::IrOp::CONST && in.dst != ir::IR_NO_VALUE)
                         const_val[in.dst] = static_cast<int64_t>(in.imm);
+            /* Y de donde sale cada valor, para reconocer el PASO de un array:
+             * `i * 8` o `i << 3` no hacen falta como instruccion si el acceso
+             * puede escalar el indice el mismo. */
+            std::unordered_map<uint32_t, const ir::IrInstr *> def_of;
+            for (const auto &blk : fn.blocks)
+                for (const ir::IrInstr &in : blk.instrs)
+                    if (in.dst != ir::IR_NO_VALUE) def_of[in.dst] = &in;
+            /**
+             * @brief Parte un indice en (valor, escala) si lleva un paso que
+             *        x86 sabe aplicar solo.
+             *
+             * Reconoce la multiplicacion por 1/2/4/8 y el desplazamiento a la
+             * izquierda equivalente, que es como el bajado suele emitirla.
+             * Cuando no es ninguna de las dos, el indice se usa tal cual con
+             * escala 1 -- que es correcto y es lo que habia --.
+             */
+            auto split_scale = [&](uint32_t idx, uint8_t &scale) -> uint32_t {
+                auto d = def_of.find(idx);
+                if (d == def_of.end() || d->second->operands.size() != 2)
+                    return idx;
+                const ir::IrInstr &m = *d->second;
+                auto c1 = const_val.find(m.operands[1]);
+                if (c1 == const_val.end()) return idx;
+                const int64_t k = c1->second;
+                int64_t factor = -1;
+                if (m.op == ir::IrOp::MUL)
+                    factor = k;
+                else if (m.op == ir::IrOp::SHL && k >= 0 && k <= 3)
+                    factor = int64_t{1} << k;
+                if (factor != 1 && factor != 2 && factor != 4 && factor != 8)
+                    return idx;
+                scale = static_cast<uint8_t>(factor);
+                return m.operands[0];
+            };
             /* 2) candidatos ptr = ADD(base, const)  (const en cualquier lado).
              */
-            std::unordered_map<uint32_t, std::pair<uint32_t, int64_t>> cand;
+            std::unordered_map<uint32_t, FoldedAddr> cand;
+            /* Se recorre en orden y se consulta lo ya visto: asi
+             * `ADD(ADD(base, indice), const)` se reconoce entero -- el interior
+             * ya esta en `cand` cuando llega el exterior --.  Es la forma que
+             * de verdad sale de un campo de un array de vistas:
+             * `pe.Sections[i].VirtualAddress` es `base + sec_off + i*40 + 4`.
+             * En SSA el interior siempre precede al exterior. */
             for (const auto &blk : fn.blocks) {
                 for (const ir::IrInstr &in : blk.instrs) {
                     if (in.op != ir::IrOp::ADD || in.dst == ir::IR_NO_VALUE ||
                         in.operands.size() != 2)
                         continue;
-                    const uint32_t o0 = in.operands[0], o1 = in.operands[1];
-                    auto c0 = const_val.find(o0), c1 = const_val.find(o1);
-                    uint32_t base;
-                    int64_t disp;
-                    if (c1 != const_val.end() && c0 == const_val.end()) {
-                        base = o0;
-                        disp = c1->second;
-                    } else if (c0 != const_val.end() && c1 == const_val.end()) {
-                        base = o1;
-                        disp = c0->second;
-                    } else
-                        continue;
-                    if (disp < INT32_MIN || disp > INT32_MAX) continue;
                     /* solo HOST ptr (VM -> LOAD_VM, no se fusiona). */
                     if (in.dst >= NVAL || !fn.values[in.dst].is_host_ptr)
                         continue;
-                    cand[in.dst] = {base, disp};
+                    const uint32_t o0 = in.operands[0], o1 = in.operands[1];
+                    auto c0 = const_val.find(o0), c1 = const_val.find(o1);
+                    const bool k0 = c0 != const_val.end();
+                    const bool k1 = c1 != const_val.end();
+                    if (k0 && k1) continue; // dos constantes: lo pliega otro
+                    FoldedAddr f;
+                    if (k0 || k1) {
+                        /* `algo + constante`.  Si ese `algo` ya era una
+                         * direccion fusionada, se acumula sobre ella en vez de
+                         * empezar de cero: es lo que junta el indice del array
+                         * con el desplazamiento del campo. */
+                        const uint32_t sum = k0 ? o1 : o0;
+                        const int64_t disp = k0 ? c0->second : c1->second;
+                        auto prev = cand.find(sum);
+                        if (prev != cand.end()) {
+                            f = prev->second;
+                            f.disp += disp;
+                        } else {
+                            f.base = sum;
+                            f.disp = disp;
+                        }
+                    } else {
+                        /* `base + indice`, los dos valores.  x86 lo hace dentro
+                         * del propio acceso; sin esto se pagaba una suma por
+                         * cada campo, con el MISMO indice las cuatro veces. */
+                        uint8_t sc = 1;
+                        const uint32_t idx = split_scale(o1, sc);
+                        auto prev = cand.find(o0);
+                        if (prev != cand.end() && !prev->second.has_index) {
+                            f = prev->second;
+                        } else {
+                            f.base = o0;
+                        }
+                        f.index = idx;
+                        f.scale = sc;
+                        f.has_index = true;
+                    }
+                    if (f.disp < INT32_MIN || f.disp > INT32_MAX) continue;
+                    /* Con indice, el desplazamiento viaja en un hueco de UN
+                     * byte del propio MInstr -- no queda otro sitio libre --,
+                     * asi que lo que no quepa se queda sin fusionar el indice.
+                     * Un desplazamiento de campo pasa de 127 muy pocas veces, y
+                     * rendirse aqui solo cuesta una instruccion. */
+                    if (f.has_index && (f.disp < -128 || f.disp > 127)) continue;
+                    cand[in.dst] = f;
                 }
             }
             /* 3) address-only: ptr solo puede usarse como DIRECCION de un
@@ -1616,7 +1872,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 return fp_ok && pv < fn.values.size() &&
                        ir::type_is_float(fn.values[pv].type);
             };
-            // ¿Este param declara un registro fisico de entrada (ABI custom)?
+            // Este param declara un registro fisico de entrada (ABI custom)?
             auto param_custom_reg = [&](size_t i) -> int {
                 if (i < fn.param_abi_regs.size() &&
                     !fn.param_abi_regs[i].empty())
@@ -1624,7 +1880,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                             /*for_pin=*/true);
                 return -1;
             };
-            // G = nº de GP-stack params (los FP-stack van DESPUES en la pila).
+            // G = numero de GP-stack params (los FP-stack van DESPUES).
             // Los params con ABI custom NO cuentan: llegan en su registro fijo,
             // no consumen un arg-reg estandar ni un slot de pila.
             size_t gp_count = 0;
@@ -3524,16 +3780,35 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * FP -> el rewrite enruta a MOVSD/MOVSS (sin esto, vr() lo
                  * hardcodea a GP y el valor float queda inconsistente con el
                  * FADD que SI lo trata como XMM -> codegen roto). */
-                /* P2 SIB: si el ptr es `base + const` (address-only), emitir
-                 * `mov dst, [base + disp]` (el disp viaja en src2=IMM32; el
-                 * rewrite lo usa en make_mem).  Si no, LOAD normal [ptr]. */
+                /* P2 SIB: si el ptr es `base + const` o `base + indice + const`
+                 * (address-only), emitir el acceso con la direccion DENTRO.
+                 *
+                 * Que hay en `src2` lo dice su CLASE, no una bandera aparte:
+                 *   IMM32 -> es el desplazamiento (no hay indice);
+                 *   VREG  -> es el INDICE, y el desplazamiento va en `variant`,
+                 *            que en un LOAD no lo usa nadie (es el codigo de
+                 *            condicion de un JCC/SETCC).
+                 * Sin ranura libre para las tres partes, esta es la unica forma
+                 * de no crecer el MInstr, que esta declarado como 32 bytes
+                 * EXACTOS por localidad de cache. */
                 auto fd = fold_disp.find(in.operands[0]);
                 if (fd != fold_disp.end()) {
-                    MInstr ld =
-                        MInstr::make_load(vrt(in.dst), vr(fd->second.first),
-                                          static_cast<uint8_t>(w), sgn);
-                    ld.src2 = MOperand::make_imm32(
-                        static_cast<int32_t>(fd->second.second));
+                    const FoldedAddr &fa = fd->second;
+                    MInstr ld = MInstr::make_load(vrt(in.dst), vr(fa.base),
+                                                  static_cast<uint8_t>(w), sgn);
+                    if (fa.has_index) {
+                        ld.src2 = vr(fa.index);
+                        /* La ESCALA viaja en el byte `reg` del operando del
+                         * indice, que un vreg no usa -- ahi solo van fisicos
+                         * 0..63 y este operando aun no lo es --.  Es el ultimo
+                         * hueco que quedaba sin crecer el MInstr. */
+                        ld.src2.reg = fa.scale;
+                        ld.variant = static_cast<uint8_t>(
+                            static_cast<int8_t>(fa.disp));
+                    } else {
+                        ld.src2 = MOperand::make_imm32(
+                            static_cast<int32_t>(fa.disp));
+                    }
                     O.push_back(ld);
                     break;
                 }
@@ -3585,19 +3860,27 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* El VALOR (operands[0]) usa vrt() (class-aware): para f64/f32
                  * le da clase FP -> el rewrite enruta a MOVSD/MOVSS [addr],xmm
                  * (consistente con como el FADD produjo el valor en XMM). */
-                /* P2 SIB: si el ptr es `base + const` (address-only), emitir
-                 * `mov [base + disp], src` (el disp viaja en dst=IMM32, el
-                 * hueco que el STORE deja libre; el rewrite lo usa en
-                 * make_mem).  Si no, STORE normal [ptr]. */
+                /* P2 SIB: igual que el LOAD, pero el hueco libre del STORE es
+                 * `dst` en vez de `src2`.  Y la misma regla para saber que
+                 * lleva: IMM32 = desplazamiento, VREG = indice (con el
+                 * desplazamiento en `variant`). */
                 {
                     MInstr st = MInstr::make_store(vr(in.operands[1]),
                                                    vrt(in.operands[0]),
                                                    static_cast<uint8_t>(w));
                     auto fs = fold_disp.find(in.operands[1]);
                     if (fs != fold_disp.end()) {
-                        st.src1 = vr(fs->second.first);
-                        st.dst = MOperand::make_imm32(
-                            static_cast<int32_t>(fs->second.second));
+                        const FoldedAddr &fa = fs->second;
+                        st.src1 = vr(fa.base);
+                        if (fa.has_index) {
+                            st.dst = vr(fa.index);
+                            st.dst.reg = fa.scale; // ver la nota del LOAD
+                            st.variant = static_cast<uint8_t>(
+                                static_cast<int8_t>(fa.disp));
+                        } else {
+                            st.dst = MOperand::make_imm32(
+                                static_cast<int32_t>(fa.disp));
+                        }
                     }
                     O.push_back(st);
                 }
@@ -3627,6 +3910,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 flush_pending();
                 if (in.operands.size() != 3)
                     return vreg_bail(fn.name.c_str(), __LINE__);
+                /* Gemela del relleno, y por lo mismo: ver la nota de MEMSET. */
+                if (!is_host_bulk_ptr(fn, in.operands[0])) {
+                    if (!emit_bulk_vm(O, out, ent, vr(in.operands[0]),
+                                      vr(in.operands[1]), vr(in.operands[2]),
+                                      /*is_copy=*/true))
+                        return vreg_bail(fn.name.c_str(), __LINE__);
+                    break;
+                }
                 /* 1. dst/src a los scratch reservados (R10/R11): el rewrite
                  *    resuelve cada vr() a su fisico/spill; como el DESTINO es
                  *    un reg fisico, emite MOV reg,reg o MOV reg,[rbp-off]
@@ -3694,6 +3985,49 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 flush_pending();
                 if (in.operands.size() != 3)
                     return vreg_bail(fn.name.c_str(), __LINE__);
+                /* De QUE memoria es el destino, que es lo que decide cual de
+                 * las dos operaciones de bloque hay que emitir.  El emisor del
+                 * intermedio ya lo distingue -- `memset` contra `memseth` --;
+                 * aqui no se miraba, y se emitia siempre la del anfitrion.
+                 *
+                 * Sobre una direccion de la maquina eso escribe en otro sitio,
+                 * porque su memoria va por paginas con traduccion: el numero
+                 * que lleva el registro no es un puntero del proceso.  No daba
+                 * un error, daba otro resultado -- un programa que registraba
+                 * sus clases devolvia CERO compilado y su valor correcto
+                 * interpretado. */
+                if (!is_host_bulk_ptr(fn, in.operands[0])) {
+                    if (!emit_bulk_vm(O, out, ent, vr(in.operands[0]),
+                                      vr(in.operands[1]), vr(in.operands[2]),
+                                      /*is_copy=*/false))
+                        return vreg_bail(fn.name.c_str(), __LINE__);
+                    break;
+                }
+                /* Tramo CORTO de longitud conocida: se escribe por LANES, no
+                 * con el bucle de la maquina.
+                 *
+                 * `rep stosb` esta pensado para bloques grandes: su arranque
+                 * cuesta decenas de ciclos y ademas hay que salvar y restaurar
+                 * tres registros fijos, once instrucciones en total.  Para los
+                 * dieciseis bytes que salen de juntar los campos contiguos de
+                 * una vista, eso es todo coste y nada de trabajo: la misma
+                 * escritura cabe en UNA instruccion ancha.
+                 *
+                 * El ancho lo da el banco del objetivo, no esta escrito aqui:
+                 * la misma longitud sale en una pieza donde hay lanes de 64 y
+                 * en cuatro donde solo las hay de 16.  Es el mismo eje que usa
+                 * la vectorizacion. */
+                const bool len_known = in.operands[2] < fn.values.size() &&
+                                       fn.values[in.operands[2]].is_const;
+                const bool val_known = in.operands[1] < fn.values.size() &&
+                                       fn.values[in.operands[1]].is_const;
+                if (len_known && val_known &&
+                    emit_short_fill(
+                        O, vr(in.operands[0]),
+                        fn.values[in.operands[2]].const_val,
+                        static_cast<uint8_t>(fn.values[in.operands[1]].const_val),
+                        vec_host_w(), fp_ok, tri_sel))
+                    break;
                 O.push_back(MInstr::make_unary(MOp::MOV,
                                                MOperand::make_reg(MReg::R10, 8),
                                                vr(in.operands[0]))); // dst
