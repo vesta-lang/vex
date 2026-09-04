@@ -249,6 +249,11 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             fn.name.rfind("__spawn_", 0) != 0) {
             emit_instrument_enter(fn.name, m->loc.line);
         }
+        // `@Hook(enter)` tambien en metodos, ctors y dtors.  Faltaba, y el
+        // sintoma fue una salida sin su entrada: el constructor de una clase
+        // aparecia saliendo de una llamada que nadie habia visto empezar.
+        emit_hook_calls(HookPoint::Enter, fn.name, ir::IR_NO_VALUE,
+                        m->loc.line);
 
         // SRET context para metodos retornando Result/Optional.
         // `lower_return` consulta @c sret_active_ para copiar el slot al
@@ -518,6 +523,9 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                 fn.name.rfind("__spawn_", 0) != 0) {
                 emit_instrument_exit(fn.name, ir::IR_NO_VALUE, m->loc.line);
             }
+            // Idem para un metodo que cae por el final.
+            emit_hook_calls(HookPoint::Exit, fn.name, ir::IR_NO_VALUE,
+                            m->loc.line);
             ir::IrInstr ret{};
             ret.op = ir::IrOp::RET;
             ret.type = fn.ret_type;

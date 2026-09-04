@@ -377,6 +377,10 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
         }
     }
+    // Los `@Hook` se recogen ANTES de bajar ninguna funcion: el gancho puede
+    // estar escrito despues de las funciones que instrumenta, y el orden en el
+    // fichero no puede decidir que se mide.
+    collect_hook_providers();
     lower_global_storage(out_module);
 
     us_previo =
@@ -637,6 +641,10 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // para que los @c IrMethod::ir_fn_name apunten a IrFunctions ya
     // emitidas en @c out_module.functions.
     export_classes_to_ir(out_module);
+    // Y las vistas `@overlay`, por la misma razon y con el mismo criterio: es
+    // lo que el comprobador de tipos SABE de ellas, puesto donde se puede
+    // preguntar.
+    export_overlays_to_ir(out_module);
 
     // volcar las funciones sinteticas de spawn DESPUES de las
     // de usuario y POO.  Asi main sigue siendo la primera funcion del
@@ -807,6 +815,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                   << us_previo << " us | bajar+resto " << us_fns
                   << " us | total " << us_total << " us\n";
     }
+    // Ya se sabe a que llego cada `@Hook`: uno que no alcanzo nada se dice
+    // AQUI, no al recogerlo -- al recogerlo todavia no hay a que compararlo.
+    warn_unreached_hooks();
     return diags_.error_count() == initial_errors;
 }
 
@@ -1369,6 +1380,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         emit_instrument_enter(fd->name, fd->loc.line);
     }
 
+    // Instrumentacion en COMPILACION (`@Hook(enter)`).  Es un eje distinto de
+    // --instrument: aquel llama a un plugin nativo con el contexto de la VM
+    // (`getproc`) y por eso no llega a nativo; este se resuelve entero al
+    // compilar y baja a una llamada normal, asi que funciona en --target bare.
+    emit_hook_calls(HookPoint::Enter, fd->name, ir::IR_NO_VALUE, fd->loc.line);
+
     // C-3: dentro del cuerpo de la PROPIA fn override desactivar el
     // ruteo, o un `a + b` / `str_concat(a, b)` en su body se rutearia a
     // si mismo (recursion infinita).  Se restaura al cerrar la funcion.
@@ -1414,6 +1431,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             fd->name.rfind("__spawn_", 0) != 0) {
             emit_instrument_exit(fd->name, ir::IR_NO_VALUE, fd->loc.line);
         }
+        // Caida por el final, sin `return` escrito.  Tambien es una salida:
+        // no cerrarla dejaria un `enter` sin su `exit` en toda funcion void.
+        emit_hook_calls(HookPoint::Exit, fd->name, ir::IR_NO_VALUE,
+                        fd->loc.line);
         ir::IrInstr ret{};
         ret.op = ir::IrOp::RET;
         ret.type = fn.ret_type;
@@ -1507,6 +1528,228 @@ void Lowering::emit_instrument_exit(const std::string &fn_name,
     const ir::IrValueId v_proc = emit_getproc(line);
     emit_native_call(kVestaTraceLib, "leave", {v_proc, v_name, v_val},
                      ir::IrType::VOID, line);
+}
+
+/**
+ * @brief Comprueba un glob sencillo (`*` comodin) contra un nombre.
+ *
+ * Se implementa aqui, con dos indices y sin recursion, en vez de tirar de
+ * expresiones regulares: el selector se evalua una vez por funcion del modulo
+ * y una regex costaria construirla mas que todo el tejido.
+ *
+ * @param patron Patron con cero o mas `*`.
+ * @param texto  Nombre cualificado de la funcion.
+ * @return @c true si casa.
+ */
+static bool glob_matches(const std::string &pattern, const std::string &text) {
+    size_t p = 0, t = 0;
+    size_t star = std::string::npos, mark = 0;
+    while (t < text.size()) {
+        if (p < pattern.size() &&
+            (pattern[p] == '?' || pattern[p] == text[t])) {
+            ++p;
+            ++t;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            // Se anota donde estaba la estrella para poder retroceder: es lo
+            // que permite que un patron con varias case sin explorar arboles.
+            star = p++;
+            mark = t;
+        } else if (star != std::string::npos) {
+            p = star + 1;
+            t = ++mark;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern[p] == '*') ++p;
+    return p == pattern.size();
+}
+
+/**
+ * @copydoc vx::Lowering::collect_hook_providers
+ */
+void Lowering::collect_hook_providers() {
+    for (auto &decl : mod_.decls) {
+        if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
+        auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+        if (fd->is_no_instrument) hook_excluded_.insert(fd->name);
+        if (fd->hook_point.empty()) continue;
+
+        // El parser ya rechazo un punto que no este en la tabla, asi que aqui
+        // resolver no puede fallar; si fallara seria un desajuste entre las
+        // dos, y callarlo dejaria el gancho sin tejer sin decir por que.
+        HookPoint point = HookPoint::Enter;
+        if (!hook_point_from_name(fd->hook_point, point)) {
+            diags_.diag(fd->loc, DiagLevel::ERR, "VXE931",
+                        {fd->hook_point, hook_points_available()});
+            continue;
+        }
+
+        HookProvider hp;
+        hp.fn_name = fd->name;
+        hp.selector = fd->hook_selector;
+        hp.point = point;
+        hp.loc = fd->loc;
+
+        // La firma la decide el gancho: se valida CADA parametro contra la
+        // tabla del punto.  Uno que ese punto no ofrezca es un error con la
+        // lista de lo que si hay -- rellenarlo con basura daria un numero
+        // plausible y una medicion equivocada, que es peor que no medir.
+        bool signature_ok = true;
+        for (const auto &pd : fd->params) {
+            if (!pd) continue;
+            const HookFieldInfo *field = hook_field_for(pd->name, point);
+            if (!field) {
+                diags_.diag(fd->loc, DiagLevel::ERR, "VXE933",
+                            {fd->hook_point, pd->name,
+                             hook_fields_available(point)});
+                signature_ok = false;
+                continue;
+            }
+            // Lo que la tabla ofrece pero el tejido todavia no sabe rellenar
+            // se DICE aqui, una sola vez.  Callarlo seria pasar un cero que
+            // parece un dato: el gancho mediria y el resultado seria mentira.
+            if (pd->name != "fn_id" && pd->name != "ret_value") {
+                diags_.diag(fd->loc, DiagLevel::WARN, "VXW930",
+                            {pd->name});
+            }
+            hp.params.push_back(pd->name);
+        }
+        if (!signature_ok) continue;
+
+        // Un gancho no puede instrumentarse a si mismo: se llamaria sin fin.
+        // Es la misma precaucion que ya toma el ruteo de los override de
+        // string dentro del cuerpo de la propia funcion que rutea.
+        hook_excluded_.insert(fd->name);
+        hook_providers_.push_back(std::move(hp));
+    }
+}
+
+/**
+ * @copydoc vx::Lowering::warn_hooks_sin_alcance
+ */
+void Lowering::warn_unreached_hooks() {
+    // Un `@Hook(exit)` sin `@Hook(unwind)` en un modulo que lanza excepciones
+    // CUENTA DE MENOS y no lo dice: la excepcion salta el epilogo de las
+    // funciones que atraviesa.  Medido con tres funciones anidadas: 3
+    // entradas, 1 salida, igual en interprete, JIT y nativo.  El aviso no
+    // obliga a nada -- hay ganchos a los que no les importa cerrar --, pero
+    // que la cuenta no cuadre no puede ser una sorpresa.
+    bool has_exit = false, has_unwind = false;
+    for (const auto &hp : hook_providers_) {
+        if (hp.point == HookPoint::Exit) has_exit = true;
+        if (hp.point == HookPoint::Unwind) has_unwind = true;
+    }
+    if (has_exit && !has_unwind && module_throws_) {
+        for (const auto &hp : hook_providers_) {
+            if (hp.point != HookPoint::Exit) continue;
+            diags_.diag(hp.loc, DiagLevel::WARN, "VXW932", {hp.fn_name});
+            break;
+        }
+    }
+    for (const auto &hp : hook_providers_) {
+        if (hp.reached != 0) continue;
+        // Un codigo por caso, y no uno solo con el motivo de argumento: una
+        // frase pasada como dato no la traduce nadie, y el aviso saldria
+        // mitad en un idioma y mitad en otro.
+        if (hp.selector.empty())
+            diags_.diag(hp.loc, DiagLevel::WARN, "VXW933", {hp.fn_name});
+        else
+            diags_.diag(hp.loc, DiagLevel::WARN, "VXW931",
+                        {hp.fn_name, hp.selector});
+    }
+}
+
+/**
+ * @copydoc vx::Lowering::should_instrument
+ */
+bool Lowering::should_instrument(const std::string &fn_name) const {
+    if (hook_providers_.empty()) return false;
+    if (hook_excluded_.count(fn_name)) return false;
+    // Los envoltorios que fabrica el compilador no son codigo del usuario:
+    // medirlos ensucia el perfil con nombres que no aparecen en su fuente.
+    if (fn_name == "__module_init") return false;
+    if (fn_name.rfind("__new_", 0) == 0) return false;
+    if (fn_name.rfind("__async_", 0) == 0) return false;
+    if (fn_name.rfind("__lambda_", 0) == 0) return false;
+    if (fn_name.rfind("__spawn_", 0) == 0) return false;
+    return true;
+}
+
+/**
+ * @copydoc vx::Lowering::hook_fn_id
+ */
+uint32_t Lowering::hook_fn_id(const std::string &fn_name) {
+    auto it = hook_fn_ids_.find(fn_name);
+    if (it != hook_fn_ids_.end()) return it->second;
+    const uint32_t id = static_cast<uint32_t>(hook_fn_ids_.size());
+    hook_fn_ids_.emplace(fn_name, id);
+    return id;
+}
+
+/**
+ * @copydoc vx::Lowering::emit_hook_calls
+ */
+void Lowering::emit_hook_calls(HookPoint point, const std::string &fn_name,
+                               ir::IrValueId v_ret, uint32_t line) {
+    if (!fn_ || !out_mod_) return;
+    if (!should_instrument(fn_name)) return;
+
+    // El selector se escribe con PUNTOS, como el usuario escribe los
+    // namespaces (`"std.*"`), pero por dentro el nombre ya viene aplanado con
+    // `__` (`std__collections__Vector`).  Comparar solo contra el aplanado
+    // haria que un selector escrito de la forma natural no casara NUNCA, y sin
+    // casar no se instrumenta nada -- callando.  Se prueban las dos formas.
+    std::string fn_dotted = fn_name;
+    for (size_t i = 0; i + 1 < fn_dotted.size();) {
+        if (fn_dotted[i] == '_' && fn_dotted[i + 1] == '_') {
+            fn_dotted.replace(i, 2, ".");
+            ++i;
+        } else {
+            ++i;
+        }
+    }
+
+    for (auto &hp : hook_providers_) {
+        if (hp.point != point) continue;
+        // Selector vacio = todas las funciones.  Es el caso util por defecto:
+        // perfilar un programa entero no puede exigir marcarlas una a una.
+        if (!hp.selector.empty() && !glob_matches(hp.selector, fn_name) &&
+            !glob_matches(hp.selector, fn_dotted))
+            continue;
+        ++hp.reached;
+
+        // Se emite UN argumento por cada campo que el gancho pidio, y solo
+        // esos: lo que no se declara no se calcula ni se pasa.
+        std::vector<ir::IrValueId> args;
+        args.reserve(hp.params.size());
+        for (const auto &name : hp.params) {
+            if (name == "fn_id") {
+                args.push_back(emit_const(
+                    ir::IrType::I32,
+                    static_cast<int64_t>(hook_fn_id(fn_name)), line));
+            } else if (name == "ret_value") {
+                args.push_back(v_ret != ir::IR_NO_VALUE
+                                   ? v_ret
+                                   : emit_const(ir::IrType::I64, 0, line));
+            } else {
+                // `call_site` y `depth` necesitan apoyo que todavia no existe
+                // (la direccion de retorno y un contador de anidamiento).  El
+                // aviso se da UNA vez, al recoger el gancho, no aqui: aqui se
+                // repetiria por cada funcion instrumentada.
+                args.push_back(emit_const(ir::IrType::I64, 0, line));
+            }
+        }
+
+        ir::IrInstr in{};
+        in.op = ir::IrOp::CALL;
+        in.type = ir::IrType::VOID;
+        in.dst = ir::IR_NO_VALUE;
+        in.func_name = hp.fn_name;
+        in.operands = std::move(args);
+        in.source_line = line;
+        emit(current_block_, std::move(in));
+    }
 }
 
 /**

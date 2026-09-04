@@ -1874,6 +1874,37 @@ struct FunctionDecl : Node {
     /// dispatch por cpuid se salta y el fp apunta a esta fn.  Firma
     /// esperada para "memcpy": void(u8*, u8*, u64).
     std::string helper_override_target;
+    /// Instrumentacion en COMPILACION: `@Hook(<punto>[, "<selector>"])`.
+    /// Esta funcion PROVEE el gancho que se llama al entrar (`enter`) o al
+    /// salir (`exit`) de las funciones que el selector abarque; su sola
+    /// presencia lo activa, igual que @AllocatorOverride / @PanicHandler.
+    /// Vacio => esta funcion no provee ningun gancho.
+    ///
+    /// Es el AOP ESTATICO (tejido en compilacion), distinto por diseno del
+    /// @Aspect dinamico: aquel registra el advice en runtime via
+    /// `advice_chain` y por eso NO llega a compilacion nativa.  Este se
+    /// resuelve entero al compilar, asi que funciona en --target bare.
+    ///
+    /// Mecanismo GENERAL, no solo para perfilar: sirve igual para trazar,
+    /// medir cobertura, un watchdog o auditoria.  El punto va como
+    /// identificador (no string) por consistencia con @HelperOverride, y
+    /// deja sitio a `@Hook(alloc)` / `@Hook(panic)` sin anadir keywords.
+    std::string hook_point;
+    /// Selector del `@Hook`: patron glob contra el nombre cualificado de la
+    /// funcion (p.ej. "std.*", "mi.modulo.*").  VACIO significa TODAS las
+    /// funciones, que es el caso util por defecto -- perfilar un programa
+    /// entero no puede exigir marcar funcion por funcion.
+    std::string hook_selector;
+    /// `@NoInstrument`: esta funcion NUNCA se instrumenta, la abarque o no
+    /// el selector de un @Hook.
+    ///
+    /// Es la pieza que hace posible medir la stdlib ENTERA: el que escribe
+    /// el gancho decide el codigo que corre, asi que se escribe una salida
+    /// propia marcada aqui y se escanea todo lo demas.  Se descarto excluir
+    /// automaticamente el cierre transitivo del gancho porque dejaria fuera
+    /// media stdlib sin que el usuario lo pidiera -- y una exclusion que no
+    /// se ve es justo el modo de fallo que este proyecto persigue.
+    bool is_no_instrument = false;
     /// Subsistema de coste (modo --analyze): `@complexity(O(...))`.
     /// Metadata PURA -- NO afecta el codegen.  La consume el analizador
     /// estatico (analyze::bigo) como contrato a validar contra la

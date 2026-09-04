@@ -64,6 +64,7 @@
 #include "vx/builtin_names.h" // Builtin: el nombre ya resuelto, no la cadena
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
+#include "vx/hook_points.h" // vocabulario de @Hook: puntos y campos
 #include "vx/type_checker.h"
 
 namespace vx {
@@ -2767,6 +2768,16 @@ class Lowering {
      * el runtime las define y los transpilers no deben re-emitirlas.
      */
     void export_classes_to_ir(ir::IrModule &out);
+    /**
+     * @brief Lleva al modulo las vistas `@overlay` con la cobertura de sus
+     *        campos.
+     *
+     * Mismo motivo que @c export_classes_to_ir: es conocimiento de TIPO, y sin
+     * pasarlo al modulo nadie mas puede preguntarlo.
+     *
+     * @param out Modulo IR al que anadir las vistas.
+     */
+    void export_overlays_to_ir(ir::IrModule &out);
 
     /**
      * @brief Lower de @c this -> primer parametro del metodo en curso.
@@ -4486,6 +4497,86 @@ class Lowering {
     /// @c IR_NO_VALUE (funcion void), se pasa @c 0.
     void emit_instrument_exit(const std::string &fn_name, ir::IrValueId v_ret,
                               uint32_t line);
+
+    /**
+     * @brief Un `@Hook(<punto>[, "<selector>"])` declarado en el modulo.
+     *
+     * Se recoge ANTES de bajar ninguna funcion porque el gancho puede estar
+     * escrito despues de las funciones que instrumenta -- y el orden en el
+     * fichero no puede decidir que se mide.
+     */
+    struct HookProvider {
+        std::string fn_name;              ///< Funcion que provee el gancho.
+        std::string selector;             ///< Glob; vacio = todas.
+        std::vector<std::string> params;  ///< Campos que pidio, en orden.
+        HookPoint point = HookPoint::Enter; ///< Donde se instala.
+        SourceLoc loc;                    ///< Donde se declaro, para el aviso.
+        /// Cuantas funciones alcanzo.  CERO casi siempre es una errata en el
+        /// selector, y sin avisar se traduce en "no se instrumenta nada" sin
+        /// que nadie lo note -- que es como muerde un fallo mudo.
+        size_t reached = 0;
+    };
+
+    /// Los `@Hook` del modulo, ya validados contra @ref kHookPoints.
+    std::vector<HookProvider> hook_providers_;
+
+    /// Nombres marcados `@NoInstrument`: nunca se instrumentan.
+    std::unordered_set<std::string> hook_excluded_;
+
+    /**
+     * @brief Recoge y valida los `@Hook` / `@NoInstrument` del modulo.
+     *
+     * Valida aqui la FIRMA del gancho contra @ref kHookFields: un parametro
+     * que el punto no ofrece es un error CON la lista de lo disponible, no un
+     * argumento relleno con basura.
+     */
+    void collect_hook_providers();
+
+    /**
+     * @brief Emite la llamada a los ganchos instalados en un punto.
+     * @param point Punto que se esta tejiendo.
+     * @param fn_name Funcion instrumentada (para decidir el selector y el id).
+     * @param v_ret Valor de retorno, solo en @c Exit; @c IR_NO_VALUE si no hay.
+     * @param line Linea para el diagnostico.
+     */
+    void emit_hook_calls(HookPoint point, const std::string &fn_name,
+                         ir::IrValueId v_ret, uint32_t line);
+
+    /**
+     * @brief Decide si una funcion debe instrumentarse.
+     *
+     * Excluye lo marcado `@NoInstrument`, los propios ganchos (o se llamarian
+     * a si mismos sin fin) y los envoltorios sinteticos del compilador, que no
+     * son codigo que el usuario haya escrito.
+     */
+    bool should_instrument(const std::string &fn_name) const;
+
+    /**
+     * @brief Identificador estable de una funcion, el `fn_id` del gancho.
+     *
+     * Es un indice y no la direccion de la funcion a proposito: cabe en un
+     * inmediato, no necesita reubicacion ni tabla de simbolos, y por eso
+     * funciona igual en `--target bare`.  La traduccion a fichero/linea la
+     * da el `.vxdbg`.
+     */
+    uint32_t hook_fn_id(const std::string &fn_name);
+
+    /// fn_id asignado a cada funcion instrumentada.
+    std::unordered_map<std::string, uint32_t> hook_fn_ids_;
+
+    /**
+     * @brief Avisa de los `@Hook` cuyo selector no alcanzo ninguna funcion.
+     *
+     * Se llama al terminar de bajar el modulo, cuando ya se sabe a que llego
+     * cada uno.  Un selector que no casa deja el programa SIN instrumentar y
+     * compilando igual de bien: sin este aviso el usuario mediria nada y
+     * creeria que midio.
+     */
+    void warn_unreached_hooks();
+
+    /// @c true si el modulo baja algun `throw`.  Condiciona lo que se le
+    /// puede prometer a un `@Hook(exit)`: por ahi no se sale por el epilogo.
+    bool module_throws_ = false;
 
     /// Spill slots activos durante el body y catches de un try.
     /// Para cada variable del scope outer que se asigna dentro del try,

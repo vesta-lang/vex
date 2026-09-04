@@ -1,0 +1,92 @@
+// 543 -- @Hook: instrumentacion tejida en COMPILACION.
+//
+// Un `@Hook(<punto>)` marca una funcion como PROVEEDORA del gancho que se
+// llama al entrar o al salir de las demas.  Su sola presencia lo activa, igual
+// que @AllocatorOverride o @PanicHandler; sin ningun @Hook no se teje nada y
+// el binario sale exactamente igual.
+//
+// Es el equivalente de `-finstrument-functions` de GCC/Clang, pero como
+// notacion del lenguaje y de uso MULTIPLE: lo mismo sirve para perfilar que
+// para trazar, contar cobertura o auditar.
+//
+// Se resuelve ENTERO al compilar, asi que baja a una llamada normal y funciona
+// en los tres modos -- incluido el binario nativo en `--target bare`, donde el
+// @Aspect dinamico no llega porque registra el advice en ejecucion.
+//
+// Salida esperada (identica en interprete, JIT y binario nativo):
+//   -> entra 0        main
+//   -> entra 1        doblar
+//   <- sale 1 con 40  doblar
+//   -> entra 2        falla
+//   -> entra 3        el constructor de MiExc
+//   <- sale 3 con 0   el constructor
+//   ~~ aterriza en 0  main captura
+//   <- sale 0 con 45  main
+// y el programa devuelve 45 (40 + 5).
+//
+// Dos cosas que leer en esa traza: `sin_medir` no aparece por ninguna parte
+// -- esta excluida --, y la funcion 2 (`falla`) ENTRA y no sale nunca, porque
+// el throw se la salto.  Esa es exactamente la razon de que exista `unwind`.
+
+namespace ejemplos.hook;
+
+// El gancho declara la firma que QUIERE: se le pasan esos campos y solo esos.
+// `fn_id` identifica la funcion instrumentada; es un numero y no una direccion
+// para que quepa en un inmediato y funcione tambien sin tabla de simbolos.
+@Hook(enter)
+void al_entrar(u32 fn_id) {
+	println("-> entra ${fn_id}");
+}
+
+// En `exit` hay ademas `ret_value`, que en `enter` todavia no existe: pedirlo
+// alli es un error de compilacion con la lista de lo que si hay.
+@Hook(exit)
+void al_salir(u32 fn_id, u64 ret_value) {
+	println("<- sale ${fn_id} con ${ret_value}");
+}
+
+// Tercer punto: una excepcion NO sale por el epilogo, salta al catch, y las
+// funciones que atraviesa no llaman a su `exit`.  `unwind` avisa de donde
+// cayo el control para que un gancho que lleve una pila pueda rebobinarla.
+// Sin el, el compilador avisa de que la cuenta no va a cuadrar.
+@Hook(unwind)
+void al_aterrizar(u32 fn_id) {
+	println("~~ aterriza en ${fn_id}");
+}
+
+// Lo que el gancho usa se marca para que no se instrumente a si mismo.  El
+// compilador ya excluye al propio gancho; esto es para las funciones de apoyo
+// que el gancho llame, y es lo que permite instrumentar TODO lo demas.
+@NoInstrument
+i32 sin_medir(i32 x) {
+	return x + 1;
+}
+
+i32 doblar(i32 x) {
+	return x + x;
+}
+
+class MiExc {
+	public i32 valor;
+
+	public MiExc(i32 v) {
+		this.valor = v;
+	}
+}
+
+i32 falla() {
+	throw new MiExc(5);
+}
+
+i32 main() {
+	i32 base = sin_medir(19); // no aparece en la traza
+	i32 r    = doblar(base);
+	try {
+		r = r + falla();
+	} catch (MiExc e) {
+		// `falla` entro pero no salio: se la salto el throw.  Por eso el
+		// gancho de aterrizaje existe.
+		r = r + e.valor;
+	}
+	return r;
+}

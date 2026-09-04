@@ -550,6 +550,22 @@ void Lowering::lower_try(ast::TryStmt *s) {
                 (*outer_scope)[name] = v_load;
             }
         }
+        // `@Hook(unwind)`: aqui aterriza el salto.  Las funciones que la
+        // excepcion atraveso NO ejecutaron su `exit` -- no salieron por su
+        // epilogo, se las salto --, asi que un gancho que lleve una pila se
+        // queda con entradas sin cerrar.  Se le avisa DONDE cayo el control
+        // para que rebobine hasta aqui; el camino normal no paga nada por
+        // esto, que es lo que descarto llevar un contador de profundidad.
+        //
+        // Va DESPUES del bind de la excepcion y de recargar los spills, por
+        // la misma razon que lo dice el comentario de arriba: al entrar al
+        // handler el objeto lanzado viaja en r0, y una llamada lo pisa.
+        // Ponerlo al principio del handler hacia que `catch (E e)` leyera
+        // basura, y no daba un error -- daba OTRO VALOR, distinto ademas
+        // entre el interprete y el JIT.
+        if (fn_ != nullptr)
+            emit_hook_calls(HookPoint::Unwind, fn_->name, ir::IR_NO_VALUE,
+                            s->loc.line);
         if (cc.body) lower_stmt(cc.body.get());
         pop_scope();
         // capturar snapshot del scope antes de pop_scope NO
@@ -925,6 +941,10 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     block_terminated_ = false;
 }
 void Lowering::lower_throw(ast::ThrowStmt *s) {
+    // Que el modulo lance condiciona lo que se le puede prometer a un
+    // `@Hook(exit)`: por aqui no se sale por el epilogo.  Ver
+    // warn_hooks_sin_alcance().
+    module_throws_ = true;
     if (!s->value) {
         error_at(s->loc, "lowering: throw sin valor");
         return;

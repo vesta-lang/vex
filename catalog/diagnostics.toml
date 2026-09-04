@@ -1914,3 +1914,52 @@ es = "'{0}' no es algo por lo que un @Target pueda preguntar: ningun objetivo lo
 [VXW924]
 en = "this will not compile to a bare native binary: it needs {0}"
 es = "esto no compila a un binario nativo sin runtime: necesita {0}"
+
+# --- @Hook: instrumentacion tejida en compilacion (VXE930-933, VXW930-932) ---
+#
+# Todos estos mensajes enumeran lo DISPONIBLE en vez de limitarse a rechazar,
+# y esa lista sale de la tabla de `include/vx/hook_points.h`, no del texto: al
+# anadir un punto o un campo, el diagnostico se actualiza solo.  Es la leccion
+# de la errata en una clave de @Target, donde el vocabulario vivia en dos
+# sitios ya divergidos y equivocarse borraba codigo en SILENCIO.
+
+[VXE930]
+en = "@Hook(<point>) needs the instrumentation point.  Available: {0}"
+es = "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"
+
+[VXE931]
+en = "unknown instrumentation point in @Hook: '{0}'.  Available: {1}"
+es = "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"
+
+[VXE932]
+en = "the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")"
+es = "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"
+
+[VXE933]
+en = "@Hook({0}): the parameter '{1}' is not a field available at that point.  Available: {2}"
+es = "@Hook({0}): el parametro '{1}' no es un campo disponible en ese punto.  Disponibles: {2}"
+
+# Un cero que parece un dato es peor que no medir: el gancho mediria y el
+# resultado seria mentira.  Por eso se dice, una sola vez, al recogerlo.
+[VXW930]
+en = "@Hook: the field '{0}' is not filled in yet; the hook will get it as 0"
+es = "@Hook: el campo '{0}' todavia no se rellena; el gancho lo recibira como 0"
+
+# Casi siempre una errata en el selector.  Sin este aviso el programa compila,
+# corre y no instrumenta nada: el usuario mediria nada y creeria que midio.
+# Dos codigos y no uno con el motivo como argumento: meter una frase como dato
+# la deja SIN traducir, y el aviso saldria mitad en un idioma y mitad en otro.
+[VXW931]
+en = "@Hook: the hook '{0}' was not installed anywhere: the selector \"{1}\" matches no function.  The program will run WITHOUT instrumentation"
+es = "@Hook: el gancho '{0}' no se instalo en ningun sitio: el selector \"{1}\" no casa con ninguna funcion.  El programa correra SIN instrumentar"
+
+[VXW933]
+en = "@Hook: the hook '{0}' was not installed anywhere: there is no function to instrument.  The program will run WITHOUT instrumentation"
+es = "@Hook: el gancho '{0}' no se instalo en ningun sitio: no hay ninguna funcion que instrumentar.  El programa correra SIN instrumentar"
+
+# Una excepcion no sale por el epilogo: salta al catch y las funciones que
+# atraviesa no llaman a su gancho de salida.  Medido en los tres modos con
+# tres funciones anidadas: 3 entradas, 1 sola salida.
+[VXW932]
+en = "@Hook(exit): this module throws, and an exception does NOT leave through the epilogue: the functions it crosses will not call '{0}'.  Add a @Hook(unwind) if the hook keeps a count of the entries"
+es = "@Hook(exit): este modulo lanza excepciones, y una excepcion NO sale por el epilogo: las funciones que atraviesa no llamaran a '{0}'.  Anade un @Hook(unwind) si el gancho lleva cuenta de las entradas"

@@ -1306,6 +1306,13 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     emit_instrument_exit(fname, sret_retbuf_, s->loc.line);
                 }
             }
+            // `@Hook(exit)` en el camino SRET.  Se pasa el buffer de retorno
+            // porque es lo que la funcion devuelve aqui; sin cerrar tambien
+            // esta rama, una funcion que devuelve Optional/Result entraria y
+            // no saldria, y el perfil quedaria descuadrado sin decirlo.
+            if (fn_ != nullptr)
+                emit_hook_calls(HookPoint::Exit, fn_->name, sret_retbuf_,
+                                s->loc.line);
             ir::IrInstr ret{};
             ret.op = ir::IrOp::RET;
             ret.type = ir::IrType::VOID;
@@ -1404,6 +1411,9 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 emit_instrument_exit(fname, sret_retbuf_, s->loc.line);
             }
         }
+        if (fn_ != nullptr)
+            emit_hook_calls(HookPoint::Exit, fn_->name, sret_retbuf_,
+                            s->loc.line);
         ir::IrInstr ret{};
         ret.op = ir::IrOp::RET;
         ret.type = ir::IrType::VOID;
@@ -1555,6 +1565,11 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             emit_instrument_exit(fname, v_ret, s->loc.line);
         }
     }
+    // `@Hook(exit)`: mismo punto que la instrumentacion de arriba, y por el
+    // mismo motivo -- despues de los cleanups y antes del RET, para que el
+    // gancho vea la funcion todavia viva.
+    if (fn_ != nullptr)
+        emit_hook_calls(HookPoint::Exit, fn_->name, v_ret, s->loc.line);
     ir::IrInstr ret{};
     ret.op = ir::IrOp::RET;
     ret.type = fn_->ret_type;

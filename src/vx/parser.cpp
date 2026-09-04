@@ -29,6 +29,8 @@
 #include "util/env_flags.h"
 #include "vx/parser.h"
 
+#include "vx/hook_points.h"
+
 #include "vx/contract_when.h"
 
 #include <algorithm> // std::find sobre los vectores de nombres (lo arrastraba
@@ -1710,6 +1712,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     /* CPU dispatch Inc 4: @HelperOverride(<helper>).  Guarda el nombre del
        helper objetivo (hoy "memcpy"); vacio => no es override. */
     std::string top_helper_override_target;
+    // Instrumentacion en compilacion: @Hook(<punto>[, "<selector>"]) y
+    // @NoInstrument.  Ver ast::FunctionDecl::hook_point.
+    std::string top_hook_point;
+    std::string top_hook_selector;
+    bool top_is_no_instrument = false;
     bool top_is_introspect = false;
     bool top_is_abstract =
         false; /* @Abstract struct: no instanciable, solo base */
@@ -1797,6 +1804,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_naked = true;
             else if (current_.lexeme == "NoIdiom")
                 top_is_no_idiom = true;
+            else if (current_.lexeme == "NoInstrument")
+                top_is_no_instrument = true;
             else if (current_.lexeme == "NoExcept")
                 top_is_noexcept = true;
             else if (current_.lexeme == "NoExceptions")
@@ -1862,6 +1871,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             // CPU dispatch Inc 4: @HelperOverride(<helper>).
             const bool is_helper_override =
                 (current_.lexeme == "HelperOverride");
+            // Instrumentacion en compilacion: @Hook(<punto>[, "<selector>"]).
+            const bool is_hook = (current_.lexeme == "Hook");
             (void)consume();
             // @complexity(O(...)[, n = <expr>]): contrato de coste para el
             // modo --analyze.  Se captura el texto RAW entre los parens y se
@@ -2069,6 +2080,54 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 }
                 (void)expect(TokenKind::RPAREN,
                              "se esperaba ')' tras N en @bits(N)");
+                continue;
+            }
+            if (is_hook) {
+                // @Hook(<punto>[, "<selector>"]): esta funcion PROVEE el
+                // gancho del punto dado.  El punto va como identificador (no
+                // string) igual que en @HelperOverride, y deja sitio a
+                // @Hook(alloc) / @Hook(panic) sin anadir keywords nuevas.
+                //
+                // El selector es OPCIONAL y su ausencia significa TODAS las
+                // funciones: perfilar un programa entero no puede exigir
+                // marcarlas una a una.  Para acotar se pasa un glob contra el
+                // nombre cualificado ("std.*", "mi.modulo.*").
+                (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @Hook");
+                if (current_.kind != TokenKind::IDENTIFIER) {
+                    diags_.diag(current_.loc, DiagLevel::ERR, "VXE930",
+                                {hook_points_available()});
+                } else {
+                    // Una errata en el punto tiene que DOLER aqui.  Si se
+                    // aceptase, el gancho no se tejeria en ningun sitio y el
+                    // programa compilaria y correria sin instrumentar nada:
+                    // un fallo mudo, que es exactamente como mordio la errata
+                    // en una clave de @Target.
+                    HookPoint hook_pt = HookPoint::Enter;
+                    if (!hook_point_from_name(current_.lexeme, hook_pt)) {
+                        diags_.diag(
+                            current_.loc, DiagLevel::ERR, "VXE931",
+                            {current_.lexeme, hook_points_available()});
+                    } else {
+                        top_hook_point = current_.lexeme;
+                    }
+                    (void)consume();
+                }
+                // Selector opcional: `, "<glob>"`.
+                if (current_.kind == TokenKind::COMMA) {
+                    (void)consume();
+                    const bool is_string =
+                        (current_.kind == TokenKind::STRING_LIT ||
+                         current_.kind == TokenKind::RAW_STRING_LIT);
+                    if (!is_string) {
+                        diags_.diag(current_.loc, DiagLevel::ERR, "VXE932",
+                                    {});
+                    } else {
+                        top_hook_selector = current_.str_val;
+                        (void)consume();
+                    }
+                }
+                (void)expect(TokenKind::RPAREN,
+                             "se esperaba ')' al cerrar @Hook(...)");
                 continue;
             }
             if (is_helper_override) {
@@ -2686,6 +2745,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_sync_impl) fd->is_sync_impl = true;
         if (fd && !top_helper_override_target.empty())
             fd->helper_override_target = top_helper_override_target;
+        if (fd && !top_hook_point.empty()) {
+            fd->hook_point = top_hook_point;
+            fd->hook_selector = top_hook_selector;
+        }
+        if (fd && top_is_no_instrument) fd->is_no_instrument = true;
         // Subsistema de coste: propagar el contrato @complexity al AST.
         // Sin resolver: el type checker aplica la regla de prioridad sobre
         // todos juntos.  Los campos resueltos los rellena el.

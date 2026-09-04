@@ -267,6 +267,10 @@ const CatEntry kEntries[] = {
     {"VXA068", {"while compiling '{2}': MOp {0} does not say which registers it touches, and nothing answers for it on {1}. An instruction's effects are never guessed: declare them in isa_effects_{1}.cpp -- its mnemonic if the ISA has that instruction, its case in `pseudo` if it is one of ours -- or in `generic_pseudo` when everything it touches is already in its operands", "al compilar '{2}': la MOp {0} no dice que registros toca, y para {1} no hay quien lo conteste.  Los efectos de una instruccion no se adivinan: hay que declararlos en isa_effects_{1}.cpp -- su mnemonico si la ISA tiene esa instruccion, su caso en `pseudo` si es de las nuestras -- o en `generic_pseudo` si todo lo que toca ya esta en sus operandos"}},
     {"VXA069", {"while compiling '{2}': there is no effects table for {1}, so nothing can say what MOp {0} touches -- declare one in src/jit/sched/isa_effects_{1}.cpp and list it in isa_effects()", "al compilar '{2}': no hay tabla de efectos para {1}, asi que nadie puede decir que toca la MOp {0} -- hay que declararla en src/jit/sched/isa_effects_{1}.cpp y nombrarla en isa_effects()"}},
     {"VXA070", {"the function '{2}' does not say which target it is compiled for, so its calling convention is unknown -- whoever builds it must set MFunction::target", "la funcion '{2}' no dice para que objetivo se compila, asi que su convencion de llamada se desconoce -- quien la construye tiene que poner MFunction::target"}},
+    {"VXE930", {"@Hook(<point>) needs the instrumentation point.  Available: {0}", "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"}},
+    {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
+    {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
+    {"VXE933", {"@Hook({0}): the parameter '{1}' is not a field available at that point.  Available: {2}", "@Hook({0}): el parametro '{1}' no es un campo disponible en ese punto.  Disponibles: {2}"}},
     {"VXF001", {"formatter: the lexer moved backwards through the source", "formateador: el lexer retrocedio en el fuente"}},
     {"VXF002", {"formatter: a token falls outside the source buffer", "formateador: un token cae fuera del fuente"}},
     {"VXF003", {"formatter: the source could not be tokenized, left untouched", "formateador: el fuente no se pudo tokenizar; se deja intacto"}},
@@ -312,6 +316,10 @@ const CatEntry kEntries[] = {
     {"VXW920", {"this loop advances past its limit without ever equalling it, so its '!=' guard never stops it: it either does not end, or ends only after wrapping around the whole type", "este bucle se pasa de su limite sin llegar a igualarlo nunca, asi que su guarda '!=' no lo para: o no termina, o solo termina tras dar la vuelta al tipo entero"}},
     {"VXW924", {"this will not compile to a bare native binary: it needs {0}", "esto no compila a un binario nativo sin runtime: necesita {0}"}},
     {"VXW925", {"'@overlaps({0})' on the field '{1}' is not true: the two do not share a single byte ('{1}' covers {2}..{3}, '{0}' covers {4}..{5}). The mark says the format has a union here; leaving it once it stops being true turns it into a note nobody can trust", "'@overlaps({0})' en el campo '{1}' no es cierto: los dos no comparten ni un byte ('{1}' cubre {2}..{3} y '{0}' cubre {4}..{5}). La marca dice que ahi el formato tiene una union; dejarla cuando deja de ser verdad la convierte en una nota de la que nadie se puede fiar"}},
+    {"VXW930", {"@Hook: the field '{0}' is not filled in yet; the hook will get it as 0", "@Hook: el campo '{0}' todavia no se rellena; el gancho lo recibira como 0"}},
+    {"VXW931", {"@Hook: the hook '{0}' was not installed anywhere: the selector \"{1}\" matches no function.  The program will run WITHOUT instrumentation", "@Hook: el gancho '{0}' no se instalo en ningun sitio: el selector \"{1}\" no casa con ninguna funcion.  El programa correra SIN instrumentar"}},
+    {"VXW932", {"@Hook(exit): this module throws, and an exception does NOT leave through the epilogue: the functions it crosses will not call '{0}'.  Add a @Hook(unwind) if the hook keeps a count of the entries", "@Hook(exit): este modulo lanza excepciones, y una excepcion NO sale por el epilogo: las funciones que atraviesa no llamaran a '{0}'.  Anade un @Hook(unwind) si el gancho lleva cuenta de las entradas"}},
+    {"VXW933", {"@Hook: the hook '{0}' was not installed anywhere: there is no function to instrument.  The program will run WITHOUT instrumentation", "@Hook: el gancho '{0}' no se instalo en ningun sitio: no hay ninguna funcion que instrumentar.  El programa correra SIN instrumentar"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"bulk.body_does_more", {"the body does something beyond walking the run and moving it", "el cuerpo hace algo mas que recorrer el tramo y moverlo"}},
     {"bulk.bound_varies", {"the limit changes inside the loop, so there is no fixed run", "el limite cambia dentro del bucle, asi que no hay un tramo fijo"}},
@@ -382,7 +390,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 361;
+const int kEntryCount = 369;
 
 } // namespace
 

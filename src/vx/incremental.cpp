@@ -138,6 +138,7 @@ uint64_t BuildConfig::ir_fingerprint() const {
     mix_u64(h, native_poo ? 1u : 0u);
     mix_u64(h, exceptions_enabled ? 1u : 0u);
     mix_str(h, instrument_mode);
+    mix_u64(h, hooks_fp);
     mix_str(h, tgt_os);
     mix_str(h, tgt_arch);
     /* Y los mandos del entorno que cambian lo EMITIDO.  Es lo que la cabecera

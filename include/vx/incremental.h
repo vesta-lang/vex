@@ -66,6 +66,21 @@ struct BuildConfig {
     bool native_poo = false;        ///< clases AOT (calloc/dtor) vs VM (GC).
     bool exceptions_enabled = true; ///< lowering de try/catch en AOT.
     std::string instrument_mode; ///< "none"/"trace"/"profile": afecta emision.
+    /**
+     * @brief Huella de los `@Hook` activos; 0 = ninguno.
+     *
+     * Los ganchos NO son configuracion de la linea de ordenes: se declaran en
+     * el fuente.  Aun asi entran aqui, y no en el hash del modulo, porque su
+     * efecto es GLOBAL -- un gancho declarado en un fichero teje llamadas en
+     * las funciones de OTROS, cuyo fuente no ha cambiado.  Sin esta huella se
+     * les serviria el IR cacheado SIN instrumentar: no daria error, daria un
+     * programa que dice medir y no mide.
+     *
+     * De paso resuelve lo otro: al ser parte de la clave, el IR instrumentado
+     * y el limpio viven en entradas distintas y no se pisan.  El aislamiento
+     * sale de la clave, sin una cache aparte que mantener.
+     */
+    uint64_t hooks_fp = 0;
     std::string tgt_os;          ///< @Target OS (solo si el modulo lo usa).
     std::string tgt_arch;        ///< @Target arch (idem).
     // -- Dimensiones que afectan SOLO al artefacto final (post-merge) --------
