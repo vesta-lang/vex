@@ -1636,7 +1636,7 @@ void Lowering::collect_hook_providers() {
             // se DICE aqui, una sola vez.  Callarlo seria pasar un cero que
             // parece un dato: el gancho mediria y el resultado seria mentira.
             if (pd->name != "fn_id" && pd->name != "ret_value" &&
-                pd->name != "call_site") {
+                pd->name != "call_site" && pd->name != "fn_name") {
                 diags_.diag(fd->loc, DiagLevel::WARN, "VXW930",
                             {pd->name});
             }
@@ -1759,6 +1759,30 @@ void Lowering::emit_hook_calls(HookPoint point, const std::string &fn_name,
                 args.push_back(v_ret != ir::IR_NO_VALUE
                                    ? v_ret
                                    : emit_const(ir::IrType::I64, 0, line));
+            } else if (name == "fn_name") {
+                /* El nombre lo sabe el compilador, asi que se interna como
+                 * literal y se construye un `string` de verdad con el MISMO
+                 * mecanismo que el resto del lenguaje: eso elige la
+                 * representacion segun el modo -- cadena por valor con
+                 * optimizacion de cadena corta en nativo, objeto del
+                 * recolector en interprete y JIT --, y por eso vale igual en
+                 * `--target bare`.
+                 *
+                 * Pasar la direccion cruda no valia: el literal vive en la
+                 * memoria de la maquina virtual y `print_cstr` espera una del
+                 * proceso, asi que imprimirlo reventaba con un acceso
+                 * invalido.  Es la distincion que el volcado del intermedio
+                 * marca con `@host`. */
+                std::vector<uint8_t> bytes(fn_name.begin(), fn_name.end());
+                bytes.push_back(0); // nul, por si cruza a una API en C
+                const uint64_t idx =
+                    out_mod_->intern_static_data(std::move(bytes));
+                const ir::IrValueId v_addr = emit_str_lit_addr(idx, line);
+                const int64_t n = static_cast<int64_t>(fn_name.size());
+                const ir::IrValueId v_len =
+                    emit_const(ir::IrType::I64, n, line);
+                args.push_back(
+                    emit_string_literal_repr(v_addr, v_len, n, line));
             } else if (name == "call_site") {
                 // Una instruccion, y solo si el gancho lo pide: la direccion
                 // ya esta en la pila porque la puso la llamada.

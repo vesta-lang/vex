@@ -121,6 +121,19 @@ inline constexpr HookFieldInfo kHookFields[] = {
      "profundidad de anidamiento de la llamada"},
     {"ret_value", "u64", hook_mask(HookPoint::Exit),
      "valor devuelto por la funcion"},
+    /* El NOMBRE, que el compilador conoce al compilar: se interna como literal
+     * y se pasa el puntero, igual que hace la instrumentacion de traza.  Es lo
+     * que permite que un gancho imprima "-> app.calcular" en vez de un numero
+     * opaco, sin que el programa tenga que llevar su propia tabla.
+     *
+     * Va como `string` y vale igual en `--target bare`: la representacion la
+     * elige el compilador segun el modo -- cadena por valor con optimizacion
+     * de cadena corta en nativo, objeto del recolector en interprete y JIT --,
+     * que es lo mismo que hacen los builtins de introspeccion. */
+    {"fn_name", "string",
+     hook_mask(HookPoint::Enter) | hook_mask(HookPoint::Exit) |
+         hook_mask(HookPoint::Unwind),
+     "nombre de la funcion instrumentada"},
 };
 
 /** @brief Cuantos campos tiene la tabla. */

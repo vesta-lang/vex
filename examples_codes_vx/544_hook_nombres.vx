@@ -1,0 +1,75 @@
+// 544 -- Un trazador que imprime QUE funcion se llama, no un numero.
+//
+// El gancho pide `fn_name` y el compilador se lo da: el nombre lo sabe al
+// compilar, asi que lo interna como literal y construye la cadena con el mismo
+// mecanismo que el resto del lenguaje.  Eso elige la representacion segun el
+// modo -- cadena por valor con optimizacion de cadena corta en el binario
+// nativo, objeto del recolector en interprete y JIT --, y por eso el ejemplo
+// vale igual en `--target bare`, donde no hay runtime que valga.
+//
+// Sin este campo el gancho solo recibia `fn_id`, un numero opaco: para saber a
+// que funcion correspondia habia que mirar el fichero de depuracion desde
+// fuera, y desde DENTRO del programa no habia forma.  La introspeccion que hay
+// hoy -- `field_count`, `field_name`, y la reflexion de clases y metodos -- no
+// alcanza a las funciones libres.
+//
+// Salida esperada (identica en interprete, JIT y binario nativo):
+//   -> entra  main
+//   -> entra  ejemplos__hook_nombres__preparar
+//   <- sale   ejemplos__hook_nombres__preparar
+//   -> entra  ejemplos__hook_nombres__acumular      (n=3)
+//   -> entra  ejemplos__hook_nombres__acumular      (n=2)
+//   -> entra  ejemplos__hook_nombres__acumular      (n=1)
+//   -> entra  ejemplos__hook_nombres__acumular      (n=0, el caso base)
+//   <- sale   ejemplos__hook_nombres__acumular      x4, en orden inverso
+//   <- sale   main
+// -- doce lineas en total -- y el programa devuelve 12.
+//
+// Las cuatro entradas de `acumular` dan el MISMO nombre, que es justo lo que
+// se queria ver: el nombre es de la funcion, no de la llamada.  Y `sin_medir`
+// no aparece por ningun lado.
+//
+// Los nombres salen APLANADOS porque ese es el nombre real del simbolo: el
+// mismo por el que se le llama y el que aparece en un volcado o en el
+// enlazador.  Traducirlo al que se escribe en el fuente es cosa del fichero de
+// depuracion, no del programa.
+
+namespace ejemplos.hook_nombres;
+
+@Hook(enter)
+void al_entrar(string fn_name) {
+	print("-> entra  ");
+	println(fn_name);
+}
+
+@Hook(exit)
+void al_salir(string fn_name) {
+	print("<- sale   ");
+	println(fn_name);
+}
+
+// Lo que el gancho usa para imprimir queda fuera de la medida: si no, cada
+// linea de traza generaria mas traza.  El compilador ya excluye al propio
+// gancho; esto es para lo que el gancho llame.
+@NoInstrument
+i32 sin_medir(i32 x) {
+	return x + 1;
+}
+
+i32 preparar() {
+	return sin_medir(2);
+}
+
+// Recursiva a proposito: es lo unico que el inline no se lleva por delante, y
+// asi se ve que las tres entradas dan el MISMO nombre.
+i32 acumular(i32 n) {
+	if (n <= 0) {
+		return 0;
+	}
+	return n + acumular(n - 1);
+}
+
+i32 main() {
+	i32 base = preparar();     // 3
+	return acumular(base) + 6; // 3+2+1 = 6, +6 = 12
+}
