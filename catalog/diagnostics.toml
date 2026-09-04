@@ -1963,3 +1963,13 @@ es = "@Hook: el gancho '{0}' no se instalo en ningun sitio: no hay ninguna funci
 [VXW932]
 en = "@Hook(exit): this module throws, and an exception does NOT leave through the epilogue: the functions it crosses will not call '{0}'.  Add a @Hook(unwind) if the hook keeps a count of the entries"
 es = "@Hook(exit): este modulo lanza excepciones, y una excepcion NO sale por el epilogo: las funciones que atraviesa no llamaran a '{0}'.  Anade un @Hook(unwind) si el gancho lleva cuenta de las entradas"
+
+# --- @Hook: un asm que mueve la pila invalida `call_site` (VXW934) ---
+#
+# Se puede DECIR porque el bloque no es opaco: la tabla de efectos ya declara
+# que `push`/`pop` escriben `rsp`, asi que se sabe cuando el sitio desde el que
+# se llamo deja de estar donde el codigo lo va a buscar.  Otros compiladores
+# tratan el asm en linea como una barrera y devolverian el valor igual.
+[VXW934]
+en = "@Hook: the `call_site` of '{0}' is not reliable: the function has an asm block that writes {1}, and the return address is read from the stack. The value will be whatever is at that position"
+es = "@Hook: el `call_site` de '{0}' no es fiable: la funcion tiene un bloque asm que escribe {1}, y la direccion de retorno se lee de la pila.  El valor sera lo que haya en esa posicion"

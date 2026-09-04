@@ -1736,6 +1736,10 @@ void Lowering::emit_hook_calls(HookPoint point, const std::string &fn_name,
             } else if (name == "call_site") {
                 // Una instruccion, y solo si el gancho lo pide: la direccion
                 // ya esta en la pila porque la puso la llamada.
+                // Se marca AQUI, que es donde se sabe: quien comprueba
+                // despues si un asm mueve la pila se salta el modulo entero
+                // con una comparacion en vez de recorrerlo buscandolo.
+                if (out_mod_) out_mod_->usa_return_addr = true;
                 ir::IrInstr ra{};
                 ra.op = ir::IrOp::RETURN_ADDR;
                 ra.type = ir::IrType::I64;

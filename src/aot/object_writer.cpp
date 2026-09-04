@@ -165,10 +165,18 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
                                               static_cast<int>(csecs.size()),
                                               crel_ptr, crel_n, sym_ptr, sym_n,
                                               errbuf, sizeof(errbuf))
-                         : aot_emit_elf_obj(path.c_str(), csecs.data(),
-                                            static_cast<int>(csecs.size()),
-                                            crel_ptr, crel_n, sym_ptr, sym_n,
-                                            errbuf, sizeof(errbuf));
+                         : (cfg_.machine == 183 /* EM_AARCH64 */
+                                ? aot_emit_elf_obj_arm64(
+                                      path.c_str(), csecs.data(),
+                                      static_cast<int>(csecs.size()), crel_ptr,
+                                      crel_n, sym_ptr, sym_n, errbuf,
+                                      sizeof(errbuf))
+                                : aot_emit_elf_obj(path.c_str(), csecs.data(),
+                                                   static_cast<int>(
+                                                       csecs.size()),
+                                                   crel_ptr, crel_n, sym_ptr,
+                                                   sym_n, errbuf,
+                                                   sizeof(errbuf)));
         else /* PE -> COFF .obj (AMD64 o i386 segun mode32) */
             ok = mode32_ ? aot_emit_coff32_obj(path.c_str(), csecs.data(),
                                                static_cast<int>(csecs.size()),

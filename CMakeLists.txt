@@ -500,9 +500,13 @@ add_subdirectory(libs/SourceCode/LibPEparse)
 # mete src/ en el include-path).
 add_library(aot_emit STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/common/aot_emit_common.c
+    # El layout de un ELF64 reubicable es el mismo para toda arquitectura de
+    # 64 bits, asi que vive UNA vez aqui; cada arch aporta solo su ficha.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/common/aot_emit_elf_obj.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_64/aot_emit_x86_64.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_32/aot_emit_x86_32.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_16/aot_emit_x86_16.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/x86_16/aot_emit_x86_16.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/arm64/aot_emit_arm64.c)
 target_include_directories(aot_emit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(aot_emit PUBLIC LibPEparse)
 

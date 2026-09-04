@@ -43,6 +43,14 @@
 #include "LibCOFFparse.h"
 #include "LibPEparse.h" // lectura de exports de DLL (aot_pe_export_names)
 
+/* Constante de ELF a secas -- no de una arquitectura concreta -- que no trae
+ * CreateELF.h del submodulo.  Vive aqui, con el resto de lo comun, porque la
+ * usan tanto el emisor de ejecutables como el de objetos; tenerla dentro del
+ * fichero de x86-64 obligaba a los demas a ir a buscarla alli. */
+#ifndef SHF_TLS
+#define SHF_TLS 0x400u /* la seccion contiene almacenamiento thread-local */
+#endif
+
 /* -------------------------------------------------------------------------
  *  Helpers arch-neutrales pequenos (static inline: copia por TU, sin ODR).
  * ------------------------------------------------------------------------- */

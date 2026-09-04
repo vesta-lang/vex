@@ -2030,6 +2030,16 @@ struct IrClass {
 struct IrModule {
     std::string name;                  ///< nombre del modulo (@module)
     std::vector<IrFunction> functions; ///< funciones definidas
+    /**
+     * @brief Alguna funcion pidio a donde volvera (@c IrOp::RETURN_ADDR).
+     *
+     * Lo pone quien la emite, que es el unico que ya lo sabe sin buscarlo.
+     * Sirve para que la comprobacion del ensamblador que mueve la pila se
+     * salte en una comparacion: sin esto habria que recorrer el IR ENTERO de
+     * cada programa para descubrir algo que el emisor tenia delante, y lo
+     * pagarian tambien las compilaciones que no usan ganchos.
+     */
+    bool usa_return_addr = false;
     std::vector<std::string>
         imports; ///< nombres de funciones importadas (@import)
     std::unordered_map<std::string, IrValueId> globals; ///< variables globales

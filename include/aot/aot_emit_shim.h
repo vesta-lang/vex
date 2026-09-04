@@ -313,6 +313,20 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
                      int num_syms, char *err, size_t err_cap);
 
 /**
+ * @brief Emite un objeto ELF64 reubicable de AArch64 (.o arm64).
+ *
+ * Misma firma y mismo layout que @c aot_emit_elf_obj -- de hecho es el mismo
+ * emisor: un ELF64 reubicable se escribe igual en las dos arquitecturas --,
+ * cambiando solo la marca de maquina y los tipos de reubicacion.  Existe
+ * porque, mientras no existio, una llamada `bl` entre funciones no se podia
+ * escribir a un objeto de ARM.
+ */
+int aot_emit_elf_obj_arm64(const char *path, const AotSection *secs,
+                           int num_secs, const AotReloc *relocs,
+                           int num_relocs, const AotSym *syms, int num_syms,
+                           char *err, size_t err_cap);
+
+/**
  * @brief Emite un objeto RELOCATABLE ELF32 (.o i386) a disco.
  *
  * Variante de 32-bit de @c aot_emit_elf_obj: ELFCLASS32 + EM_386 + structs

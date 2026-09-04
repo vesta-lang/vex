@@ -173,6 +173,24 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 emit_imm(os, "x9", in.imm);
                 emit_st(os, "x9", in.dst);
                 break;
+            case ir::IrOp::RETURN_ADDR:
+                /* A donde volvera la funcion.  Aqui no vive en la pila como
+                 * en x86: la deja `bl` en el registro de enlace (x30).  Si la
+                 * funcion llama a alguien, ese `bl` lo machaca y el prologo ya
+                 * lo salvo en el marco, asi que se lee de ahi; si no llama a
+                 * nadie sigue intacto en x30.
+                 *
+                 * En la practica siempre es el primer caso: quien pide esto es
+                 * un gancho, y un gancho ES una llamada dentro de la funcion.
+                 * La otra rama esta por correccion, no porque se espere.
+                 *
+                 * Una instruccion, igual que en x86, y sin mantener nada. */
+                if (has_call)
+                    os << "    ldr x9, [sp, #" << lr_off << "]\n";
+                else
+                    os << "    mov x9, x30\n";
+                emit_st(os, "x9", in.dst);
+                break;
             case ir::IrOp::MOV:
                 if (in.operands.size() != 1) {
                     out_unsupported = true;

@@ -4833,6 +4833,77 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
 /**
  * @brief Ver la declaracion en compiler.h.
  */
+/**
+ * @brief Avisa de un `call_site` que un bloque de ensamblador deja sin sentido.
+ *
+ * Pedir `call_site` lee la direccion de retorno de la PILA, asi que un bloque
+ * que mueva @c rsp o @c rbp la deja donde no esta y el gancho recibe lo que
+ * hubiera en esa posicion.
+ *
+ * Se puede DECIR, y ahi esta la diferencia con tratar el asm como una caja
+ * negra: la tabla de efectos ya declara que @c push y @c pop escriben @c rsp
+ * -- "se dice POR DONDE", como reza ahi --, asi que basta preguntarlo.  Otro
+ * compilador devolveria el numero igual y el usuario mediria mal sin saberlo.
+ *
+ * SOLO se llama si el modulo pidio la direccion de retorno en alguna parte
+ * (@c IrModule::usa_return_addr, que pone el propio emisor al bajarla).  Sin
+ * eso habria que recorrer el IR ENTERO de cada programa para descubrir algo
+ * que quien lo emitio ya sabia -- y el precio lo pagarian todas las
+ * compilaciones, incluidas las que no usan ganchos.
+ *
+ * @param mod   Modulo ya bajado.
+ * @param diags Donde dejar el aviso.
+ * @param file  Fichero al que apuntar.
+ */
+static void vx_avisar_call_site_con_asm(const ir::IrModule &mod,
+                                        Diagnostics &diags,
+                                        const std::string &file) {
+    for (const ir::IrFunction &fn : mod.functions) {
+        // Una sola pasada por funcion, y se corta en cuanto se sabe la
+        // respuesta: en cuanto hay las dos cosas ya no queda nada que mirar.
+        bool pide_retorno = false;
+        const ir::IrInstr *bloque_asm = nullptr;
+        for (const ir::IrBlock &b : fn.blocks) {
+            for (const ir::IrInstr &in : b.instrs) {
+                if (in.op == ir::IrOp::RETURN_ADDR) pide_retorno = true;
+                else if (in.op == ir::IrOp::INLINE_ASM && bloque_asm == nullptr)
+                    bloque_asm = &in;
+                if (pide_retorno && bloque_asm != nullptr) break;
+            }
+            if (pide_retorno && bloque_asm != nullptr) break;
+        }
+        if (!pide_retorno || bloque_asm == nullptr) continue;
+
+        // Solo ahora se analiza el bloque, que es lo caro de todo esto.
+        const vx::AsmBlockEffects e = vx::asm_analyze_block_no_classes(
+            bloque_asm->func_name, vx::asm_arch_actual());
+        /* Los nombres llegan CANONICOS por arquitectura: en x86 los cuatro
+         * anchos de la pila (`rsp`/`esp`/`sp`/`spl`) se normalizan a `rsp` y
+         * los del marco a `rbp`, y en arm64 salen `sp`, `x29` y `x30`.  Por
+         * eso la lista no enumera anchos ni alias: eso ya lo resolvio quien
+         * mejor lo sabe.
+         *
+         * `x30` entra porque en arm64 la vuelta viaja en el registro de
+         * enlace, no en la pila: pisarlo rompe lo mismo que mover `rsp` en
+         * x86, aunque la pila quede intacta. */
+        static const char *const kRegsDeRetorno[] = {"rsp", "rbp", "sp",
+                                                     "x29", "x30", "r13",
+                                                     "r11", "r14"};
+        std::string tocados;
+        for (const std::string &r : e.escritos) {
+            bool afecta = false;
+            for (const char *c : kRegsDeRetorno)
+                if (r == c) { afecta = true; break; }
+            if (!afecta) continue;
+            if (!tocados.empty()) tocados += ", ";
+            tocados += r;
+        }
+        if (tocados.empty()) continue;
+        diags.diag(SourceLoc{file, bloque_asm->source_line, 1}, DiagLevel::WARN,
+                   "VXW934", {fn.name, tocados});
+    }
+}
+
 void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                                  const std::string &file, bool programa_cerrado,
                                  bool decir_lo_no_acotado, const char *backend,
@@ -5257,6 +5328,21 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
      * No saber es un resultado, y se cuenta como tal.  Con el MOTIVO, que es lo
      * unico accionable: quien lee no puede hacer nada con "no se pudo", pero si
      * con "el bloque salta" o "ese operando no dice cuantos bytes mide". */
+    /* Un `@Hook` que pide `call_site` lee la direccion de retorno de la PILA,
+     * asi que un bloque de ensamblador que mueva `rsp` o `rbp` la deja donde
+     * no esta y el gancho recibe lo que hubiera en esa posicion.
+     *
+     * Esto se puede DECIR, y es la diferencia con tratar el asm como una caja
+     * negra: la tabla de efectos ya declara que `push`/`pop` escriben `rsp`
+     * -- "se dice POR DONDE", como reza ahi --, asi que basta preguntarlo.
+     * Otro compilador devolveria el numero igual, y el usuario mediria mal sin
+     * enterarse.
+     *
+     * Corre SIEMPRE, no bajo el flag de lo no acotado: no es un detalle de
+     * cuanto se sabe del bloque, es un valor que va a salir mal.
+     */
+    if (mod.usa_return_addr) vx_avisar_call_site_con_asm(mod, diags, file);
+
     if (!decir_lo_no_acotado) return;
     for (const ir::IrFunction &fn : mod.functions) {
         const analysis::AsmBindingFacts lig =

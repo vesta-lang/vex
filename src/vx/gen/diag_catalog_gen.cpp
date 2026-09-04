@@ -320,6 +320,7 @@ const CatEntry kEntries[] = {
     {"VXW931", {"@Hook: the hook '{0}' was not installed anywhere: the selector \"{1}\" matches no function.  The program will run WITHOUT instrumentation", "@Hook: el gancho '{0}' no se instalo en ningun sitio: el selector \"{1}\" no casa con ninguna funcion.  El programa correra SIN instrumentar"}},
     {"VXW932", {"@Hook(exit): this module throws, and an exception does NOT leave through the epilogue: the functions it crosses will not call '{0}'.  Add a @Hook(unwind) if the hook keeps a count of the entries", "@Hook(exit): este modulo lanza excepciones, y una excepcion NO sale por el epilogo: las funciones que atraviesa no llamaran a '{0}'.  Anade un @Hook(unwind) si el gancho lleva cuenta de las entradas"}},
     {"VXW933", {"@Hook: the hook '{0}' was not installed anywhere: there is no function to instrument.  The program will run WITHOUT instrumentation", "@Hook: el gancho '{0}' no se instalo en ningun sitio: no hay ninguna funcion que instrumentar.  El programa correra SIN instrumentar"}},
+    {"VXW934", {"@Hook: the `call_site` of '{0}' is not reliable: the function has an asm block that writes {1}, and the return address is read from the stack. The value will be whatever is at that position", "@Hook: el `call_site` de '{0}' no es fiable: la funcion tiene un bloque asm que escribe {1}, y la direccion de retorno se lee de la pila.  El valor sera lo que haya en esa posicion"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"bulk.body_does_more", {"the body does something beyond walking the run and moving it", "el cuerpo hace algo mas que recorrer el tramo y moverlo"}},
     {"bulk.bound_varies", {"the limit changes inside the loop, so there is no fixed run", "el limite cambia dentro del bucle, asi que no hay un tramo fijo"}},
@@ -390,7 +391,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 369;
+const int kEntryCount = 370;
 
 } // namespace
 
