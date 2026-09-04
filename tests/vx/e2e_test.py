@@ -2040,6 +2040,61 @@ modulo_case("mod_ns_xmod_concept", "ns_xmod_concept", 42)
 modulo_case("mod_generic_fn_infer", "generic_fn_infer", 42)
 
 
+def _resumen_unitarios(salida):
+    """Lee la linea de resumen de `tools/run_unit_tests.py`.
+
+    Devuelve (ok, fallidos, sin_correr, total) o None si no aparecio -- que ya
+    es un fallo: significa que el lanzador no llego a terminar.
+    """
+    m = re.search(r"tests unitarios: (\d+) OK, (\d+) fallidos, "
+                  r"(\d+) sin correr de (\d+)", salida)
+    if not m:
+        return None
+    return tuple(int(m.group(i)) for i in (1, 2, 3, 4))
+
+
+@case("unit_tests", serial=True)
+def _(ctx):
+    """Los tests de C++ de `tests/`, enganchados a la suite que decide.
+
+    Son mas de doscientos y hasta ahora NO los corria nadie: cada `.cpp`
+    produce su propio ejecutable, el proyecto no usa ctest, y solo
+    `tools/run_unit_tests.py` los lanza en tanda -- a mano.  El propio lanzador
+    lo dice en su cabecera: "sin forma de correrlos, no se corren", y de ahi
+    salio un test que dejo de compilar al cambiar la firma de una funcion y
+    siguio roto sin que nadie se enterara.
+
+    Es el mismo agujero que tenian los de `tests/aot/` antes de engancharlos, y
+    se cierra igual: la suite que decide los ejecuta.
+
+    Se les limita la memoria (`--mem-mb`), que no es un detalle: un test del
+    recolector que se desboque se lleva por delante la maquina entera, y
+    entonces el fallo no es un test rojo sino una sesion perdida.
+
+    Los que piden argumentos o abren un REPL son HERRAMIENTAS, no
+    comprobaciones: el lanzador los cuenta aparte y aqui no cuentan como fallo.
+    """
+    build = os.path.dirname(VM_EXE)
+    runner = os.path.join(ROOT, "tools", "run_unit_tests.py")
+    if not os.path.isfile(runner):
+        ctx.fail("no encuentro tools/run_unit_tests.py")
+        return
+    _, log = ctx.run([sys.executable, runner, build, "--mem-mb", "2048"],
+                     timeout=3600)
+    r = _resumen_unitarios(log)
+    if r is None:
+        ctx.fail("tests unitarios: el lanzador no dio resumen", log)
+        return
+    ok_n, mal_n, sin_n, total = r
+    if mal_n:
+        fallos = "\n".join(l for l in log.splitlines() if "fallan:" in l)
+        ctx.fail("tests unitarios: %d fallidos de %d" % (mal_n, total),
+                 fallos or log)
+        return
+    ctx.ok("tests unitarios: %d OK, %d herramientas de %d"
+           % (ok_n, sin_n, total))
+
+
 def _resumen_aot(salida):
     """Lee la linea de resumen de `tests/aot/run_all.py`.
 
