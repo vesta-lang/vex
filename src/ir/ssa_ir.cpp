@@ -301,6 +301,7 @@ static const OpEntry OP_TABLE[] = {
     {"gc_collect", IrOp::GC_COLLECT},
     {"gc_finalize_all", IrOp::GC_FINALIZE_ALL},
     {"gc_allocp", IrOp::GC_ALLOCP},
+    {"return_addr", IrOp::RETURN_ADDR},
     {"getstatic", IrOp::GETSTATIC},
     {"setstatic", IrOp::SETSTATIC},
     {"atomic_ld_i64", IrOp::ATOMIC_LD},

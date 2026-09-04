@@ -484,6 +484,28 @@ enum class IrOp : uint16_t {
                             ///< recurso interno).  Builtin Vesta
                             ///< gc_finalize_all(). interp/JIT: opcode gcfinall;
                             ///< AOT: CALL vx_gc_finalize_all.  Determinista.
+    /**
+     * @brief %dst = return_addr -- a donde volvera esta funcion al terminar.
+     *
+     * Se baja a UNA instruccion en los tres caminos, y a la MISMA idea en los
+     * tres, porque la maquina virtual apila la direccion de retorno igual que
+     * x86 (ver @c exec_instr_callvm): esta en la pila, no en una estructura
+     * aparte.  Interprete: la cima de la pila virtual.  JIT y nativo:
+     * `[rbp+8]`, que el prologo (`push rbp; mov rbp, rsp`) deja ahi.
+     *
+     * De ahi que no cueste NADA mantenerlo: no hay que llevar ninguna cadena
+     * de marcos ni tocar el prologo; el dato ya esta puesto porque la llamada
+     * lo puso.  Y si nadie lo pide, no se emite.
+     *
+     * CUIDADO -- el valor deja de ser fiable si la funcion tiene un bloque de
+     * ensamblador que escribe `rsp` o `rbp`.  Eso NO se supone: la tabla de
+     * efectos del asm ya declara que `push`/`pop` escriben `rsp`, asi que se
+     * puede preguntar y DECIRLO en vez de devolver un numero que parece bueno.
+     *
+     * El hueco es el primero libre tras los ops del recolector; la zona de
+     * intrinsics de la maquina virtual (0xF0-0xFF) esta llena.
+     */
+    RETURN_ADDR = 0xD6,
     GC_ALLOCP = 0x98,  ///< %dst = gc_allocp.ptr %size  (gcallocp: alloc + deref
                        ///< + xchg en 1 instr)
     GETSTATIC = 0x99,  ///< %dst = getstatic.i64 %cls, imm=offset   (carga campo
