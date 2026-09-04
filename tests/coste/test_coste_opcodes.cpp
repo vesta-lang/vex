@@ -56,7 +56,7 @@
 #include "runtime/decode_instruction.h"
 #include "runtime/decode_table.h"
 
-#include "../util/handler_walk.h"
+#include "../util/opcode_effects.h" // walk_our_handler: el MISMO analisis
 #include "../util/report_out.h"
 #include "util/ansi.h"
 #include "vx/asm/instr_db.h"
@@ -226,9 +226,20 @@ int main(int argc, char **argv) {
                 fila.fn = par.first;
                 fila.compartida = reparto[par.first];
                 std::set<tests::WalkVisit> vistas;
-                tests::walk_handler(
-                    cs, reinterpret_cast<uint64_t>(par.first), g_profundidad,
-                    vistas,
+                /* El MISMO analisis que usa la derivacion de efectos.
+                 *
+                 * Antes se llamaba al recorredor a pelo, sin ninguna cota: ni
+                 * el ambito del modulo ni el final de la funcion.  Con eso el
+                 * recorrido se pasaba del final y seguia con los saltos de la
+                 * funcion de al lado, asi que en el CUERPO cuyo coste se mide
+                 * entraban instrucciones que no son del manejador -- falsear la
+                 * medida -- y ademas tardaba veinte veces mas.
+                 *
+                 * Dos consumidores del mismo codigo tienen que verlo igual, y
+                 * la unica forma de garantizarlo es que compartan la
+                 * configuracion en vez de tener cada uno su copia. */
+                tests::walk_our_handler(
+                    cs, par.first,
                     [&fila](const cs_insn &in, const tests::TableState &) {
                         fila.h.cuerpo += in.mnemonic;
                         if (in.op_str[0]) {

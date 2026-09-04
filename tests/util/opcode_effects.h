@@ -537,6 +537,48 @@ inline void module_range(uint64_t &lo, uint64_t &hi) {
     hi = h;
 }
 
+/**
+ * @brief Recorre un manejador NUESTRO con la configuracion estandar.
+ *
+ * Es UNA sola configuracion, y por eso existe: quien deriva efectos y quien
+ * mide coste recorren el mismo codigo y tienen que verlo igual.  Con cada uno
+ * llamando a `walk_handler` por su cuenta, el de coste se quedaba sin ninguna
+ * cota -- ni el modulo, ni el final de la funcion -- y acababa midiendo el
+ * coste de codigo que no es del manejador, ademas de tardar veinte veces mas.
+ *
+ * Lo que aporta la configuracion, y ninguno de los dos deberia repetir:
+ *
+ *   - el AMBITO del modulo: al otro lado esta la libreria del sistema;
+ *   - las FRONTERAS: donde se para (fallo fatal) y donde se declara el
+ *     contrato en vez de seguir;
+ *   - los INICIOS conocidos, que acotan donde acaba cada funcion;
+ *   - la REGION marcada, para seguir la memoria de la VM.
+ *
+ * @param cs         Capstone ya abierto.
+ * @param handler    La funcion por donde empezar.
+ * @param ver        Que hacer con cada instruccion.
+ * @param res        Resultado del recorrido.
+ * @param max_instrs Presupuesto.  Derivar efectos exige llegar al final
+ *                   (@ref kWalkInstrMaxEfectos); medir coste se conforma con
+ *                   el cuerpo del manejador.
+ */
+inline void walk_our_handler(csh cs, const void *handler,
+                             const tests::WalkVisitor &ver,
+                             tests::WalkResult &res,
+                             uint32_t max_instrs = tests::kWalkInstrMax) {
+    uint64_t lo = 0, hi = 0;
+    module_range(lo, hi);
+    std::set<WalkVisit> vistas;
+    tests::walk_handler(
+        cs, reinterpret_cast<uint64_t>(handler), 6, vistas, ver, res,
+        tests::CallSeed{}, all_frontiers(), lo, hi,
+        tests::TaintRegion{
+            0, (int64_t)offsetof(runtime::ProcessVM, vm_mem),
+            (int64_t)(offsetof(runtime::ProcessVM, vm_mem) +
+                      sizeof(((runtime::ProcessVM *)nullptr)->vm_mem))},
+        &known_function_starts(), max_instrs);
+}
+
 inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
     ImplicitEffects out;
     if (handler == nullptr) return out;
@@ -902,7 +944,12 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
             0, (int64_t)offsetof(runtime::ProcessVM, vm_mem),
             (int64_t)(offsetof(runtime::ProcessVM, vm_mem) +
                       sizeof(((runtime::ProcessVM *)nullptr)->vm_mem))},
-        &known_function_starts());
+        &known_function_starts(),
+        /* Derivar efectos exige LLEGAR AL FINAL de cada manejador: quedarse a
+         * medias declara como exacto lo que no se ha mirado.  Medir coste no,
+         * y con el tope grande para todos ese test pasaba de instantaneo a
+         * seis minutos.  Ver `kWalkInstrMaxEfectos`. */
+        tests::kWalkInstrMaxEfectos);
     out.completo = res.completo();
     out.sin_resolver = res.unresolved;
     out.sin_resolver_fn = res.unresolved_fn;

@@ -167,7 +167,20 @@ constexpr size_t kWalkBytesMax = 128 * 1024;
  * compilacion, asi que doce segundos a cambio de 66 opcodes que dejan de estar
  * declarados como desconocidos es un cambio bueno.
  */
-constexpr uint32_t kWalkInstrMax = 400000;
+constexpr uint32_t kWalkInstrMax = 20000;
+
+/* Tope para el derivador de EFECTOS, que necesita mucho mas.
+ *
+ * No es el mismo para todos y por eso es un parametro.  Quien deriva efectos
+ * tiene que llegar al final de cada manejador -- si se queda a medias, declara
+ * como exacto lo que no ha mirado --, y eso son 400.000 instrucciones porque
+ * sigue las llamadas hasta seis niveles.  Quien mide COSTE solo quiere el
+ * cuerpo del manejador y con 20.000 le sobra.
+ *
+ * Medido, y por eso esta separado: con el tope grande para todos, el test de
+ * coste pasaba de casi instantaneo a SEIS MINUTOS.  Con el pequeno para todos,
+ * los efectos exactos caen de 213 a 141. */
+constexpr uint32_t kWalkInstrMaxEfectos = 400000;
 
 #if !defined(_WIN32)
 /**
@@ -1023,6 +1036,15 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             } else {
                 st.origin[d] = Origin{}; // se lo llevo entero: ya no queda nada
             }
+            /* Y SE SALE.  Sin esto, la invalidacion del final -- que borra la
+             * procedencia de todo registro escrito -- se llevaba por delante lo
+             * que este mismo `shr` acaba de deducir.
+             *
+             * Costaba el NIBBLE ALTO entero: la convencion B mete dos registros
+             * en un byte y el alto se saca desplazando, asi que en las 232
+             * instrucciones no se detecto ni una sola vez -- ni leido ni
+             * escrito --.  El bajo, que solo lleva `and`, si se veia. */
+            return;
         }
     }
 
@@ -1896,7 +1918,8 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                          const std::set<uint64_t> &frontera = {},
                          uint64_t ambito_lo = 0, uint64_t ambito_hi = 0,
                          const TaintRegion &taint = TaintRegion{},
-                         const std::vector<uint64_t> *inicios = nullptr) {
+                         const std::vector<uint64_t> *inicios = nullptr,
+                         uint32_t max_instrs = kWalkInstrMax) {
     /* Una frontera no se cruza: se apunta y se vuelve.  Ver
      * `WalkResult::fronteras`. */
     if (frontera.count(dir) != 0) {
@@ -2290,7 +2313,7 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
             }
             for (uint64_t d : destinos) pendientes.emplace_back(d, sub);
         }
-        if (res.instrs > kWalkInstrMax) {
+        if (res.instrs > max_instrs) {
             res.truncado = true;
             break;
         }
@@ -2301,7 +2324,7 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
         // El rango marcado viaja a los ayudantes: un manejador saca el puntero
         // y se lo PASA, asi que el acceso de verdad ocurre alli.
         walk_handler(cs, p.first, profundidad - 1, vistas, ver, res, p.second,
-                     frontera, ambito_lo, ambito_hi, taint, inicios);
+                     frontera, ambito_lo, ambito_hi, taint, inicios, max_instrs);
 }
 
 } // namespace tests

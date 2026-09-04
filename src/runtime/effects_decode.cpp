@@ -242,7 +242,21 @@ inline void form_mov(const DecodedInstr &d, InstrEffects &e) {
     e.field_write = 0;
 
     if (d.flags_info._signed_instruct == 0) {
-        mark_write(d, e, RS_REG1, /*kill=*/true);
+        /* PISA el destino entero solo en 64 bits.
+         *
+         * Esta VM no extiende con ceros al escribir un ancho parcial -- a
+         * diferencia de x86-64, y por eso existe `loadz` --, asi que un
+         * `mov r3b, r4b` CONSERVA los 56 bits altos: para conservarlos hay que
+         * leerlos, o sea que la instruccion tambien LEE su destino.
+         *
+         * Se declaraba `kill` siempre, y eso es una lectura que falta.  Quien
+         * reordena vería un destino que se pisa entero, movería por encima al
+         * que escribe ahi, y el `mov` conservaria bits distintos: no da un
+         * error, da otro resultado.  Lo caza `test_effects_decode`, que
+         * contrasta esta declaracion contra lo que el derivador ve hacer al
+         * manejador. */
+        const bool pisa_entero = (d.flags_info.mode == 3);
+        mark_write(d, e, RS_REG1, /*kill=*/pisa_entero);
         mark_read(d, e, RS_REG2);
         return;
     }
