@@ -31,8 +31,35 @@ bool may_alias(const AbstractLoc &a, const AbstractLoc &b) {
     // Misma clase: el id GENERICO aliasa cualquier sitio de la clase.
     if (a.id == LOC_GENERIC || b.id == LOC_GENERIC) return true;
     // Raices concretas distintas -> disjuntas (dos ALLOCAs, dos
-    // alloc-sites...).
-    if (a.id != b.id) return false;
+    // alloc-sites...).  Pero SOLO donde la raiz es una IDENTIDAD.
+    if (a.id != b.id) {
+        /* Y en un parametro NO lo es: su raiz es el INDICE, o sea un nombre.
+         * Nada impide que el que llama pase la misma direccion dos veces, o dos
+         * que se solapen -- `mueve(m + 1, m)` --, asi que dos indices distintos
+         * no demuestran nada por si solos.
+         *
+         * Esto se daba por disjunto y era un fallo de verdad: el planificador
+         * subia las lecturas por encima de las escrituras y una copia campo a
+         * campo con solape devolvia OTRO resultado.  Y lo peor no era el
+         * numero, era que dependia de si la llamada se habia inlinado: al
+         * inlinar, las dos direcciones vuelven a su reserva comun y entonces SI
+         * salian aliasadas.  El mismo programa, dos respuestas.
+         *
+         * Lo que si demuestra la disyuncion es que los DOS declaren su
+         * direccion (`in` / `out` / `inout`).  Esa marca no dice solo que hace
+         * la funcion con lo apuntado: dice que esa region es de ese parametro,
+         * y por tanto no es la de otro que tambien la declare.  Se exigen los
+         * dos y no uno: asi la afirmacion no depende de cuanto se estire el
+         * significado de una sola marca, y el consejo que se le puede dar al
+         * programador es concreto -- "declara la direccion del otro y esto se
+         * puede reordenar" --.
+         *
+         * Sin marca, lo conservador.  No poder demostrar que no se pisan NO es
+         * demostrar que se pisan, pero es lo unico con lo que se puede emitir
+         * codigo. */
+        if (a.kind == K::ArgDerived) return !(a.exclusive && b.exclusive);
+        return false;
+    }
     // MISMA raiz concreta: aliasan solo si sus rangos de bytes se SOLAPAN.  Con
     // width==0 (ancho desconocido = objeto entero) no se puede probar
     // disyuncion
@@ -96,8 +123,13 @@ void LocSet::asegurar_indice_() const {
     idx_top_ = false;
     idx_kinds_ = 0;
     idx_kinds_gen_ = 0;
-    idx_raiz_.clear();
-    idx_raiz_.reserve(locs.size());
+    // Se reserva la tabla AQUI, que es el unico sitio donde se llena: un
+    // conjunto al que nadie pregunte por aliasing no la tiene nunca.
+    if (!idx_raiz_)
+        idx_raiz_.reset(
+            new std::unordered_map<uint64_t, std::vector<uint32_t>>());
+    idx_raiz_->clear();
+    idx_raiz_->reserve(locs.size());
     for (uint32_t i = 0; i < locs.size(); ++i) {
         const AbstractLoc &e = locs[i];
         if (e.kind == AbstractLoc::Kind::None) continue;
@@ -111,7 +143,7 @@ void LocSet::asegurar_indice_() const {
             idx_kinds_gen_ |= bit; // la clase entera, sin raiz concreta.
             continue;
         }
-        idx_raiz_[clave_raiz_(e.kind, e.id)].push_back(i);
+        (*idx_raiz_)[clave_raiz_(e.kind, e.id)].push_back(i);
     }
 }
 
@@ -130,8 +162,9 @@ bool LocSet::may_alias_any(const AbstractLoc &l) const {
     const uint32_t bit = 1u << static_cast<uint8_t>(l.kind);
     if ((idx_kinds_gen_ & bit) != 0) return true;
     if (l.id == LOC_GENERIC) return (idx_kinds_ & bit) != 0;
-    auto it = idx_raiz_.find(clave_raiz_(l.kind, l.id));
-    if (it == idx_raiz_.end()) return false;
+    if (!idx_raiz_) return false;
+    auto it = idx_raiz_->find(clave_raiz_(l.kind, l.id));
+    if (it == idx_raiz_->end()) return false;
     for (uint32_t i : it->second)
         if (may_alias(locs[i], l)) return true;
     return false;

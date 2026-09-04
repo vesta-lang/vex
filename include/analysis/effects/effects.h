@@ -30,6 +30,7 @@
 #include <cstdint>
 
 #include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
+#include <memory>                   // el indice de LocSet, detras de un puntero
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -73,27 +74,51 @@ struct AbstractLoc {
         0; ///< raiz concreta dentro de la clase; LOC_GENERIC = toda la clase.
     int64_t off = 0;   ///< offset const desde la raiz (solo si id concreto).
     int32_t width = 0; ///< bytes accedidos; 0 = desconocido/objeto entero.
+    /**
+     * @brief El TIPO promete que esta raiz no coincide con ninguna otra.
+     *
+     * Solo tiene sentido en @c ArgDerived, y ahi es la unica forma de saberlo.
+     * En las demas clases la raiz ES una identidad -- dos @c alloca son dos
+     * reservas del marco, dos sitios de reserva son dos regiones distintas --,
+     * asi que ids distintos ya bastan.  En @c ArgDerived la raiz es el INDICE
+     * del parametro, que es un nombre y no un objeto: nada impide que el que
+     * llama pase la misma direccion dos veces, o dos que se solapen.
+     *
+     * Lo pone el CONTRATO del parametro, con cualquiera de las formas que lo
+     * escriben: `out`/`inout` -- que lo AFIRMA el que llama y hay que
+     * comprobarselo -- o `borrow_mut<T>` / `unique<T>`, que lo garantiza el
+     * compilador.  Cual de las dos fue viaja en el hecho del ASA
+     * (@c asa.param_contracts), no aqui: a la regla de aliasing solo le importa
+     * si la promesa esta, y quien tenga que verificar contratos pregunta alli.
+     *
+     * Ausente = no se dijo, y no saber obliga a lo conservador.  Que es lo
+     * contrario de lo que se hacia: dos indices distintos se daban por regiones
+     * distintas, y con eso una lectura adelantaba a una escritura que iba al
+     * mismo byte.
+     */
+    bool exclusive = false;
 
     bool operator==(const AbstractLoc &o) const {
-        return kind == o.kind && id == o.id && off == o.off && width == o.width;
+        return kind == o.kind && id == o.id && off == o.off &&
+               width == o.width && exclusive == o.exclusive;
     }
-    /// ¿Es un sitio CONCRETO (raiz conocida, no la clase generica ni TOP)?
+    /// Es un sitio CONCRETO (raiz conocida, no la clase generica ni TOP)?
     bool concrete() const {
         return kind != Kind::None && kind != Kind::Unknown && id != LOC_GENERIC;
     }
 };
 
-/// ¿Pueden @p a y @p b referirse a la MISMA memoria?  Unknown aliasa todo;
+/// Pueden @p a y @p b referirse a la MISMA memoria?  Unknown aliasa todo;
 /// None (bottom) no aliasa nada; clases distintas son disjuntas; misma clase +
 /// misma raiz: solo aliasan si sus rangos de bytes [off,off+width) se solapan
 /// (con width==0 = objeto entero = siempre puede solapar -> conservador).
 bool may_alias(const AbstractLoc &a, const AbstractLoc &b);
 
-/// ¿Se refieren SIEMPRE a EXACTAMENTE los mismos bytes?  (misma raiz concreta,
+/// Se refieren SIEMPRE a EXACTAMENTE los mismos bytes?  (misma raiz concreta,
 /// mismo off, mismo width > 0).  Requerido por el DSE para "sobreescritura".
 bool must_alias(const AbstractLoc &a, const AbstractLoc &b);
 
-/// ¿Se refieren SIEMPRE a memoria DISJUNTA?  (== !may_alias, pero explicito).
+/// Se refieren SIEMPRE a memoria DISJUNTA?  (== !may_alias, pero explicito).
 bool no_alias(const AbstractLoc &a, const AbstractLoc &b);
 
 // ===========================================================================
@@ -104,6 +129,25 @@ struct LocSet {
     bool is_top = false;
     std::vector<AbstractLoc>
         locs; ///< vacio si is_top; sin duplicados; sin None.
+
+    LocSet() = default;
+    ~LocSet() = default;
+    LocSet(LocSet &&) = default;
+    LocSet &operator=(LocSet &&) = default;
+
+    /* Copiar NO copia el indice: es una cache de este conjunto, no parte de lo
+     * que dice.  La copia arranca sin el y lo construye si alguien pregunta,
+     * que casi nunca pasa.  Copiarlo seria duplicar una tabla hash entera para
+     * tirarla sin usar. */
+    LocSet(const LocSet &o) : is_top(o.is_top), locs(o.locs) {}
+    LocSet &operator=(const LocSet &o) {
+        if (this == &o) return *this;
+        is_top = o.is_top;
+        locs = o.locs;
+        idx_listo_ = false;
+        idx_raiz_.reset();
+        return *this;
+    }
 
     bool empty() const { return !is_top && locs.empty(); }
     void clear() {
@@ -126,7 +170,7 @@ struct LocSet {
      */
     void indice_obsoleto() const { idx_listo_ = false; }
     /**
-     * @brief ¿algun elemento puede aliasar @p l?
+     * @brief algun elemento puede aliasar @p l?
      *
      * Consulta INDEXADA por raiz.  Recorrer el vector entero por consulta
      * costaba O(posiciones), y quien pregunta lo hace una vez por instruccion:
@@ -157,7 +201,23 @@ struct LocSet {
     mutable bool idx_top_ = false;
     mutable uint32_t idx_kinds_ = 0;
     mutable uint32_t idx_kinds_gen_ = 0;
-    mutable std::unordered_map<uint64_t, std::vector<uint32_t>> idx_raiz_;
+
+    /**
+     * @brief Lo que se indexa por RAIZ, detras de un puntero.
+     *
+     * Un `unordered_map` como MIEMBRO lo pagaba cada `LocSet`, y de estos se
+     * crean y se destruyen a montones -- uno por lectura y otro por escritura
+     * en cada efecto de memoria, o sea por instruccion --, mientras que el
+     * indice solo se construye en los pocos a los que se les pregunta por
+     * aliasing.  Construir y destruir esa tabla en todos los demas era, medido,
+     * el 17 % de todo lo que el compilador hacia con tablas hash.
+     *
+     * Detras de un puntero, un conjunto sin indexar no lleva mas que eso: un
+     * puntero nulo.  Lo que se paga cuando SI se usa es una reserva y una
+     * indireccion, y eso ocurre pocas veces.
+     */
+    mutable std::unique_ptr<std::unordered_map<uint64_t, std::vector<uint32_t>>>
+        idx_raiz_;
 
     /// Construye el indice si hace falta.
     void asegurar_indice_() const;
@@ -200,7 +260,7 @@ struct ControlEffect {
     }
 };
 
-/// ¿Este control TERMINA el flujo lineal (nada despues se ejecuta en
+/// Este control TERMINA el flujo lineal (nada despues se ejecuta en
 /// secuencia)?
 bool control_is_terminator(ControlKind k);
 
@@ -392,7 +452,7 @@ enum class UnknownReason : uint8_t {
     UnknownRuntime    ///< FUNDAMENTAL: helper de runtime opaco.
 };
 
-/// ¿El motivo es una LAGUNA del motor (mejorable modelandolo) o imprecision
+/// El motivo es una LAGUNA del motor (mejorable modelandolo) o imprecision
 /// FUNDAMENTAL?  Lo usa el reporte de cobertura para separar ambos.
 inline bool reason_is_gap(UnknownReason r) {
     return r == UnknownReason::UnmodeledOp ||
