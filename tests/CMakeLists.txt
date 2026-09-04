@@ -221,6 +221,21 @@ endfunction()
 # Buscar todos los archivos .cpp dentro de tests/ y subcarpetas
 file(GLOB_RECURSE TEST_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp)
 
+# Quitar los que el CMakeLists de la raiz ya declara con nombre corto.
+#
+# Sin esto, setenta y seis ficheros se compilaban y enlazaban DOS veces, con dos
+# nombres (`test_gc_lib` y `test_gc_test_gc_lib`), y el lanzador ejecutaba los
+# dos binarios a la vez.  El precio no era solo el tiempo: dos copias del mismo
+# test compiten por sus ficheros temporales y sus puertos, y de ahi salieron dos
+# fallos que parecian del azar.
+#
+# Gana el nombre CORTO de la raiz porque es el que se escribe a mano -- la
+# documentacion de `gen_instr_db_vm.py` dice `test_efectos_opcodes --json`, no
+# `test_coste_test_efectos_opcodes`.
+if (VESTA_TESTS_YA_DECLARADOS)
+    list(REMOVE_ITEM TEST_FILES ${VESTA_TESTS_YA_DECLARADOS})
+endif ()
+
 foreach (TEST_FILE ${TEST_FILES})
     # Crear un prefijo seguro basado en la ruta relativa
     get_filename_component(TEST_DIR ${TEST_FILE} DIRECTORY)

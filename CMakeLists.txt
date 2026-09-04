@@ -2180,6 +2180,51 @@ target_compile_options(vesta_rt PRIVATE
 #
 # Es la misma convencion que ya usa el preprocesador (`VPP_BUILD_TESTS`), al
 # que este mismo fichero se lo pone en OFF unas lineas mas arriba.
+# Los mandos del entorno: que la tabla este bien formada y que las huellas
+# reaccionen a lo que cambia el binario y a nada mas.  Las dos formas de fallar
+# son opuestas: de menos, la cache sirve un artefacto de otra configuracion; de
+# mas, pedir tiempos recompila el proyecto entero.
+#
+# Va AQUI, y no despues de `add_subdirectory(tests)`, porque la lista de lo ya
+# declarado se arma justo antes de entrar: uno declarado despues no entraria en
+# ella y el glob volveria a crearlo con otro nombre.
+add_executable(test_util_env_flags tests/util/test_env_flags.cpp)
+target_include_directories(test_util_env_flags PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_util_env_flags PRIVATE vmcore sqlite3 capstone keystone)
+
+# ---------------------------------------------------------------------------
+# Los .cpp de `tests/` que ESTE fichero ya declara.
+# ---------------------------------------------------------------------------
+# `tests/CMakeLists.txt` recorre `tests/**.cpp` con un glob y declara un
+# ejecutable por fichero.  Aqui arriba hay setenta y seis declarados a mano --
+# con nombre CORTO (`test_gc_lib`), que es el que se escribe al invocarlos --,
+# asi que cada uno de esos ficheros se compilaba y ENLAZABA dos veces, y el
+# lanzador ejecutaba los dos binarios A LA VEZ.
+#
+# No es solo tiempo de construccion: dos copias del mismo test corriendo en
+# paralelo compiten por sus ficheros temporales y sus puertos, y eso fue la
+# causa de dos fallos que parecian del azar (`test_asa_fact_file_lnx` sobre el
+# mismo fichero, los dos de red sobre el puerto 9000).
+#
+# La lista se saca LEYENDO este mismo fichero, no manteniendola a mano: una
+# lista escrita se queda vieja en cuanto alguien anade un ejecutable aqui
+# arriba, y el duplicado volveria sin que nada avise.
+file(STRINGS "${CMAKE_CURRENT_LIST_FILE}" _vesta_decls
+        REGEX "^add_executable\\([A-Za-z0-9_]+ +tests/")
+set(VESTA_TESTS_YA_DECLARADOS "")
+foreach (_l IN LISTS _vesta_decls)
+    # `add_executable(test_gc_lib tests/gc/test_gc_lib.cpp)` -> `gc/test_gc_lib.cpp`
+    string(REGEX REPLACE "^add_executable\\([A-Za-z0-9_]+ +tests/([^ )]+).*$"
+            "\\1" _rel "${_l}")
+    if (_rel AND NOT _rel STREQUAL "${_l}")
+        list(APPEND VESTA_TESTS_YA_DECLARADOS "${_rel}")
+    endif ()
+endforeach ()
+list(REMOVE_DUPLICATES VESTA_TESTS_YA_DECLARADOS)
+list(LENGTH VESTA_TESTS_YA_DECLARADOS _n_ya)
+message(STATUS "[tests] ${_n_ya} ficheros de tests/ ya declarados aqui; "
+        "el glob de tests/ no los repetira")
+
 option(VESTA_BUILD_TESTS "Compilar los tests unitarios de C++" ON)
 if (VESTA_BUILD_TESTS)
     add_subdirectory(tests)
@@ -2217,13 +2262,6 @@ endif()
 # Genera el instalador con:  cpack --config <build>/CPackConfig.cmake -G NSIS
 # ---------------------------------------------------------------------------
 include(VestaPackaging)
-# Los mandos del entorno: que la tabla este bien formada y que las huellas
-# reaccionen a lo que cambia el binario y a nada mas.  Las dos formas de fallar
-# son opuestas: de menos, la cache sirve un artefacto de otra configuracion; de
-# mas, pedir tiempos recompila el proyecto entero.
-add_executable(test_util_env_flags tests/util/test_env_flags.cpp)
-target_include_directories(test_util_env_flags PRIVATE ${VM_INCLUDES})
-target_link_libraries(test_util_env_flags PRIVATE vmcore sqlite3 capstone keystone)
 
 # ---------------------------------------------------------------------------
 # Los tests, fuera del objetivo `all` cuando no se piden.
