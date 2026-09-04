@@ -1569,11 +1569,36 @@ static bool glob_matches(const std::string &pattern, const std::string &text) {
  * @copydoc vx::Lowering::collect_hook_providers
  */
 void Lowering::collect_hook_providers() {
+    /* Los del propio modulo y los que vienen del RAIZ, en una sola lista.
+     *
+     * Un modulo importado no ve las declaraciones del que lo importa, asi que
+     * sin los del raiz la stdlib se quedaria sin instrumentar -- que es justo
+     * lo que se quiere medir.  El raiz recoge los suyos por el primer camino,
+     * y esta lista le llega vacia. */
+    std::vector<std::pair<ast::FunctionDecl *, std::string>> candidates;
+    candidates.reserve(mod_.decls.size() / 8 + root_hook_decls_.size());
     for (auto &decl : mod_.decls) {
         if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
         auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
         if (fd->is_no_instrument) hook_excluded_.insert(fd->name);
-        if (fd->hook_point.empty()) continue;
+        // Los de casa ya tienen el nombre bueno en el propio nodo.
+        if (!fd->hook_point.empty()) candidates.push_back({fd, fd->name});
+    }
+    for (const auto &rh : root_hook_decls_)
+        if (rh.first) candidates.push_back(rh);
+
+    for (const auto &cand : candidates) {
+        ast::FunctionDecl *fd = cand.first;
+        const std::string &call_name = cand.second;
+        /* El contador COMPARTIDO de este gancho, si lo tiene: un gancho del
+         * raiz se teje en cada modulo por separado y solo la suma dice si
+         * llego a alguna parte.  Se busca por NOMBRE porque el raiz recoge los
+         * suyos de su propio arbol y no hay indice comun. */
+        std::shared_ptr<std::atomic<size_t>> total_counter;
+        {
+            auto itc = hook_counters_.find(call_name);
+            if (itc != hook_counters_.end()) total_counter = itc->second;
+        }
 
         // El parser ya rechazo un punto que no este en la tabla, asi que aqui
         // resolver no puede fallar; si fallara seria un desajuste entre las
@@ -1586,10 +1611,11 @@ void Lowering::collect_hook_providers() {
         }
 
         HookProvider hp;
-        hp.fn_name = fd->name;
+        hp.fn_name = call_name;
         hp.selector = fd->hook_selector;
         hp.point = point;
         hp.loc = fd->loc;
+        hp.reached_total = total_counter;
 
         // La firma la decide el gancho: se valida CADA parametro contra la
         // tabla del punto.  Uno que ese punto no ofrezca es un error con la
@@ -1621,7 +1647,7 @@ void Lowering::collect_hook_providers() {
         // Un gancho no puede instrumentarse a si mismo: se llamaria sin fin.
         // Es la misma precaucion que ya toma el ruteo de los override de
         // string dentro del cuerpo de la propia funcion que rutea.
-        hook_excluded_.insert(fd->name);
+        hook_excluded_.insert(call_name);
         hook_providers_.push_back(std::move(hp));
     }
 }

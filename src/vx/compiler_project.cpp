@@ -2021,6 +2021,103 @@ CompileResult compile_vx_project(
         }
     }
 
+    /* Los `@Hook` del modulo RAIZ, para tejerlos en TODOS los modulos.
+     *
+     * Se toman solo del raiz -- la misma regla que ya siguen
+     * @AllocatorOverride y @PanicHandler -- y no de cualquiera que se importe.
+     * No es una restriccion, es la propiedad util: una libreria que use un
+     * perfilador NO instrumenta a quien la usa; instrumentar el programa
+     * entero es una decision del programa entero, y quien la toma es su raiz.
+     *
+     * Se recoge AQUI, antes de bajar nada, porque los modulos importados se
+     * bajan primero: un gancho recogido durante el lowering del raiz llegaria
+     * tarde a todo lo demas, y la stdlib -- que es justo lo que se quiere
+     * medir -- se quedaria sin instrumentar sin que nadie lo notara. */
+    /* La declaracion y el nombre por el que se le llamara desde fuera.  Van
+     * juntos porque el segundo no se puede sacar del primero mas tarde: el
+     * aplanado del raiz ocurre despues de esto. */
+    std::vector<std::pair<ast::FunctionDecl *, std::string>> root_hooks;
+    std::vector<std::string> root_no_instrument;
+    if (!work.empty() && work.back().ast) {
+        /* Hay que ENTRAR en los namespaces.  Aqui todavia no se ha aplanado el
+         * arbol -- eso pasa mas adelante --, asi que un fichero que empiece por
+         * `namespace app.principal;` tiene UNA sola declaracion arriba, la del
+         * namespace, y sus funciones cuelgan de ella.  Mirando solo el nivel
+         * superior no se encontraba ni un gancho, y como la lista quedaba
+         * vacia no se propagaba nada: el programa compilaba igual y no media
+         * nada.  Y los namespaces se anidan, de ahi la recursion. */
+        std::function<void(const std::vector<std::unique_ptr<ast::Node>> &,
+                           const std::string &)>
+            collect = [&](const std::vector<std::unique_ptr<ast::Node>> &ds,
+                          const std::string &ns) {
+                for (const auto &decl : ds) {
+                    if (!decl) continue;
+                    if (decl->kind == ast::NodeKind::NamespaceDecl) {
+                        auto *nd = static_cast<ast::NamespaceDecl *>(decl.get());
+                        collect(nd->decls,
+                                ns.empty() ? nd->name : ns + "." + nd->name);
+                        continue;
+                    }
+                    if (decl->kind != ast::NodeKind::FunctionDecl) continue;
+                    auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+                    /* El nombre por el que se le llama desde OTRO modulo es el
+                     * aplanado -- `app__principal__al_entrar` --, no el que
+                     * tiene aqui: el aplanado ocurre despues, por modulo, y el
+                     * raiz es el ultimo.  Tejer con el nombre corto compilaba
+                     * y moria al enlazar con "simbolo no resuelto".
+                     *
+                     * Se calcula APARTE y no se le escribe al nodo: el aplanado
+                     * de verdad pasara luego por aqui, y encontrarse el nombre
+                     * ya aplanado lo aplanaria DOS veces.
+                     *
+                     * Con el MISMO helper que el mangling de namespaces: la
+                     * regla vive en un sitio, no en dos que puedan divergir. */
+                    const std::string flat =
+                        ns.empty() ? fd->name
+                                   : flatten_ns_(ns) + "__" + fd->name;
+                    if (!fd->hook_point.empty())
+                        root_hooks.push_back({fd, flat});
+                    if (fd->is_no_instrument) root_no_instrument.push_back(flat);
+                }
+            };
+        collect(work.back().ast->decls, std::string());
+    }
+    /* Un contador por gancho, compartido por todos los modulos: cada uno teje
+     * por su cuenta y solo la SUMA dice si el gancho llego a alguna parte. */
+    std::unordered_map<std::string, std::shared_ptr<std::atomic<size_t>>>
+        root_hook_counters;
+    for (const auto &rh : root_hooks)
+        root_hook_counters[rh.second] =
+            std::make_shared<std::atomic<size_t>>(0);
+
+    /* Huella de lo que el tejido cambia: el punto, el selector, los campos
+     * pedidos y el nombre por el que se llama.  Se calcula UNA vez y la usan
+     * los dos caminos de cache -- la clave del CAS y el hash de los artefactos
+     * que viven junto al fuente --, que si no acabarian con criterios
+     * distintos: uno invalidaria y el otro no.
+     *
+     * El CUERPO del gancho no entra: cambiarlo cambia SU modulo, y de eso ya
+     * se encarga el hash del fuente. */
+    uint64_t hooks_source_fp = 0;
+    if (!root_hooks.empty()) {
+        uint64_t h = util::kFnvOffset;
+        const auto mix_str = [&h](const std::string &s) {
+            for (unsigned char c : s) {
+                h ^= c;
+                h *= util::kFnvPrime;
+            }
+        };
+        for (const auto &rh : root_hooks) {
+            if (!rh.first) continue;
+            mix_str(rh.first->hook_point);
+            mix_str(rh.first->hook_selector);
+            mix_str(rh.second);
+            for (const auto &pd : rh.first->params)
+                if (pd) mix_str(pd->name);
+        }
+        hooks_source_fp = h;
+    }
+
     //  M8: refactor del loop body a lambda para enable dispatch paralelo
     // por nivel topo.  La lambda captura todo el entorno por referencia.
     // Cada thread tiene su propio @c pm = work[i] por diseno (slots distintos
@@ -2064,6 +2161,17 @@ CompileResult compile_vx_project(
         bcfg.native_poo = opts.native_poo;
         bcfg.exceptions_enabled = opts.exceptions_enabled;
         bcfg.instrument_mode = opts.instrument_mode;
+        /* Los `@Hook` del raiz tejen llamadas en el IR de los DEMAS modulos,
+         * cuyo fuente no ha cambiado por ello.  Sin meterlos en la huella se
+         * les serviria el artefacto cacheado SIN instrumentar: no daria error,
+         * daria un programa que dice medir y no mide.
+         *
+         * Basta la huella de lo que cambia el tejido -- punto, selector y
+         * campos pedidos --, no el cuerpo del gancho: cambiarle el cuerpo
+         * cambia SU modulo, y de eso ya se encarga el hash del fuente. */
+        // La MISMA huella que invalida los artefactos de junto al fuente: dos
+        // criterios distintos acabarian con uno invalidando y el otro no.
+        bcfg.hooks_fp = hooks_source_fp;
         // tgt_os/tgt_arch quedan vacios: la precision por-modulo de @Target la
         // aporta cache_tgt_suffix (solo divide los modulos que USAN @Target).
         cas_config_fp = bcfg.ir_fingerprint();
@@ -2130,6 +2238,20 @@ CompileResult compile_vx_project(
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             const uint64_t instrument_hash = vxi_fnv1a(opts.instrument_mode);
             source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +
+                           (source_hash << 6) + (source_hash >> 2);
+        }
+        /* Y los `@Hook` del raiz, por la misma razon y con mas motivo: tejen
+         * LLAMADAS en el IR de este modulo, cuyo fuente no ha cambiado por
+         * ello.  Sin esto, compilar un programa con `@Hook(enter, "std.*")`
+         * dejaba la stdlib guardada CON el gancho dentro, y el siguiente
+         * programa que la usara moria al enlazar con "simbolo no resuelto"
+         * -- un gancho de otro programa, que en el suyo no existe.
+         *
+         * No basta con meterlo en la huella de configuracion del CAS: los
+         * artefactos que viven JUNTO al fuente (`math.vxir`) se reutilizan por
+         * este hash, no por aquella clave. */
+        if (hooks_source_fp != 0) {
+            source_hash ^= hooks_source_fp + 0x9E3779B97F4A7C15ULL +
                            (source_hash << 6) + (source_hash >> 2);
         }
         //  AOT (fix): el IR de un dep depende del MODO de POO con que se
@@ -3124,6 +3246,18 @@ CompileResult compile_vx_project(
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             lo.set_instrument_mode(opts.instrument_mode);
         }
+        /* Los `@Hook` del raiz alcanzan a TODOS los modulos: es lo que hace
+         * posible medir la stdlib declarando el gancho una sola vez.  Al raiz
+         * no se le pasan -- ya los tiene en su propio AST y se recogeria dos
+         * veces el mismo gancho. */
+        if (!is_root && !root_hooks.empty())
+            lo.set_root_hooks(root_hooks, root_no_instrument);
+        /* Los contadores van a TODOS, raiz incluido: el raiz recoge sus
+         * ganchos de su propio arbol, y sin contador creeria que no se
+         * instalaron en ningun sitio -- justo el modulo desde el que se ve
+         * peor, porque un selector como `"std.*"` no casa nada ahi. */
+        if (!root_hook_counters.empty())
+            lo.set_hook_counters(root_hook_counters);
         const std::string mod_name = pm.module_name;
         if (!lo.run(pm.ir, mod_name)) {
             pm.ok = false;

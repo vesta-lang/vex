@@ -4511,14 +4511,78 @@ class Lowering {
         std::vector<std::string> params;  ///< Campos que pidio, en orden.
         HookPoint point = HookPoint::Enter; ///< Donde se instala.
         SourceLoc loc;                    ///< Donde se declaro, para el aviso.
-        /// Cuantas funciones alcanzo.  CERO casi siempre es una errata en el
-        /// selector, y sin avisar se traduce en "no se instrumenta nada" sin
-        /// que nadie lo note -- que es como muerde un fallo mudo.
+        /// Cuantas funciones alcanzo EN ESTE modulo.
         size_t reached = 0;
+        /**
+         * @brief Cuantas alcanzo en TODA la compilacion; compartido.
+         *
+         * Un gancho del raiz se teje en cada modulo por separado, y lo normal
+         * es que no case en todos: un selector `"std.*"` no alcanza nada en el
+         * programa que lo declara.  Contando solo por modulo, el aviso de "no
+         * se instalo en ningun sitio" saltaba aunque hubiera instrumentado la
+         * stdlib entera -- decia lo contrario de lo que pasaba.
+         *
+         * Es atomico porque los modulos se bajan en paralelo.  Nulo cuando el
+         * gancho es local: entonces basta con @c reached.
+         */
+        std::shared_ptr<std::atomic<size_t>> reached_total;
     };
 
     /// Los `@Hook` del modulo, ya validados contra @ref kHookPoints.
     std::vector<HookProvider> hook_providers_;
+
+public:
+    /**
+     * @brief Instala los `@Hook` que vienen del modulo RAIZ.
+     *
+     * Un modulo importado no ve las declaraciones del que lo importa, asi que
+     * los ganchos del raiz hay que traerselos.  Es lo que permite instrumentar
+     * la stdlib: el programa declara el gancho una vez y alcanza a todo lo que
+     * enlaza.
+     *
+     * Solo del RAIZ, como @c @AllocatorOverride: asi una libreria que use un
+     * perfilador no instrumenta a quien la usa.
+     *
+     * @param decls Las funciones del raiz marcadas con `@Hook`.
+     * @param excluded Nombres marcados `@NoInstrument` en el raiz.
+     */
+    void set_root_hooks(
+        const std::vector<std::pair<ast::FunctionDecl *, std::string>> &decls,
+        const std::vector<std::string> &excluded) {
+        root_hook_decls_ = decls;
+        for (const std::string &n : excluded) hook_excluded_.insert(n);
+    }
+
+    /**
+     * @brief Instala los contadores compartidos de los ganchos del raiz.
+     *
+     * Van por NOMBRE y no por posicion porque el RAIZ tambien los necesita, y
+     * el raiz recoge sus ganchos de su propio arbol -- no por la lista de
+     * arriba --, asi que no hay un indice comun.  Sin esto, el modulo que
+     * declara el gancho avisaba de que "no se instalo en ningun sitio" con la
+     * stdlib entera instrumentada: dice lo contrario de lo que pasa.
+     */
+    void set_hook_counters(
+        const std::unordered_map<std::string,
+                                 std::shared_ptr<std::atomic<size_t>>> &c) {
+        hook_counters_ = c;
+    }
+
+private:
+    /**
+     * @brief Los `@Hook` del raiz, con el nombre por el que se les llama.
+     *
+     * El nombre va aparte de la declaracion porque no se puede deducir de ella
+     * aqui: desde otro modulo se le llama por el nombre APLANADO, y el aplanado
+     * del raiz todavia no ha ocurrido cuando esto se recoge.
+     *
+     * Vacio si este modulo ES el raiz -- entonces sus ganchos salen de su
+     * propio arbol, ya con el nombre bueno.
+     */
+    std::vector<std::pair<ast::FunctionDecl *, std::string>> root_hook_decls_;
+    /// Contador compartido por gancho, por su nombre de llamada.
+    std::unordered_map<std::string, std::shared_ptr<std::atomic<size_t>>>
+        hook_counters_;
 
     /// Nombres marcados `@NoInstrument`: nunca se instrumentan.
     std::unordered_set<std::string> hook_excluded_;
