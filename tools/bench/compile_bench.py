@@ -151,6 +151,10 @@ def main() -> int:
     # minutos y no deja nada escrito obliga a repetirla para comparar, y a
     # nadie se le ocurre pedir el fichero ANTES de ver si el resultado
     # interesa.  Relativo = junto a la raiz del proyecto.
+    p.add_argument("--conservar", action="store_true",
+                   help="no borrar las fuentes generadas al terminar (por "
+                        "defecto se borran: son gigabytes en el TEMP del "
+                        "sistema, que en Windows vive en C:)")
     p.add_argument("--out-json", type=str, default="bench_compilacion.json")
     args = p.parse_args()
 
@@ -305,6 +309,15 @@ def main() -> int:
     ruta_json.write_text(json.dumps(ctx.resultados, indent=2), encoding="utf-8")
     print()
     print(f"{C.GREEN}[ok]{C.RESET} JSON: {ruta_json}")
+
+    # RECOGER.  Se limpiaba al ENTRAR y nunca al salir, asi que entre dos
+    # corridas quedaban gigabytes de fuentes generadas ocupando el TEMP del
+    # sistema -- que en Windows vive en C: --.  Un banco que llena el disco de
+    # quien lo ejecuta acaba sin poder ejecutarse.
+    if args.conservar:
+        print(f"{C.DIM}  fuentes conservadas en {base_tmp}{C.RESET}")
+    else:
+        shutil.rmtree(base_tmp, ignore_errors=True)
     return 0
 
 

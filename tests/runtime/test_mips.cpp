@@ -649,6 +649,16 @@ uint64_t run_program(const std::string &velb, Engine engine, uint64_t *r0,
     proc->bundle_reorder_on =
         (engine == Engine::Reorder || engine == Engine::ScalarReorder);
 
+    /* Y CONTAR lo que hace, que se pide aparte.
+     *
+     * La telemetria del reordenamiento no viene de serie: el planificador tiene
+     * dos instanciaciones y solo la que explica lleva contadores, asi que hay
+     * que pedirla o el resumen sale a cero sin que nadie avise.  Aqui se pide
+     * porque este test IMPRIME esos numeros; el coste es una rama por paquete
+     * formado, no por instruccion ejecutada, y esta prueba mide instrucciones
+     * por segundo -- lo que se mide no cambia --. */
+    proc->bundle_stats_on = true;
+
     /* Se cronometra con NUESTRO reloj, no con `steady_clock`.  En Windows ese
      * sale de QueryPerformanceCounter y salta de 100 en 100 ns; aqui se miden
      * decenas de milisegundos, asi que daria igual -- pero el numero que este
@@ -706,7 +716,19 @@ double measure(uint64_t loops, uint64_t body, Mix mix, Engine engine,
     const uint64_t v =
         body == 0 ? loops : (loops * 4) / (body + 4);
     const std::string velb = "test_mips_bench.velb";
-    if (!prepare(generate(v, body, mix), velb)) return 0.0;
+    /* POR QUE fallo, no solo que fallo.
+     *
+     * Devolver 0.0 desde cuatro sitios distintos ponia un `-` en la tabla y
+     * dejaba al que la lee eligiendo entre cuatro causas que llevan a sitios
+     * opuestos: no se pudo generar el programa, no arranco, el reloj no midio,
+     * o DIO OTRO RESULTADO -- que es un fallo de correccion y no de medida --.
+     * Un guion mudo hace perder una tarde distinguiendolas a mano. */
+    if (!prepare(generate(v, body, mix), velb)) {
+        std::fprintf(stderr, "[medida] no se pudo generar/enlazar el programa "
+                             "(mezcla=%s cuerpo=%llu)\n",
+                     mix_name(mix), (unsigned long long)body);
+        return 0.0;
+    }
 
     uint64_t r0 = 0, counted = 0;
     run_program(velb, engine, &r0, &counted); // calentamiento, se tira
@@ -714,7 +736,23 @@ double measure(uint64_t loops, uint64_t body, Mix mix, Engine engine,
     uint64_t best_ns = UINT64_MAX, instrs = 0;
     for (int i = 0; i < repeats; ++i) {
         const uint64_t ns = run_program(velb, engine, &r0, &counted);
-        if (ns == 0 || r0 != v) return 0.0;
+        if (ns == 0) {
+            std::fprintf(stderr, "[medida] el programa no llego a ejecutarse "
+                                 "(mezcla=%s cuerpo=%llu despacho=%s)\n",
+                         mix_name(mix), (unsigned long long)body,
+                         engine_name(engine));
+            return 0.0;
+        }
+        if (r0 != v) {
+            std::fprintf(stderr,
+                         "[medida] RESULTADO DISTINTO: r0=%llu y se esperaba "
+                         "%llu (mezcla=%s cuerpo=%llu despacho=%s).  Esto NO "
+                         "es ruido de medida\n",
+                         (unsigned long long)r0, (unsigned long long)v,
+                         mix_name(mix), (unsigned long long)body,
+                         engine_name(engine));
+            return 0.0;
+        }
         if (ns < best_ns) {
             best_ns = ns;
             instrs = counted;
@@ -993,7 +1031,8 @@ int main(int argc, char **argv) {
                          "  mezcla:   alu | anchos | memoria | mixta | float "
                          "| vector\n"
                          "  tramo:    instrucciones seguidas sin salto\n"
-                         "  despacho: escalar | paquetes\n");
+                         "  despacho: escalar | esc+reord | paquetes "
+                         "| paq+reord\n");
             return 2;
         }
     }

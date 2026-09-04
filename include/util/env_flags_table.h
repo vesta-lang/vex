@@ -190,6 +190,20 @@ VESTA_ENV_FLAG(CacheDump, "VESTA_CACHE_DUMP", Report, Scheduler, Bool, Any)
 VESTA_ENV_FLAG(NoBundleReorder, "VESTA_NO_BUNDLE_REORDER", Report, Scheduler,
                Bool, Any)
 
+/* Contar TODO lo que hace la maquinaria de paquetes: cuantos se forman, cuantos
+ * despachos, cuantos encadenamientos, cuanto movio el planificador y que
+ * criterio decidio cada posicion.
+ *
+ * Se pide en EJECUCION y no al compilar.  Que la telemetria dependiera del
+ * perfil de construccion significaba que para mirar por que un programa forma
+ * los paquetes que forma habia que reconstruir el proyecto, y entonces el
+ * binario que se mira no es el que se ejecuta.
+ *
+ * Apagada no cuesta: ninguno de estos contadores va por INSTRUCCION -- van por
+ * paquete formado, por despacho o por encadenamiento --, y el reordenador ni
+ * eso, porque tiene dos instanciaciones y esto elige cual se llama. */
+VESTA_ENV_FLAG(BundleStats, "VESTA_BUNDLE_STATS", Report, Scheduler, Bool, Any)
+
 /* -- Asignacion de registros ---------------------------------------------- */
 VESTA_ENV_FLAG(AsignadorMaquina, "VESTA_ASIGNADOR_MAQUINA", Emitted, RegAlloc,
                Bool, Any)

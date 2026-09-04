@@ -887,9 +887,14 @@ struct HechosDeAsmParaDse {
     const analysis::RangeFacts *rangos = nullptr;
 };
 
+/// @param facts Def-use de @p fn, si el llamante ya los tiene.  Se los pasa al
+///        modelo de efectos, que es quien contesta si una instruccion SUSPENDE
+///        -- y eso decide si la memoria compartida sigue valiendo despues --.
+///        Null = se construyen aqui, que es el mismo recorrido otra vez.
 bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
                  const std::unordered_set<std::string> *pure_callees = nullptr,
-                 const HechosDeAsmParaDse *hechos_asm = nullptr);
+                 const HechosDeAsmParaDse *hechos_asm = nullptr,
+                 const analysis::IrFacts *facts = nullptr);
 
 /**
  * @brief Pase Const CSE Entry: deduplicacion global de constantes.

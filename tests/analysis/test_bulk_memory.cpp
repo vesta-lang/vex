@@ -207,9 +207,9 @@ int main() {
         CHECK(r.facts.size() == 1, "se reconoce el bucle");
         CHECK(r.declines.empty(), "y no se renuncia a nada");
         if (!r.facts.empty()) {
-            CHECK(r.facts[0].clase == analysis::BulkMemoryFact::Clase::Relleno,
+            CHECK(r.facts[0].kind == analysis::BulkMemoryFact::Kind::Fill,
                   "es un RELLENO, no una copia");
-            CHECK(r.facts[0].ancho == 1, "de un byte por elemento");
+            CHECK(r.facts[0].width == 1, "de un byte por elemento");
 
             /* Y el hecho publicado lleva el NUMERO, no el identificador del
              * valor.  Publicar el id como si fuera la cuenta imprimia "1
@@ -283,6 +283,108 @@ int main() {
             analysis::analyze_bulk_memory(fn);
         CHECK(rep.facts.empty() && rep.declines.empty(),
               "nada que decir, y se distingue de haber mirado y descartado");
+    }
+
+    /* -------------------------------------------------------------------
+     * El mismo movimiento de bloque, escrito EN RECTA.
+     *
+     * Es como quedan los campos de una vista al ponerlos a cero uno a uno: sin
+     * bucle que reconocer, solo escrituras seguidas que embaldosan un tramo.
+     * ------------------------------------------------------------------- */
+    {
+        /* Escrituras de 8 bytes en desplazamientos que se le pasan.  Sirve
+         * para los dos casos de abajo -- seguidas y con hueco -- sin repetir
+         * el andamiaje.
+         *
+         * Valores: 0 = base | 1 = cte 0 (lo escrito) | 2+2k = cte del
+         * desplazamiento | 3+2k = la direccion. */
+        const auto make_fn = [](const std::vector<int64_t> &offsets) {
+            ir::IrFunction fn;
+            fn.name = "straight_line";
+            for (size_t i = 0; i < 2 + 2 * offsets.size(); ++i)
+                fn.values.push_back({});
+            fn.values[0].type = IrType::PTR;
+            fn.values[0].is_host_ptr = true;
+            fn.params.push_back(0);
+
+            IrBlock b0;
+            b0.id = 0;
+            b0.name = "entry";
+            IrInstr zero{};
+            zero.op = IrOp::CONST;
+            zero.dst = 1;
+            zero.type = IrType::I64;
+            zero.imm = 0;
+            b0.instrs.push_back(zero);
+
+            for (size_t k = 0; k < offsets.size(); ++k) {
+                const IrValueId c = static_cast<IrValueId>(2 + 2 * k);
+                const IrValueId a = static_cast<IrValueId>(3 + 2 * k);
+                IrValueId addr = 0; // la base misma cuando el offset es cero
+                if (offsets[k] != 0) {
+                    IrInstr kc{};
+                    kc.op = IrOp::CONST;
+                    kc.dst = c;
+                    kc.type = IrType::I64;
+                    kc.imm = static_cast<uint64_t>(offsets[k]);
+                    b0.instrs.push_back(kc);
+                    fn.values[a].type = IrType::PTR;
+                    fn.values[a].is_host_ptr = true;
+                    IrInstr ad = val(IrOp::ADD, a, IrType::PTR);
+                    ad.operands.push_back(0);
+                    ad.operands.push_back(c);
+                    b0.instrs.push_back(ad);
+                    addr = a;
+                }
+                IrInstr st{};
+                st.op = IrOp::STORE;
+                st.type = IrType::I64;
+                st.operands.push_back(1);    // el valor
+                st.operands.push_back(addr); // la direccion
+                b0.instrs.push_back(st);
+            }
+            IrInstr r{};
+            r.op = IrOp::RET;
+            b0.instrs.push_back(r);
+            fn.blocks = {b0};
+            return fn;
+        };
+
+        /* Cuatro escrituras SEGUIDAS: 0, 8, 16 y 24.  La primera va a la BASE
+         * sin suma, que es como baja el campo de offset cero -- tratarlo como
+         * un caso aparte lo dejaba fuera del tramo. */
+        {
+            const ir::IrFunction fn = make_fn({0, 8, 16, 24});
+            const analysis::StraightLineBulkReport rep =
+                analysis::analyze_straight_line_bulk(fn);
+            CHECK(rep.facts.size() == 1, "las cuatro escrituras son UN tramo");
+            if (rep.facts.size() == 1) {
+                const analysis::StraightLineBulkFact &f = rep.facts[0];
+                CHECK(f.kind == analysis::BulkMemoryFact::Kind::Fill,
+                      "y lo que hacen es rellenar");
+                CHECK(f.begin == 0 && f.bytes == 32,
+                      "de 32 bytes seguidos desde el principio");
+                CHECK(f.fill == 0, "con el byte cero");
+                CHECK(f.instrs.size() == 4,
+                      "y sustituyen exactamente a las cuatro escrituras");
+            }
+        }
+        /* Con un HUECO en medio: 0, 8, luego 24 y 32.  Lo que NO puede pasar
+         * es que salga un solo tramo de 0 a 40: los bytes 16..24 no son del
+         * grupo y escribirlos seria escribir encima de algo que nadie ha
+         * mirado.  Salen DOS tramos, uno a cada lado del hueco. */
+        {
+            const ir::IrFunction fn = make_fn({0, 8, 24, 32});
+            const analysis::StraightLineBulkReport rep =
+                analysis::analyze_straight_line_bulk(fn);
+            CHECK(rep.facts.size() == 2, "el hueco parte el tramo en dos");
+            if (rep.facts.size() == 2) {
+                CHECK(rep.facts[0].begin == 0 && rep.facts[0].bytes == 16,
+                      "el primero llega hasta el hueco y para");
+                CHECK(rep.facts[1].begin == 24 && rep.facts[1].bytes == 16,
+                      "y el segundo empieza despues, sin cubrirlo");
+            }
+        }
     }
 
     std::printf("\n%s: %d comprobaciones, %d fallos\n",

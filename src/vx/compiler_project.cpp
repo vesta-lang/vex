@@ -4989,28 +4989,28 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
  * @param diags Donde dejar el aviso.
  * @param file  Fichero al que apuntar.
  */
-static void vx_avisar_call_site_con_asm(const ir::IrModule &mod,
+static void vx_warn_call_site_with_asm(const ir::IrModule &mod,
                                         Diagnostics &diags,
                                         const std::string &file) {
     for (const ir::IrFunction &fn : mod.functions) {
         // Una sola pasada por funcion, y se corta en cuanto se sabe la
         // respuesta: en cuanto hay las dos cosas ya no queda nada que mirar.
-        bool pide_retorno = false;
-        const ir::IrInstr *bloque_asm = nullptr;
+        bool wants_return_addr = false;
+        const ir::IrInstr *asm_block = nullptr;
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {
-                if (in.op == ir::IrOp::RETURN_ADDR) pide_retorno = true;
-                else if (in.op == ir::IrOp::INLINE_ASM && bloque_asm == nullptr)
-                    bloque_asm = &in;
-                if (pide_retorno && bloque_asm != nullptr) break;
+                if (in.op == ir::IrOp::RETURN_ADDR) wants_return_addr = true;
+                else if (in.op == ir::IrOp::INLINE_ASM && asm_block == nullptr)
+                    asm_block = &in;
+                if (wants_return_addr && asm_block != nullptr) break;
             }
-            if (pide_retorno && bloque_asm != nullptr) break;
+            if (wants_return_addr && asm_block != nullptr) break;
         }
-        if (!pide_retorno || bloque_asm == nullptr) continue;
+        if (!wants_return_addr || asm_block == nullptr) continue;
 
         // Solo ahora se analiza el bloque, que es lo caro de todo esto.
         const vx::AsmBlockEffects e = vx::asm_analyze_block_no_classes(
-            bloque_asm->func_name, vx::asm_arch_actual());
+            asm_block->func_name, vx::asm_arch_actual());
         /* Los nombres llegan CANONICOS por arquitectura: en x86 los cuatro
          * anchos de la pila (`rsp`/`esp`/`sp`/`spl`) se normalizan a `rsp` y
          * los del marco a `rbp`, y en arm64 salen `sp`, `x29` y `x30`.  Por
@@ -5020,21 +5020,21 @@ static void vx_avisar_call_site_con_asm(const ir::IrModule &mod,
          * `x30` entra porque en arm64 la vuelta viaja en el registro de
          * enlace, no en la pila: pisarlo rompe lo mismo que mover `rsp` en
          * x86, aunque la pila quede intacta. */
-        static const char *const kRegsDeRetorno[] = {"rsp", "rbp", "sp",
+        static const char *const kReturnPathRegs[] = {"rsp", "rbp", "sp",
                                                      "x29", "x30", "r13",
                                                      "r11", "r14"};
-        std::string tocados;
+        std::string touched;
         for (const std::string &r : e.escritos) {
             bool afecta = false;
-            for (const char *c : kRegsDeRetorno)
+            for (const char *c : kReturnPathRegs)
                 if (r == c) { afecta = true; break; }
             if (!afecta) continue;
-            if (!tocados.empty()) tocados += ", ";
-            tocados += r;
+            if (!touched.empty()) touched += ", ";
+            touched += r;
         }
-        if (tocados.empty()) continue;
-        diags.diag(SourceLoc{file, bloque_asm->source_line, 1}, DiagLevel::WARN,
-                   "VXW934", {fn.name, tocados});
+        if (touched.empty()) continue;
+        diags.diag(SourceLoc{file, asm_block->source_line, 1}, DiagLevel::WARN,
+                   "VXW934", {fn.name, touched});
     }
 }
 
@@ -5475,7 +5475,7 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
      * Corre SIEMPRE, no bajo el flag de lo no acotado: no es un detalle de
      * cuanto se sabe del bloque, es un valor que va a salir mal.
      */
-    if (mod.usa_return_addr) vx_avisar_call_site_con_asm(mod, diags, file);
+    if (mod.usa_return_addr) vx_warn_call_site_with_asm(mod, diags, file);
 
     if (!decir_lo_no_acotado) return;
     for (const ir::IrFunction &fn : mod.functions) {

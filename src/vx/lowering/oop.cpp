@@ -2431,6 +2431,35 @@ void Lowering::lower_extension_methods(ir::IrModule &out) {
     }
 }
 
+void Lowering::export_overlays_to_ir(ir::IrModule &out) {
+    /* Misma razon que las clases: la cobertura de una vista la sabe SOLO el
+     * comprobador de tipos -- es quien tiene la expresion de cada offset --, y
+     * quien viene despues no tiene otra forma de verla.  Sin esto, preguntar
+     * "que bytes cubre este campo" no se podia ni desde el ASA ni desde el
+     * optimizador, que es justo quien necesita saberlo para decidir si una
+     * escritura a un campo puede pisar a otro. */
+    for (const auto &kv : tc_.struct_layouts()) {
+        const StructLayout &lay = kv.second;
+        if (!lay.is_overlay) continue;
+        ir::IrOverlay ov;
+        ov.name = lay.name;
+        ov.extent = lay.overlay_extent;
+        ov.fields.reserve(lay.fields.size());
+        for (const StructFieldInfo &fi : lay.fields) {
+            ir::IrOverlayField f;
+            f.name = fi.name;
+            f.terms = fi.span.terms;
+            f.begin = fi.span.begin;
+            f.end = fi.span.end;
+            f.known = fi.span.known;
+            f.shares_on_purpose = !fi.overlaps_with.empty();
+            if (ov.line == 0 && fi.loc.line > 0) ov.line = fi.loc.line;
+            ov.fields.push_back(std::move(f));
+        }
+        out.overlays.push_back(std::move(ov));
+    }
+}
+
 void Lowering::export_classes_to_ir(ir::IrModule &out) {
     const auto &layouts = tc_.class_layouts();
     out.classes.reserve(layouts.size());

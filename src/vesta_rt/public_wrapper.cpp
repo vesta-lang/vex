@@ -59,6 +59,7 @@
 #include "runtime/manager_runtime.h"
 #include "runtime/native_invoke.h"
 #include "runtime/proceso_runtime.h"
+#include "runtime/vm_block_mem.h" // el recorrido por paginas, en UN sitio
 #include "runtime/string_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/string_runtime.h"
@@ -1259,6 +1260,23 @@ void vrt_vm_write_u16(vrt_proc *proc, uint64_t vaddr, uint16_t value) {
 void vrt_vm_write_u8(vrt_proc *proc, uint64_t vaddr, uint8_t value) {
     if (!proc) return;
     as_proc(proc)->vm_mem.write_u8(vaddr, value);
+}
+
+void vrt_vm_memset(vrt_proc *proc, uint64_t vaddr, uint64_t value,
+                   uint64_t len) {
+    if (!proc) return;
+    /* El recorrido NO se escribe aqui: es el mismo que ejecuta la instruccion
+     * de la maquina, y tiene que serlo.  Dos copias del mismo recorrido es
+     * exactamente como el codigo compilado y el interpretado empiezan a dejar
+     * memorias distintas -- que es el fallo que trajo a estas dos funciones
+     * aqui. */
+    runtime::vm_block_fill(*as_proc(proc), vaddr,
+                           static_cast<uint8_t>(value & 0xFFu), len);
+}
+
+void vrt_vm_memcpy(vrt_proc *proc, uint64_t dst, uint64_t src, uint64_t len) {
+    if (!proc) return;
+    runtime::vm_block_copy(*as_proc(proc), dst, src, len);
 }
 
 uint8_t *vrt_vm_translate(vrt_proc *proc, uint64_t vaddr) {

@@ -1675,7 +1675,13 @@ void Lowering::warn_unreached_hooks() {
         }
     }
     for (const auto &hp : hook_providers_) {
+        /* Un gancho del raiz se teje modulo a modulo, y lo NORMAL es que no
+         * case en todos: `"std.*"` no alcanza nada en el programa que lo
+         * declara.  Por eso se mira el total de la compilacion cuando lo hay;
+         * mirando solo este modulo, el aviso decia "no se instalo en ningun
+         * sitio" con la stdlib entera instrumentada. */
         if (hp.reached != 0) continue;
+        if (hp.reached_total && hp.reached_total->load() != 0) continue;
         // Un codigo por caso, y no uno solo con el motivo de argumento: una
         // frase pasada como dato no la traduce nadie, y el aviso saldria
         // mitad en un idioma y mitad en otro.
@@ -1745,6 +1751,7 @@ void Lowering::emit_hook_calls(HookPoint point, const std::string &fn_name,
             !glob_matches(hp.selector, fn_dotted))
             continue;
         ++hp.reached;
+        if (hp.reached_total) hp.reached_total->fetch_add(1);
 
         // Se emite UN argumento por cada campo que el gancho pidio, y solo
         // esos: lo que no se declara no se calcula ni se pasa.

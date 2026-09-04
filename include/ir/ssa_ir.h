@@ -1999,6 +1999,53 @@ struct IrMethod {
 /**
  * @brief Descriptor completo de una clase / interface Vesta.
  */
+/**
+ * @struct IrOverlayField
+ * @brief Un campo de una vista `@overlay` y los bytes que ocupa.
+ *
+ * El offset de un campo es `simbolo1 + simbolo2 + ... + constante`, donde cada
+ * simbolo es un campo hermano que se lee al acceder.  Guardarlo asi -- y no
+ * como un numero -- es lo que deja comparar dos campos DINAMICOS: dos que
+ * cuelgan del MISMO simbolo se mueven a la vez, asi que si sus constantes no se
+ * pisan, no se pisan nunca, valga lo que valga el simbolo.
+ */
+struct IrOverlayField {
+    std::string name;
+    /// Los hermanos que suman al offset, ORDENADOS.  Vacio = offset constante.
+    std::vector<std::string> terms;
+    /// Parte constante del principio y del final, en el marco de @c terms.
+    int64_t begin = 0, end = 0;
+    /// false = no se supo (un resolver `@offset { }`, un array de paso no
+    /// literal).  NO es "no ocupa nada": es que no se sabe donde cae, y los dos
+    /// se distinguen a proposito.
+    bool known = false;
+    /// El campo declara compartir bytes a proposito (`@overlaps(...)`).
+    bool shares_on_purpose = false;
+};
+
+/**
+ * @struct IrOverlay
+ * @brief Una vista `@overlay` y la cobertura de sus campos.
+ *
+ * Viaja en el modulo por la misma razon que @c IrClass: es conocimiento de
+ * TIPO que solo tiene el frontend, y aqui es donde lo pueden preguntar los que
+ * vienen despues.  Sin esto, el layout de una vista se quedaba dentro del
+ * comprobador de tipos, asi que ni el ASA ni el optimizador podian saber que
+ * bytes cubre un campo -- y esa es justo la pregunta que hace falta para
+ * responder si una escritura a un campo puede pisar a otro.
+ */
+struct IrOverlay {
+    std::string name;
+    std::vector<IrOverlayField> fields;
+    /// Huella estatica de la vista: `max(begin+len)` sobre los campos de offset
+    /// constante, redondeada.  Es lo que devuelve `sizeof(T)`.
+    uint32_t extent = 0;
+    /// Linea donde se declara.  Una vista no es una funcion, asi que quien
+    /// quiera senalarla no la puede buscar por el codigo: sin esto, un hallazgo
+    /// sobre una vista sale sin posicion y no se puede pinchar en el editor.
+    uint32_t line = 0;
+};
+
 struct IrClass {
     std::string name;       ///< Nombre simple ("Counter", "Animal").
     std::string super_name; ///< "" si no hay super (o == "Object").
@@ -2066,6 +2113,13 @@ struct IrModule {
     /// Vacio en modulos sin POO -- el transpiler entonces opera solo
     /// sobre funciones libres.  El IR emitter (a .vel) la ignora.
     std::vector<IrClass> classes;
+
+    /// Las vistas `@overlay` declaradas en el modulo, con la cobertura de sus
+    /// campos.  Misma razon que @c classes: es conocimiento de TIPO que solo
+    /// tiene el frontend, y quien viene despues -- el ASA, el linter, quien
+    /// pregunte si dos accesos pueden aliasar -- no tiene otra forma de verlo.
+    /// Vacio en modulos sin vistas.
+    std::vector<IrOverlay> overlays;
 
     /**
      * @brief La CADENA de aspectos de cada metodo, por su nombre IR.

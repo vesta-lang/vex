@@ -112,31 +112,13 @@ bool disasm_regs(const uint8_t *bytes, size_t n,
     return true;
 }
 
-/**
- * @brief El `RegSlot` de cada bit de la forma DERIVADA del codigo maquina.
- *
- * El derivador responde en campos del operando -- reg1 entero, nibble bajo de
- * reg2... -- y el descodificador en `RegSlot`.  Son la misma nocion con dos
- * nombres, y esta tabla es el puente.  El orden es el que produce
- * `operand_field_bit`: campo (reg1, reg2) por parte (entero, bajo, alto).
- */
-constexpr runtime::RegSlot kFormSlot[12] = {
-    runtime::RS_REG1, runtime::RS_REG1_LO, runtime::RS_REG1_HI,
-    runtime::RS_REG2, runtime::RS_REG2_LO, runtime::RS_REG2_HI,
-    runtime::RS_REG3, runtime::RS_REG3_LO, runtime::RS_REG3_HI,
-    runtime::RS_REGI, runtime::RS_REGI_LO, runtime::RS_REGI_HI};
-
 /// Los registros a los que apunta @p forma sobre la instancia @p d.
-/// Doce bits, no seis: el puente se habia quedado corto cuando el derivador
-/// paso a producir tambien el tercer registro de la forma de memoria y el de
-/// la forma con inmediato.  Truncando, esos campos no se comparaban con nada.
-uint16_t regs_de_forma(uint16_t forma, const runtime::DecodedInstr &d) {
-    uint16_t m = 0;
-    for (int b = 0; b < 12; ++b)
-        if ((forma >> b) & 1)
-            m |= static_cast<uint16_t>(
-                1u << (runtime::reg_slot_get(d, kFormSlot[b]) & 0x0F));
-    return m;
+///
+/// El puente forma -> `RegSlot` vive en `effects_decode.h` porque lo usan dos:
+/// este test y el que reordena dentro de un paquete.  Aqui solo se le pone el
+/// nombre en espanol con el que se lee el resto del fichero.
+inline uint16_t regs_de_forma(uint16_t forma, const runtime::DecodedInstr &d) {
+    return runtime::regs_of_form(forma, d);
 }
 
 /// `r3 r5=` en texto, para que el fallo diga QUE difiere y no solo que difiere.

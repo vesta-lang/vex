@@ -512,31 +512,20 @@ target_link_libraries(aot_emit PUBLIC LibPEparse)
 
 
 # ---------------------------------------------------------------------------
-# Telemetria de los paquetes de instrucciones.
+# Telemetria de los paquetes: NO hay opcion de construccion, a proposito.
 #
-# Los contadores (`bundle_stats`) no se pueden encender por target: los
-# INCREMENTOS viven en `bundle.cpp` y `scheduler.cpp`, o sea dentro de
-# `vmcore`, asi que un test que se definiera la macra para si mismo veria los
-# campos a cero y no se enteraria.  Por eso es una definicion GLOBAL.
+# La hubo (`VESTA_BUNDLE_STATS` -> `VM_BUNDLE_STATS=1`) y se quito: obligaba a
+# reconstruir el proyecto para mirar por que un programa forma los paquetes que
+# forma, y entonces lo que se mira ya no es el binario que se ejecuta.  Una
+# medida que exige cambiar de binario para tomarla mide otro binario.
 #
-# Apagada por defecto, y no por prudencia: con ella los caminos calientes del
-# interprete llevan incrementos que sin ella NO EXISTEN.  Medir no puede
-# cambiar lo que se mide, asi que la construccion normal va sin telemetria y
-# quien quiera los numeros la pide:
-#
-#   cmake -DVESTA_BUNDLE_STATS=ON ...
-#
-# El campo `bundle_stats` de `ProcessVM` existe en las dos: si dependiera de la
-# bandera, un test compilado con ella y enlazado contra un `vmcore` sin ella
-# veria una estructura de otro tamano -- corrupcion en ejecucion, sin un solo
-# error de compilacion.
+# Ahora se pide en EJECUCION -- `ProcessVM::bundle_stats_on` o la variable
+# `VESTA_BUNDLE_STATS` -- y no cuesta: ninguno de esos contadores va por
+# INSTRUCCION.  Van por paquete formado, por despacho o por encadenamiento, o
+# sea una rama que casi siempre no se toma cada treinta y tantas instrucciones.
+# El reordenador ni eso: tiene dos instanciaciones y la peticion elige cual se
+# llama, asi que la de por defecto no lleva ni el contador.
 # ---------------------------------------------------------------------------
-option(VESTA_BUNDLE_STATS
-       "Contar telemetria de los paquetes de instrucciones (cuesta en el camino caliente)"
-       OFF)
-if (VESTA_BUNDLE_STATS)
-    add_compile_definitions(VM_BUNDLE_STATS=1)
-endif()
 
 # ---------------------------------------------------------------------------
 # Opciones de codigo de Release, en UNA lista.
@@ -581,6 +570,8 @@ set(VESTA_TUNE "native" CACHE STRING
 # persiguiendo punteros, mirando tablas y manejando cadenas.
 set(VESTA_OPTS_CODIGO_RELEASE
         -O3
+        -Wall
+        -Wextra
         -march=x86-64
         -mtune=${VESTA_TUNE}
         -fstrict-aliasing

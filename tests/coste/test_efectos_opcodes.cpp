@@ -198,6 +198,15 @@ int main(int argc, char **argv) {
                         // enteros, y mezclarlos en un solo campo obligaria a
                         // ordenarlas entre si sin motivo.
                         "\"form_vec_read\": %u, \"form_vec_write\": %u, "
+                        /* Si la FORMA se puede creer, que es distinto de que
+                         * la mascara valga algo.  Una mascara a cero tiene dos
+                         * lecturas opuestas -- "no toca registros" y "no se vio
+                         * que tocaba" -- y quien reordena necesita saber cual
+                         * es: sobrar una lectura cuesta un reorden, faltar una
+                         * ESCRITURA cuesta un resultado.  Exige las dos cosas:
+                         * que el recorrido llegara al final y que ni un solo
+                         * acceso al banco quedara sin atribuir a un campo. */
+                        "\"form_exact\": %s, "
                         "\"puede_abortar\": %s, "
                         "\"tablas_resueltas\": %u, \"motivo\": \"",
                         f.nombre.c_str(), f.tabla, f.indice, f.bytes,
@@ -206,6 +215,8 @@ int main(int argc, char **argv) {
                         f.imp.completo ? "true" : "false", f.imp.escribe,
                         f.imp.lee, f.imp.form_read, f.imp.form_write,
                         f.imp.form_vec_read, f.imp.form_vec_write,
+                        (f.imp.completo && f.imp.form_unknown == 0) ? "true"
+                                                                    : "false",
                         f.imp.can_abort ? "true" : "false", f.imp.tablas);
             /* POR QUE se quedo corto.  Es la SEMILLA de la declaracion: lo que
              * se declare nace del diagnostico del analisis, no de lo que

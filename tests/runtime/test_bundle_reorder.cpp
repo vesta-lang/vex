@@ -67,6 +67,34 @@ int g_fail = 0;
 /// programa que se esta mirando.  Es el denominador de todo lo demas.
 uint32_t g_movibles = 0;
 uint32_t g_barreras = 0;
+/* Una barrera se fija A SI MISMA, no congela el paquete: lo que queda a cada
+ * lado se sigue reordenando entre si.  Estos dos lo miden -- cuantos paquetes
+ * traian barrera y en cuantos de esos se movio algo igual --, porque es la
+ * diferencia entre un modelo que ordena y uno que se rinde en cuanto ve algo
+ * que no entiende, y las dos cosas pasan las comprobaciones de correccion. */
+uint32_t g_con_barrera = 0;
+uint32_t g_con_barrera_movidos = 0;
+bool g_este_tenia_barrera = false; ///< lo pone @ref validar para el bucle
+/* Cuantos paquetes tenian MARGEN: al menos dos contiguas que se podian
+ * intercambiar.  Sin este dato, "no movio nada" tiene dos causas que se leen
+ * igual y llevan a sitios opuestos -- que el programa sea una cadena de
+ * dependencias, donde no mover es la respuesta CORRECTA, o que el planificador
+ * se este rindiendo --, y acusar de lo segundo cuando es lo primero manda a
+ * arreglar lo que no esta roto. */
+uint32_t g_con_margen = 0;
+/* Totales del CONJUNTO, que es donde se exige que el planificador haga algo.
+ *
+ * Por programa no se puede exigir: que un paquete tenga margen -- dos
+ * contiguas intercambiables -- no quiere decir que exista un orden MEJOR.  Si
+ * cada instruccion ya es independiente de la anterior, todas las candidatas
+ * empatan y gana la que ya iba primera; no mover es entonces la respuesta
+ * correcta del modelo, no una renuncia.  Lo que si tiene que ser cierto es que
+ * en el conjunto se mueva algo y que alguna barrera no congele su paquete: un
+ * planificador que no moviera NUNCA pasaria todas las comprobaciones de
+ * correccion sin hacer nada. */
+uint32_t g_tot_movidos = 0;
+uint32_t g_tot_margen = 0;
+uint32_t g_tot_barrera_movidos = 0;
 
 void check(bool cond, const char *que, const char *donde) {
     if (cond) {
@@ -192,13 +220,25 @@ void validar(runtime::ProcessVM *proc, const runtime::Bundle &antes,
     }
 
     std::vector<Rough> t(antes.k);
+    g_este_tenia_barrera = false;
     for (uint32_t i = 0; i < antes.k; ++i) {
         t[i] = rough_of(proc, antes.instr[i]);
-        if (t[i].barrier)
+        if (t[i].barrier) {
             ++g_barreras;
-        else
+            g_este_tenia_barrera = true;
+        } else {
             ++g_movibles;
+        }
     }
+    if (g_este_tenia_barrera) ++g_con_barrera;
+
+    // Habia DOS contiguas intercambiables?  Es el margen minimo: sin el, la
+    // unica ordenacion valida es la que ya trae y no mover es lo correcto.
+    for (uint32_t i = 0; i + 1 < antes.k; ++i)
+        if (!clash(t[i], t[i + 1])) {
+            ++g_con_margen;
+            break;
+        }
 
     /* 1 y 2 juntas: si dos se cruzaron y el modelo basto dice que chocaban, el
      * reorden es incorrecto.  Una barrera choca con todo, asi que la misma
@@ -295,6 +335,9 @@ void probar(const std::string &fichero, bool detalle) {
     uint32_t mirados = 0, movidos = 0;
     g_movibles = 0;
     g_barreras = 0;
+    g_con_barrera = 0;
+    g_con_barrera_movidos = 0;
+    g_con_margen = 0;
     for (uint32_t i = 0; i < runtime::ICACHE_SIZE; ++i) {
         runtime::DecodedInstr &e = proc->icache[i];
         if (e.exec_cached != &runtime::exec_bundle) continue;
@@ -324,6 +367,7 @@ void probar(const std::string &fichero, bool detalle) {
         ++mirados;
         if (n != 0) {
             ++movidos;
+            if (g_este_tenia_barrera) ++g_con_barrera_movidos;
             // Con `--detalle`, los primeros que se muevan se ensenan enteros.
             if (detalle && movidos <= 3) ensenar(proc, antes, copia, why);
             /* ESTABILIDAD: reordenar lo ya reordenado no lo vuelve a mover.  Si
@@ -337,19 +381,29 @@ void probar(const std::string &fichero, bool detalle) {
     }
     // Que MUEVA algo: un reordenador que nunca mueve pasa las comprobaciones
     // de correccion sin hacer nada, y entonces no estan comprobando nada.
-    check(movidos > 0, "no movio ni una instruccion en todo el programa",
-          donde);
+    // Se suma al conjunto; la exigencia de que MUEVA se comprueba ahi.
+    g_tot_movidos += movidos;
+    g_tot_margen += g_con_margen;
+    g_tot_barrera_movidos += g_con_barrera_movidos;
 
     /* CUANTAS se podian mover, que es el denominador de todo lo demas.
      *
      * Sin esto, "no movio nada" tiene dos causas que se leen igual y llevan a
      * sitios opuestos: que el programa no de margen -- todo son cadenas -- o
      * que el modelo declare barrera casi todo, que es un fallo. */
-    std::printf("  %s%-28s%s %4u paquetes, %s%u movibles%s / %u barreras\n",
+    std::printf("  %s%-28s%s %4u paquetes, %s%u movibles%s / %u barreras"
+                "  |  con margen: %s%u%s, reordenados %u"
+                "  |  con barrera: %u, reordenados %s%u%s\n",
                 ansi::c(ansi::BR_CYAN), donde, ansi::c(ansi::RESET), mirados,
                 g_movibles > g_barreras ? ansi::c(ansi::BR_GREEN)
                                         : ansi::c(ansi::BR_RED),
-                g_movibles, ansi::c(ansi::RESET), g_barreras);
+                g_movibles, ansi::c(ansi::RESET), g_barreras,
+                g_con_margen > 0 ? ansi::c(ansi::BR_GREEN)
+                                 : ansi::c(ansi::BR_YELLOW),
+                g_con_margen, ansi::c(ansi::RESET), movidos, g_con_barrera,
+                g_con_barrera_movidos > 0 ? ansi::c(ansi::BR_GREEN)
+                                          : ansi::c(ansi::BR_YELLOW),
+                g_con_barrera_movidos, ansi::c(ansi::RESET));
     vm->stop();
     runtime::bundle_release(proc);
 }
@@ -390,6 +444,23 @@ int main(int argc, char **argv) {
                 " acusar de mas.\n\n");
 
     for (const std::string &f : ficheros) probar(f, detalle);
+
+    /* Las dos propiedades del CONJUNTO.  Ninguna se puede exigir por programa:
+     * un programa donde cada instruccion ya es independiente de la anterior no
+     * tiene un orden mejor que el que trae, y ahi no mover es lo correcto.  Lo
+     * que no puede pasar es que en NINGUN programa se mueva nada -- eso es un
+     * planificador que no hace nada y aun asi pasa todo lo demas, porque no
+     * cruzar nada es trivialmente correcto -- ni que ninguna barrera deje
+     * reordenar a su alrededor, que seria congelar el paquete entero por una
+     * instruccion que solo se fija a si misma. */
+    if (g_tot_margen > 0) {
+        check(g_tot_movidos > 0,
+              "habia margen en todo el corpus y no movio ni una instruccion",
+              "conjunto");
+        check(g_tot_barrera_movidos > 0,
+              "ningun paquete con barrera se reordeno: la barrera congela",
+              "conjunto");
+    }
 
     std::printf("\ncomprobaciones: %s%d pasaron%s, %s%d fallaron%s\n",
                 ansi::c(ansi::BR_GREEN), g_pass, ansi::c(ansi::RESET),

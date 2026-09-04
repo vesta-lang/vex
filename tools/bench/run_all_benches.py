@@ -3158,6 +3158,10 @@ def main() -> int:
                              "(`>tope`), se ensena en la tabla y se deja "
                              "fuera de razones y medias." % BENCH_TIMEOUT)
     parser.add_argument("--no-plot", action="store_true")
+    parser.add_argument("--conservar", action="store_true",
+                        help="no borrar el directorio de trabajo al terminar "
+                             "(por defecto se borra: son cientos de MB en el "
+                             "TEMP del sistema, que en Windows vive en C:)")
     parser.add_argument("--out-json", type=str, default="bench_results.json")
     parser.add_argument("--out-plot", type=str, default="bench_results.png")
     parser.add_argument("--skip-legacy", action="store_true",
@@ -3891,6 +3895,15 @@ def main() -> int:
     resumen_permisos()
     resumen_muertes()
     resumen_sin_explicacion()
+
+    # RECOGER lo que se dejo en el TEMP del sistema.  No se limpiaba ni al
+    # entrar ni al salir, asi que los binarios de cada lenguaje se acumulaban
+    # corrida tras corrida en C:.  Un banco que llena el disco de quien lo
+    # ejecuta acaba sin poder ejecutarse.
+    if getattr(args, "conservar", False):
+        print(f"{C.DIM}  trabajo conservado en {work_dir}{C.RESET}")
+    else:
+        shutil.rmtree(work_dir, ignore_errors=True)
     return 0
 
 

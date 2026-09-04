@@ -180,6 +180,47 @@ struct FunctionSig {
 };
 
 /**
+ * @struct OverlaySpan
+ * @brief Los bytes que un campo de una vista `@overlay` ocupa.
+ *
+ * El offset de un campo es `simbolo1 + simbolo2 + ... + constante`, donde los
+ * simbolos son campos hermanos leidos en tiempo de acceso.  Guardarlo asi -- y
+ * no como un numero, ni como un rango de valores -- es lo que permite comparar
+ * dos campos DINAMICOS entre si: `@offset(e_lfanew + 4)` y
+ * `@offset(e_lfanew + 6)` no se pisan sea cual sea `e_lfanew`, porque los dos
+ * se mueven a la vez.  Un rango de valores no lo veria: `e_lfanew` es un `i32`,
+ * asi que su rango no acota nada.
+ *
+ * Con eso, la cabecera de un PE -- catorce campos colgando de `e_lfanew`, que
+ * es donde una errata es mas probable y donde mas cuesta verla -- se comprueba
+ * igual que una de offsets fijos.
+ *
+ * Dos tramos se pueden comparar cuando los DOS se saben y sus @c terms son los
+ * mismos; entonces la comparacion es exacta.  Con terminos distintos la
+ * respuesta no es "no se pisan", es "no se sabe", y eso se distingue.
+ */
+struct OverlaySpan {
+    /// Los campos hermanos que suman al offset, ORDENADOS (para comparar dos
+    /// tramos sin depender del orden en que se escribieron).  Vacio = offset
+    /// constante.
+    std::vector<std::string> terms;
+    /// Parte CONSTANTE del principio y del final, en el marco de @c terms.
+    int64_t begin = 0, end = 0;
+    /// false = no se pudo expresar asi (un resolver `@offset { }`, una
+    /// multiplicacion, un array de paso no literal): no se sabe donde cae.
+    bool known = false;
+
+    /// Dos tramos son comparables cuando cuelgan de los MISMOS simbolos.
+    bool comparable_with(const OverlaySpan &o) const {
+        return known && o.known && terms == o.terms;
+    }
+    /// Se pisan.  Solo tiene sentido preguntarlo si son comparables.
+    bool overlaps(const OverlaySpan &o) const {
+        return begin < o.end && o.begin < end;
+    }
+};
+
+/**
  * @struct StructFieldInfo
  * @brief Informacion del layout de un campo dentro de un @c struct.
  *
@@ -258,6 +299,11 @@ struct StructFieldInfo {
     /// Localizacion de la declaracion del campo, para el diagnostico del
     /// solape (que tiene que senalar los DOS campos, no solo uno).
     SourceLoc loc;
+    /// Overlay: que bytes ocupa el campo, con su marco de simbolos.  Lo calcula
+    /// el comprobador de tipos UNA vez -- es el unico que tiene la expresion
+    /// del offset -- y de aqui lo leen todos: el error del solape, el hecho de
+    /// cobertura del ASA y quien pregunte si dos accesos pueden aliasar.
+    OverlaySpan span;
 };
 
 /**
@@ -1400,6 +1446,16 @@ class TypeChecker {
      * @param lay Layout de la vista, ya con sus campos y offsets resueltos.
      */
     void check_overlay_overlaps(const StructLayout &lay);
+    /**
+     * @brief Resuelve que bytes ocupa cada campo de una vista `@overlay`.
+     *
+     * Se calcula AQUI y una sola vez porque este es el unico sitio con la
+     * expresion del offset delante; de @c StructFieldInfo::span lo leen luego
+     * el error del solape, el hecho de cobertura y el codegen.
+     *
+     * @param lay Layout de la vista; se rellena el @c span de cada campo.
+     */
+    void resolve_overlay_spans(StructLayout &lay);
     /// Resolver de structs (Fase 0) respaldado por @c struct_layouts_.
     const StructLayout *resolve_struct_layout(const std::string &name) const;
 

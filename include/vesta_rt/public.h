@@ -560,6 +560,45 @@ void vrt_vm_write_u16(vrt_proc *proc, uint64_t vaddr, uint16_t value);
 void vrt_vm_write_u8(vrt_proc *proc, uint64_t vaddr, uint8_t value);
 
 /**
+ * @brief Relleno de un bloque de memoria de la MAQUINA.
+ *
+ * Existe por lo mismo que sus hermanas de un valor: la memoria de la maquina no
+ * es contigua -- va por paginas, con traduccion y asignacion perezosa --, asi
+ * que una direccion virtual NO vale como puntero del proceso.
+ *
+ * El codigo compilado tenia las de un valor y le faltaban las de BLOQUE: para
+ * @c MEMSET emitia el relleno del anfitrion sobre la direccion en crudo, sin
+ * mirar de que memoria era.  Sobre memoria de la maquina eso escribe en otro
+ * sitio, y no da un error -- da otro resultado --.  Un programa que registraba
+ * sus clases devolvia CERO compilado y su valor correcto interpretado.
+ *
+ * Aqui NO hay camino rapido en linea, a diferencia de las de un valor: una
+ * operacion de bloque ya amortiza la llamada, y el trabajo por pagina lo hace
+ * la propia memoria virtual.
+ *
+ * @param proc  Proceso dueno de la memoria.
+ * @param vaddr Primer byte, en direcciones de la maquina.
+ * @param value Byte que se repite (solo se usan sus 8 bits bajos).
+ * @param len   Cuantos bytes.
+ */
+void vrt_vm_memset(vrt_proc *proc, uint64_t vaddr, uint64_t value,
+                   uint64_t len);
+
+/**
+ * @brief Copia de un bloque DENTRO de la memoria de la maquina.
+ *
+ * Gemela de @ref vrt_vm_memset, y por la misma razon.  Admite solape: se
+ * comporta como un movimiento, no como una copia byte a byte hacia delante,
+ * porque las dos regiones pueden ser la misma con desplazamiento.
+ *
+ * @param proc Proceso dueno de la memoria.
+ * @param dst  Primer byte del destino, en direcciones de la maquina.
+ * @param src  Primer byte del origen, en direcciones de la maquina.
+ * @param len  Cuantos bytes.
+ */
+void vrt_vm_memcpy(vrt_proc *proc, uint64_t dst, uint64_t src, uint64_t len);
+
+/**
  * @brief Traduce una VM-addr a host_ptr via vm_mem.
  *
  *  D.jit-mem-model FULL: usado por el JIT en cada LOAD/STORE

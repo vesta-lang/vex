@@ -747,7 +747,7 @@ def warns_r0_case(tag, label, src, pattern, expected, line=None):
 
 
 
-def lint_case(tag, label, src, codigos, ausentes=None, line=None):
+def lint_case(tag, label, src, codigos, ausentes=None, line=None, solo=None):
     """Corre `vm lint` sobre un ejemplo y exige unos codigos de hallazgo.
 
     Una familia del linter no se puede comprobar con el valor de retorno del
@@ -760,10 +760,16 @@ def lint_case(tag, label, src, codigos, ausentes=None, line=None):
     `ausentes` sirve para fijar lo que NO debe decir.  Una comprobacion que
     solo exige lo que si sale no distingue una familia afinada de una que avisa
     de todo, y esa es justo la forma en que una familia util se vuelve ruido.
+
+    `solo` pide UNA familia por su nombre.  Hace falta para las que solo hablan
+    cuando se les pregunta -- las que describen algo legitimo, como el hueco de
+    una vista --: en la pasada entera no dicen nada A PROPOSITO, asi que
+    comprobarlas sin pedirlas seria comprobar que siguen calladas.
     """
     def fn(ctx):
         ruta = ctx.src(src)
-        rc, log = ctx.run([VM_EXE, "lint", ruta])
+        cmd = [VM_EXE, "lint"] + (["--only", solo] if solo else []) + [ruta]
+        rc, log = ctx.run(cmd)
         for c in codigos:
             if c not in log:
                 ctx.fail("%s: `lint` no dijo %s" % (label, c), log)
@@ -3628,6 +3634,7 @@ modes3_case("overlay_pe_parser", "leer las cabeceras de un PE con vistas", "273_
 modes3_case("overlay_parent_walk", "una vista que sube a la que la contiene", "276_overlay_parent_walk.vx", 162)
 modes3_case("overlay_element_tlv", "elementos tipo-longitud-valor sobre una vista", "277_overlay_element_tlv.vx", 170)
 modes3_case("overlay_extent", "extension de una vista calculada de sus propios campos", "278_overlay_extent.vx", 40)
+modes3_case("overlay_campos_anchos", "campos contiguos de una vista tratados de una vez", "543_overlay_campos_anchos.vx", 136)
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
 modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)
@@ -3689,6 +3696,17 @@ fails_case("overlay_solape_sin_declarar",
 warns_r0_case("overlay_solape_declarado_falso",
               "una marca de solape que ya no es cierta se avisa",
               "542_overlay_solape_declarado_falso.vx", "VXW925", 42)
+
+# El HUECO no es un aviso del compilador -- describir solo los campos que lees
+# es el uso normal de una vista --, asi que va por el linter, que es donde se
+# pregunta lo que uno quiere saber en vez de lo que hay que saber siempre.
+# `261` declara `e_magic @0x00` y `e_lfanew @0x3C`: 58 bytes sin describir, a
+# proposito.  Y se exige que NO diga nada del solape: eso lo dice el
+# compilador, y repetirlo aqui serian dos implementaciones del mismo criterio.
+lint_case("lint_overlay_gaps",
+          "`vesta lint` dice que bytes de una vista no describe nadie",
+          "261_overlay_basics.vx", ["VXW926"], ausentes=["VX2051"],
+          solo="overlays.gaps")
 
 diff3_case("valued_enums", "enums con valor explicito, estilo C", "283_valued_enums.vx")
 diff3_case("paralelismo_heavy", "carga paralela sostenida sobre el planificador", "44_paralelismo_heavy.vx")

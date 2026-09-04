@@ -565,8 +565,29 @@ struct TableState {
      */
     struct Spill {
         bool used = false;
-        bool from_rbp = false; ///< la ranura se nombro por el marco, no por rsp
-        int64_t off = 0;       ///< desplazamiento, ya normalizado
+        /**
+         * @brief Desplazamiento en UNA sola coordenada: la de la entrada.
+         *
+         * `[rsp+d]` vale `d + rsp_delta` y `[rbp+d]` vale `d + rbp_delta`, que
+         * es la misma cuenta que ya hacia la ruta de los argumentos que llegan
+         * por la pila.  Antes se guardaban en DOS sistemas -- por `rsp` con el
+         * desplazamiento normalizado y por `rbp` en crudo, distinguidos por una
+         * marca --, asi que una ranura escrita por `rsp` y releida por `rbp` no
+         * casaba consigo misma aunque fuera la misma direccion.
+         *
+         * Eso es exactamente lo que pasa cuando hay presion de registros: el
+         * compilador derrama el INDICE del registro destino y lo recupera para
+         * escribir el resultado.  Por ahi se perdia la escritura al banco de
+         * `mul` en sus tres formas, mientras `add` -- que no llega a derramar
+         * -- salia bien: el mismo codigo, y una mitad de la familia fuera.
+         */
+        int64_t off = 0;
+        /* Si `off` esta en coordenadas de la ENTRADA o en crudo.  Cuando no se
+         * sabe donde quedo el puntero que la nombra no se puede convertir, y
+         * entonces la ranura solo casa con otra igual de cruda y por el mismo
+         * puntero: convertir a ojo casaria con la que no es. */
+        bool normalized = false;
+        bool from_rbp = false; ///< solo importa si `normalized` es falso
         Origin o;
     };
     /// Dieciseis basta: un manejador no derrama mas.  Array fijo, no un mapa:
@@ -595,6 +616,32 @@ struct TableState {
     /// con esa base es un acceso a la memoria del dominio.
     bool mem_ptr[16] = {};
 };
+
+/**
+ * @brief Es @p s la MISMA ranura de pila que la que se esta nombrando?
+ *
+ * Una ranura se puede nombrar por `rsp` o por `rbp`, y son la misma direccion.
+ * Cuando de las dos se sabe donde quedo su puntero, las dos se llevan a
+ * coordenadas de la ENTRADA y se comparan ahi: asi una escrita por `rsp` casa
+ * con su relectura por `rbp`, que es lo que hace el compilador en cuanto hay
+ * presion de registros.
+ *
+ * Cuando NO se sabe, no se convierte: se exige el mismo desplazamiento crudo y
+ * el mismo puntero.  Convertir a ojo casaria con la ranura que no es, y una
+ * procedencia equivocada es peor que ninguna -- atribuye un acceso al banco a
+ * un campo del operando que no lo indexa.
+ *
+ * @param s          Ranura ya apuntada.
+ * @param off        Desplazamiento de la que se busca, ya convertido si se pudo.
+ * @param normalized Si @p off esta en coordenadas de la entrada.
+ * @param from_rbp   Con que puntero se nombra la que se busca.
+ */
+inline bool spill_matches(const TableState::Spill &s, int64_t off,
+                          bool normalized, bool from_rbp) {
+    if (s.off != off) return false;
+    if (s.normalized && normalized) return true;
+    return s.normalized == normalized && s.from_rbp == from_rbp;
+}
 
 /**
  * @brief Lee las entradas de la tabla que direcciona @p mem, si es una.
@@ -801,13 +848,15 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         const bool por_marco = (x.operands[0].mem.base == X86_REG_RBP);
         // Por `rsp` hay que normalizar: el desplazamiento depende de cuanto se
         // ha movido el puntero, y eso el recorrido ya lo sigue.
-        if (s >= 0 && st.origin[s].valid && (por_marco || st.rsp_known)) {
-            const int64_t off = x.operands[0].mem.disp +
-                                (por_marco ? 0 : st.rsp_delta);
+        const bool situada = por_marco ? st.rbp_known : st.rsp_known;
+        if (s >= 0 && st.origin[s].valid && (situada || por_marco)) {
+            const int64_t off =
+                x.operands[0].mem.disp +
+                (situada ? (por_marco ? st.rbp_delta : st.rsp_delta) : 0);
             int libre = -1;
             for (int i = 0; i < TableState::kSpills; ++i) {
-                if (st.spill[i].used && st.spill[i].from_rbp == por_marco &&
-                    st.spill[i].off == off) {
+                if (st.spill[i].used &&
+                    spill_matches(st.spill[i], off, situada, por_marco)) {
                     libre = i;
                     break;
                 }
@@ -815,8 +864,9 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             }
             if (libre >= 0) {
                 st.spill[libre].used = true;
-                st.spill[libre].from_rbp = por_marco;
                 st.spill[libre].off = off;
+                st.spill[libre].normalized = situada;
+                st.spill[libre].from_rbp = por_marco;
                 st.spill[libre].o = st.origin[s];
             }
         }
@@ -831,12 +881,14 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
          x.operands[1].mem.base == X86_REG_RBP)) {
         const int d = gpr_slot(x.operands[0].reg);
         const bool por_marco = (x.operands[1].mem.base == X86_REG_RBP);
-        if (d >= 0 && (por_marco || st.rsp_known)) {
-            const int64_t off = x.operands[1].mem.disp +
-                                (por_marco ? 0 : st.rsp_delta);
+        const bool situada = por_marco ? st.rbp_known : st.rsp_known;
+        if (d >= 0 && (situada || por_marco)) {
+            const int64_t off =
+                x.operands[1].mem.disp +
+                (situada ? (por_marco ? st.rbp_delta : st.rsp_delta) : 0);
             for (int i = 0; i < TableState::kSpills; ++i)
-                if (st.spill[i].used && st.spill[i].from_rbp == por_marco &&
-                    st.spill[i].off == off) {
+                if (st.spill[i].used &&
+                    spill_matches(st.spill[i], off, situada, por_marco)) {
                     st.origin[d] = st.spill[i].o;
                     st.arg[d] = -1;
                     st.base[d] = 0;
@@ -933,6 +985,17 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         x.operands[1].mem.base != X86_REG_RIP) {
         const int d = gpr_slot(x.operands[0].reg);
         const int b = gpr_slot(x.operands[1].mem.base);
+        /* Lo que la BASE llevaba, leido ANTES de tocar nada.
+         *
+         * El destino y la base son el MISMO registro a menudo -- cargar un
+         * campo en el registro que llevaba el puntero es lo mas normal que hay
+         * (`movzx edx, [rdx+9]`) --, y borrar `arg[d]` antes de consultar
+         * `arg[b]` consultaba justo lo que se acababa de borrar.  El campo se
+         * quedaba sin procedencia, y con el el acceso al banco que se hace
+         * despues: por eso las formas de MEMORIA no declaraban leer el registro
+         * de la direccion. */
+        const int arg_base = (b >= 0) ? st.arg[b] : -1;
+        const bool mem_base = (b >= 0) && st.mem_ptr[b];
         if (d >= 0) {
             st.origin[d] = Origin{};
             st.arg[d] = -1;
@@ -940,16 +1003,16 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
              * del dominio, y el registro se queda con la marca.  Si no, la
              * pierde: lo que hubiera antes en ese registro ya no esta. */
             st.mem_ptr[d] =
-                (b >= 0 && st.arg[b] >= 0 &&
-                 st.taint.contains(st.arg[b], x.operands[1].mem.disp)) ||
+                (arg_base >= 0 &&
+                 st.taint.contains(arg_base, x.operands[1].mem.disp)) ||
                 /* Y tambien si se carga LEYENDO POR un puntero que ya estaba
                  * marcado: una estructura de memoria lleva punteros dentro
                  * (la arena, la cache de pagina, la tabla de traduccion), y
                  * seguir solo el primer salto perderia justo los accesos que
                  * se hacen por el segundo. */
-                (b >= 0 && st.mem_ptr[b]);
-            if (b >= 0 && st.arg[b] >= 0) {
-                st.origin[d].base = st.arg[b];
+                mem_base;
+            if (arg_base >= 0) {
+                st.origin[d].base = arg_base;
                 st.origin[d].disp = x.operands[1].mem.disp;
                 st.origin[d].shift = 0;
                 /* Los bits que trae la carga.  Capstone da el tamano del
@@ -1658,6 +1721,28 @@ struct CallSeed {
     AddrOrigin arg[kArgRegs];    ///< direcciones en los argumentos de registro
     Origin stack[kStackArgs];    ///< valores dejados en el area de la pila
     /**
+     * @brief De donde salio el VALOR que va en cada argumento de registro.
+     *
+     * Distinto de `arg[]`, que lleva una DIRECCION, y de `arg_de[]`, que lleva
+     * "cual de mis argumentos es".  Esto lleva "esto se leyo del byte N de la
+     * instruccion descodificada", que es lo unico con lo que se puede decir a
+     * que CAMPO del operando pertenece un acceso al banco.
+     *
+     * Sin ello, un manejador que pase el INDICE de registro a un ayudante --
+     * `write_reg_table[mode](vm, rdst, imm)`, que es como escribe `mov r,
+     * imm` -- perdia la procedencia al cruzar la llamada: dentro, el
+     * `mov [rcx + rdx*8 + 0x60], r8b` llegaba al banco sin saber de que campo
+     * venia `rdx`, y la ESCRITURA se quedaba sin declarar.  Una escritura que
+     * falta es el lado caro de equivocarse: deja mover por encima a quien leia
+     * ese registro, y eso no da un error sino otro resultado.
+     *
+     * El otro camino -- pasar `regs[reg1]` ya resuelto, como hace `mov r, r`
+     * -- si funcionaba, porque entonces lo que viaja es una direccion y de eso
+     * ya se encargaba `arg[]`.  Los dos existen en la misma familia de
+     * opcodes, asi que cubrir uno solo dejaba la mitad fuera.
+     */
+    Origin origin[kArgRegs];
+    /**
      * @brief Que argumento MIO va en cada argumento suyo (-1 = ninguno).
      *
      * Un ayudante recibe casi siempre el mismo puntero que el manejador -- el
@@ -1701,6 +1786,10 @@ inline CallSeed capture_call_seed(const TableState &st) {
         if (slot < 0) continue;
         s.arg[n] = st.addr[slot];
         if (s.arg[n].valid) s.any = true;
+        // Y de donde salio el VALOR, que es lo que identifica el campo cuando
+        // lo que se pasa es el INDICE del registro y no su direccion.
+        s.origin[n] = st.origin[slot];
+        if (s.origin[n].valid) s.any = true;
         // Y si lo que va ahi es un argumento MIO tal cual, cual.
         s.arg_de[n] = st.arg[slot];
         if (s.arg_de[n] >= 0) s.any = true;
@@ -1721,6 +1810,10 @@ inline void apply_call_seed(TableState &st, const CallSeed &s) {
         const int slot = arg_slot(n);
         if (slot < 0) continue;
         if (s.arg[n].valid) st.addr[slot] = s.arg[n];
+        // La procedencia del VALOR viaja igual que la de la direccion: el
+        // ayudante indexa el banco con lo que le dieron, y de que campo salio
+        // solo lo sabe quien llamo.
+        if (s.origin[n].valid) st.origin[slot] = s.origin[n];
         /* La siembra por defecto dice "aqui viene MI argumento n", que es
          * cierto en la RAIZ y falso en un ayudante: ahi lo que traiga cada
          * argumento lo decide quien llamo.  Se corrige con lo que el llamante

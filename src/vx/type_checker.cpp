@@ -4266,6 +4266,7 @@ void TypeChecker::collect_globals() {
                 }
                 if (extent % 8 != 0) extent += 8 - (extent % 8);
                 layout.overlay_extent = extent;
+                resolve_overlay_spans(layout);
                 check_overlay_overlaps(layout);
                 // F4: registrar el layout PROVISIONALMENTE (copia) ANTES de
                 // chequear los resolvers, para que un resolver `@offset { }`
@@ -5822,37 +5823,119 @@ bool TypeChecker::type_is_managed(const Type &t) const {
     return vx::is_managed(t, r);
 }
 
-void TypeChecker::check_overlay_overlaps(const StructLayout &lay) {
-    /* Tramo [begin, end) que ocupa un campo, o `false` si no se puede saber sin
-     * ejecutar.  Un campo de offset dinamico vive donde digan los datos; un
-     * array solo se acota si su cuenta Y su paso son literales. */
-    struct Span {
-        uint32_t begin = 0, end = 0;
+void TypeChecker::resolve_overlay_spans(StructLayout &lay) {
+    /* Nombres de los campos de la vista: un identificador dentro de un offset
+     * solo cuenta como SIMBOLO si es un hermano.  Cualquier otro (una global,
+     * una constante que no se plego) deja el tramo sin saber, que es la
+     * respuesta honesta -- podria valer cualquier cosa. */
+    std::unordered_set<std::string> siblings;
+    for (const StructFieldInfo &fi : lay.fields) siblings.insert(fi.name);
+
+    /* `expr` -> (simbolos, constante).  Solo suma y resta: son las dos que
+     * mantienen la propiedad que hace util esto -- que dos campos del mismo
+     * marco se muevan a la vez --.  Una multiplicacion por algo que no se sabe
+     * ya no la mantiene, asi que ahi se para. */
+    struct Sym {
+        std::vector<std::string> terms;
+        int64_t constant = 0;
+        bool known = false;
+    };
+    std::function<Sym(const ast::Expr *)> eval = [&](const ast::Expr *e) {
+        Sym out;
+        if (!e) return out;
+        switch (e->kind) {
+        case ast::NodeKind::IntLitExpr:
+            out.known = true;
+            out.constant =
+                static_cast<int64_t>(
+                    static_cast<const ast::IntLitExpr *>(e)->value);
+            return out;
+        case ast::NodeKind::IdentExpr: {
+            const std::string &n =
+                static_cast<const ast::IdentExpr *>(e)->name;
+            if (!siblings.count(n)) return out; // no es un hermano: no se sabe
+            out.known = true;
+            out.terms.push_back(n);
+            return out;
+        }
+        case ast::NodeKind::BinaryExpr: {
+            const auto *b = static_cast<const ast::BinaryExpr *>(e);
+            if (b->op != ast::BinOp::Add && b->op != ast::BinOp::Sub)
+                return out;
+            const Sym l = eval(b->lhs.get()), r = eval(b->rhs.get());
+            if (!l.known || !r.known) return out;
+            if (b->op == ast::BinOp::Sub) {
+                /* Restar un simbolo lo moveria en sentido contrario al de sus
+                 * companeros, que es justo lo que rompe la comparacion; solo se
+                 * admite restar una constante. */
+                if (!r.terms.empty()) return out;
+                out = l;
+                out.constant = l.constant - r.constant;
+                return out;
+            }
+            out.known = true;
+            out.terms = l.terms;
+            out.terms.insert(out.terms.end(), r.terms.begin(), r.terms.end());
+            out.constant = l.constant + r.constant;
+            return out;
+        }
+        default: return out;
+        }
     };
     auto int_literal = [](const ast::Expr *e, uint64_t &out) -> bool {
         if (!e || e->kind != ast::NodeKind::IntLitExpr) return false;
         out = static_cast<const ast::IntLitExpr *>(e)->value;
         return true;
     };
-    auto span_of = [&](const StructFieldInfo &fi, Span &out) -> bool {
-        if (fi.offset_expr || fi.offset_block || fi.element_block) return false;
+
+    for (StructFieldInfo &fi : lay.fields) {
+        fi.span = OverlaySpan{};
+        /* Un resolver de bloque devuelve una DIRECCION con control de flujo
+         * dentro: no hay marco al que referirla. */
+        if (fi.offset_block || fi.element_block) continue;
+        Sym base;
+        if (fi.offset_expr) {
+            base = eval(fi.offset_expr);
+        } else {
+            base.known = true;
+            base.constant = fi.offset;
+        }
+        if (!base.known) continue;
         uint64_t length = fi.size;
         if (fi.is_array) {
             uint64_t count = 0, stride = 0;
             if (!int_literal(fi.array_count, count) ||
                 !int_literal(fi.array_stride, stride))
-                return false;
+                continue; // cuantos o cada cuanto no se saben
             length = count * stride;
         }
-        if (length == 0) return false; // nada que pisar
-        out.begin = fi.offset;
-        out.end = static_cast<uint32_t>(fi.offset + length);
-        return true;
-    };
-    auto hex = [](uint32_t v) {
-        char buf[16];
-        std::snprintf(buf, sizeof(buf), "0x%02X", v);
-        return std::string(buf);
+        if (length == 0) continue; // no ocupa nada: no puede pisar a nadie
+        std::sort(base.terms.begin(), base.terms.end());
+        fi.span.terms = std::move(base.terms);
+        fi.span.begin = base.constant;
+        fi.span.end = base.constant + static_cast<int64_t>(length);
+        fi.span.known = true;
+    }
+}
+
+void TypeChecker::check_overlay_overlaps(const StructLayout &lay) {
+    /* Como se NOMBRA un limite del tramo: con su marco de simbolos delante, que
+     * es lo que hace legible un solape dinamico.  Sin el, dos campos de la
+     * cabecera de un PE saldrian como "0x04" y "0x06" cuando lo que el usuario
+     * escribio es `e_lfanew + 4` y `e_lfanew + 6`, y el mensaje senalaria a
+     * unos bytes que en el fichero no estan ahi. */
+    auto at = [](const OverlaySpan &s, int64_t v) {
+        std::string out;
+        for (const std::string &t : s.terms) {
+            out += t;
+            out += " + ";
+        }
+        char buf[24];
+        std::snprintf(buf, sizeof(buf), "0x%02llX",
+                      static_cast<unsigned long long>(v < 0 ? -v : v));
+        if (v < 0) out += "-";
+        out += buf;
+        return out;
     };
     /* `@overlaps(x)` en A y `@overlaps(a)` en X dicen lo mismo, asi que basta
      * con que UNO de los dos lo diga: obligar a los dos convertiria una union
@@ -5869,8 +5952,6 @@ void TypeChecker::check_overlay_overlaps(const StructLayout &lay) {
     const size_t count = lay.fields.size();
     for (size_t i = 0; i < count; ++i) {
         const StructFieldInfo &a = lay.fields[i];
-        Span sa;
-        const bool a_known = span_of(a, sa);
         /* Lo que el campo AFIRMA: cada nombre de su `@overlaps` tiene que ser
          * un hermano, y tienen que compartir de verdad.  Una marca que nombra
          * a quien no existe es un error; una que ya no es cierta es un aviso:
@@ -5883,14 +5964,16 @@ void TypeChecker::check_overlay_overlaps(const StructLayout &lay) {
                 diags_.diag(a.loc, DiagLevel::ERR, "VX2052", {named, a.name});
                 continue;
             }
-            Span sb;
-            if (!a_known || !span_of(*other, sb)) continue; // no se sabe
-            if (sa.begin < sb.end && sb.begin < sa.end) continue; // cierto
+            /* Sin poder comparar los dos tramos no se puede decir que la marca
+             * sobre: podria ser cierta.  Callar aqui es lo correcto. */
+            if (!a.span.comparable_with(other->span)) continue;
+            if (a.span.overlaps(other->span)) continue; // cierto
             diags_.diag(a.loc, DiagLevel::WARN, "VXW925",
-                        {named, a.name, hex(sa.begin), hex(sa.end - 1),
-                         hex(sb.begin), hex(sb.end - 1)});
+                        {named, a.name, at(a.span, a.span.begin),
+                         at(a.span, a.span.end - 1),
+                         at(other->span, other->span.begin),
+                         at(other->span, other->span.end - 1)});
         }
-        if (!a_known) continue;
         for (size_t j = i + 1; j < count; ++j) {
             const StructFieldInfo &b = lay.fields[j];
             /* Dos bit fields del MISMO word comparten sus bytes por
@@ -5898,16 +5981,20 @@ void TypeChecker::check_overlay_overlaps(const StructLayout &lay) {
             if (a.bit_width && b.bit_width && a.offset == b.offset &&
                 a.size == b.size)
                 continue;
-            Span sb;
-            if (!span_of(b, sb)) continue;
-            if (!(sa.begin < sb.end && sb.begin < sa.end)) continue;
+            /* Solo se acusa de lo DEMOSTRADO.  Dos campos de marcos distintos
+             * -- uno fijo y otro colgando de `e_lfanew`, o dos que cuelgan de
+             * simbolos distintos -- pueden pisarse o no segun los datos; eso no
+             * es un error, es conocimiento, y va al hecho de cobertura. */
+            if (!a.span.comparable_with(b.span)) continue;
+            if (!a.span.overlaps(b.span)) continue;
             if (pair_declared(a, b)) continue;
             /* Se senala el SEGUNDO -- el que llego a unos bytes ya cubiertos --
              * y se nombra el primero con su tramo, que es lo que hace falta
              * para ver si el offset mal escrito es este o aquel. */
             diags_.diag(b.loc, DiagLevel::ERR, "VX2051",
-                        {b.name, hex(sb.begin), hex(sb.end - 1), a.name,
-                         hex(sa.begin), hex(sa.end - 1)});
+                        {b.name, at(b.span, b.span.begin),
+                         at(b.span, b.span.end - 1), a.name,
+                         at(a.span, a.span.begin), at(a.span, a.span.end - 1)});
         }
     }
 }

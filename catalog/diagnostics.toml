@@ -537,6 +537,25 @@ es = "forma de los operandos sin declarar para la instruccion de VM '{0}' (tabla
 en = "which registers it reads and writes is unknown, so it cannot be reordered or fused; declare it in decode_effects (src/runtime/effects_decode.cpp) pointing its opcode at its family label"
 es = "no se sabe que registros lee ni cual escribe, asi que no se puede reordenar ni fusionar; declararla en decode_effects (src/runtime/effects_decode.cpp) apuntando su opcode a la etiqueta de su familia"
 
+# VX7029/VX7030 -- el volcado del reordenamiento dentro de un paquete.
+#
+# Solo salen con el volcado de caches encendido.  Van al catalogo porque un
+# mensaje escrito en el sitio deja de traducirse en cuanto se anade un idioma,
+# y este lo lee quien esta persiguiendo un resultado equivocado: es justo cuando
+# menos conviene que este a medias.
+[VX7029]
+en = "bundle at {0}: {1} instructions, {2} moved"
+es = "paquete en {0}: {1} instrucciones, {2} movidas"
+
+# {2} es el criterio que gano esa posicion; {3} solo aparece si cambio de sitio.
+[VX7030]
+en = "  {0}: {1}  [{2}]{3}"
+es = "  {0}: {1}  [{2}]{3}"
+
+[VX7031]
+en = " <- moved"
+es = " <- cambia"
+
 # ---------------------------------------------------------------------------
 # VX9xxx -- texto de las herramientas (CLI y servidor de lenguaje).
 #
@@ -1650,6 +1669,34 @@ es = "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea
 en = "this integer operation does not fit in its type: the result {0} is outside {1} ({2} to {3}), so it comes out as a different number; write a cast to the type -- (i8)(a + b) -- if wrapping around is what you meant"
 es = "esta cuenta entera no cabe en su tipo: el resultado {0} se sale de {1} ({2} a {3}), asi que sale otro numero; escribe un cast al tipo -- (i8)(a + b) -- si envolver es lo que querias"
 
+# --- el dominio de MEMORIA: lo que localiza y lo que no ---
+#
+# Son codigos de HECHO, no diagnosticos del compilador: los lee el volcado del
+# ASA, el editor y el MCP.  Por eso viven aqui igual que el resto -- el que los
+# consulta merece leerlos en su idioma --, y por eso lo que viaja en el hecho
+# son DATOS ({0}=id de la localizacion, {1}=desplazamiento, {2}=el detalle) y
+# nunca una frase escrita en el compilador.
+
+["memory.points_to_symbol"]
+en = "points to global #{0}{1}, identified by its SYMBOL: two accesses to the same global are the same address, and two different globals never overlap"
+es = "apunta al global #{0}{1}, identificado por su SIMBOLO: dos accesos al mismo global son la misma direccion, y dos globales distintos no se pisan nunca"
+
+["memory.global_without_symbol"]
+en = "points to static memory, but WHICH one is not known: '{2}' does not prove its symbol, so two accesses to the same global cannot be told to be the same address -- and that is what stops a read from being reused or a write from being removed"
+es = "apunta a memoria estatica, pero no se sabe a CUAL: '{2}' no demuestra su simbolo, asi que dos accesos al mismo global no se pueden dar por la misma direccion -- y eso es lo que impide reusar una lectura o quitar una escritura"
+
+["memory.not_an_address"]
+en = "there is nothing to locate here: this value is not an address (neither a pointer type nor host memory), so asking where it points has no answer to give"
+es = "aqui no hay nada que localizar: este valor no es una direccion (ni tipo puntero ni memoria del anfitrion), asi que preguntar a donde apunta no tiene respuesta que dar"
+
+["memory.unmodelled_op"]
+en = "the pointer resolver does not model '{2}': the program is fine and what has to grow is the resolver"
+es = "el resolvedor de punteros no modela '{2}': el programa esta bien y lo que hay que ampliar es el resolvedor"
+
+["memory.comes_from_outside"]
+en = "'{2}' has no definition inside this function: whoever passes it is the one who knows where it points, so this is a boundary and not ignorance"
+es = "'{2}' no tiene definicion dentro de esta funcion: quien lo pasa es quien sabe a donde apunta, asi que esto es una frontera y no ignorancia"
+
 # --- overlays: el solape de campos (VX2051/VX2052) y la marca que sobra
 # (VXW925) ---
 #
@@ -1670,6 +1717,20 @@ es = "'@overlaps({0})' en el campo '{1}' nombra algo que no es un campo de esta 
 [VXW925]
 en = "'@overlaps({0})' on the field '{1}' is not true: the two do not share a single byte ('{1}' covers {2}..{3}, '{0}' covers {4}..{5}). The mark says the format has a union here; leaving it once it stops being true turns it into a note nobody can trust"
 es = "'@overlaps({0})' en el campo '{1}' no es cierto: los dos no comparten ni un byte ('{1}' cubre {2}..{3} y '{0}' cubre {4}..{5}). La marca dice que ahi el formato tiene una union; dejarla cuando deja de ser verdad la convierte en una nota de la que nadie se puede fiar"
+
+# --- overlays: los bytes que no describe nadie (VXW926) ---
+#
+# NO es un aviso del compilador, y no por prudencia: el hueco es el uso NORMAL
+# de la feature.  `261_overlay_basics` declara `e_magic @0x00` y
+# `e_lfanew @0x3C` y se salta los 58 de en medio a proposito, porque para leer
+# esos dos campos no hace falta describir la cabecera entera.  Avisar por
+# defecto seria ruido justo en el caso comun.  Se pregunta cuando uno quiere
+# saberlo: al cubrir del todo una cabecera de tamano fijo, o al revisar una
+# vista que crecio a trozos.
+
+[VXW926]
+en = "the view '{0}' leaves {1} byte(s) that no field describes ({2}..{3}). A gap is fine -- describing only the fields you read is the normal way to use a view -- so this is only worth acting on if this one is meant to cover the whole format"
+es = "la vista '{0}' deja {1} byte(s) que ningun campo describe ({2}..{3}). Un hueco esta bien -- describir solo los campos que lees es el uso normal de una vista --, asi que esto solo hay que tocarlo si esta pretende cubrir el formato entero"
 
 [VXW008]
 en = "cannot tell whether the parameters of '{0}' are read: it has values bound to an asm block, which take them through a register rather than through a use the count can see. The bindings say which register carries which slot; joining that to a parameter needs the store between them, which is another domain's knowledge"
@@ -1973,3 +2034,84 @@ es = "@Hook(exit): este modulo lanza excepciones, y una excepcion NO sale por el
 [VXW934]
 en = "@Hook: the `call_site` of '{0}' is not reliable: the function has an asm block that writes {1}, and the return address is read from the stack. The value will be whatever is at that position"
 es = "@Hook: el `call_site` de '{0}' no es fiable: la funcion tiene un bloque asm que escribe {1}, y la direccion de retorno se lee de la pila.  El valor sera lo que haya en esa posicion"
+
+# --- overlays: tramos contiguos y con que lanes se pueden tratar ---
+# El tramo dice que los bytes van juntos; estos dicen CON QUE.  Son respuestas
+# por ISA porque la respuesta cambia de verdad entre ellas, y dentro de x86-64
+# cambia por NIVEL: con `--float-isa sse2` no hay lanes de 64 aunque la
+# arquitectura las tenga, y afirmarlas seria emitir lo que el objetivo no admite.
+["overlay.lanes_sse2"]
+en = "x86-64 at the SSE2 level: the widest lane the target admits is 16 bytes"
+es = "x86-64 en el nivel SSE2: la lane mas ancha que admite el objetivo es de 16 bytes"
+
+["overlay.lanes_avx"]
+en = "x86-64 with AVX: the target admits lanes of up to 32 bytes"
+es = "x86-64 con AVX: el objetivo admite lanes de hasta 32 bytes"
+
+["overlay.lanes_avx512f"]
+en = "x86-64 with AVX-512F: the target admits lanes of up to 64 bytes"
+es = "x86-64 con AVX-512F: el objetivo admite lanes de hasta 64 bytes"
+
+["overlay.lanes_x86_32"]
+en = "x86-32 presents no wide class in the register bank"
+es = "x86-32 no presenta clase ancha en el banco de registros"
+
+["overlay.lanes_arm64_baseline"]
+en = "the lanes aarch64 makes mandatory in its baseline, which is what can be proven without declaring anything"
+es = "las lanes que aarch64 hace obligatorias en su base, que es lo que se puede demostrar sin declarar nada"
+
+["overlay.lanes_velb"]
+en = "the wide register bank of the machine itself"
+es = "el banco ancho de la propia maquina"
+
+# El suelo de aarch64 NO es su techo, y decir que si lo es seria peor que
+# callarse: quien lo lea dejaria de ensanchar donde si se puede.
+["overlay.arm64_wide_lane_axis_missing"]
+en = "aarch64 admits wider lanes and their width CAN be pinned in the binary, the same way `--float-isa` pins it on x86; what is missing is the axis to declare it -- BackendCaps only carries x86 bits and descriptor_arm64 does not look at the caps it receives"
+es = "aarch64 admite lanes mas anchas y su ancho SI se puede fijar en el binario, igual que `--float-isa` lo fija en x86; lo que falta es el eje para declararlo -- BackendCaps solo lleva bits de x86 y descriptor_arm64 no mira las capacidades que recibe"
+
+["overlay.no_wide_bank"]
+en = "this ISA presents no wide lane in its register bank, so the run cannot be treated with words wider than a field"
+es = "esta ISA no presenta ninguna lane ancha en su banco, asi que el tramo no se puede tratar con palabras mas anchas que un campo"
+
+["overlay.run_shorter_than_lane"]
+en = "the run is shorter than the narrowest lane of this ISA: a wider word would touch bytes behind it, which do not belong to this view"
+es = "el tramo es mas corto que la lane mas estrecha de esta ISA: una palabra mas ancha tocaria bytes de detras, que no son de esta vista"
+
+["overlay.wider_lane_not_declarable"]
+en = "the width proven here is the FLOOR, not the ceiling: this ISA admits wider lanes and there is nothing yet to declare which"
+es = "el ancho demostrado aqui es el SUELO, no el techo: esta ISA admite lanes mas anchas y todavia no hay con que declarar cuales"
+
+# --- movimiento de bloque escrito EN RECTA (sin bucle) ---
+# Codigo propio y no el del bucle: la clase de conocimiento es la misma, pero
+# el sujeto no.  Con `bulk.fill` el mensaje decia "este bucle escribe..." sobre
+# una tirada de asignaciones donde no hay ningun bucle, y sus dos numeros
+# (elementos y ancho) ahi no significan nada: aqui son bytes y el byte que se
+# repite, porque en recta las direcciones son constantes y la longitud se sabe.
+["bulk.fill_run"]
+en = "these adjacent writes tile a contiguous run of {0} bytes with the byte 0x{1}: together they are a block fill"
+es = "estas escrituras seguidas embaldosan un tramo contiguo de {0} bytes con el byte 0x{1}: juntas son un relleno de bloque"
+
+["bulk.copy_run"]
+en = "these adjacent accesses tile a contiguous run of {0} bytes: together they are a block copy"
+es = "estos accesos seguidos embaldosan un tramo contiguo de {0} bytes: juntos son una copia de bloque"
+
+# --- por que un grupo de escrituras seguidas NO se junta ---
+# Tres casos con tres salidas distintas.  El primero es el unico que es una
+# LIMITACION: hay una copia de bloque ahi delante y lo que falta es el hecho de
+# que las dos regiones no se solapan; los otros dos son "aqui no hay nada".
+["bulk.would_be_a_copy_needs_no_overlap"]
+en = "these adjacent accesses ARE a block copy, but turning them into one needs proof that the two regions do not overlap -- with two pointers arriving as parameters that is not known here, and assuming it would give a different result when they do overlap"
+es = "estos accesos seguidos SI son una copia de bloque, pero convertirlos en una exige demostrar que las dos regiones no se solapan -- con dos punteros que llegan como parametros eso no se sabe aqui, y suponerlo daria otro resultado cuando de verdad se solapen"
+
+["bulk.stored_value_computed"]
+en = "the value written is computed, not the same byte over and over: there is no block operation to reduce this to"
+es = "el valor que se escribe es calculado, no el mismo byte una y otra vez: no hay operacion de bloque a la que reducir esto"
+
+["bulk.stored_value_not_a_byte"]
+en = "the constant written does not fit in one byte: a block fill repeats a single byte, and this one does not"
+es = "la constante que se escribe no cabe en un byte: un relleno de bloque repite UN byte, y esta no lo es"
+
+["bulk.run_in_machine_memory"]
+en = "the run is in the machine's own memory, not the host's: the IR distinguishes the two block operations, but the JIT emits the host one for both, so reducing this would write somewhere else"
+es = "el tramo esta en la memoria de la propia maquina, no en la del anfitrion: el intermedio distingue las dos operaciones de bloque, pero el JIT emite la del anfitrion para las dos, asi que reducirlo escribiria en otro sitio"

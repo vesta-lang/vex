@@ -26,15 +26,15 @@
  *
  * Que mide
  * --------
- * Con `VM_BUNDLE_STATS=1` publica cuantos paquetes se formaron, cuantos
- * despachos se ahorraron y cuantos se abandonaron a mitad.  El ahorro de
- * despachos es la cifra que dice si esto sirve para algo: cada instruccion de
- * mas dentro de un paquete es un salto indirecto que el interprete no hizo.
+ * Publica cuantos paquetes se formaron, cuantos despachos se ahorraron y
+ * cuantos se abandonaron a mitad.  El ahorro de despachos es la cifra que dice
+ * si esto sirve para algo: cada instruccion de mas dentro de un paquete es un
+ * salto indirecto que el interprete no hizo.
  *
- * La telemetria NO altera lo que mide: los incrementos solo existen con la
- * bandera puesta, y sin ella el codigo generado es el mismo.  Para verla hay
- * que construir con `-DVM_BUNDLE_STATS=1`; sin eso el test valida igual pero
- * los contadores salen a cero.
+ * La telemetria se PIDE en ejecucion (`ProcessVM::bundle_stats_on`), asi que no
+ * hace falta reconstruir nada para verla.  Antes dependia de una bandera de
+ * compilacion y eso obligaba a cambiar de binario para tomar la medida -- con
+ * lo que se media otro binario --.
  *
  * Por que conduce el interprete a mano
  * ------------------------------------
@@ -341,9 +341,8 @@ void dump_caches(runtime::ProcessVM *proc, const char *name) {
     const char *R = ansi::c(ansi::RESET);
 
     /* Las cifras se sacan de la propia icache.  `entries` y `executed` los
-     * mantiene la logica de retirada en TODAS las construcciones, no la
-     * telemetria, asi que esto sale con numeros de verdad aunque
-     * `VM_BUNDLE_STATS` este apagado. */
+     * mantiene la logica de retirada, no la telemetria, asi que esto sale con
+     * numeros de verdad aunque nadie haya pedido los contadores. */
     uint32_t heads = 0, retired = 0, occupied = 0;
     uint64_t total_k = 0, total_entries = 0, total_exec = 0;
     const runtime::Bundle *sample = nullptr;
@@ -471,9 +470,7 @@ int main(int argc, char **argv) {
                 "ICACHE_SIZE=%s%u%s  telemetria=%s%s%s\n",
                 B, R, ansi::c(ansi::BR_CYAN), BUNDLE_MAX, R,
                 ansi::c(ansi::BR_CYAN), (unsigned)runtime::ICACHE_SIZE, R,
-                VM_BUNDLE_STATS ? ansi::c(ansi::BR_GREEN)
-                                : ansi::c(ansi::BR_RED),
-                VM_BUNDLE_STATS ? "si" : "no (-DVM_BUNDLE_STATS=1)", R);
+                ansi::c(ansi::BR_GREEN), "si (se pide en ejecucion)", R);
 
     /* QUE SIGNIFICA CADA COLUMNA.  Sin esto la tabla son seis numeros sin
      * nombre, y el que la lee dentro de tres meses no sabe si "ahorrados" es
@@ -520,15 +517,6 @@ int main(int argc, char **argv) {
                 "             es solo hasta ahi.\n\n",
                 D, R);
 
-    if (!VM_BUNDLE_STATS)
-        std::printf("  %s(sin telemetria las cuatro columnas de contadores "
-                    "salen `--`: no se han medido.  Para\n"
-                    "   tenerlas: cmake -DVESTA_BUNDLE_STATS=ON.  Lo que SI se "
-                    "ve sin ella es el volcado de\n"
-                    "   las caches de mas abajo, que lee las estructuras en vez "
-                    "de contar al ejecutar.)%s\n",
-                    ansi::c(ansi::YELLOW), R);
-
     std::printf("\n%s%-28s %12s %9s %12s %10s %9s %9s  %s%s\n", B, "programa",
                 "instr VM", "paquetes", "ahorrados", "abandonos", "reentra",
                 "identico", "motivo", R);
@@ -560,6 +548,9 @@ int main(int argc, char **argv) {
             if (proc == nullptr) break;
 
             proc->bundles_on = (modo == 1) && !control;
+            // Este test IMPRIME los contadores, asi que los pide.  Ya no hace
+            // falta reconstruir con una bandera para verlos.
+            proc->bundle_stats_on = true;
             g_proc = proc;
             g_bench = base(f);
             std::signal(SIGSEGV, al_reventar);
@@ -580,9 +571,10 @@ int main(int argc, char **argv) {
                  * de soltar la arena.  Aqui es el unico sitio donde se puede
                  * ver: `bundle_release` la destruye.
                  *
-                 * Y no depende de `VM_BUNDLE_STATS`: lo que se lee son las
-                 * propias estructuras -- la icache, las cabeceras vivas y lo
-                 * que cada paquete lleva dentro --, no contadores. */
+                 * Y no depende de que nadie haya pedido la telemetria: lo que
+                 * se lee son las propias estructuras -- la icache, las
+                 * cabeceras vivas y lo que cada paquete lleva dentro --, no
+                 * contadores. */
                 dump_caches(proc, base(f));
             }
             runtime::bundle_release(proc);
@@ -663,8 +655,7 @@ int main(int argc, char **argv) {
         // BUNDLE_LOOP_MAX paquetes mas sin soltarlo.  El tope se mira ANTES del
         // despacho, asi que ese es el desbordamiento maximo.
         const uint64_t holgura = (uint64_t)BUNDLE_MAX * (BUNDLE_LOOP_MAX + 1);
-        const bool mismo_n =
-            !VM_BUNDLE_STATS ? true : (cortado ? diff <= holgura : a == c);
+        const bool mismo_n = cortado ? diff <= holgura : a == c;
         const bool mismo_rip = out[0].final_rip == out[1].final_rip;
         bool mismos_regs = true;
         for (int i = 0; i < 16; ++i)
@@ -689,26 +680,20 @@ int main(int argc, char **argv) {
             formed ? (double)aborts / (double)formed : 0.0;
         const bool ok = mismo_n && (cortado || (mismo_rip && mismos_regs));
 
-        /* Los cuatro contadores vienen de la telemetria.  Sin ella NO son cero:
-         * es que nadie los ha contado, y escribir un cero ahi seria decir que
-         * los paquetes no hicieron nada cuando el volcado de la cache ensena lo
-         * contrario.  Se pone `--`, que es la respuesta honesta. */
+        /* Los cuatro contadores vienen de la telemetria, que este test PIDE al
+         * crear el proceso.  Ya no hay caso "sin medir": antes dependia de una
+         * bandera de compilacion y habia que escribir `--` en vez de un cero,
+         * porque un cero ahi habria dicho que los paquetes no hicieron nada
+         * cuando el volcado de la cache ensenaba lo contrario. */
         char c_formed[24], c_saved[24], c_aborts[24], c_turns[24];
-        if (VM_BUNDLE_STATS) {
-            std::snprintf(c_formed, sizeof c_formed, "%llu",
-                          (unsigned long long)formed);
-            std::snprintf(c_saved, sizeof c_saved, "%llu",
-                          (unsigned long long)saved);
-            std::snprintf(c_aborts, sizeof c_aborts, "%llu",
-                          (unsigned long long)aborts);
-            std::snprintf(c_turns, sizeof c_turns, "%llu",
-                          (unsigned long long)turns);
-        } else {
-            std::strcpy(c_formed, "--");
-            std::strcpy(c_saved, "--");
-            std::strcpy(c_aborts, "--");
-            std::strcpy(c_turns, "--");
-        }
+        std::snprintf(c_formed, sizeof c_formed, "%llu",
+                      (unsigned long long)formed);
+        std::snprintf(c_saved, sizeof c_saved, "%llu",
+                      (unsigned long long)saved);
+        std::snprintf(c_aborts, sizeof c_aborts, "%llu",
+                      (unsigned long long)aborts);
+        std::snprintf(c_turns, sizeof c_turns, "%llu",
+                      (unsigned long long)turns);
 
         std::printf("%s%-28s%s %s%12llu%s %s%9s%s %s%12s%s %s%10s%s "
                     "%s%9s%s %s%9s%s  %s%s%s\n",
@@ -720,18 +705,10 @@ int main(int argc, char **argv) {
                      * ponerlo daba 5.421 donde el programa hace 2,4 millones. */
                     ansi::c(ansi::WHITE), (unsigned long long)out[0].vm_instrs,
                     ansi::c(ansi::RESET),
-                    VM_BUNDLE_STATS ? heat(formed ? 1.0 : 0.0)
-                                    : ansi::c(ansi::BR_BLACK),
-                    c_formed, ansi::c(ansi::RESET),
-                    VM_BUNDLE_STATS ? heat(frac_saved)
-                                    : ansi::c(ansi::BR_BLACK),
-                    c_saved, ansi::c(ansi::RESET),
-                    VM_BUNDLE_STATS ? heat_bad(frac_abort)
-                                    : ansi::c(ansi::BR_BLACK),
-                    c_aborts, ansi::c(ansi::RESET),
-                    VM_BUNDLE_STATS ? heat(turns ? 1.0 : 0.0)
-                                    : ansi::c(ansi::BR_BLACK),
-                    c_turns, ansi::c(ansi::RESET),
+                    heat(formed ? 1.0 : 0.0), c_formed, ansi::c(ansi::RESET),
+                    heat(frac_saved), c_saved, ansi::c(ansi::RESET),
+                    heat_bad(frac_abort), c_aborts, ansi::c(ansi::RESET),
+                    heat(turns ? 1.0 : 0.0), c_turns, ansi::c(ansi::RESET),
                     ok ? ansi::c(ansi::BR_GREEN) : ansi::c(ansi::BR_RED),
                     !mismo_n ? "NO" : cortado ? "si*" : ok ? "si" : "NO",
                     ansi::c(ansi::RESET),

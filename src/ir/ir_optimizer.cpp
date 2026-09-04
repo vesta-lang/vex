@@ -34,6 +34,7 @@
 #include "ir/passes/bulk_memory_lower.h" // bucle que mueve memoria -> operacion de bloque
 #include "ir/passes/unroll.h" // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h" // canonicalizacion algebraica de SELECT
+#include "analysis/facts/demanded_bits.h" // cuantos bits de un valor mira alguien
 #include "analysis/facts/alignment.h"  // de cuanto es multiplo un valor
 #include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
 #include "analysis/facts/ir_facts.h" // hechos (def-use) para el modelo de efectos
@@ -6638,8 +6639,9 @@ static bool strength_reduce_with_facts(
 // Es una optimizacion PURA: si el rango no dice nada, la normalizacion se
 // queda.  Quitar de menos solo cuesta velocidad; no hay forma de que
 // produzca un resultado equivocado.
-static bool ir_pass_elide_narrow_norm(IrFunction &fn,
-                                      const analysis::RangeFacts &ranges) {
+static bool
+ir_pass_elide_narrow_norm(IrFunction &fn, const analysis::RangeFacts &ranges,
+                          const analysis::DemandedBits &demanded) {
     if (fn.blocks.empty()) return false;
 
     /* Quien define cada valor, para llegar de la normalizacion a la cuenta
@@ -6723,115 +6725,37 @@ static bool ir_pass_elide_narrow_norm(IrFunction &fn,
             replace[ins.dst] = src;
         }
     }
-
-    /* Segunda regla: en una CADENA de cuentas basta normalizar al final.
+    /* Segunda regla: la normalizacion sobra si NADIE mira por encima.
      *
-     * `sum + a + b + c` son tres sumas y salen tres normalizaciones, cuando
-     * la aritmetica de complemento a dos COMPONE: sumar, restar y multiplicar
-     * modulo 2^N da lo mismo normalizando en cada paso que solo al terminar.
-     * Los pasos de en medio pueden llevar bits de mas mientras NADIE los mire.
+     * Aqui no se decide nada: se PREGUNTA.  Cuantos bits de un valor llega a
+     * leer alguien lo contesta el dominio `asa.demanded_bits`, que es la
+     * pregunta dual de los rangos y los KnownBits -- aquellos dicen que
+     * garantiza quien PRODUCE el valor, este que lee quien lo CONSUME -- y
+     * ninguna implica a la otra: de un parametro no se prueba nada por
+     * delante, y sin embargo si lo unico que se hace con la cuenta es
+     * escribirla en un campo de cuatro bytes, los bits de arriba no los mira
+     * nadie.
      *
-     * Asi que una normalizacion se puede quitar si TODOS sus usos son otra
-     * cuenta estrecha del mismo tipo -- que traera la suya --.  Cualquier otro
-     * uso (comparar, ensanchar, guardar, llamar) SI mira el registro entero y
-     * obliga a dejarla.
-     *
-     * Un PHI tampoco mira: reenvia.  Que su valor pueda ir sucio depende de
-     * quien lo consuma A EL, asi que la pregunta se propaga y hay que
-     * resolverla en punto fijo -- de ahi que no baste recorrer los usos una
-     * vez.  Es lo que separa `sum = sum + a` (donde el acumulador vuelve por
-     * el phi del bucle) de una cuenta suelta.
-     *
-     * Lo unico que NO tolera un operando sucio es una cuenta cuya
-     * normalizacion quito la regla de arriba: aquella demostro que no puede
-     * salirse DANDO POR HECHO que sus operandos valen lo que su tipo dice.
-     * Ensuciarle uno rompe su premisa, y entonces no quedaria ninguna
-     * normalizacion en toda la cadena.
+     * Esto vivio AQUI, como un punto fijo privado con su lista de consumidores
+     * tolerados escrita a mano, y paso lo que pasa siempre: se quedo corto sin
+     * que nadie lo notara -- una cadena `trunc` + `bitcast` + `store` cortaba
+     * la tolerancia en el bitcast -- y ningun otro pase podia preguntarlo.
      */
-    {
-        /* Que normalizacion le corresponde a cada cuenta. */
-        std::unordered_map<IrValueId, IrValueId> norm_of; // cuenta -> su trunc
-        for (const auto &bb : fn.blocks)
-            for (const auto &in : bb.instrs)
-                if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
-                    in.dst != IR_NO_VALUE &&
-                    in.operands[0] < fn.values.size() &&
-                    fn.values[in.operands[0]].type == in.type)
-                    norm_of[in.operands[0]] = in.dst;
-
-        /* `dirty` = valores a los que se les permite llevar bits de mas.  Se
-         * empieza suponiendo que TODOS pueden y se van quitando los que tengan
-         * un uso que no lo tolere, hasta que deje de cambiar.  Al MAYOR punto
-         * fijo, no al menor: lo que se busca es el conjunto mas grande que sea
-         * consistente consigo mismo. */
-        std::unordered_set<IrValueId> dirty;
-        for (IrValueId v = 0; v < fn.values.size(); ++v) {
-            int64_t a = 0, b = 0;
-            if (type_bounds(fn.values[v].type, a, b)) dirty.insert(v);
-        }
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            for (const auto &bb : fn.blocks) {
-                for (const auto &in : bb.instrs) {
-                    const bool has_dst =
-                        in.dst != IR_NO_VALUE && in.dst < fn.values.size();
-                    /* La propia NORMALIZACION no cuenta como quien mira: es
-                     * justo la que se esta decidiendo quitar, y ella limpia lo
-                     * que le entra.  Sin esta salvedad cada cuenta se
-                     * descartaba a si misma y no se quitaba ninguna. */
-                    if (has_dst && in.op == IrOp::TRUNC &&
-                        in.operands.size() == 1 &&
-                        in.operands[0] < fn.values.size() &&
-                        fn.values[in.operands[0]].type == in.type)
-                        continue;
-                    /* Una cuenta estrecha del mismo tipo tolera dirt en sus
-                     * operandos si tiene normalizacion propia -- que lo
-                     * arreglara -- y esa normalizacion no la quito la regla
-                     * del rango. */
-                    const bool arith_ok =
-                        has_dst &&
-                        (in.op == IrOp::ADD || in.op == IrOp::SUB ||
-                         in.op == IrOp::MUL) &&
-                        norm_of.count(in.dst) != 0 &&
-                        replace.count(norm_of[in.dst]) == 0;
-                    /* Un phi tolera si el que sale de el tambien puede ir
-                     * sucio.  Aqui es donde el punto fijo hace su trabajo. */
-                    const bool phi_ok = has_dst && in.op == IrOp::PHI &&
-                                        dirty.count(in.dst) != 0;
-                    auto drop = [&](IrValueId v, bool tolerated) {
-                        if (tolerated || v >= fn.values.size()) return;
-                        if (dirty.erase(v) != 0) changed = true;
-                    };
-                    for (IrValueId o : in.operands) {
-                        const bool same =
-                            has_dst && o < fn.values.size() &&
-                            fn.values[in.dst].type == fn.values[o].type;
-                        drop(o, same && arith_ok);
-                    }
-                    for (const auto &pa : in.phi_args) {
-                        const bool same =
-                            has_dst && pa.value < fn.values.size() &&
-                            fn.values[in.dst].type == fn.values[pa.value].type;
-                        drop(pa.value, same && phi_ok);
-                    }
-                    if (in.func_ptr != IR_NO_VALUE) drop(in.func_ptr, false);
-                }
-            }
-        }
-        /* Se mira el RESULTADO de la normalizacion, no su origen: quitarla es
-         * dejar que quien la usaba reciba el valor sin limpiar, asi que la
-         * pregunta es si SUS consumidores lo toleran. */
-        for (const auto &bb : fn.blocks) {
-            for (const auto &ins : bb.instrs) {
-                if (ins.op != IrOp::TRUNC || ins.operands.size() != 1) continue;
-                if (ins.dst == IR_NO_VALUE) continue;
-                if (replace.count(ins.dst) != 0) continue; // ya se va
-                const IrValueId src = ins.operands[0];
-                if (src >= fn.values.size()) continue;
-                if (fn.values[src].type != ins.type) continue;
-                if (dirty.count(ins.dst) != 0) replace[ins.dst] = src;
-            }
+    for (const auto &bb : fn.blocks) {
+        for (const auto &ins : bb.instrs) {
+            if (ins.op != IrOp::TRUNC || ins.operands.size() != 1) continue;
+            if (ins.dst == IR_NO_VALUE) continue;
+            if (replace.count(ins.dst) != 0) continue; // ya se va por el rango
+            const IrValueId src = ins.operands[0];
+            if (src >= fn.values.size()) continue;
+            // Solo la NORMALIZACION: al mismo tipo y estrecho.
+            if (fn.values[src].type != ins.type) continue;
+            const uint32_t nb = type_narrow_bits(ins.type);
+            if (nb == 0 || nb >= 64) continue;
+            /* Se mira el RESULTADO: quitarla es dejar que quien la usaba
+             * reciba el valor sin limpiar, asi que la pregunta es si sus
+             * consumidores llegan a mirar por encima del ancho del tipo. */
+            if (demanded.only_low(ins.dst, nb)) replace[ins.dst] = src;
         }
     }
 
@@ -8314,8 +8238,24 @@ bool ir_pass_const_fold(IrFunction &fn) {
 // de STOREs reales (init list, alloca cleared, etc).  ~10-15% reduccion.
 bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                  const std::unordered_set<std::string> *pure_callees,
-                 const HechosDeAsmParaDse *hechos_asm) {
+                 const HechosDeAsmParaDse *hechos_asm,
+                 const analysis::IrFacts *facts) {
     bool changed = false;
+    /* Def-use de la funcion: los necesita el modelo de efectos para contestar
+     * por instruccion.
+     *
+     * VIENEN DE FUERA, cacheados por el gestor.  Construirlos aqui seria el
+     * mismo recorrido por tercera vez -- la tabla points-to que ya se recibe
+     * sale de ellos --, que es exactamente lo que el propio comentario de
+     * `IrFacts::def_block` cuenta que costo: tres pases haciendose cada uno su
+     * doble bucle para el mismo hecho.  El respaldo solo existe para quien
+     * llame sin ellos. */
+    analysis::IrFacts own_facts;
+    if (facts == nullptr) {
+        own_facts = analysis::build_ir_facts(fn);
+        facts = &own_facts;
+    }
+    const analysis::IrFacts &ir_facts = *facts;
 
     // ¿Es esta CALL/TAILCALL a un callee TOTALMENTE PURO?  Entonces NO es
     // barrera de memoria (conocimiento INTERPROCEDURAL del modelo de efectos:
@@ -8353,7 +8293,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
     // parametro, PHI, calculo con offset variable) puede aliasar cualquier
     // direccion local -> barrera que invalida todo el forwarding.  Sin esto,
     // `(*p).x = v` (p cargado que en runtime == &s) no invalidaba `s.x`.
-    enum class RootKind : uint8_t { NONE = 0, STACK = 1, HEAP = 2 };
+    enum class RootKind : uint8_t { NONE = 0, STACK = 1, HEAP = 2, GLOBAL = 3 };
     struct AddrInfo {
         IrValueId root = IR_NO_VALUE; ///< raiz (ALLOCA o allocador)
         int64_t off = 0;              ///< offset constante desde la raiz
@@ -8384,8 +8324,26 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                 k = RootKind::STACK;
             else if (e.kind == MK::Heap)
                 k = RootKind::HEAP;
+            /* Y la memoria GLOBAL del propio programa, que es conocimiento como
+             * cualquier otro: `contador` es una direccion concreta, y dos
+             * globales distintos no se pisan.  Estaba fuera, asi que todo
+             * acceso a un global era una barrera y `g = g + 1` volvia a leer
+             * `g` justo despues de escribirlo.
+             *
+             * Solo con la raiz DEMOSTRADA por su simbolo.  Sin esa marca la
+             * raiz es el valor que dio la direccion, y entonces dos accesos al
+             * MISMO global tienen raices distintas -- diria que no aliasan,
+             * que es falso --.  Aqui rendirse solo cuesta una optimizacion;
+             * aceptar una identidad que no se sostiene da otro resultado.
+             *
+             * Es seguro con lo que ya habia: una llamada limpia todo el
+             * reenvio, y un almacenamiento por un puntero de raiz desconocida
+             * tambien.  Lo unico que cambia es que dos globales distintos
+             * dejan de bloquearse entre si. */
+            else if (e.kind == MK::Global && e.root_is_symbol)
+                k = RootKind::GLOBAL;
             else
-                continue; // Global/ArgDerived/Unknown -> barrera (sin entrada)
+                continue; // ArgDerived/Unknown/global sin simbolo -> barrera
             addr_of[v] = AddrInfo{e.root, e.off};
             root_kind[e.root] = k; // la raiz misma se resuelve a off 0 exacto
         }
@@ -8728,6 +8686,41 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
 
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
             auto &ins = bb.instrs[i];
+            /* Lo que SUSPENDE es barrera, y se PREGUNTA al modelo de efectos en
+             * vez de llevar aqui otra lista de operaciones.
+             *
+             * Ceder el turno o cambiar de fibra deja seguir la ejecucion en
+             * codigo que desde aqui no se ve, y ese codigo alcanza la memoria
+             * COMPARTIDA sin que nadie le haya pasado una direccion: un global
+             * lo ve todo el mundo por definicion, a diferencia de un `alloca` o
+             * de un bloque del monton, que solo se alcanzan si su direccion
+             * escapo -- y de eso ya se lleva la cuenta --.
+             *
+             * Preguntarlo en vez de enumerarlo importa: cuando entro la memoria
+             * global en el modelo, `swapctx` no estaba clasificado, se adelanto
+             * una lectura por encima del cambio de fibra y el programa devolvia
+             * el valor de antes (22 en vez de 1212, `235_fiber_swapctx`).  Con
+             * una lista escrita aqui, el siguiente que falte se descubre igual
+             * de tarde; preguntando, basta completar el modelo UNA vez y lo
+             * arregla para todos sus consumidores. */
+            if (g_dse_unified) {
+                /* Sin tabla points-to el modelo no resuelve a que memoria toca
+                 * cada operando, pero la pregunta de aqui -- si esto SUSPENDE
+                 * -- no depende de ella: es propiedad de la operacion.  Una
+                 * tabla vacia deja al modelo contestarla igual. */
+                static const analysis::PointsTo kNoTable;
+                const analysis::PointsTo &table = pt ? *pt : kNoTable;
+                const analysis::effects::EffectAnalysisResult ef =
+                    analysis::effects::effects_of_instr(fn, ir_facts, table,
+                                                        ins);
+                if (ef.effects.control.kind ==
+                    analysis::effects::ControlKind::Suspend) {
+                    pending.clear();
+                    last_store_val.clear();
+                    load_recorded.clear();
+                    continue;
+                }
+            }
             switch (ins.op) {
             case IrOp::STORE: {
                 if (ins.operands.size() < 2) break;
@@ -14187,14 +14180,19 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                         }
                         {
                             const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
+                            /* Los def-use van por el gestor, como el resto: el
+                             * DSE los necesita para preguntarle al modelo de
+                             * efectos, y construirlos dentro seria el mismo
+                             * recorrido por tercera vez -- `pt_of` ya sale de
+                             * ellos --. */
                             APLICA(ir_pass_dse(fn, &pt_of(fn), &pure_callees,
-                                               &h__));
+                                               &h__, &facts_of(fn)));
                         }
                     } else {
                         {
                             const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
-                            APLICA(
-                                ir_pass_dse(fn, nullptr, &pure_callees, &h__));
+                            APLICA(ir_pass_dse(fn, nullptr, &pure_callees, &h__,
+                                               &facts_of(fn)));
                         }
                     }
                     // Global const CSE solamente (safer than full CSE).
@@ -14413,13 +14411,17 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             if (fn.is_native || fn.blocks.empty()) continue;
             const analysis::IrFacts fx = analysis::build_ir_facts(fn);
             const analysis::RangeFacts rx = analysis::compute_ranges(fn, fx);
+            /* Y cuantos bits de cada valor mira alguien, que es la otra mitad
+             * de la pregunta y la contesta su propio dominio. */
+            const analysis::DemandedBits dbx =
+                analysis::compute_demanded_bits(fn);
             /* Sin barrer detras.  Un `ir_pass_dce` aqui deja el intermedio
              * ROTO: quitar la normalizacion puede dejar a una cuenta con su
              * unico uso dentro de un `phi`, y en ese estado el barrido se la
              * lleva y el phi apunta a un valor que ya no existe.  Lo que
              * quede muerto lo limpian los pases de despues, que corren de
              * todas formas. */
-            ir_pass_elide_narrow_norm(fn, rx);
+            ir_pass_elide_narrow_norm(fn, rx, dbx);
         }
     }
 
