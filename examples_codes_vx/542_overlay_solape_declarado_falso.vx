@@ -1,0 +1,28 @@
+namespace ejemplos.overlay_solape_declarado_falso;
+
+// Una marca `@overlaps(...)` que ya NO es cierta se avisa.
+//
+// La marca dice "aqui el formato tiene una union"; es documentacion que el
+// compilador comprueba.  Si alguien mueve el campo y la deja puesta, deja de
+// describir el formato y pasa a ser una nota de la que nadie se puede fiar --
+// y peor: apagaria la comprobacion de ese par si algun dia volvieran a
+// pisarse, sin que nadie lo hubiera querido.
+//
+// Es un AVISO y no un error a proposito: el programa esta bien, lo que sobra es
+// la marca.  Quitarla es todo el arreglo.
+
+@overlay
+struct Movido {
+	u32 antes   @0x00;                  // 0x00..0x03
+	u32 despues @0x08 @overlaps(antes); // ya no comparten nada: sobra la marca
+}
+
+i32 main() {
+	u8*    buf = (u8*)malloc(16);
+	Movido m   = Movido(buf);
+	m.antes   = 40_u32;
+	m.despues = 2_u32;
+	i32 r = (i32)(m.antes + m.despues);
+	free(buf);
+	return r; // 42
+}

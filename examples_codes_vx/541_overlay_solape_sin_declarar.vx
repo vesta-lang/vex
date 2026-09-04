@@ -1,0 +1,31 @@
+namespace ejemplos.overlay_solape_sin_declarar;
+
+// NEGATIVO: dos campos de una vista que se pisan sin decirlo NO compilan.
+//
+// Es el mismo criterio que con el desbordamiento de enteros: para que algo que
+// casi siempre es un fallo deje de serlo, hay que ESCRIBIRLO.  Un aviso aqui no
+// serviria, porque un aviso se ignora -- y lo que se ignora en una vista mal
+// escrita es leer el campo equivocado, que no falla: da otro valor.
+//
+// `count` esta declarado en 0x04 y ocupa dos bytes (0x04..0x05); `flags` cae en
+// 0x05, asi que comparte el 0x05 con el.  Escribir uno pisa medio del otro.
+//
+// Para que valiera habria que escribir `@overlaps(count)` en `flags`, que es lo
+// que hace 540_overlay_solape.vx con el thunk de un PE.
+
+@overlay
+struct Cabecera {
+	u32 magic @0x00;
+	u16 count @0x04; // 0x04..0x05
+	u16 flags @0x05; // 0x05..0x06  <- pisa el ultimo byte de `count`
+}
+
+i32 main() {
+	u8*      buf = (u8*)malloc(16);
+	Cabecera c   = Cabecera(buf);
+	c.count = 2_u16;
+	c.flags = 5_u16;
+	i32 r = (i32)(c.count + c.flags);
+	free(buf);
+	return r;
+}

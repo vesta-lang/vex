@@ -2382,6 +2382,19 @@ struct StructFieldDecl {
     /// Distingue un array NO acotado (el usuario gestiona la terminacion) de un
     /// campo escalar.  true = es un array (con o sin @c array_count).
     bool is_array = false;
+    /// Overlay: campos hermanos con los que este COMPARTE bytes a proposito
+    /// (`u64 addr @0x00 @overlaps(ordinal);`).  Vacio = no comparte con nadie,
+    /// y entonces pisar a otro campo es un error.
+    ///
+    /// Se nombra CON QUIEN se comparte y no se apaga la comprobacion entera:
+    /// una vista puede tener una union deliberada y, aparte, un offset mal
+    /// escrito, y lo segundo se sigue detectando.  Describir un formato es
+    /// justo para lo que existe un overlay, asi que la parte del formato que
+    /// de verdad se solapa se DICE, y lo que no, se caza.
+    std::vector<std::string> overlaps_with;
+    /// Localizacion de cada nombre de @c overlaps_with (mismo indice), para que
+    /// el diagnostico senale el nombre y no la declaracion entera.
+    std::vector<SourceLoc> overlaps_locs;
     /// Overlay ENDIANNESS del campo (F5): 0 = nativo/host (sin swap), 1 = big-
     /// endian (`@be`), 2 = little-endian explicito (`@le`).  Un campo `@be` en
     /// un host little-endian (x86-64) emite BYTESWAP en cada read/write.  Para

@@ -1,0 +1,67 @@
+namespace ejemplos.overlay_solape;
+
+// -----------------------------------------------------------------------------
+// Un `@overlay` describe un formato, asi que dos campos que se pisan se avisan
+// -----------------------------------------------------------------------------
+// Una vista `@overlay` existe para DESCRIBIR como esta puesto un formato en
+// memoria.  Por eso dos campos que cubren los mismos bytes son casi siempre un
+// offset mal escrito -- y hasta ahora eso compilaba sin decir nada, en la unica
+// parte del lenguaje cuyo proposito es justo describir un formato.
+//
+// Casi siempre, no siempre: un formato binario de verdad tiene uniones dentro.
+// Un `IMAGE_THUNK_DATA` de un PE son ocho bytes que segun el bit alto son un
+// ORDINAL o la direccion de un nombre.  Eso no es un error, es el formato.
+//
+// La diferencia se dice en el campo, nombrando CON QUIEN comparte:
+//
+//     u64 by_name @0x00 @overlaps(ordinal);
+//
+// Se nombra al hermano en vez de apagar la comprobacion de la vista entera
+// porque las dos cosas conviven: una vista puede tener una union deliberada y,
+// tres lineas mas abajo, un offset mal escrito.  Apagando la vista se pierde el
+// segundo; nombrando al hermano, no.
+
+// El thunk de importacion de un PE: los mismos 8 bytes, dos lecturas.  El bit
+// 63 decide cual vale.
+@overlay
+struct Thunk {
+	u64 ordinal @0x00;                    // si el bit 63 esta puesto
+	u64 by_name @0x00 @overlaps(ordinal); // si no, RVA a un IMAGE_IMPORT_BY_NAME
+	u16 hint    @0x08;                    // ya fuera de la union: no se solapa
+}
+
+// Aqui NO hay union: cada campo tiene sus bytes.  El compilador lo comprueba,
+// asi que un `@0x06` en vez de `@0x08` seria un error y no un valor raro.
+@overlay
+struct Cabecera {
+	u32 magic  @0x00;
+	u16 count  @0x04;
+	u16 flags  @0x06;
+	u64 offset @0x08;
+}
+
+i32 main() {
+	u8* buf = (u8*)malloc(32);
+
+	// Un thunk POR ORDINAL: bit 63 puesto, ordinal 7.
+	*(u64*)(buf + 0x00) = 0x8000000000000007_u64;
+	*(u16*)(buf + 0x08) = 3_u16;
+
+	Thunk t = Thunk(buf);
+	// Las dos lecturas ven los MISMOS bytes, que es lo que la union significa.
+	u64 orden = t.ordinal & 0xFFFF_u64;
+	u64 crudo = t.by_name;
+	println("ordinal=${orden} mismo=${(u64)(crudo & 0xFFFF_u64)} hint=${t.hint}");
+
+	// La vista sin union: cuatro campos, cuatro tramos, ninguno pisa a otro.
+	Cabecera c = Cabecera(buf + 16);
+	c.magic  = 0xCAFE_u32;
+	c.count  = 2_u16;
+	c.flags  = 5_u16;
+	c.offset = 24_u64;
+	println("magic=${c.magic:hex} count=${c.count} flags=${c.flags}");
+
+	i32 r = (i32)(orden + (u64)t.hint + (u64)c.count + (u64)c.flags); // 7+3+2+5
+	free(buf);
+	return r + 25; // 17 + 25 = 42
+}

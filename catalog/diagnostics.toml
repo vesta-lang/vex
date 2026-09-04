@@ -1650,6 +1650,27 @@ es = "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea
 en = "this integer operation does not fit in its type: the result {0} is outside {1} ({2} to {3}), so it comes out as a different number; write a cast to the type -- (i8)(a + b) -- if wrapping around is what you meant"
 es = "esta cuenta entera no cabe en su tipo: el resultado {0} se sale de {1} ({2} a {3}), asi que sale otro numero; escribe un cast al tipo -- (i8)(a + b) -- si envolver es lo que querias"
 
+# --- overlays: el solape de campos (VX2051/VX2052) y la marca que sobra
+# (VXW925) ---
+#
+# Un `@overlay` existe para DESCRIBIR un formato, asi que dos campos que se
+# pisan son casi siempre un offset mal escrito.  Casi: una union dentro de un
+# formato binario describe los mismos bytes de dos maneras a proposito, y eso
+# se dice con `@overlaps(hermano)` -- nombrando CON QUIEN se comparte, para que
+# el resto de la vista siga vigilada.
+
+[VX2051]
+en = "the field '{0}' covers bytes {1}..{2} of this view, which the field '{3}' ({4}..{5}) already covers: two fields describing the same bytes is almost always a mistyped offset. If they share them on purpose -- a union inside the format -- say so on the field: @overlaps({3})"
+es = "el campo '{0}' cubre los bytes {1}..{2} de esta vista, que ya cubre el campo '{3}' ({4}..{5}): dos campos describiendo los mismos bytes son casi siempre un offset mal escrito. Si los comparten a proposito -- una union dentro del formato -- dilo en el campo: @overlaps({3})"
+
+[VX2052]
+en = "'@overlaps({0})' on the field '{1}' names something that is not a field of this view: it can only name a sibling that shares its bytes"
+es = "'@overlaps({0})' en el campo '{1}' nombra algo que no es un campo de esta vista: solo puede nombrar a un hermano con el que comparta bytes"
+
+[VXW925]
+en = "'@overlaps({0})' on the field '{1}' is not true: the two do not share a single byte ('{1}' covers {2}..{3}, '{0}' covers {4}..{5}). The mark says the format has a union here; leaving it once it stops being true turns it into a note nobody can trust"
+es = "'@overlaps({0})' en el campo '{1}' no es cierto: los dos no comparten ni un byte ('{1}' cubre {2}..{3} y '{0}' cubre {4}..{5}). La marca dice que ahi el formato tiene una union; dejarla cuando deja de ser verdad la convierte en una nota de la que nadie se puede fiar"
+
 [VXW008]
 en = "cannot tell whether the parameters of '{0}' are read: it has values bound to an asm block, which take them through a register rather than through a use the count can see. The bindings say which register carries which slot; joining that to a parameter needs the store between them, which is another domain's knowledge"
 es = "no se puede decir si los parametros de '{0}' se leen: tiene valores atados a un bloque asm, que los toma por un registro y no por un uso que la cuenta vea.  Las ataduras dicen que registro lleva que hueco; unir eso con un parametro necesita el almacen que hay en medio, que es conocimiento de otro dominio"

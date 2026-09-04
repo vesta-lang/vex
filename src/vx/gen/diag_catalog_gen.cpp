@@ -57,6 +57,8 @@ const CatEntry kEntries[] = {
     {"VX2043", {"argument {0} of {1}", "el argumento {0} de {1}"}},
     {"VX2044", {"argument {0}", "el argumento {0}"}},
     {"VX2050", {"this integer operation does not fit in its type: the result {0} is outside {1} ({2} to {3}), so it comes out as a different number; write a cast to the type -- (i8)(a + b) -- if wrapping around is what you meant", "esta cuenta entera no cabe en su tipo: el resultado {0} se sale de {1} ({2} a {3}), asi que sale otro numero; escribe un cast al tipo -- (i8)(a + b) -- si envolver es lo que querias"}},
+    {"VX2051", {"the field '{0}' covers bytes {1}..{2} of this view, which the field '{3}' ({4}..{5}) already covers: two fields describing the same bytes is almost always a mistyped offset. If they share them on purpose -- a union inside the format -- say so on the field: @overlaps({3})", "el campo '{0}' cubre los bytes {1}..{2} de esta vista, que ya cubre el campo '{3}' ({4}..{5}): dos campos describiendo los mismos bytes son casi siempre un offset mal escrito. Si los comparten a proposito -- una union dentro del formato -- dilo en el campo: @overlaps({3})"}},
+    {"VX2052", {"'@overlaps({0})' on the field '{1}' names something that is not a field of this view: it can only name a sibling that shares its bytes", "'@overlaps({0})' en el campo '{1}' nombra algo que no es un campo de esta vista: solo puede nombrar a un hermano con el que comparta bytes"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -309,6 +311,7 @@ const CatEntry kEntries[] = {
     {"VXW919", {"this loop copies a contiguous run: 'std.memory.copy' says it in one line, and says it to whoever reads it next", "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea, y se lo dice a quien lo lea despues"}},
     {"VXW920", {"this loop advances past its limit without ever equalling it, so its '!=' guard never stops it: it either does not end, or ends only after wrapping around the whole type", "este bucle se pasa de su limite sin llegar a igualarlo nunca, asi que su guarda '!=' no lo para: o no termina, o solo termina tras dar la vuelta al tipo entero"}},
     {"VXW924", {"this will not compile to a bare native binary: it needs {0}", "esto no compila a un binario nativo sin runtime: necesita {0}"}},
+    {"VXW925", {"'@overlaps({0})' on the field '{1}' is not true: the two do not share a single byte ('{1}' covers {2}..{3}, '{0}' covers {4}..{5}). The mark says the format has a union here; leaving it once it stops being true turns it into a note nobody can trust", "'@overlaps({0})' en el campo '{1}' no es cierto: los dos no comparten ni un byte ('{1}' cubre {2}..{3} y '{0}' cubre {4}..{5}). La marca dice que ahi el formato tiene una union; dejarla cuando deja de ser verdad la convierte en una nota de la que nadie se puede fiar"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"bulk.body_does_more", {"the body does something beyond walking the run and moving it", "el cuerpo hace algo mas que recorrer el tramo y moverlo"}},
     {"bulk.bound_varies", {"the limit changes inside the loop, so there is no fixed run", "el limite cambia dentro del bucle, asi que no hay un tramo fijo"}},
@@ -379,7 +382,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 358;
+const int kEntryCount = 361;
 
 } // namespace
 

@@ -252,6 +252,12 @@ struct StructFieldInfo {
     /// @c resolver_parent_type = nombre del tipo overlay raiz (T).
     bool resolver_uses_parent = false;
     std::string resolver_parent_type;
+    /// Overlay: campos hermanos con los que este comparte bytes A PROPOSITO
+    /// (`@overlaps(ordinal)`).  Vacio = no comparte, y pisar a otro es error.
+    std::vector<std::string> overlaps_with;
+    /// Localizacion de la declaracion del campo, para el diagnostico del
+    /// solape (que tiene que senalar los DOS campos, no solo uno).
+    SourceLoc loc;
 };
 
 /**
@@ -1376,6 +1382,24 @@ class TypeChecker {
     /// categoria (@c StructLayout::cat_c_representable / @c cat_managed) via
     /// el clasificador de Fase 0.  Se llama al final de @c collect_globals.
     void compute_struct_categories();
+    /**
+     * @brief Comprueba que dos campos de una vista `@overlay` no se pisen.
+     *
+     * Un overlay existe para DESCRIBIR un formato, asi que dos campos que
+     * cubren el mismo byte son casi siempre un offset mal escrito -- y hoy eso
+     * no daba ni un aviso, en la unica feature del lenguaje cuyo proposito es
+     * justo ese --.  Compartir bytes a proposito (una union dentro del
+     * formato) se dice con `@overlaps(hermano)` en el campo.
+     *
+     * Solo mira los campos de offset CONSTANTE: los dinamicos (`@offset(expr)`,
+     * `@offset { }`, `@element { }`) dependen de los datos, asi que la
+     * respuesta ahi no es "no se solapan", es "no se sabe" -- y callarselo es
+     * lo correcto para un ERROR, pero no para el conocimiento: el hueco y lo
+     * indecidible se cuentan aparte, por el linter.
+     *
+     * @param lay Layout de la vista, ya con sus campos y offsets resueltos.
+     */
+    void check_overlay_overlaps(const StructLayout &lay);
     /// Resolver de structs (Fase 0) respaldado por @c struct_layouts_.
     const StructLayout *resolve_struct_layout(const std::string &name) const;
 

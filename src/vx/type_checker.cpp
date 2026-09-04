@@ -4229,6 +4229,8 @@ void TypeChecker::collect_globals() {
                 }
                 fi.size = fsize;
                 fi.default_init = f.default_init.get();
+                fi.overlaps_with = f.overlaps_with;
+                fi.loc = f.loc;
                 layout.fields.push_back(std::move(fi));
 
                 if (s->is_union) {
@@ -4264,6 +4266,7 @@ void TypeChecker::collect_globals() {
                 }
                 if (extent % 8 != 0) extent += 8 - (extent % 8);
                 layout.overlay_extent = extent;
+                check_overlay_overlaps(layout);
                 // F4: registrar el layout PROVISIONALMENTE (copia) ANTES de
                 // chequear los resolvers, para que un resolver `@offset { }`
                 // pueda acceder a arrays hermanos via `this.<array>[i].<campo>`
@@ -5817,6 +5820,96 @@ bool TypeChecker::type_is_managed(const Type &t) const {
         return resolve_struct_layout(n);
     };
     return vx::is_managed(t, r);
+}
+
+void TypeChecker::check_overlay_overlaps(const StructLayout &lay) {
+    /* Tramo [begin, end) que ocupa un campo, o `false` si no se puede saber sin
+     * ejecutar.  Un campo de offset dinamico vive donde digan los datos; un
+     * array solo se acota si su cuenta Y su paso son literales. */
+    struct Span {
+        uint32_t begin = 0, end = 0;
+    };
+    auto int_literal = [](const ast::Expr *e, uint64_t &out) -> bool {
+        if (!e || e->kind != ast::NodeKind::IntLitExpr) return false;
+        out = static_cast<const ast::IntLitExpr *>(e)->value;
+        return true;
+    };
+    auto span_of = [&](const StructFieldInfo &fi, Span &out) -> bool {
+        if (fi.offset_expr || fi.offset_block || fi.element_block) return false;
+        uint64_t length = fi.size;
+        if (fi.is_array) {
+            uint64_t count = 0, stride = 0;
+            if (!int_literal(fi.array_count, count) ||
+                !int_literal(fi.array_stride, stride))
+                return false;
+            length = count * stride;
+        }
+        if (length == 0) return false; // nada que pisar
+        out.begin = fi.offset;
+        out.end = static_cast<uint32_t>(fi.offset + length);
+        return true;
+    };
+    auto hex = [](uint32_t v) {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "0x%02X", v);
+        return std::string(buf);
+    };
+    /* `@overlaps(x)` en A y `@overlaps(a)` en X dicen lo mismo, asi que basta
+     * con que UNO de los dos lo diga: obligar a los dos convertiria una union
+     * de tres campos en seis marcas que hay que mantener a la vez. */
+    auto pair_declared = [](const StructFieldInfo &a,
+                            const StructFieldInfo &b) {
+        for (const std::string &name : a.overlaps_with)
+            if (name == b.name) return true;
+        for (const std::string &name : b.overlaps_with)
+            if (name == a.name) return true;
+        return false;
+    };
+
+    const size_t count = lay.fields.size();
+    for (size_t i = 0; i < count; ++i) {
+        const StructFieldInfo &a = lay.fields[i];
+        Span sa;
+        const bool a_known = span_of(a, sa);
+        /* Lo que el campo AFIRMA: cada nombre de su `@overlaps` tiene que ser
+         * un hermano, y tienen que compartir de verdad.  Una marca que nombra
+         * a quien no existe es un error; una que ya no es cierta es un aviso:
+         * el codigo funciona, pero la nota miente sobre el formato. */
+        for (const std::string &named : a.overlaps_with) {
+            const StructFieldInfo *other = nullptr;
+            for (const StructFieldInfo &c : lay.fields)
+                if (c.name == named && &c != &a) other = &c;
+            if (!other) {
+                diags_.diag(a.loc, DiagLevel::ERR, "VX2052", {named, a.name});
+                continue;
+            }
+            Span sb;
+            if (!a_known || !span_of(*other, sb)) continue; // no se sabe
+            if (sa.begin < sb.end && sb.begin < sa.end) continue; // cierto
+            diags_.diag(a.loc, DiagLevel::WARN, "VXW925",
+                        {named, a.name, hex(sa.begin), hex(sa.end - 1),
+                         hex(sb.begin), hex(sb.end - 1)});
+        }
+        if (!a_known) continue;
+        for (size_t j = i + 1; j < count; ++j) {
+            const StructFieldInfo &b = lay.fields[j];
+            /* Dos bit fields del MISMO word comparten sus bytes por
+             * construccion: es lo que un bit field ES, no un solape. */
+            if (a.bit_width && b.bit_width && a.offset == b.offset &&
+                a.size == b.size)
+                continue;
+            Span sb;
+            if (!span_of(b, sb)) continue;
+            if (!(sa.begin < sb.end && sb.begin < sa.end)) continue;
+            if (pair_declared(a, b)) continue;
+            /* Se senala el SEGUNDO -- el que llego a unos bytes ya cubiertos --
+             * y se nombra el primero con su tramo, que es lo que hace falta
+             * para ver si el offset mal escrito es este o aquel. */
+            diags_.diag(b.loc, DiagLevel::ERR, "VX2051",
+                        {b.name, hex(sb.begin), hex(sb.end - 1), a.name,
+                         hex(sa.begin), hex(sa.end - 1)});
+        }
+    }
 }
 
 void TypeChecker::compute_struct_categories() {

@@ -6051,6 +6051,28 @@ void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
                 (void)expect(TokenKind::RPAREN,
                              "se esperaba ')' tras @endian(expr)");
             } else if (current_.kind == TokenKind::IDENTIFIER &&
+                       current_.lexeme == "overlaps") {
+                // Overlay: `@overlaps(hermano)` / `@overlaps(a, b)` -- este
+                // campo comparte bytes con esos, a proposito.  Sin la marca,
+                // pisar a otro campo es un error.
+                (void)consume(); // 'overlaps'
+                (void)expect(TokenKind::LPAREN,
+                             "se esperaba '(' tras @overlaps");
+                for (;;) {
+                    if (current_.kind != TokenKind::IDENTIFIER) {
+                        error_here("@overlaps espera el NOMBRE de un campo "
+                                   "hermano de la vista");
+                        break;
+                    }
+                    f.overlaps_with.push_back(current_.lexeme);
+                    f.overlaps_locs.push_back(current_.loc);
+                    (void)consume();
+                    if (current_.kind != TokenKind::COMMA) break;
+                    (void)consume(); // ','
+                }
+                (void)expect(TokenKind::RPAREN,
+                             "se esperaba ')' tras @overlaps(...)");
+            } else if (current_.kind == TokenKind::IDENTIFIER &&
                        current_.lexeme == "element") {
                 // Overlay array POR-ELEMENTO: `T Name[c] @element { ...; return
                 // <dir del elemento index>; }`.  Solo valido en un array.

@@ -3673,6 +3673,23 @@ diff3_case("overlay_rva_resolver", "resolver direcciones virtuales relativas des
 diff3_case("overlay_assembler", "ensamblar una estructura escribiendo por la vista", "279_overlay_assembler.vx")
 diff3_case("overlay_endian", "vistas con campos de orden de bytes contrario", "280_overlay_endian.vx")
 diff3_case("overlay_endian_ctx", "el orden de bytes sale del contexto de la propia vista", "281_overlay_endian_ctx.vx")
+
+# Una vista describe un formato, asi que dos campos que cubren los mismos bytes
+# son casi siempre un offset mal escrito -- y compilaban en silencio.  Hacen
+# falta los TRES casos: el positivo solo dice que la marca no estorba, asi que
+# sin el negativo la comprobacion entera se podria borrar sin que nada fallara.
+modes3_case("overlay_solape",
+            "una union del formato se DECLARA, y entonces vale",
+            "540_overlay_solape.vx", 42)
+fails_case("overlay_solape_sin_declarar",
+           "dos campos que se pisan sin decirlo son un ERROR",
+           "541_overlay_solape_sin_declarar.vx", "VX2051")
+# Y la marca tiene que seguir siendo verdad: dejarla puesta cuando ya no lo es
+# apagaria ese par el dia que volvieran a pisarse, sin que nadie lo quisiera.
+warns_r0_case("overlay_solape_declarado_falso",
+              "una marca de solape que ya no es cierta se avisa",
+              "542_overlay_solape_declarado_falso.vx", "VXW925", 42)
+
 diff3_case("valued_enums", "enums con valor explicito, estilo C", "283_valued_enums.vx")
 diff3_case("paralelismo_heavy", "carga paralela sostenida sobre el planificador", "44_paralelismo_heavy.vx")
 
@@ -5323,6 +5340,19 @@ lint_case("lint_loops_dead",
 lint_case("lint_bulk_by_hand",
           "`vesta lint` reconoce un relleno de bloque escrito a mano",
           "279_overlay_assembler.vx", ["VXW918"])
+
+# La familia que dice lo que NO cabe en un binario nativo sin runtime.  Los dos
+# casos van juntos a proposito: uno fija que avisa y el otro que NO avisa de lo
+# que si cabe.  Sin el segundo, una familia que avisara de todo pasaria igual
+# la primera comprobacion -- y eso es exactamente como una familia util se
+# convierte en ruido.
+lint_case("lint_native_gap",
+          "`vesta lint` dice que el contexto de la VM no cabe en nativo bare",
+          "02_hola_mundo.vx", ["VXW924"])
+
+lint_case("lint_native_gap_neg",
+          "`vesta lint` NO avisa de un malloc, que en bare con libc si cabe",
+          "10_heap_malloc.vx", [], ausentes=["VXW924"])
 
 # Las OCHO formas de llamar bajan por caminos distintos, y cuatro de ellos no
 # tomaban la direccion: el metodo de un struct, una lambda en una variable, un
