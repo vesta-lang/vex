@@ -55,12 +55,12 @@ int aot_emit_elf_obj_arch(const char *path, const AotSection *secs,
          * arquitectura que no traiga un tipo lo deja a cero, y entonces es que
          * NO lo admite.  Asi anadir una no obliga a tocar esta lista. */
         const int k = relocs[r].kind;
-        const int admitido =
+        const int accepted =
             (k == AOT_RELOC_REL32 && A->r_pcrel32 != 0) ||
             (k == AOT_RELOC_ABS64 && A->r_abs64 != 0) ||
             (k == AOT_RELOC_TPOFF32 && A->r_tpoff32 != 0) ||
             (k == AOT_RELOC_ARM64_CALL26 && A->r_call_local != 0);
-        if (!admitido) {
+        if (!accepted) {
             set_err(err, err_cap,
                     "aot_emit_elf_obj: reloc kind no soportado en .o");
             return 0;
