@@ -1277,18 +1277,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * valor -- y con el, sus lecturas --.  Sin este numero, mirar
                  * `fold` no dice si el trabajo lo hace la mitad nueva o la
                  * vieja. */
-                size_t con_store = 0;
+                size_t store_uses = 0;
                 for (const auto &blk : fn.blocks)
                     for (const ir::IrInstr &in : blk.instrs)
                         if (in.op == ir::IrOp::STORE &&
                             in.operands.size() == 2 &&
                             fold_disp.count(in.operands[1]))
-                            ++con_store;
+                            ++store_uses;
                 std::fprintf(
                     stderr,
                     "[sib] %s: const=%zu cand=%zu fold=%zu (store=%zu)\n",
                     fn.name.c_str(), const_val.size(), cand.size(),
-                    fold_disp.size(), con_store);
+                    fold_disp.size(), store_uses);
             }
         }
     }
