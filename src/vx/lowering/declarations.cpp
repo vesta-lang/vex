@@ -336,7 +336,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             if (dtor != nullptr) {
                 if (!class_has_vtable(sem_type.struct_name)) {
                     const std::string owner = dtor->defining_class.empty()
-                                                  ? sem_type.struct_name
+                                                  ? sem_type.struct_name.str()
                                                   : dtor->defining_class;
                     const std::string dtor_label =
                         owner + "__" + dtor->name; // <Clase>____dtor
@@ -394,7 +394,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     // AOT.2.d: nombre IR del dtor del tipo estatico ->
                     // se invoca antes del free.
                     const std::string owner = dtor->defining_class.empty()
-                                                  ? sem_type.struct_name
+                                                  ? sem_type.struct_name.str()
                                                   : dtor->defining_class;
                     act.func_name =
                         owner + "__" + dtor->name; // <Class>____dtor
@@ -432,7 +432,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 // CALLVIRT.
                 if (!class_has_vtable(sem_type.struct_name)) {
                     const std::string owner = dtor->defining_class.empty()
-                                                  ? sem_type.struct_name
+                                                  ? sem_type.struct_name.str()
                                                   : dtor->defining_class;
                     act.func_name =
                         owner + "__" + dtor->name; // <Class>____dtor
@@ -588,7 +588,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                             // CALL directo en native_poo (AOT).
                             const std::string owner =
                                 mi.defining_class.empty()
-                                    ? sem_type.pointee->struct_name
+                                    ? sem_type.pointee->struct_name.str()
                                     : mi.defining_class;
                             act.inner_dtor_func_name = owner + "__" + mi.name;
                             // Polimorfico si la clase de dentro tiene tabla de

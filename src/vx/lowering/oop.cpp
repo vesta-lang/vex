@@ -384,9 +384,10 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     for (const auto &im : inner.methods) {
                         if (im.is_destructor) {
                             inner_dtor_idx = im.vtable_index;
-                            const std::string owner = im.defining_class.empty()
-                                                          ? f.type.struct_name
-                                                          : im.defining_class;
+                            const std::string owner =
+                                im.defining_class.empty()
+                                    ? f.type.struct_name.str()
+                                    : im.defining_class;
                             inner_dtor_name = owner + "__" + im.name;
                             break;
                         }
@@ -2273,7 +2274,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             }
         if (is_leaf) {
             const std::string owner = mtd->defining_class.empty()
-                                          ? bt.struct_name
+                                          ? bt.struct_name.str()
                                           : mtd->defining_class;
             ir::IrInstr dc{};
             dc.op = ir::IrOp::CALL;

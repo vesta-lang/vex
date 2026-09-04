@@ -44,6 +44,7 @@
 #include <string>
 #include <vector>
 
+#include "util/name_pool.h" // los nombres de un tipo, compartidos
 #include "vx/token.h"
 
 namespace vx {
@@ -302,6 +303,105 @@ inline const char *param_dir_name(ParamDir d) noexcept {
 }
 
 /**
+ * @class PooledName
+ * @brief Un nombre de tipo COMPARTIDO, que se lee como una cadena.
+ *
+ * Un @ref Type llevaba tres @c std::string -- el del struct, el nominal y el
+ * del liberador --, o sea 96 de sus 256 bytes.  Y un @c Type se copia
+ * constantemente: el comprobador de tipos lo devuelve por valor de cada
+ * expresion que mira, y ahi se iba -- medido -- casi tres cuartas partes del
+ * coste de construir y destruir tipos.  La inmensa mayoria de esas copias son
+ * de tipos SIN nombre, un `i32`, que pagaban igual las tres cadenas.
+ *
+ * Aqui solo viaja un puntero al pozo (@c util::intern_name), que reparte cada
+ * nombre una vez: copiar son ocho bytes y destruir no es nada.  El nombre se
+ * interna al ASIGNARLO -- unas pocas decenas de sitios donde se resuelve un
+ * tipo con nombre --, no en cada copia, que es lo que pasa mucho.
+ *
+ * Se comporta como una cadena de SOLO LECTURA a proposito: los mas de
+ * trescientos sitios que la leen siguen escritos igual, y lo unico que deja de
+ * poderse hacer es modificarla por dentro -- que es justo lo que no se debe
+ * hacer con un nombre compartido.
+ */
+class PooledName {
+  public:
+    PooledName() noexcept : p_(util::empty_name()) {}
+    PooledName(const std::string &s) : p_(util::intern_name(s)) {}
+    PooledName(const char *s) : p_(util::intern_name(std::string(s))) {}
+
+    PooledName &operator=(const std::string &s) {
+        p_ = util::intern_name(s);
+        return *this;
+    }
+    PooledName &operator=(const char *s) {
+        p_ = util::intern_name(std::string(s));
+        return *this;
+    }
+
+    /// Se lee como la cadena que es, para que quien la use no note el cambio.
+    operator const std::string &() const noexcept { return *p_; }
+    /// @return El nombre.
+    const std::string &str() const noexcept { return *p_; }
+
+    bool empty() const noexcept { return p_->empty(); }
+    size_t size() const noexcept { return p_->size(); }
+    const char *c_str() const noexcept { return p_->c_str(); }
+    /// Deja el nombre vacio.  No borra nada del pozo: apunta al vacio.
+    void clear() noexcept { p_ = util::empty_name(); }
+    size_t rfind(const char *s, size_t pos = std::string::npos) const {
+        return p_->rfind(s, pos);
+    }
+    size_t rfind(const std::string &s, size_t pos = std::string::npos) const {
+        return p_->rfind(s, pos);
+    }
+    size_t find(const char *s, size_t pos = 0) const { return p_->find(s, pos); }
+    size_t find(const std::string &s, size_t pos = 0) const {
+        return p_->find(s, pos);
+    }
+
+    /* Dos nombres del pozo son iguales si son EL MISMO, asi que basta comparar
+     * punteros.  Contra cualquier otra cosa se compara el texto. */
+    bool operator==(const PooledName &o) const noexcept { return p_ == o.p_; }
+    bool operator!=(const PooledName &o) const noexcept { return p_ != o.p_; }
+    bool operator==(const std::string &s) const { return *p_ == s; }
+    bool operator!=(const std::string &s) const { return *p_ != s; }
+    bool operator==(const char *s) const { return *p_ == s; }
+    bool operator!=(const char *s) const { return *p_ != s; }
+
+  private:
+    const std::string *p_; ///< del pozo; nunca nulo
+};
+
+/// @brief Concatenacion, para los sitios que arman un mensaje con el nombre.
+inline std::string operator+(const PooledName &a, const char *b) {
+    return a.str() + b;
+}
+/// @copydoc operator+(const PooledName &, const char *)
+inline std::string operator+(const PooledName &a, const std::string &b) {
+    return a.str() + b;
+}
+/// @copydoc operator+(const PooledName &, const char *)
+inline std::string operator+(const char *a, const PooledName &b) {
+    return a + b.str();
+}
+/// @copydoc operator+(const PooledName &, const char *)
+inline std::string operator+(const std::string &a, const PooledName &b) {
+    return a + b.str();
+}
+/// @brief Igualdad con el nombre a la derecha.
+inline bool operator==(const std::string &a, const PooledName &b) {
+    return a == b.str();
+}
+/// @copydoc operator==(const std::string &, const PooledName &)
+inline bool operator==(const char *a, const PooledName &b) { return b == a; }
+/// @brief Desigualdad con el nombre a la derecha.
+inline bool operator!=(const std::string &a, const PooledName &b) {
+    return a != b.str();
+}
+/// @copydoc operator!=(const std::string &, const PooledName &)
+inline bool operator!=(const char *a, const PooledName &b) { return b != a; }
+
+/**
  * @struct Type
  * @brief Representacion del tipo de una expresion o declaracion.
  *
@@ -323,7 +423,11 @@ struct Type {
     /// despreciable comparado con la simplicidad del modelo.  Si en
     /// el futuro la presion de cache importa, se puede sustituir por
     /// un indice a una pool de StructLayout en TypeChecker.
-    std::string struct_name;
+    ///
+    /// Eso ultimo es lo que se hizo, y por la razon que anticipaba: el nombre
+    /// va COMPARTIDO (@ref PooledName), asi que copiar un tipo no copia
+    /// cadenas.
+    PooledName struct_name;
     /// @c true si esta referencia de clase (@c kind == CLASS) es GC-managed
     /// (declarada como @c gc<X>): se aloca con @c vx_gc_alloc en vez de
     /// @c calloc, no tiene cleanup RAII (el GC colecta, incl. ciclos), y su
@@ -378,6 +482,16 @@ struct Type {
     /// lvalue.result_type.is_const. Ortogonal a @c is_virtual y a la forma del
     /// tipo (NO entra en la igualdad estructural).
     bool is_const = false;
+
+    /// `volatile`, POR NIVEL y con la misma lectura que @c is_const: para un
+    /// PTR marca el PUNTERO, y lo del APUNTADO vive en @c pointee->is_volatile.
+    ///
+    /// Dice que la region es OBSERVABLE desde fuera del programa (hardware
+    /// mapeado en memoria): cada acceso es un evento, asi que no se puede
+    /// reordenar, fundir ni quitar.  Igual que @c is_const, es ortogonal a la
+    /// forma del tipo y NO entra en la igualdad estructural -- dos regiones del
+    /// mismo tipo siguen siendo el mismo tipo aunque una sea observable.
+    bool is_volatile = false;
 
     /// Tipos de los parametros cuando @c kind == FUNCTION.  Vacio para
     /// los demas kinds.  La lista se materializa solo cuando se crea un
@@ -457,8 +571,9 @@ struct Type {
     bool is_opaque = false;
 
     /// Nombre humano-legible del newtype (para mensajes de error e
-    /// introspeccion).  Vacio si no es newtype.
-    std::string nominal_name;
+    /// introspeccion).  Vacio si no es newtype.  Compartido: ver
+    /// @ref PooledName.
+    PooledName nominal_name;
 
     /// Nombre de la funcion que libera el recurso, cuando @c kind es
     /// @c UNIQUE_PTR o @c SHARED_PTR.  Vacio = el de por defecto.
@@ -476,7 +591,9 @@ struct Type {
     /// liberador en una DECLARACION LOCAL adopta el de su inicializador; donde
     /// el tipo esta fijado de antemano -- un campo, una firma -- hay que
     /// escribirlo, porque quien limpie del otro lado tiene que saberlo.
-    std::string deleter_name;
+    ///
+    /// Compartido: ver @ref PooledName.
+    PooledName deleter_name;
 
     /// Alineacion forzada en bytes (sintaxis @c "@align(N)").  0 = sin
     /// override (usar alineacion natural del kind).  Debe ser potencia
@@ -1068,9 +1185,11 @@ inline std::string type_to_string(const Type &t) {
         return elem + sfx;
     }
     if (t.kind == PrimitiveKind::STRUCT)
-        return t.struct_name.empty() ? std::string("struct") : t.struct_name;
+        return t.struct_name.empty() ? std::string("struct")
+                                     : t.struct_name.str();
     if (t.kind == PrimitiveKind::CLASS)
-        return t.struct_name.empty() ? std::string("class") : t.struct_name;
+        return t.struct_name.empty() ? std::string("class")
+                                     : t.struct_name.str();
     if (t.kind == PrimitiveKind::OPTIONAL) {
         return std::string("Optional<") +
                (t.pointee ? type_to_string(*t.pointee) : "?") + ">";
