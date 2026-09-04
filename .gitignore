@@ -3,6 +3,12 @@
 
 # ...pero sí trackear la config de formato del proyecto
 !.clang-format
+# ...y como llegan los ficheros al disco, que sin esto NO llegaba a nadie: la
+# regla `.*` de arriba se lo tragaba, asi que el fichero existia en la maquina
+# donde se escribio y en ninguna otra.  Sus reglas parecian estar puestas y no
+# lo estaban -- de ahi que el CMakeLists tenga que normalizar a mano el
+# `config.guess` de keystone, que es justo lo que esto deberia cubrir.
+!.gitattributes
 # ...y el CI de GitHub Actions
 !.github/
 !.github/**

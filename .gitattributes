@@ -1,0 +1,35 @@
+# Ficheros que TIENEN que llegar con saltos de linea de Unix, se clone donde se
+# clone.
+#
+# El repo se trabaja desde Windows con `core.autocrlf=true`, que convierte a
+# CRLF al sacar los ficheros del historial.  Para el codigo eso da igual -- lo
+# lee un compilador --, pero un script de shell con CRLF NO lo puede ejecutar
+# `sh`: el `\r` se cuela dentro de la ultima palabra de cada linea y el
+# interprete ve un token que nadie escribio.
+#
+# Es lo que impedia CONFIGURAR el proyecto en Linux.  `config.guess`, que
+# keystone invoca con `sh` para averiguar la arquitectura del anfitrion, moria
+# con "Syntax error: word unexpected (expecting \"in\")" y CMake abortaba antes
+# de compilar una sola linea.  El fallo no dice nada de saltos de linea, y el
+# fichero es de un submodulo vendorizado que nadie mira.
+#
+# Se marcan por extension y tambien por nombre: los `config.guess`/`config.sub`
+# de autotools no llevan extension.
+*.sh          text eol=lf
+*.bash        text eol=lf
+config.guess  text eol=lf
+config.sub    text eol=lf
+configure     text eol=lf
+
+# El codigo Vesta, por lo mismo.  El estandar de formato del lenguaje -- lo que
+# `vesta fmt` PRODUCE, ver doc/VMdoc/Vesta/EstiloYFormato.md -- lleva saltos de
+# Unix, asi que un `.vx` que llegue con los de Windows NO esta formateado y
+# `vesta fmt check` lo dice.  Y lo dice con razon: el formateador es la
+# especificacion, no una opinion.
+#
+# Sin esta linea el fallo llega solo y es de los peores: `core.autocrlf=true`
+# convierte al sacar del historial, asi que cualquiera que CLONE en Windows se
+# encuentra el corpus ENTERO marcado como sin formatear -- y la suite en rojo
+# -- sin que ningun fichero tenga nada mal.  Aqui se veia en cuentagotas, solo
+# en los pocos que alguien habia vuelto a sacar del historial.
+*.vx          text eol=lf
