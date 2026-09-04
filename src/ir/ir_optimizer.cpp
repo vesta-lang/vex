@@ -6736,56 +6736,92 @@ static bool ir_pass_elide_narrow_norm(IrFunction &fn,
      * uso (comparar, ensanchar, guardar, llamar) SI mira el registro entero y
      * obliga a dejarla.
      *
-     * Y hay que exigir que la del consumidor SOBREVIVA.  La regla de arriba
-     * quita la suya cuando demuestra que no puede salirse, y esa prueba da por
-     * hecho que los operandos valen lo que su tipo dice: si le dejamos uno
-     * sucio, la premisa se rompe y no quedaria ninguna normalizacion en toda
-     * la cadena.  Por eso esta regla va DESPUES y mira lo que aquella decidio.
+     * Un PHI tampoco mira: reenvia.  Que su valor pueda ir sucio depende de
+     * quien lo consuma A EL, asi que la pregunta se propaga y hay que
+     * resolverla en punto fijo -- de ahi que no baste recorrer los usos una
+     * vez.  Es lo que separa `sum = sum + a` (donde el acumulador vuelve por
+     * el phi del bucle) de una cuenta suelta.
+     *
+     * Lo unico que NO tolera un operando sucio es una cuenta cuya
+     * normalizacion quito la regla de arriba: aquella demostro que no puede
+     * salirse DANDO POR HECHO que sus operandos valen lo que su tipo dice.
+     * Ensuciarle uno rompe su premisa, y entonces no quedaria ninguna
+     * normalizacion en toda la cadena.
      */
     {
-        /* Que normalizacion le corresponde a cada cuenta, y cuantas veces se
-         * usa cada valor y en que. */
+        /* Que normalizacion le corresponde a cada cuenta. */
         std::unordered_map<IrValueId, IrValueId> norm_of; // cuenta -> su trunc
         for (const auto &bb : fn.blocks)
             for (const auto &in : bb.instrs)
                 if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
-                    in.dst != IR_NO_VALUE && in.operands[0] < fn.values.size() &&
+                    in.dst != IR_NO_VALUE &&
+                    in.operands[0] < fn.values.size() &&
                     fn.values[in.operands[0]].type == in.type)
                     norm_of[in.operands[0]] = in.dst;
 
-        /* Un valor es "solo consumido por cuentas del mismo tipo cuya
-         * normalizacion se queda".  Se empieza suponiendo que si y se
-         * desmiente con el primer uso que no lo sea. */
-        std::unordered_map<IrValueId, bool> chain_ok;
-        auto note = [&](IrValueId v, bool good) {
-            auto it = chain_ok.find(v);
-            if (it == chain_ok.end())
-                chain_ok[v] = good;
-            else
-                it->second = it->second && good;
-        };
-        for (const auto &bb : fn.blocks) {
-            for (const auto &in : bb.instrs) {
-                const bool arith = (in.op == IrOp::ADD || in.op == IrOp::SUB ||
-                                    in.op == IrOp::MUL) &&
-                                   in.dst != IR_NO_VALUE &&
-                                   in.dst < fn.values.size();
-                for (IrValueId o : in.operands) {
-                    bool good = false;
-                    if (o >= fn.values.size()) continue; // ni se apunta
-                    if (arith && fn.values[in.dst].type == fn.values[o].type) {
-                        auto n = norm_of.find(in.dst);
-                        // Su normalizacion tiene que existir Y quedarse.
-                        good = n != norm_of.end() && replace.count(n->second) == 0;
+        /* `dirty` = valores a los que se les permite llevar bits de mas.  Se
+         * empieza suponiendo que TODOS pueden y se van quitando los que tengan
+         * un uso que no lo tolere, hasta que deje de cambiar.  Al MAYOR punto
+         * fijo, no al menor: lo que se busca es el conjunto mas grande que sea
+         * consistente consigo mismo. */
+        std::unordered_set<IrValueId> dirty;
+        for (IrValueId v = 0; v < fn.values.size(); ++v) {
+            int64_t a = 0, b = 0;
+            if (type_bounds(fn.values[v].type, a, b)) dirty.insert(v);
+        }
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (const auto &bb : fn.blocks) {
+                for (const auto &in : bb.instrs) {
+                    const bool has_dst =
+                        in.dst != IR_NO_VALUE && in.dst < fn.values.size();
+                    /* La propia NORMALIZACION no cuenta como quien mira: es
+                     * justo la que se esta decidiendo quitar, y ella limpia lo
+                     * que le entra.  Sin esta salvedad cada cuenta se
+                     * descartaba a si misma y no se quitaba ninguna. */
+                    if (has_dst && in.op == IrOp::TRUNC &&
+                        in.operands.size() == 1 &&
+                        in.operands[0] < fn.values.size() &&
+                        fn.values[in.operands[0]].type == in.type)
+                        continue;
+                    /* Una cuenta estrecha del mismo tipo tolera dirt en sus
+                     * operandos si tiene normalizacion propia -- que lo
+                     * arreglara -- y esa normalizacion no la quito la regla
+                     * del rango. */
+                    const bool arith_ok =
+                        has_dst &&
+                        (in.op == IrOp::ADD || in.op == IrOp::SUB ||
+                         in.op == IrOp::MUL) &&
+                        norm_of.count(in.dst) != 0 &&
+                        replace.count(norm_of[in.dst]) == 0;
+                    /* Un phi tolera si el que sale de el tambien puede ir
+                     * sucio.  Aqui es donde el punto fijo hace su trabajo. */
+                    const bool phi_ok = has_dst && in.op == IrOp::PHI &&
+                                        dirty.count(in.dst) != 0;
+                    auto drop = [&](IrValueId v, bool tolerated) {
+                        if (tolerated || v >= fn.values.size()) return;
+                        if (dirty.erase(v) != 0) changed = true;
+                    };
+                    for (IrValueId o : in.operands) {
+                        const bool same =
+                            has_dst && o < fn.values.size() &&
+                            fn.values[in.dst].type == fn.values[o].type;
+                        drop(o, same && arith_ok);
                     }
-                    note(o, good);
+                    for (const auto &pa : in.phi_args) {
+                        const bool same =
+                            has_dst && pa.value < fn.values.size() &&
+                            fn.values[in.dst].type == fn.values[pa.value].type;
+                        drop(pa.value, same && phi_ok);
+                    }
+                    if (in.func_ptr != IR_NO_VALUE) drop(in.func_ptr, false);
                 }
-                // Un phi, una llamada o cualquier otra cosa MIRA el valor.
-                for (const auto &pa : in.phi_args)
-                    note(pa.value, false);
-                if (in.func_ptr != IR_NO_VALUE) note(in.func_ptr, false);
             }
         }
+        /* Se mira el RESULTADO de la normalizacion, no su origen: quitarla es
+         * dejar que quien la usaba reciba el valor sin limpiar, asi que la
+         * pregunta es si SUS consumidores lo toleran. */
         for (const auto &bb : fn.blocks) {
             for (const auto &ins : bb.instrs) {
                 if (ins.op != IrOp::TRUNC || ins.operands.size() != 1) continue;
@@ -6794,19 +6830,25 @@ static bool ir_pass_elide_narrow_norm(IrFunction &fn,
                 const IrValueId src = ins.operands[0];
                 if (src >= fn.values.size()) continue;
                 if (fn.values[src].type != ins.type) continue;
-                int64_t tlo = 0, thi = 0;
-                if (!type_bounds(ins.type, tlo, thi)) continue;
-                auto it = chain_ok.find(ins.dst);
-                if (it != chain_ok.end() && it->second) replace[ins.dst] = src;
+                if (dirty.count(ins.dst) != 0) replace[ins.dst] = src;
             }
         }
     }
 
     if (replace.empty()) return false;
 
+    /* Se sigue la CADENA, no un solo salto.  Una normalizacion puede caer
+     * sobre otra -- el inlinado deja `trunc(trunc(x))` cuando el retorno del
+     * llamado ya venia normalizado --, y quitando las dos con un remapeo de un
+     * nivel el primer sustituto tambien desaparecia: quedaba un `phi`
+     * apuntando a un valor que ya no existe, y el programa daba basura. */
     auto remap = [&](IrValueId v) {
-        auto it = replace.find(v);
-        return it != replace.end() ? it->second : v;
+        for (int hops = 0; hops < 64; ++hops) {
+            auto it = replace.find(v);
+            if (it == replace.end()) break;
+            v = it->second;
+        }
+        return v;
     };
     for (auto &bb : fn.blocks)
         for (auto &ins : bb.instrs) {
@@ -14217,10 +14259,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             if (fn.is_native || fn.blocks.empty()) continue;
             const analysis::IrFacts fx = analysis::build_ir_facts(fn);
             const analysis::RangeFacts rx = analysis::compute_ranges(fn, fx);
-            if (ir_pass_elide_narrow_norm(fn, rx)) {
-                util::CronoTramo crono__("  dce:limpieza-orquestada");
-                ir_pass_dce(fn);
-            }
+            /* Sin barrer detras.  Un `ir_pass_dce` aqui deja el intermedio
+             * ROTO: quitar la normalizacion puede dejar a una cuenta con su
+             * unico uso dentro de un `phi`, y en ese estado el barrido se la
+             * lleva y el phi apunta a un valor que ya no existe.  Lo que
+             * quede muerto lo limpian los pases de despues, que corren de
+             * todas formas. */
+            ir_pass_elide_narrow_norm(fn, rx);
         }
     }
 
