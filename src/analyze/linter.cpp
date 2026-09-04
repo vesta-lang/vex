@@ -607,6 +607,89 @@ void family_native_gap(const LintInput &in, vx::Diagnostics &diags) {
     }
 }
 
+/**
+ * @brief Los bytes de una vista `@overlay` que no describe ningun campo.
+ *
+ * Un hueco NO es un fallo: `261_overlay_basics` declara `e_magic @0x00` y
+ * `e_lfanew @0x3C` y se salta los 58 bytes de en medio A PROPOSITO -- describir
+ * la cabecera entera no hace falta para leer los dos campos que importan --.
+ * Por eso no es un aviso del compilador sino una familia del linter, que se
+ * pide cuando uno quiere saberlo: al escribir una vista de una cabecera de
+ * tamano fijo que SI se quiere cubrir del todo, o al revisar una que crecio a
+ * trozos.
+ *
+ * No cuenta nada por su cuenta: el tramo de cada campo lo resolvio el frontend
+ * -- que es el unico con la expresion del offset delante -- y lo publica el
+ * dominio `asa.overlays`.  Aqui solo se restan del extent los tramos cubiertos.
+ *
+ * Solo entran los tramos del marco CONSTANTE (`overlay.covers`).  Uno que
+ * cuelga de un simbolo cae donde digan los datos, asi que no tapa un hueco
+ * concreto: contarlo como cobertura convertiria el hallazgo en una suposicion,
+ * que es lo contrario de para lo que existe.
+ */
+void family_overlay_gaps(const LintInput &in, vx::Diagnostics &diags) {
+    /* QUE vistas hay se pregunta, no se recorre el modulo.  Escrito al reves
+     * -- iterando `in.mod.overlays` y consultando los hechos por cada una -- la
+     * familia se quedaba MUDA en cuanto el modulo que el linter recibe no
+     * llevara las vistas dentro, aunque los hechos estuvieran todos ahi: el
+     * volcado del ASA los listaba y la familia no decia nada.  Una familia que
+     * no encuentra nada no falla, y eso es indistinguible de "aqui no hay nada
+     * que decir", que es la forma en que esto se queda roto en silencio. */
+    for (const analysis::asa::Fact *huella :
+         in.facts.find_all("overlay.extent", nullptr, in.here)) {
+        const std::string vista =
+            huella->about.function ? huella->about.function : "";
+        if (vista.empty()) continue;
+        /* Como el usuario la escribio.  El nombre viaja aplanado con el
+         * namespace delante (`ejemplos__formato__Thunk`), y eso no lo escribio
+         * nadie: `readable` no sirve porque solo deshace el PRIMER `__` -- vale
+         * para `Tipo__metodo`, no para una ruta de namespace de tres tramos. */
+        std::string nombre = vista;
+        for (size_t k = nombre.find("__"); k != std::string::npos;
+             k = nombre.find("__", k + 1))
+            nombre.replace(k, 2, ".");
+        const int64_t extent = huella->what.a;
+        if (extent <= 0) continue;
+        /* La posicion sale del hecho: una vista no es una funcion y no se puede
+         * localizar recorriendo el codigo. */
+        vx::SourceLoc loc;
+        loc.file = in.file;
+        loc.line = huella->seal.origin.site;
+        if (!cabe_en_el_fichero(in, loc.line)) continue;
+
+        /* Los bytes cubiertos, marcados uno a uno.  La huella de una vista son
+         * decenas o pocos cientos de bytes -- una cabecera --, asi que un mapa
+         * de bits plano es mas simple y mas rapido que ordenar tramos, y no hay
+         * que tratar el solape como un caso aparte. */
+        std::vector<bool> cubierto(static_cast<size_t>(extent), false);
+        for (const analysis::asa::Fact *f :
+             in.facts.find_all("overlay.covers", vista.c_str(), in.here)) {
+            for (int64_t b = f->what.a; b < f->what.b && b < extent; ++b)
+                if (b >= 0) cubierto[static_cast<size_t>(b)] = true;
+        }
+
+        /* Un hallazgo por TRAMO seguido y no por byte: lo que el usuario mira
+         * es "de aqui a aqui no hay nada", y 58 avisos de un byte serian
+         * exactamente el ruido que hace que se apague la familia. */
+        size_t i = 0;
+        while (i < cubierto.size()) {
+            if (cubierto[i]) {
+                ++i;
+                continue;
+            }
+            const size_t ini = i;
+            while (i < cubierto.size() && !cubierto[i]) ++i;
+            char desde[24], hasta[24];
+            std::snprintf(desde, sizeof(desde), "0x%02llX",
+                          static_cast<unsigned long long>(ini));
+            std::snprintf(hasta, sizeof(hasta), "0x%02llX",
+                          static_cast<unsigned long long>(i - 1));
+            diags.diag(loc, vx::DiagLevel::NOTE, "VXW926",
+                       {nombre, std::to_string(i - ini), desde, hasta});
+        }
+    }
+}
+
 /* Lo que consulta cada familia.  Listas nombradas y no literales sueltos para
  * que se lean al lado de su familia y no haya que buscarlas. */
 const char *const kNeedsFingerprint[] = {"asa.fingerprint", nullptr};
@@ -626,6 +709,10 @@ const char *const kNeedsMemoryAccess[] = {"asa.memory_access", nullptr};
  * los efectos de memoria al armar su hecho. */
 const char *const kNeedsBulkMemory[] = {"asa.bulk_memory", nullptr};
 const char *const kNeedsBackend[] = {"asa.backend", nullptr};
+/* `overlays.gaps` consulta el dominio de las vistas.  Uno solo: el tramo de
+ * cada campo ya viene resuelto del frontend, asi que ese productor no depende
+ * de ningun otro. */
+const char *const kNeedsOverlays[] = {"asa.overlays", nullptr};
 
 void register_builtin_families() {
     /* El NOMBRE es vocabulario estable: es lo que se escribe en `vx.toml` para
@@ -660,6 +747,12 @@ void register_builtin_families() {
      * ninguna al pasar el linter. */
     register_lint_family("modes.native_gap", "VXW924", &family_native_gap,
                          kNeedsBackend);
+    /* Y los bytes que una vista `@overlay` no describe.  No es un aviso del
+     * compilador porque el hueco es legitimo -- describir solo los dos campos
+     * que importan es el uso normal de la feature --, pero es justo lo que uno
+     * quiere preguntar al cubrir una cabecera entera. */
+    register_lint_family("overlays.gaps", "VXW926", &family_overlay_gaps,
+                         kNeedsOverlays, /*on_demand=*/true);
 }
 
 /* NO hay familia "contrato que nadie comprueba", y no es un olvido: eso lo dice
@@ -683,11 +776,12 @@ void register_builtin_families() {
 
 void register_lint_family(const char *name, const char *doc,
                           void (*run)(const LintInput &, vx::Diagnostics &),
-                          const char *const *needs) {
+                          const char *const *needs, bool on_demand) {
     if (name == nullptr || run == nullptr) return;
     for (const LintFamily &f : registry())
         if (std::strcmp(f.name, name) == 0) return; // ya esta
-    registry().push_back({name, doc != nullptr ? doc : "", run, needs});
+    registry().push_back(
+        {name, doc != nullptr ? doc : "", run, needs, on_demand});
 }
 
 std::vector<const char *>
@@ -729,9 +823,14 @@ uint32_t run_lint(const LintInput &in, vx::Diagnostics &diags,
      * que quiere quien pasa el linter entero --; con nombres, solo esas, que es
      * lo que permite apagar una desde `vx.toml` sin tocar codigo. */
     for (const LintFamily &f : registry()) {
-        if (!wanted.empty() && std::find(wanted.begin(), wanted.end(),
-                                         std::string(f.name)) == wanted.end())
-            continue;
+        const bool pedida =
+            !wanted.empty() && std::find(wanted.begin(), wanted.end(),
+                                         std::string(f.name)) != wanted.end();
+        if (!wanted.empty() && !pedida) continue;
+        /* Y la que solo habla cuando se le pregunta no entra en la pasada
+         * entera: lo que dice es legitimo, asi que decirlo siempre seria ruido
+         * en el caso comun. */
+        if (f.on_demand && !pedida) continue;
         f.run(in, diags);
     }
     return static_cast<uint32_t>(diags.all().size() - before);

@@ -48,6 +48,7 @@ using analysis::asa::Certainty;
 using analysis::asa::Fact;
 using analysis::asa::FactId;
 using analysis::asa::Production;
+using analysis::asa::Scope;
 using analysis::asa::Subject;
 
 const char *const kProductorAsm = "asa.asm";
@@ -340,7 +341,8 @@ void produce_asm(Production &p) {
             /* No es ignorancia: se sabe perfectamente que no tiene asm. */
             p.say_unknown({Subject::Kind::Function, p.store.intern(fn.name), 0},
                           analysis::asa::UnknownReason::NothingToSay,
-                          "asm.none", kProductorAsm, "no tiene asm");
+                          "asm.none", kProductorAsm, "no tiene asm",
+                          Scope::everywhere());
             continue;
         }
         Fact f;
@@ -371,7 +373,8 @@ void produce_asm(Production &p) {
                 analysis::asa::UnknownReason::NotAsked, "asm.lift_not_recorded",
                 kProductorAsm,
                 "su IR vino de cache: el elevado no corrio en este proceso "
-                "y no consta que hizo (purga la cache para verlo)");
+                "y no consta que hizo (purga la cache para verlo)",
+                Scope::everywhere());
 
         /* 4. LAS ATADURAS: por que registro entra y sale cada valor.
          *
@@ -395,7 +398,8 @@ void produce_asm(Production &p) {
                 p.say_unknown({Subject::Kind::Function, f.about.function, 0},
                               analysis::asa::UnknownReason::ShapeNotRecognized,
                               "asm.binding_value_unresolved", kProductorAsm,
-                              p.store.intern(l.marcador));
+                              p.store.intern(l.marcador),
+                              Scope::everywhere());
                 continue;
             }
             Fact b;

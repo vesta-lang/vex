@@ -109,6 +109,20 @@ struct LintFamily {
      * ni un dominio mas: apagar una familia deja de pagar lo suyo.
      */
     const char *const *needs = nullptr;
+    /**
+     * @brief Solo corre si se PIDE por su nombre.
+     *
+     * Para una familia cuyo hallazgo describe algo LEGITIMO.  El hueco de una
+     * vista `@overlay` es el caso: describir solo los campos que lees es el uso
+     * normal de la feature, asi que decirlo en cada pasada seria ruido justo en
+     * el caso comun -- y un linter ruidoso se apaga entero, con lo que se
+     * pierden tambien los hallazgos que si importaban.
+     *
+     * No es lo mismo que apagarla en `vx.toml`: eso lo decide el proyecto y
+     * esto lo decide la familia, porque es una propiedad de lo que dice.  Sigue
+     * saliendo en `--help`, para que se sepa que se puede preguntar.
+     */
+    bool on_demand = false;
 };
 
 /// Da de alta una familia.  Idempotente por nombre.
@@ -119,7 +133,8 @@ struct LintFamily {
 /// @param needs Dominios del ASA que consulta, terminado en nullptr.
 void register_lint_family(const char *name, const char *doc,
                           void (*run)(const LintInput &, vx::Diagnostics &),
-                          const char *const *needs = nullptr);
+                          const char *const *needs = nullptr,
+                          bool on_demand = false);
 
 /**
  * @brief Los dominios del ASA que hacen falta para @p wanted.

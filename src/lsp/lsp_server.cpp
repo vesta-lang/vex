@@ -42,6 +42,8 @@
 #include <utility>
 #include <vector>
 
+#include "analyze/linter.h"
+#include "ir/ssa_ir_serialize.h"
 #include "lsp/param_hints.h"
 #include "lsp/semantic_tokens.h"
 #include "lsp/symbol_index.h"
@@ -388,9 +390,43 @@ void LspServer::publish_diagnostics(const std::string &uri) {
     const auto an_ref = engine_.analyze_document(uri, text);
     const DocAnalysis &an = *an_ref;
 
+    /* Los hallazgos del LINTER, junto a los del compilador.
+     *
+     * El editor ya comparte el FORMATEADOR con la terminal -- `vesta fmt` y
+     * "dar formato al documento" son la misma funcion --, y no habia razon
+     * para que el linter fuera distinto: sin esto, `vesta lint` te decia cosas
+     * que el editor callaba, o sea que la misma pregunta tenia dos respuestas
+     * segun donde se hiciera.  Es lo que el propio linter dice de si mismo:
+     * una implementacion, tres caras (terminal, editor y MCP).
+     *
+     * No se recompila nada: el modulo y los hechos son los de la compilacion
+     * que se acaba de hacer para este documento.
+     *
+     * Si el intermedio no esta -- una compilacion que fallo antes de generarlo
+     * --, no hay nada que mirar y no se dice nada: un fallo de sintaxis ya
+     * tiene sus propios diagnosticos, y anadir "no pude lintar" encima seria
+     * ruido sobre un error que el usuario ya esta viendo. */
+    vx::Diagnostics lint_findings;
+    if (!an.result.ir_module_cache_bytes.empty()) {
+        ir::IrModule mod;
+        if (ir::parse_ir_module_cache(an.result.ir_module_cache_bytes, mod)) {
+            /* El MOMENTO tiene que ser el del modulo que se mira, igual que en
+             * la terminal: preguntar sin decirlo no significa "cualquiera",
+             * significa que no casa con ninguno de los sellados. */
+            analysis::asa::Scope here;
+            here.stage = analysis::asa::kStagePostOpt;
+            const analyze::LintInput in{mod, an.result.facts,
+                                        an.result.contracts, here, uri};
+            (void)analyze::run_lint(in, lint_findings);
+        }
+    }
+
     // Construir el array de diagnosticos LSP a partir de los del compilador.
     nlohmann::json diags = nlohmann::json::array();
-    for (const auto &d : an.result.diagnostics.all()) {
+    std::vector<vx::Diagnostic> todos = an.result.diagnostics.all();
+    for (const auto &d : lint_findings.all())
+        todos.push_back(d);
+    for (const auto &d : todos) {
         // El compilador da linea/columna 1-based en bytes; el LSP exige
         // 0-based + caracter en UTF-16.  Convertir cada extremo del span.
         const vx::SourceLoc &loc = d.loc;

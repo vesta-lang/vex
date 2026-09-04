@@ -25,6 +25,8 @@
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "lsp/analysis_engine.h"
 
+#include "analyze/linter.h"
+
 #include <exception>
 #include <fstream>
 #include <unordered_map>
@@ -319,6 +321,17 @@ AnalysisEngine::analyze_document(const std::string &uri,
         // su ubicacion, para que el hover y el inspector los muestren.  Coste
         // bajo (un vector pequeno) y solo en el analisis del LSP.
         opts.dump_comptime_values = true;
+        /* Y los hechos que el LINTER necesita, que se publican junto a los
+         * diagnosticos del compilador.
+         *
+         * Sin pedirlos, las familias corren sin nada que consultar y no dicen
+         * nada -- que es indistinguible de "aqui no hay nada que decir".  La
+         * lista la dan las propias familias, no una enumeracion escrita aqui:
+         * una escrita se queda vieja en cuanto entra una familia que consulte
+         * otro dominio, y se queda vieja EN SILENCIO. */
+        opts.asa_domains = analyze::lint_required_domains({});
+        opts.asa_stages = {analysis::asa::kStagePostOpt,
+                           analysis::asa::kStageDuringOpt};
         // Multi-modulo: si el buffer tiene `import "..."`, compilar el PROYECTO
         // (resuelve los imports del disco) usando el buffer como overlay del
         // root.  Sin esto el analisis single-file reporta "nombre no declarado"

@@ -51,6 +51,7 @@ namespace {
 using analysis::asa::Certainty;
 using analysis::asa::Fact;
 using analysis::asa::Production;
+using analysis::asa::Scope;
 using analysis::asa::Source;
 using analysis::asa::Subject;
 using analysis::asa::UnknownReason;
@@ -59,13 +60,6 @@ const char *const kProducerFingerprint = "asa.fingerprint";
 
 /// El sujeto es la FUNCION entera: la huella es una propiedad suya, no de un
 /// valor ni de un bloque.
-Subject function_subject(Production &p, const ir::IrFunction &fn) {
-    Subject s;
-    s.kind = Subject::Kind::Function;
-    s.function = p.store.intern(fn.name);
-    return s;
-}
-
 /// Arma un hecho con lo comun ya puesto.  Los cinco de este dominio comparten
 /// procedencia, regla y apoyo, y repetirlo cinco veces es la forma de que uno
 /// se quede distinto sin que nadie lo note.
@@ -119,7 +113,8 @@ void produce_fingerprint(Production &p) {
              * si es que no tiene efectos o que no se miro. */
             p.say_unknown(function_subject(p, fn), UnknownReason::NotAsked,
                           "fingerprint.not_computed", kProducerFingerprint,
-                          "no se calculo la huella de esta funcion");
+                          "no se calculo la huella de esta funcion",
+                          Scope::everywhere());
             continue;
         }
         const FunctionFingerprint &fp = *it->second;
@@ -144,7 +139,7 @@ void produce_fingerprint(Production &p) {
             p.say_unknown(
                 function_subject(p, fn), UnknownReason::OpaqueBoundary,
                 "fingerprint.effects_not_visible", kProducerFingerprint,
-                p.store.intern(fp.opaque_callee));
+                p.store.intern(fp.opaque_callee), Scope::everywhere());
             continue;
         }
 
@@ -192,7 +187,8 @@ void produce_fingerprint(Production &p) {
                 function_subject(p, fn), UnknownReason::RuntimeDependent,
                 "fingerprint.stack_unbounded", kProducerFingerprint,
                 fp.recursive ? "es recursiva: la pila depende de la ejecucion"
-                             : "la pila no se puede acotar");
+                             : "la pila no se puede acotar",
+                Scope::everywhere());
         }
     }
 }
