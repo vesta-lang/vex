@@ -1,0 +1,55 @@
+// Medidor de ciclos que se ANTEPONE al programa que se quiere medir.
+//
+// No se incluye ni se importa: `runtime_cycles.py` concatena este fichero
+// delante del ejemplo y compila el resultado.  Funciona porque `namespace` como
+// sentencia vale hasta el siguiente, asi que lo de aqui queda en `bench.ciclos`
+// y lo del ejemplo en el suyo, sin tocar ni una linea del ejemplo.
+//
+// Mide el trabajo de `main`, no el del proceso.  La diferencia no es un
+// matiz: en un hola mundo, arrancar el proceso cuesta unos 6,2 millones de
+// ciclos y lo que el programa hace son 450.  Midiendo desde fuera, un programa
+// que no hace NADA y uno vectorizado dan lo mismo -- el arranque los tapa a los
+// dos --, y ademas el reloj de pared da +-90% de dispersion.  Desde dentro, el
+// minimo de cuarenta corridas repite dentro del uno por ciento.
+//
+// Solo x86: `rdtsc` es de esa arquitectura.  En otra habria que leer su propio
+// contador (`cntvct_el0` en AArch64), y hasta entonces esto no se puede usar
+// alli -- mejor no medir que medir con un contador que no existe.
+
+namespace bench.ciclos;
+
+u64 t_inicio = 0_u64;
+
+// Fuera de la medida: si el propio medidor se instrumentara, cada lectura del
+// contador generaria otra lectura.
+@NoInstrument
+u64 ciclos() {
+	// Operandos en la lista: el bloque queda con SOLO asm y los registros los
+	// pide la instruccion, no el que escribe.  `rdtsc` deja la parte baja en
+	// eax y la alta en edx, asi que esos dos van fijos; se leen despues del
+	// bloque, que es lo que los marca como salida.
+	//
+	// Sin `volatile`: eso se pone para que el compilador NO mire el bloque ni
+	// lo optimice, y aqui no hay nada que esconderle -- es una lectura de un
+	// contador --.  Ponerlo seria renunciar a lo que este compilador hace con
+	// el asm, que es leerlo y quedarse con lo que dice.
+	asm (rax lo, rdx hi,) {
+		rdtsc
+	}
+	return (hi << 32) | lo;
+}
+
+// El selector acota a `main`: medir funcion por funcion cambiaria lo que se
+// mide -- cada gancho es una llamada -- y aqui interesa el programa entero.
+@Hook(enter, "main")
+void bench_entra(string fn_name) {
+	t_inicio = ciclos();
+}
+
+@Hook(exit, "main")
+void bench_sale(string fn_name) {
+	// La marca la busca el corredor; va por la salida normal porque el
+	// programa medido puede estar usando la de errores.
+	print("__CICLOS__ ");
+	println(ciclos() - t_inicio);
+}
