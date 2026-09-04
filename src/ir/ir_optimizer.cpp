@@ -36,6 +36,7 @@
 #include "ir/passes/bulk_memory_lower.h" // bucle que mueve memoria -> operacion de bloque
 #include "ir/passes/unroll.h" // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h" // canonicalizacion algebraica de SELECT
+#include "analysis/asa/fact_base.h" // la puerta UNICA a los hechos del ASA
 #include "analysis/facts/demanded_bits.h" // cuantos bits de un valor mira alguien
 #include "analysis/facts/alignment.h"  // de cuanto es multiplo un valor
 #include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
@@ -6073,16 +6074,37 @@ FactsTable &facts_scratch() {
  *   - y si alguna vez se CONTRADICEN, que seria un fallo de uno de ellos.
  * ---------------------------------------------------------------------- */
 namespace {
-std::atomic<long long> g_rc_valores{0};   ///< valores mirados
-std::atomic<long long> g_rc_solo_opt{0};  ///< solo el optimizador acota
-std::atomic<long long> g_rc_solo_asa{0};  ///< solo el ASA acota
-std::atomic<long long> g_rc_iguales{0};   ///< el mismo intervalo
-std::atomic<long long> g_rc_opt_mejor{0}; ///< el del optimizador, mas estrecho
-std::atomic<long long> g_rc_asa_mejor{0}; ///< el del ASA, mas estrecho
-std::atomic<long long> g_rc_cruzados{0};  ///< cada uno estrecha por un lado
-std::atomic<long long> g_rc_contra{0};    ///< NO se solapan: uno de los dos miente
+std::atomic<long long> g_rc_values{0};   ///< valores mirados
+std::atomic<long long> g_rc_opt_only{0};  ///< solo el optimizador acota
+std::atomic<long long> g_rc_asa_only{0};  ///< solo el ASA acota
+std::atomic<long long> g_rc_equal{0};   ///< el mismo intervalo
+std::atomic<long long> g_rc_opt_tighter{0}; ///< el del optimizador, mas estrecho
+std::atomic<long long> g_rc_asa_tighter{0}; ///< el del ASA, mas estrecho
+std::atomic<long long> g_rc_crossed{0};  ///< cada uno estrecha por un lado
+std::atomic<long long> g_rc_contradict{0};    ///< NO se solapan: uno de los dos miente
+/// El ASA lo acota, pero con otro ancho: NO se puede comparar, y sobre todo NO
+/// es un valor que se le escape.
+std::atomic<long long> g_rc_other_width{0};
 
-bool comparar_rangos_on() noexcept {
+/* QUE operacion produce los valores que solo acota el optimizador.
+ *
+ * Es la pregunta que decide el reparto: si el ASA no los acota puede ser
+ * porque le falte ANALISIS (no sabe tratar esa operacion) o porque le falte
+ * INFORMACION (no le llega el hecho que hace falta).  Sin saber de que
+ * operaciones se trata, unificar los dos analisis es adivinar cual absorbe a
+ * cual. */
+constexpr size_t kRcOps = 256;
+std::atomic<long long> g_rc_op_opt_only[kRcOps];
+/// Y de que TIPO son.  El ASA se niega a acotar lo que no es numerico -- un
+/// flotante, un opaco --, y ahi lo que el optimizador llama "rango" es el
+/// patron de BITS leido como entero, que no es una cantidad.
+constexpr size_t kRcTypes = 32;
+std::atomic<long long> g_rc_type_opt_only[kRcTypes];
+/// De los que solo acota el optimizador, cuantos salen de una funcion en la
+/// que el ASA se quedo sin presupuesto.  Separa "no supe" de "me pare".
+std::atomic<long long> g_rc_asa_stopped;
+
+bool compare_ranges_on() noexcept {
     static std::atomic<int8_t> cache{-1};
     int8_t v = cache.load(std::memory_order_relaxed);
     if (v < 0) {
@@ -6093,7 +6115,7 @@ bool comparar_rangos_on() noexcept {
 }
 } // namespace
 
-void rangos_comparados_informe();
+void ranges_compared_report();
 
 // Computa ValueFacts de cada valor SSA (forward, over-aproximacion sound).
 static void compute_value_facts_into(const IrFunction &fn, FactsTable &facts) {
@@ -7230,49 +7252,87 @@ bool ir_pass_valuefacts_consumers(IrFunction &fn) {
     // que mas reservaba de todo el compilador.
     FactsTable &facts = facts_scratch();
     compute_value_facts_into(fn, facts);
-    if (comparar_rangos_on()) {
+    if (compare_ranges_on()) {
         /* Los dos analisis, sobre la MISMA funcion y el mismo momento.  Se
          * calculan los del ASA aqui aunque nadie los pida: es el precio de
-         * poder compararlos, y por eso va tras bandera. */
-        const analysis::IrFacts hechos = analysis::build_ir_facts(fn);
-        const analysis::RangeFacts rangos = analysis::compute_ranges(fn, hechos);
+         * poder compararlos, y por eso va tras bandera.
+         *
+         * Y se piden POR LA BASE, no llamando a `compute_ranges` a pelo.  La
+         * base les pasa las cotas de induccion, que es conocimiento que el
+         * compilador YA tiene y que los rangos no sacan solos; sin ellas la
+         * variable de un bucle vale todo su tipo.  Medir contra la via corta
+         * comparaba con un ASA mas debil que el que el compilador usa de
+         * verdad, y eso no mide el ASA: mide el atajo. */
+        analysis::asa::FactBase asa_base;
+        const analysis::IrFacts &ir_facts = asa_base.structure(fn);
+        const analysis::RangeFacts &asa_ranges = asa_base.ranges(fn);
         for (IrValueId v = 0; v < static_cast<IrValueId>(fn.values.size());
              ++v) {
-            g_rc_valores.fetch_add(1, std::memory_order_relaxed);
+            g_rc_values.fetch_add(1, std::memory_order_relaxed);
             const ValueFacts f = facts.get(v);
-            const bool opt_acota = facts.have(v) && f.has_range();
-            /* Solo se comparan los de 64 bits CON SIGNO.
+            const bool opt_bounds = facts.have(v) && f.has_range();
+            /* Solo se COMPARAN los de 64 bits con signo.
              *
              * El ASA lee sus extremos SEGUN EL TIPO y el optimizador los tiene
-             * como `int64` a secas, asi que para un `u64` el mismo intervalo
-             * sale con extremos distintos y pareceria una contradiccion que no
-             * existe.  Comparar peras con peras es parte de la medicion: un
-             * numero que sale de mezclar dos convenios no dice nada. */
-            const bool asa_acota =
-                v < rangos.r.size() && rangos.r[v].acotada() &&
-                !rangos.r[v].es_todo() && rangos.r[v].t.bits == 64 &&
-                !rangos.r[v].t.sin_signo;
-            if (!opt_acota && !asa_acota) continue;
-            if (opt_acota && !asa_acota) {
-                g_rc_solo_opt.fetch_add(1, std::memory_order_relaxed);
+             * como `int64` a secas, asi que para un `u32` el mismo intervalo
+             * sale con extremos distintos.  Comparar peras con peras es parte
+             * de la medicion: un numero que sale de mezclar dos convenios no
+             * dice nada.
+             *
+             * Pero un valor que el ASA SI acota con otro ancho NO es un valor
+             * que al ASA se le escape, y contarlo como tal fue el primer error
+             * de esta medicion -- daba 36 contradicciones que no existian, y
+             * hacia parecer que al ASA se le escapaban miles de constantes. */
+            const bool asa_has_it = v < asa_ranges.r.size() &&
+                                    asa_ranges.r[v].acotada() &&
+                                    !asa_ranges.r[v].es_todo();
+            const bool comparable = asa_has_it &&
+                                    asa_ranges.r[v].t.bits == 64 &&
+                                    !asa_ranges.r[v].t.sin_signo;
+            if (asa_has_it && !comparable) {
+                g_rc_other_width.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
-            if (!opt_acota && asa_acota) {
-                g_rc_solo_asa.fetch_add(1, std::memory_order_relaxed);
+            const bool asa_bounds = comparable;
+            if (!opt_bounds && !asa_bounds) continue;
+            if (opt_bounds && !asa_bounds) {
+                g_rc_opt_only.fetch_add(1, std::memory_order_relaxed);
+                // Y de QUE operacion sale, que es lo que dice si al ASA le
+                // falta analisis o le falta informacion.
+                if (const IrInstr *d = ir_facts.def(v)) {
+                    const size_t o = static_cast<size_t>(d->op);
+                    if (o < kRcOps)
+                        g_rc_op_opt_only[o].fetch_add(
+                            1, std::memory_order_relaxed);
+                }
+                const size_t ti = static_cast<size_t>(fn.values[v].type);
+                if (ti < kRcTypes)
+                    g_rc_type_opt_only[ti].fetch_add(1,
+                                                     std::memory_order_relaxed);
+                /* Y si el ASA se PARO en esta funcion, que es una razon
+                 * distinta de que no supiera: la primera se arregla subiendo
+                 * el limite y no dice nada del programa. */
+                if (!asa_ranges.convergio)
+                    g_rc_asa_stopped.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
-            const int64_t alo = rangos.r[v].lo(), ahi = rangos.r[v].hi();
+            if (!opt_bounds && asa_bounds) {
+                g_rc_asa_only.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            const int64_t alo = asa_ranges.r[v].lo(),
+                          ahi = asa_ranges.r[v].hi();
             if (alo == f.lo && ahi == f.hi) {
-                g_rc_iguales.fetch_add(1, std::memory_order_relaxed);
+                g_rc_equal.fetch_add(1, std::memory_order_relaxed);
             } else if (ahi < f.lo || f.hi < alo) {
                 // No se solapan: los dos no pueden tener razon.
-                g_rc_contra.fetch_add(1, std::memory_order_relaxed);
+                g_rc_contradict.fetch_add(1, std::memory_order_relaxed);
             } else if (f.lo >= alo && f.hi <= ahi) {
-                g_rc_opt_mejor.fetch_add(1, std::memory_order_relaxed);
+                g_rc_opt_tighter.fetch_add(1, std::memory_order_relaxed);
             } else if (alo >= f.lo && ahi <= f.hi) {
-                g_rc_asa_mejor.fetch_add(1, std::memory_order_relaxed);
+                g_rc_asa_tighter.fetch_add(1, std::memory_order_relaxed);
             } else {
-                g_rc_cruzados.fetch_add(1, std::memory_order_relaxed);
+                g_rc_crossed.fetch_add(1, std::memory_order_relaxed);
             }
         }
     }
@@ -8921,7 +8981,10 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
         bool hechos_asm_listos = false;
         analysis::AsmBindingFacts lig_asm_fn;
         analysis::IrFacts hechos_fn;
-        analysis::RangeFacts rangos_fn;
+        /* Compartido y no por valor: copiar un `RangeFacts` copia el estado de
+         * entrada de CADA bloque, y aqui se pide una vez por funcion con asm.
+         * Es la misma copia que costo 16 s de una compilacion de 26. */
+        std::shared_ptr<const analysis::RangeFacts> rangos_fn;
         /* Las clases de operando en la forma que pide el analizador de bloques.
          * Salen enteras de las ligaduras, que no cambian durante el pase, y
          * armarlas cuesta una copia de DOS cadenas por ligadura: hacerlo por
@@ -8946,10 +9009,10 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                 PassTimer crono__("  dse:hechos(calculados aqui)");
                 lig_asm_fn = analysis::compute_asm_bindings(fn);
                 hechos_fn = analysis::build_ir_facts(fn);
-                rangos_fn = analysis::compute_ranges(fn, hechos_fn);
+                rangos_fn = analysis::compute_ranges_ptr(fn, hechos_fn);
                 lig_usar = &lig_asm_fn;
                 hechos_usar = &hechos_fn;
-                rangos_usar = &rangos_fn;
+                rangos_usar = rangos_fn.get();
             }
             clases_asm_fn.reserve(lig_usar->ligaduras.size());
             for (const analysis::LigaduraAsm &l : lig_usar->ligaduras)
@@ -14191,23 +14254,71 @@ long long &fixpoint_truncations() {
     return n;
 }
 
-void rangos_comparados_informe() {
-    if (!comparar_rangos_on()) return;
-    const long long n = g_rc_valores.load(std::memory_order_relaxed);
+void ranges_compared_report() {
+    if (!compare_ranges_on()) return;
+    const long long n = g_rc_values.load(std::memory_order_relaxed);
     if (n == 0) return;
-    const long long solo_opt = g_rc_solo_opt.load(std::memory_order_relaxed);
-    const long long solo_asa = g_rc_solo_asa.load(std::memory_order_relaxed);
-    const long long iguales = g_rc_iguales.load(std::memory_order_relaxed);
-    const long long opt_mejor = g_rc_opt_mejor.load(std::memory_order_relaxed);
-    const long long asa_mejor = g_rc_asa_mejor.load(std::memory_order_relaxed);
-    const long long cruzados = g_rc_cruzados.load(std::memory_order_relaxed);
-    const long long contra = g_rc_contra.load(std::memory_order_relaxed);
+    const long long solo_opt = g_rc_opt_only.load(std::memory_order_relaxed);
+    const long long solo_asa = g_rc_asa_only.load(std::memory_order_relaxed);
+    const long long iguales = g_rc_equal.load(std::memory_order_relaxed);
+    const long long opt_mejor = g_rc_opt_tighter.load(std::memory_order_relaxed);
+    const long long asa_mejor = g_rc_asa_tighter.load(std::memory_order_relaxed);
+    const long long cruzados = g_rc_crossed.load(std::memory_order_relaxed);
+    const long long contra = g_rc_contradict.load(std::memory_order_relaxed);
     std::fprintf(stderr,
                  "[rangos] %lld valores | solo-opt %lld | solo-ASA %lld | "
                  "iguales %lld | opt-mas-estrecho %lld | ASA-mas-estrecho %lld "
-                 "| cruzados %lld | CONTRADICEN %lld\n",
+                 "| cruzados %lld | CONTRADICEN %lld | otro-ancho %lld "
+                 "| de-ellos-ASA-se-paro %lld\n",
                  n, solo_opt, solo_asa, iguales, opt_mejor, asa_mejor, cruzados,
-                 contra);
+                 contra, g_rc_other_width.load(std::memory_order_relaxed),
+                 g_rc_asa_stopped.load(std::memory_order_relaxed));
+
+    /* Y de que operaciones salen los que SOLO acota el optimizador.  Ordenado,
+     * porque lo que hace falta saber es por donde empezar a ampliar el ASA, no
+     * la lista entera. */
+    std::vector<std::pair<long long, size_t>> ops;
+    for (size_t o = 0; o < kRcOps; ++o) {
+        const long long c = g_rc_op_opt_only[o].load(std::memory_order_relaxed);
+        if (c > 0) ops.push_back({c, o});
+    }
+    std::sort(ops.begin(), ops.end(),
+              [](const std::pair<long long, size_t> &a,
+                 const std::pair<long long, size_t> &b) {
+                  return a.first > b.first;
+              });
+    if (!ops.empty()) {
+        std::fprintf(stderr, "[rangos] solo-opt, por operacion:");
+        for (size_t i = 0; i < ops.size() && i < 12; ++i)
+            std::fprintf(stderr, " %s=%lld",
+                         ir_op_name(static_cast<IrOp>(ops[i].second)),
+                         ops[i].first);
+        std::fprintf(stderr, "\n");
+    }
+
+    /* Y de que TIPO son.  Separa dos cosas que no son la misma: un entero que
+     * el ASA no supo acotar es un HUECO del analisis, y un flotante o un opaco
+     * no lo es -- ahi el "rango" del optimizador es el patron de bits leido
+     * como entero, que no es una cantidad y no significa nada. */
+    std::vector<std::pair<long long, size_t>> tipos;
+    for (size_t t = 0; t < kRcTypes; ++t) {
+        const long long c =
+            g_rc_type_opt_only[t].load(std::memory_order_relaxed);
+        if (c > 0) tipos.push_back({c, t});
+    }
+    std::sort(tipos.begin(), tipos.end(),
+              [](const std::pair<long long, size_t> &a,
+                 const std::pair<long long, size_t> &b) {
+                  return a.first > b.first;
+              });
+    if (!tipos.empty()) {
+        std::fprintf(stderr, "[rangos] solo-opt, por tipo:");
+        for (const auto &kv : tipos)
+            std::fprintf(stderr, " %s=%lld",
+                         ir_type_name(static_cast<IrType>(kv.second)),
+                         kv.first);
+        std::fprintf(stderr, "\n");
+    }
 }
 
 std::vector<TiempoPase> tiempos_de_pases() {
@@ -14922,7 +15033,12 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         for (auto &fn : mod.functions) {
             if (fn.is_native || fn.blocks.empty()) continue;
             const analysis::IrFacts fx = analysis::build_ir_facts(fn);
-            const analysis::RangeFacts rx = analysis::compute_ranges(fn, fx);
+            /* Por PUNTERO: `RangeFacts` lleva dentro el estado de entrada de
+             * cada bloque, asi que pedirlo por valor copia todo eso -- tambien
+             * cuando la cache acierta y no habia nada que calcular.  Esa misma
+             * copia costo 16 s de una compilacion de 26 en el camino del asm. */
+            const std::shared_ptr<const analysis::RangeFacts> rx =
+                analysis::compute_ranges_ptr(fn, fx);
             /* Y cuantos bits de cada valor mira alguien, que es la otra mitad
              * de la pregunta y la contesta su propio dominio. */
             const analysis::DemandedBits dbx =
@@ -14933,7 +15049,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * lleva y el phi apunta a un valor que ya no existe.  Lo que
              * quede muerto lo limpian los pases de despues, que corren de
              * todas formas. */
-            ir_pass_elide_narrow_norm(fn, rx, dbx);
+            ir_pass_elide_narrow_norm(fn, *rx, dbx);
         }
     }
 
