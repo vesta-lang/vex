@@ -33,7 +33,7 @@ import sys
 RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 
 CABECERA = RAIZ / "include" / "runtime" / "instr_db_vm.h"
-FUENTE = RAIZ / "src" / "runtime" / "instr_db_vm_gen.cpp"
+FUENTE = RAIZ / "src" / "runtime" / "isa" / "instr_db_vm_gen.cpp"
 
 AVISO = """// GENERADO por tools/import/gen_instr_db_vm.py -- NO editar a mano.
 //
@@ -574,7 +574,7 @@ def resumen(micros, campo):
     return (min(vals), sum(vals) / len(vals), max(vals))
 
 
-DECLARACIONES = RAIZ / "src" / "runtime" / "instr_effects_decl.json"
+DECLARACIONES = RAIZ / "src" / "runtime" / "isa" / "instr_effects_decl.json"
 
 NARROW = {"special_reg": 1}
 

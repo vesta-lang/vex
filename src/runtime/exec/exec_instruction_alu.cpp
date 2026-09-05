@@ -34,6 +34,7 @@
  *  - @c exec_instr_syscall / @c exec_instr_int                             :
  * llamadas al sistema
  */
+#include "runtime/bundle/alu3_semantics.h"
 #include "runtime/exec_instruction.h"
 #include "runtime/exception_runtime.h"
 #include "runtime/profile.h" // Sprint D.6 (2026-06-03): PGO counters
@@ -1791,62 +1792,20 @@ void exec_instr_alu3(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t opc = instr.flags_info.opcode_index;
 
     auto &regs = vm->registers.regs;
-    const uint64_t a = regs[r_src1].qword();
-    const uint64_t b = regs[r_src2].qword();
-    uint64_t res = 0;
 
-    /* Cada caso produce el resultado y SOLO sus bits CF/OF; ZF y SF son iguales
-     * en las nueve variantes, asi que se calculan una vez al salir y todo se
-     * escribe de UNA vez.
+    /* El QUE calcula y QUE banderas deja vive en `alu3_semantics.h`, no aqui:
+     * lo comparte con las instrucciones SINTETICAS que el fusionador construye
+     * encadenando dos de estas.  Tenerlo escrito dos veces se separaria en
+     * cuanto alguien tocara una bandera, y entonces el mismo programa daria un
+     * resultado suelto y otro dentro de un paquete.
      *
-     * Antes cada rama hacia cuatro asignaciones a campos de bits del mismo
-     * byte, o sea cuatro lee-modifica-escribe encadenados.  Aparte del coste,
-     * eso hacia que el derivador de efectos viera `adds3` LEYENDO las
-     * banderas, cuando no las lee: la explicacion larga esta en
-     * `include/runtime/rflags.h`.  Importa mas aqui que en `adds` normal,
-     * porque estas son las que emite el IR cuando el asignador de registros no
-     * pudo coalescer -- o sea, camino caliente. */
+     * No cuesta nada: es `always_inline` y el `switch` es el mismo que habia. */
     uint8_t cf_of = 0;
-
-    switch (opc) {
-    case 0x73:
-    case 0x76: // adds3 / addu3
-        res = a + b;
-        if (opc == 0x73) {
-            if (((static_cast<int64_t>(a) ^ static_cast<int64_t>(res)) &
-                 (static_cast<int64_t>(b) ^ static_cast<int64_t>(res))) < 0)
-                cf_of = RF_OF; // con signo: desborda, y no toca CF
-        } else if (res < a) {
-            cf_of = RF_CF; // sin signo: acarreo, y no toca OF
-        }
-        break;
-    case 0x74:
-    case 0x77: // subs3 / subu3
-        res = a - b;
-        if (opc == 0x74) {
-            if (((static_cast<int64_t>(a) ^ static_cast<int64_t>(b)) &
-                 (static_cast<int64_t>(a) ^ static_cast<int64_t>(res))) < 0)
-                cf_of = RF_OF;
-        } else if (a < b) {
-            cf_of = RF_CF;
-        }
-        break;
-    case 0x75: // muls3
-        res = static_cast<uint64_t>(static_cast<int64_t>(a) *
-                                    static_cast<int64_t>(b));
-        break;
-    case 0x78: res = a * b; break; // mulu3
-    case 0x79: res = a & b; break; // and3
-    case 0x7A: res = a | b; break; // or3
-    case 0x7B: res = a ^ b; break; // xor3
-    default: return;               // opcode que no es de esta familia
-    }
-
+    const uint64_t res = alu3_apply(opc, regs[r_src1].qword(),
+                                    regs[r_src2].qword(), cf_of);
     regs[r_dst].qword(res);
-    uint8_t nf = cf_of;
-    if (res == 0) nf |= RF_ZF;
-    if (static_cast<int64_t>(res) < 0) nf |= RF_SF;
-    vm->registers.flags.arith = nf; // store PURO, sin leer el valor anterior
+    // ZF y SF son iguales en las nueve, asi que todo se escribe de UNA vez.
+    vm->registers.flags.arith = alu3_flags(res, cf_of);
 }
 
 // =========================================================================

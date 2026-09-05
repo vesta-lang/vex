@@ -74,6 +74,7 @@
 #include <vector>
 
 #include "runtime/bundle.h"
+#include "runtime/bundle/fuse_report.h"
 #include "runtime/instr_db_vm.h"
 #include "runtime/decode_instruction.h"
 
@@ -97,6 +98,26 @@ struct Touch {
     bool bar_control = false; ///< transfiere control: inmovible de verdad
     bool bar_unknown = false; ///< efectos de COTA INFERIOR: limitacion del modelo
 };
+
+/**
+ * @brief El opcode de una instruccion, en la tabla que le toque.
+ *
+ * NO es `opcode_index` a secas.  Una instruccion de la tabla PRIMARIA lleva su
+ * opcode en `is_not_extended` y deja `opcode_index` a cero; solo las de la
+ * extendida usan el segundo campo.  Mirar siempre `opcode_index` mete a TODAS
+ * las primarias -- `push`, `pop`, `jmp`, `enter`, `call`, `ret` -- en la ranura
+ * 0, que es un hueco: sale un nombre sin sentido y, peor, salen los efectos
+ * de OTRA cosa.
+ *
+ * El reordenador de verdad (`src/runtime/bundle_reorder.cpp`) siempre lo hizo
+ * bien; era este medidor el que no, y por eso decia que reordenar no aporta
+ * NADA.  Se pone en una funcion para que no haya cuatro sitios que lo decidan.
+ */
+inline uint8_t op_index(const runtime::DecodedInstr &d) {
+    return (d.flags_info.is_not_extended == 0x00)
+               ? static_cast<uint8_t>(d.flags_info.opcode_index)
+               : d.flags_info.is_not_extended;
+}
 
 /// Indice del modelo por (tabla, opcode), para no buscar en el vector por cada
 /// instruccion de cada paquete.
@@ -126,7 +147,7 @@ Touch touch_of(runtime::ProcessVM *proc, const Model &model,
                const runtime::DecodedInstr &d) {
     Touch t;
     const bool ext = (d.flags_info.is_not_extended == 0x00);
-    const tests::OpcodeRow *row = model.find(ext, d.flags_info.opcode_index);
+    const tests::OpcodeRow *row = model.find(ext, op_index(d));
     if (row == nullptr) return t; // desconocido: se queda de barrera
 
     // Cota inferior o transferencia de control: barrera, sin mas analisis.
@@ -220,15 +241,32 @@ struct PairStat {
     uint32_t seen = 0;   ///< sitios distintos donde aparece
     double reorder = 0;  ///< fusionables SOLO si se aparta lo de en medio
     double reorder_named = 0; ///< lo mismo, apuntado al par REAL (i, consumidor)
+    double hoy = 0;      ///< de las fusionables, cuantas sabe hacer YA el fusionador
 };
 std::map<std::string, PairStat> g_fusion;
+
+/// Por que renuncio el fusionador, contado.  Indexado por `FuseReject`.  Es lo
+/// que convierte un "0%" en una respuesta: dice si no hay material, si el
+/// patron esta mal escrito o si lo que falla es otra cosa.
+double g_reject[8] = {0};
 
 
 /// Nombre del opcode de una instruccion del paquete.
 const char *op_name(const Model &model, const runtime::DecodedInstr &d) {
     const bool ext = (d.flags_info.is_not_extended == 0x00);
-    const tests::OpcodeRow *r = model.find(ext, d.flags_info.opcode_index);
+    const tests::OpcodeRow *r = model.find(ext, op_index(d));
     return r ? r->nombre.c_str() : "?";
+}
+
+/* Etiqueta del opcode PARA EL INFORME: el nombre a secas es AMBIGUO -- `add`
+ * son cinco opcodes distintos (reg,reg / reg,imm / SIB...) y solo uno de ellos
+ * tiene variante de tres operandos.  Un informe que los junta dice que hay
+ * material donde no lo hay, que es justo el fallo que costo una implementacion
+ * entera del fusionador. */
+std::string op_label(const Model &model, const runtime::DecodedInstr &d) {
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "/%02X", (unsigned)op_index(d));
+    return std::string(op_name(model, d)) + buf;
 }
 /**
  * @brief Escribe la instruccion su destino SIN leerlo?
@@ -269,10 +307,26 @@ bool writes_dest_only(const std::vector<disasm::RegOperand> &regs,
 }
 
 /// La forma (registros y cual es el destino) de una instruccion del paquete.
+/**
+ * @brief Las BANDERAS como un recurso mas de la forma, en el bit 16.
+ *
+ * Los registros ocupan los bits 0..15.  Las banderas van detras porque un
+ * temporal muerto tambien puede ser una bandera, y mientras no estuvieron aqui
+ * el analisis era CIEGO justo a la familia de fusiones mas clasica:
+ * `cmp` + `setcc`, `cmp` + salto, ALU + salto.  El modelo ya sabia quien las
+ * escribe y quien las lee -- sale de la base generada, igual que todo lo demas
+ * --, pero ese dato solo se usaba para decidir si dos instrucciones se pueden
+ * INTERCAMBIAR, no para ver si una alimenta a la otra.
+ *
+ * Es el mismo tipo de agujero que el de los nombres de opcode: no daba un error,
+ * daba un cero -- y un cero se lee como "no hay nada que hacer".
+ */
+constexpr int kFlagShift = 16;
+
 struct Shape {
     std::vector<disasm::RegOperand> regs;
-    uint16_t write = 0;     ///< bit por registro escrito
-    uint16_t read = 0;      ///< bit por registro leido
+    uint32_t write = 0;     ///< bit por registro escrito, mas el bit 16
+    uint32_t read = 0;      ///< bit por registro leido, mas el bit 16
     bool dest_only = false; ///< el destino se pisa entero, no se acumula
 };
 
@@ -281,6 +335,33 @@ struct Shape {
 /// Usa el desensamblador a proposito, y aqui SI vale: esto es una herramienta
 /// de analisis offline, no el camino de la VM.  La formacion del paquete no
 /// puede llamarlo --construye cadenas con `snprintf`--, y por eso la forma que
+/**
+ * @brief Anade a la forma lo que la instruccion hace con las BANDERAS.
+ *
+ * Sale de la base generada, que es donde vive; el desensamblador solo ve lo que
+ * la instruccion NOMBRA, y las banderas no se nombran en ningun operando.
+ * Se llama desde `shape_of` para que los dos caminos que miden -- el de los
+ * paquetes y el de la traza -- vean lo mismo.  Ver `kFlagShift`.
+ */
+void add_flags_to_shape(Shape &s, const runtime::DecodedInstr &d) {
+    const bool ext = (d.flags_info.is_not_extended == 0x00);
+    const runtime::vm_isa::VmInstr *v = runtime::vm_isa::vm_instr(
+        ext, op_index(d));
+    if (v == nullptr) return; // ranura desconocida: no se afirma nada
+    if ((v->effects & runtime::vm_isa::VE_EXACT) == 0) {
+        /* Cota inferior: puede tocarlas y no consta.  Se marca que las escribe
+         * Y las lee, que es lo conservador -- asi ni parece que produzca un
+         * valor limpio ni que deje libres las de otro. */
+        s.write |= (1u << kFlagShift);
+        s.read |= (1u << kFlagShift);
+        return;
+    }
+    if (v->effects & runtime::vm_isa::VE_W_FLAGS)
+        s.write |= (1u << kFlagShift);
+    if (v->effects & runtime::vm_isa::VE_R_FLAGS)
+        s.read |= (1u << kFlagShift);
+}
+
 /// consume la VM va en la base de datos generada.
 Shape shape_of(runtime::ProcessVM *proc, const runtime::DecodedInstr &d,
                 const char *name) {
@@ -306,6 +387,7 @@ Shape shape_of(runtime::ProcessVM *proc, const runtime::DecodedInstr &d,
             s.read |= bit;
         }
     }
+    add_flags_to_shape(s, d);
     return s;
 }
 
@@ -316,7 +398,7 @@ Shape shape_of(runtime::ProcessVM *proc, const runtime::DecodedInstr &d,
  * sin resolverlo, se dice que NO: el valor puede seguir vivo fuera, y darlo por
  * muerto seria justo el fallo silencioso.
  */
-bool dead_after(const std::vector<Shape> &sh, uint32_t from, uint16_t reg) {
+bool dead_after(const std::vector<Shape> &sh, uint32_t from, uint32_t reg) {
     for (uint32_t j = from + 1; j < sh.size(); ++j) {
         if (sh[j].read & reg) return false;                  // lo usa
         if ((sh[j].write & reg) && sh[j].dest_only) return true; // lo pisa
@@ -330,7 +412,7 @@ bool dead_after(const std::vector<Shape> &sh, uint32_t from, uint16_t reg) {
 double exec_cycles(const runtime::DecodedInstr &d) {
     const bool ext = (d.flags_info.is_not_extended == 0x00);
     const runtime::vm_isa::VmInstr *v = runtime::vm_isa::vm_instr(
-        ext, static_cast<uint8_t>(d.flags_info.opcode_index));
+        ext, op_index(d));
     if (!runtime::vm_isa::vm_cost_measured(v, runtime::vm_isa::VH_X86))
         return 0.0;
     return v->cost[runtime::vm_isa::VH_X86].exec_cycles_avg;
@@ -347,8 +429,8 @@ void tally_pairs(runtime::ProcessVM *proc, const Model &model,
         sh[i] = shape_of(proc, b.instr[i], op_name(model, b.instr[i]));
 
     for (uint32_t i = 0; i + 1 < b.k; ++i) {
-        std::string key = std::string(op_name(model, b.instr[i])) + " + " +
-                          op_name(model, b.instr[i + 1]);
+        std::string key = op_label(model, b.instr[i]) + " + " +
+                          op_label(model, b.instr[i + 1]);
         PairStat &st = g_fusion[key];
         st.weight += w;
         ++st.seen;
@@ -357,10 +439,10 @@ void tally_pairs(runtime::ProcessVM *proc, const Model &model,
         /* Fusionable: lo que escribe la primera lo lee la segunda, y ese valor
          * no lo quiere nadie mas.  Sin la segunda condicion la fusion tendria
          * que materializar el temporal igual y no ahorraria nada. */
-        const uint16_t pasa = sh[i].write & sh[i + 1].read;
+        const uint32_t pasa = sh[i].write & sh[i + 1].read;
         if (pasa == 0) continue;
-        for (int bit = 0; bit < 16; ++bit) {
-            const uint16_t m = static_cast<uint16_t>(1u << bit);
+        for (int bit = 0; bit <= kFlagShift; ++bit) {
+            const uint32_t m = 1u << bit;
             if ((pasa & m) == 0) continue;
             if (dead_after(sh, i + 1, m)) {
                 st.fusable += w;
@@ -405,6 +487,8 @@ struct TraceEntry {
     bool control = true; ///< transfiere control: nunca se cruza
     Shape shape;
     std::string name;
+    std::string label; ///< `nombre/OPCODE`: lo que se imprime, sin ambiguedad
+    runtime::DecodedInstr raw; ///< la instruccion tal cual, para preguntarle al fusionador
 };
 
 
@@ -430,7 +514,7 @@ struct TraceEntry {
 void fill_effects(TraceEntry &e, const runtime::DecodedInstr &d) {
     const bool ext = (d.flags_info.is_not_extended == 0x00);
     const runtime::vm_isa::VmInstr *v = runtime::vm_isa::vm_instr(
-        ext, static_cast<uint8_t>(d.flags_info.opcode_index));
+        ext, op_index(d));
     if (v == nullptr) {
         e.control = true; // ranura desconocida: no se mueve nada a su lado
         return;
@@ -446,6 +530,10 @@ void fill_effects(TraceEntry &e, const runtime::DecodedInstr &d) {
         e.field_read = 0x0F;
         e.mem = true;
     }
+    /* Las banderas NO se anaden aqui: ya las puso `shape_of` en la forma, que es
+     * el unico sitio que la construye.  Ponerlas tambien aqui las tendria
+     * calculadas en dos, y dos productores del mismo hecho es como se separan
+     * en cuanto uno cambia. */
 }
 
 /// Chocan?  Dos instrucciones no se pueden intercambiar si comparten un recurso
@@ -474,7 +562,7 @@ bool can_pull_up(const std::vector<TraceEntry> &w, size_t i, size_t j) {
 }
 /// Muere @p reg dentro de la ventana, mirando desde @p from?
 bool dead_in_window(const std::vector<TraceEntry> &w, size_t from,
-                    uint16_t reg) {
+                    uint32_t reg) {
     for (size_t j = from + 1; j < w.size(); ++j) {
         if (w[j].shape.read & reg) return false;
         if ((w[j].shape.write & reg) && w[j].shape.dest_only) return true;
@@ -487,7 +575,7 @@ bool dead_in_window(const std::vector<TraceEntry> &w, size_t from,
 /// fusionable IGUAL, y eso es exactamente lo que aporta reordenar.
 void tally_window(const std::vector<TraceEntry> &w) {
     if (w.size() < 2) return;
-    const std::string key = w[0].name + " + " + w[1].name;
+    const std::string key = w[0].label + " + " + w[1].label;
     PairStat &st = g_fusion[key];
     st.weight += 1;
     ++st.seen;
@@ -506,8 +594,8 @@ void tally_window(const std::vector<TraceEntry> &w) {
      * La barrera se comprueba donde toca: en `can_pull_up`, que es lo unico
      * que mueve algo. */
 
-    for (int bit = 0; bit < 16; ++bit) {
-        const uint16_t m = static_cast<uint16_t>(1u << bit);
+    for (int bit = 0; bit <= kFlagShift; ++bit) {
+        const uint32_t m = 1u << bit;
         if ((w[0].shape.write & m) == 0) continue;
         /* Se busca al PRIMER consumidor, este pegado o no.  Se para en cuanto
          * alguien pisa el registro: a partir de ahi ya no es el mismo valor. */
@@ -516,11 +604,23 @@ void tally_window(const std::vector<TraceEntry> &w) {
                 if (!dead_in_window(w, j, m)) break; // el valor sigue vivo
                 if (j == 1) {
                     st.fusable += 1; // ya estan pegados
+                    /* Y de esas, cuantas sabe hacer el fusionador REAL hoy, y
+                     * de las que no, POR QUE no.  Se le pregunta a el, no se
+                     * deduce del nombre: es la unica forma de que el informe y
+                     * la implementacion no se separen -- y sin la razon, un 0%
+                     * no distingue "no hay material" de "el patron esta mal
+                     * escrito". */
+                    const runtime::FuseReject por =
+                        runtime::fuse_would_apply(w[0].raw, w[1].raw);
+                    if (por == runtime::FuseReject::None)
+                        st.hoy += 1;
+                    else
+                        g_reject[static_cast<size_t>(por)] += 1;
                 } else if (can_pull_up(w, 0, j)) {
                     st.reorder += 1; // hace falta apartar lo de en medio
                     /* La clave del par pasa a ser la REAL: lo que se fusiona es
                      * la primera con su consumidor, no con su vecina. */
-                    PairStat &rk = g_fusion[w[0].name + " + " + w[j].name];
+                    PairStat &rk = g_fusion[w[0].label + " + " + w[j].label];
                     rk.reorder_named += 1;
                 }
                 return;
@@ -563,6 +663,8 @@ uint64_t trace_pairs(runtime::ProcessVM *proc, const Model &model,
 
         TraceEntry e;
         e.name = op_name(model, d);
+        e.label = op_label(model, d);
+        e.raw = d;
         e.shape = shape_of(proc, d, e.name.c_str());
         fill_effects(e, d);
         win.push_back(std::move(e));
@@ -631,7 +733,7 @@ BundleStat analyze(runtime::ProcessVM *proc, const Model &model,
              * ejecuta nunca. */
             const bool ext = (b.instr[i].flags_info.is_not_extended == 0x00);
             const tests::OpcodeRow *r =
-                model.find(ext, b.instr[i].flags_info.opcode_index);
+                model.find(ext, op_index(b.instr[i]));
             if (r != nullptr)
                 g_unknown_weight[r->nombre] += (double)(b.entries ? b.entries : 1);
         }
@@ -857,11 +959,12 @@ inline int ilp_report(const std::vector<std::string> &ficheros, bool detalle,
         std::sort(orden.begin(), orden.end(),
                   [](const auto &a, const auto &b) { return a.first > b.first; });
 
-        double total_fus = 0, total_w = 0, total_re = 0;
+        double total_fus = 0, total_w = 0, total_re = 0, total_hoy = 0;
         for (const auto &kv : g_fusion) {
             total_fus += kv.second.fusable;
             total_re += kv.second.reorder;
             total_w += kv.second.weight;
+            total_hoy += kv.second.hoy;
         }
         std::printf("\nPares consecutivos que se podrian convertir en UNA "
                     "instruccion\n");
@@ -879,13 +982,73 @@ inline int ilp_report(const std::vector<std::string> &ficheros, bool detalle,
                     total_fus + total_re,
                     total_w > 0 ? 100.0 * (total_fus + total_re) / total_w : 0.0,
                     total_w);
-        std::printf("  %-28s %12s %10s %10s\n", "par", "ejecuciones",
-                    "adyacente", "reordenando");
-        for (size_t i = 0; i < orden.size() && i < 20; ++i) {
+        /* Lo que el fusionador sabe hacer HOY, contestado por EL, no deducido
+         * del nombre del opcode.  Es la cifra que decide si hay trabajo o hace
+         * falta un opcode nuevo, y la que faltaba: sin ella la tabla de arriba
+         * se leia como "hay un 38% pendiente" cuando ese 38% pedia
+         * instrucciones que no existen. */
+        std::printf("  al alcance del ABI de HOY: %8.0f (%.1f%% del "
+                    "fusionable)\n",
+                    total_hoy,
+                    (total_fus + total_re) > 0
+                        ? 100.0 * total_hoy / (total_fus + total_re)
+                        : 0.0);
+        std::printf("  pide opcodes NUEVOS      : %8.0f (%.1f%%)\n\n",
+                    total_fus + total_re - total_hoy,
+                    (total_fus + total_re) > 0
+                        ? 100.0 * (total_fus + total_re - total_hoy) /
+                              (total_fus + total_re)
+                        : 0.0);
+
+        /* Y de quien es la culpa.  Sin esto, un 0% no dice si es que no hay
+         * material, si el patron del fusionador esta mal escrito o si lo que
+         * falla es el modelo que trae los pares. */
+        double rechazo_total = 0;
+        for (size_t i = 1; i < 8; ++i) rechazo_total += g_reject[i];
+        if (rechazo_total > 0) {
+            std::printf("  Por que renuncia el fusionador:\n");
+            for (size_t i = 1; i < 8; ++i) {
+                if (g_reject[i] <= 0) continue;
+                std::printf("    %-40s %10.0f (%.1f%%)\n",
+                            runtime::fuse_reject_name(
+                                static_cast<runtime::FuseReject>(i)),
+                            g_reject[i], 100.0 * g_reject[i] / rechazo_total);
+            }
+            std::printf("\n");
+        }
+
+        /* La tabla lleva ACUMULADO y no corta en seco.  Un top-N sin acumulado
+         * no dice si esas filas son el material o solo la punta: la cola puede
+         * pesar mas que la cabeza y no se ve.  Se imprime hasta cubrir el 95% y
+         * lo que quede se resume en una linea, para no confundir "no sale" con
+         * "no hay". */
+        std::printf("  %-28s %12s %10s %10s %8s %6s\n", "par", "ejecuciones",
+                    "adyacente", "reordenando", "hoy", "acum%");
+        const double total_orden = total_fus + total_re;
+        double acumulado = 0;
+        size_t mostradas = 0;
+        for (size_t i = 0; i < orden.size(); ++i) {
             const PairStat &st = g_fusion[orden[i].second];
-            std::printf("  %-28s %12.0f %10.0f %10.0f\n",
+            acumulado += orden[i].first;
+            const double pct =
+                total_orden > 0 ? 100.0 * acumulado / total_orden : 0.0;
+            std::printf("  %-28s %12.0f %10.0f %10.0f %8.0f %5.1f%%\n",
                         orden[i].second.c_str(), st.weight, st.fusable,
-                        st.reorder_named);
+                        st.reorder_named, st.hoy, pct);
+            ++mostradas;
+            if (pct >= 95.0) break;
+        }
+        if (mostradas < orden.size()) {
+            double resto = 0, resto_hoy = 0;
+            for (size_t i = mostradas; i < orden.size(); ++i) {
+                resto += orden[i].first;
+                resto_hoy += g_fusion[orden[i].second].hoy;
+            }
+            std::printf("  %-28s %12s %10.0f %10s %8.0f %5.1f%%\n",
+                        ("(cola: " + std::to_string(orden.size() - mostradas) +
+                         " pares mas)")
+                            .c_str(),
+                        "", resto, "", resto_hoy, 100.0);
         }
     }
         /* Cuales cerrar primero.  Es la lista de trabajo: cada uno de estos es

@@ -642,6 +642,20 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out);
 
 void decode_instruction(ProcessVM *process);
 
+/**
+ * @brief Igual, pero para quien YA consulto la icache y fallo.
+ *
+ * El camino caliente del planificador hace la consulta el mismo y solo llama
+ * aqui al fallar; `decode_instruction` la repetiria, y eso es una busqueda de
+ * mas en una tabla de 256 KB -- casi seguro un fallo de cache del anfitrion --
+ * cuya respuesta ya se conoce.
+ *
+ * Es la MISMA implementacion con la consulta como parametro de plantilla, no
+ * una copia: dos versiones del descodificador acabarian separandose, y la que
+ * se separe descodifica distinto sin dar ningun error.
+ */
+void decode_instruction_after_miss(ProcessVM *process);
+
 } // namespace runtime
 
 #endif // DECODE_INSTRUCTION_H

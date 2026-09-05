@@ -811,7 +811,8 @@ void Scheduler::run_loop() {
                                          1)) {
                         instance->decoded_ptr = _c;
                     } else {
-                        decode_instruction(instance);
+                        // La consulta ya se hizo justo arriba y fallo.
+                        decode_instruction_after_miss(instance);
                     }
                 }
                 d = instance->decoded_ptr;
@@ -881,7 +882,9 @@ void Scheduler::run_loop() {
                 _c != nullptr && instance->decoded_ptr != nullptr, 1)) {       \
             instance->decoded_ptr = _c;                                        \
         } else {                                                               \
-            decode_instruction(instance);                                      \
+            /* La consulta ya se hizo AQUI y fallo: la version normal la       \
+             * repetiria sobre una tabla de 256 KB para nada. */               \
+            decode_instruction_after_miss(instance);                           \
         }                                                                      \
         d = instance->decoded_ptr;                                             \
         fl_inl = d->flags_info;                                                \
@@ -918,7 +921,9 @@ void Scheduler::run_loop() {
                 _c != nullptr && instance->decoded_ptr != nullptr, 1)) {       \
             instance->decoded_ptr = _c;                                        \
         } else {                                                               \
-            decode_instruction(instance);                                      \
+            /* La consulta ya se hizo AQUI y fallo: la version normal la       \
+             * repetiria sobre una tabla de 256 KB para nada. */               \
+            decode_instruction_after_miss(instance);                           \
         }                                                                      \
         d = instance->decoded_ptr;                                             \
         fl_inl = d->flags_info;                                                \

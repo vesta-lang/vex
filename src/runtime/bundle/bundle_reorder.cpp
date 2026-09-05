@@ -127,6 +127,9 @@
 #include <cstring>
 
 #include "runtime/bundle_reorder_report.h"
+#include "runtime/bundle/bundle_touch_all.h"
+#include "runtime/bundle/fuse_roles.h"
+#include "runtime/bundle/touch.h"
 #include "runtime/effects_decode.h"
 #include "runtime/instr_db_vm.h"
 #include "util/env_flags.h"
@@ -136,14 +139,6 @@
 namespace runtime {
 
 namespace {
-
-/// Los cuatro campos implicitos, en el orden del derivador.
-enum : uint8_t {
-    kFlags = 1u << 0,
-    kStack = 1u << 1,
-    kFrame = 1u << 2,
-    kPc = 1u << 3,
-};
 
 /// Cuantos registros tiene el banco general.  Sale del ancho de las mascaras.
 constexpr uint32_t kRegs = 16;
@@ -198,94 +193,12 @@ constexpr uint32_t kFieldCount = 4;
  */
 constexpr uint32_t kWindow = 8;
 
-/// Lo que una instruccion del paquete toca.  Se calcula una vez al formar.
-struct Touch {
-    uint16_t reg_read = 0;  ///< bit i = lee el registro general i
-    uint16_t reg_write = 0; ///< bit i = escribe el registro general i
-    uint16_t vec_read = 0;  ///< lo mismo sobre el banco vectorial
-    uint16_t vec_write = 0;
-    uint8_t field_read = 0;  ///< banderas/pila/marco/pc que lee
-    uint8_t field_write = 0; ///< ...y que escribe
-    bool mem = false;        ///< toca la memoria de la VM
-    bool barrier = true;     ///< ni se mueve ni deja mover
-};
+/* `Touch`, `effects_of` y `touch_one` viven en `runtime/bundle/touch.h`: los
+ * comparte con el FUSIONADOR, que necesita el mismo modelo para saber si un
+ * valor muere.  Aqui se usa la variante prudente -- la que da por leido todo lo
+ * que se escribe --, porque para decidir si dos instrucciones se cruzan sobrar
+ * una lectura solo cuesta una reordenacion que no se hace. */
 
-/// Los EFECTOS IMPLICITOS de @p d, que salen de la base y no cuestan nada.
-[[gnu::always_inline]] inline bool effects_of(const DecodedInstr &d, Touch &t) {
-    const bool ext = (d.flags_info.is_not_extended == 0x00);
-    const uint8_t opcode =
-        ext ? (uint8_t)d.flags_info.opcode_index : d.flags_info.is_not_extended;
-
-    /* Se lee de la tabla CALIENTE -- 2 bytes por opcode, 1 KB entre las dos --
-     * y no de `VmInstr`, que son 272 bytes por fila: una linea de cache larga
-     * por instruccion para usar dos bytes de ella. */
-    const uint16_t eff = vm_isa::vm_hot(ext, opcode);
-    if (!vm_isa::vm_instr_movable(eff)) return false; // barrera, y ya esta
-
-    /* QUINTA barrera, y esta no sale de la base: la que LEE el contador de
-     * programa.
-     *
-     * `exec_bundle` avanza `rip` despues de CADA instruccion, sumandole su
-     * tamano.  O sea que el valor de `rip` a mitad de paquete es funcion del
-     * ORDEN en que se ejecutaron las de antes -- es una escritura implicita que
-     * hace el bucle, no la instruccion, y por eso ninguna la declara --.  Al
-     * final da igual, porque una suma no depende del orden; en medio no.
-     *
-     * Asi que quien lea `rip` veria otro valor al cambiarla de sitio.  `push`
-     * es una de esas, y es de las mas frecuentes que hay.  Se descubrio porque
-     * el reorden pasaba los siete programas sinteticos y fallaba tres de los
-     * SIETE REALES: los sinteticos no llevan `push`. */
-    if ((eff & vm_isa::VE_R_PC) != 0) return false;
-    // Deja de serlo POR SUS EFECTOS.  Todavia puede volver a marcarse si su
-    // FORMA no es de fiar, que es lo que decide `touch_one`.
-    t.barrier = false;
-
-    t.field_write = (uint8_t)(((eff & vm_isa::VE_W_FLAGS) ? kFlags : 0) |
-                              ((eff & vm_isa::VE_W_STACK) ? kStack : 0) |
-                              ((eff & vm_isa::VE_W_FRAME) ? kFrame : 0) |
-                              ((eff & vm_isa::VE_W_PC) ? kPc : 0));
-    t.field_read = (uint8_t)(((eff & vm_isa::VE_R_FLAGS) ? kFlags : 0) |
-                             ((eff & vm_isa::VE_R_STACK) ? kStack : 0) |
-                             ((eff & vm_isa::VE_R_FRAME) ? kFrame : 0) |
-                             ((eff & vm_isa::VE_R_PC) ? kPc : 0));
-    t.mem = (eff & vm_isa::VE_MEMORY) != 0;
-    return true;
-}
-
-/**
- * @brief Rellena @p t con lo que toca @p d.
- *
- * SIN DESENSAMBLAR NADA.  Los efectos dicen que toca sin nombrarlo; la forma
- * dice QUE CAMPO del operando lleva el numero de registro, y `regs_of_form` lo
- * resuelve sobre esta instancia.  Dos indexados en tablas de cache y doce
- * iteraciones sin ramas dependientes de datos.
- *
- * @return true si la instruccion se puede mover.
- */
-[[gnu::always_inline]] inline bool touch_one(const DecodedInstr &d, Touch &t) {
-    if (!effects_of(d, t)) return false;
-    const bool ext = (d.flags_info.is_not_extended == 0x00);
-    const uint8_t op =
-        ext ? (uint8_t)d.flags_info.opcode_index : d.flags_info.is_not_extended;
-    if (!vm_isa::vm_form_exact(ext, op)) {
-        t.barrier = true; // no se sabe que registros nombra
-        return false;
-    }
-    const uint64_t f = vm_isa::vm_form(ext, op);
-    t.reg_read = regs_of_form(vm_isa::vm_form_read(f), d);
-    t.reg_write = regs_of_form(vm_isa::vm_form_write(f), d);
-    t.vec_read = regs_of_form(vm_isa::vm_form_vec_read(f), d);
-    t.vec_write = regs_of_form(vm_isa::vm_form_vec_write(f), d);
-    /* Lo que se ESCRIBE se lee tambien, salvo que se pise entero.
-     *
-     * `add rd, rs` lee rd de verdad; `mov rd, rs` no.  La base lo sabe -- es el
-     * estrechamiento que ya distingue una escritura parcial de una total --,
-     * pero mientras la forma no lo separe por campo, sobrar la lectura es el
-     * lado barato de equivocarse. */
-    t.reg_read |= t.reg_write;
-    t.vec_read |= t.vec_write;
-    return true;
-}
 
 /* -------------------------------------------------------------------------
  * Los CRITERIOS
@@ -297,6 +210,10 @@ struct Touch {
 /// Lo que un criterio puede mirar para puntuar.
 struct Ctx {
     const Touch *t; ///< lo que toca cada instruccion, por indice
+    /// El PAPEL de cada instruccion en una fusion, clasificado una sola vez.
+    /// Con el, saber si un par fusionaria son dos lecturas de byte y unos ANDs,
+    /// en vez de repetir el analisis por candidata y por paso.
+    const uint8_t *role;
     /**
      * @brief Con quien choca cada una, EN LOS DOS SENTIDOS.
      *
@@ -329,6 +246,18 @@ struct Ctx {
  */
 [[gnu::always_inline]] inline int score_fusion(const Ctx &c, uint32_t i) {
     if (c.last < 0) return 0;
+
+    /* Primero se le pregunta AL FUSIONADOR si este par le vale.
+     *
+     * Antes esto tenia su propia idea de que es fusionable -- productor con
+     * consumidor y temporal muerto -- y era la del unico patron que habia
+     * entonces.  Con eso quedaba ciego a las TANDAS: varios `mov` seguidos o
+     * varios accesos seguidos no tienen ninguna dependencia entre si, asi que
+     * la regla del temporal daba cero justo para lo que hoy mas rinde.
+     *
+     * Un hecho, un productor: quien sabe que se fusiona es el fusionador. */
+    if (fuse_roles_pairable(c.role[c.last], c.role[i])) return 1;
+
     const Touch &prod = c.t[c.last];
     const Touch &cons = c.t[i];
     const uint16_t forwarded = (uint16_t)(prod.reg_write & cons.reg_read);
@@ -499,7 +428,8 @@ template <bool Explain>
  * @return Cuantas instrucciones cambiaron de sitio; 0 = el paquete no se toco.
  */
 template <bool Explain>
-uint32_t reorder_impl(ProcessVM *process, Bundle &b, uint8_t *why) {
+uint32_t reorder_impl(ProcessVM *process, Bundle &b, BundleTouch &tc,
+                      uint8_t *why) {
     // CORTE 1: con dos no hay nada que mover.
     if (b.k < 3) return 0;
 
@@ -508,9 +438,24 @@ uint32_t reorder_impl(ProcessVM *process, Bundle &b, uint8_t *why) {
      * CORTE 2: una barrera no se mueve, y una sola movible no tiene con quien
      * intercambiarse.  Sale antes de la matriz, que son 496 comparaciones en un
      * paquete lleno. */
+    /* La version PRUDENTE, derivada de la crudo que ya trae `tc`: dar por leido
+     * lo que se escribe es un `or`, y lo que lee `rip` es barrera porque
+     * moverlo cambiaria el valor que ve.  Antes esto era una pasada entera de
+     * consultas a la base, la misma que hacian el fusionador y la busqueda de
+     * corte. */
     Touch t[BUNDLE_MAX];
+    const uint8_t *const role = tc.role;
     uint32_t movable = 0;
-    for (uint32_t i = 0; i < b.k; ++i) movable += touch_one(b.instr[i], t[i]);
+    for (uint32_t i = 0; i < b.k; ++i) {
+        t[i] = tc.t[i];
+        if (tc.kind[i] != TouchKind::Movable) {
+            t[i].barrier = true;
+            continue;
+        }
+        t[i].reg_read |= t[i].reg_write;
+        t[i].vec_read |= t[i].vec_write;
+        ++movable;
+    }
     if (movable < 2) return 0;
 
     /* La matriz de choques, en MASCARAS DE BITS y en los DOS sentidos:
@@ -640,12 +585,14 @@ uint32_t reorder_impl(ProcessVM *process, Bundle &b, uint8_t *why) {
     }
 
     DecodedInstr out[BUNDLE_MAX];
+    uint8_t order[BUNDLE_MAX]; ///< de donde salio cada emitida
     uint32_t pending = all;
     uint32_t emitted = 0, moved = 0;
     int32_t last = -1;
 
     while (pending != 0) {
-        const Ctx c{t, clash, b.k, pending, last, pend_reg_read, emitted};
+        const Ctx c{t,    role,          clash,   b.k,
+                    pending, last, pend_reg_read, emitted};
 
         int best = 0;
         int32_t pick = -1;
@@ -725,6 +672,12 @@ uint32_t reorder_impl(ProcessVM *process, Bundle &b, uint8_t *why) {
         if ((uint32_t)pick != emitted) ++moved;
         if constexpr (Explain) why[emitted] = winner;
         out[emitted] = b.instr[pick];
+        /* Y de donde salio, para mover con ella el analisis compartido.
+         *
+         * Si el paquete se permuta y `BundleTouch` no, `t[i]` pasa a describir
+         * OTRA instruccion, y eso no da un error: da un fusionador y un reparto
+         * mirando dependencias que no son. */
+        order[emitted] = (uint8_t)pick;
         const uint32_t pick_bit = 1u << (uint32_t)pick;
         pending &= ~pick_bit;
         ready &= ~pick_bit;
@@ -760,6 +713,12 @@ uint32_t reorder_impl(ProcessVM *process, Bundle &b, uint8_t *why) {
 
     if (moved == 0) return 0; // nada que hacer: no se toca el paquete
     std::memcpy(b.instr, out, (size_t)emitted * sizeof(DecodedInstr));
+    /* El analisis compartido viaja CON las instrucciones.  Fuera de sitio y no
+     * en el mismo array: una permutacion en el sitio se pisa a si misma. */
+    BundleTouch permuted;
+    for (uint32_t i = 0; i < emitted; ++i)
+        bundle_touch_move(permuted, i, tc, order[i]);
+    for (uint32_t i = 0; i < emitted; ++i) bundle_touch_move(tc, i, permuted, i);
     return moved;
 }
 
@@ -769,7 +728,8 @@ const char *bundle_reorder_criterion(uint8_t id) {
     return id < CR_COUNT ? kCriteria[id].name : "natural order";
 }
 
-uint32_t bundle_reorder(ProcessVM *process, Bundle &b, uint8_t *why) {
+uint32_t bundle_reorder(ProcessVM *process, Bundle &b, BundleTouch &tc,
+                        uint8_t *why) {
     /* Que instancia toca.  Se decide aqui, UNA vez por paquete formado, y nunca
      * dentro del bucle: la instancia caliente no lleva ni la pregunta.
      *
@@ -779,15 +739,15 @@ uint32_t bundle_reorder(ProcessVM *process, Bundle &b, uint8_t *why) {
      * a como se compilo obliga a reconstruir para mirar, y entonces lo que se
      * mira ya no es el binario que se ejecuta. */
     if (__builtin_expect(why != nullptr, 0))
-        return reorder_impl<true>(process, b, why);
+        return reorder_impl<true>(process, b, tc, why);
     if (__builtin_expect(process->bundle_stats_on ||
                              ::util::flag_on(::util::FlagId::BundleStats) ||
                              ::util::flag_on(::util::FlagId::CacheDump),
                          0)) {
         uint8_t local[BUNDLE_MAX];
-        return reorder_impl<true>(process, b, local);
+        return reorder_impl<true>(process, b, tc, local);
     }
-    return reorder_impl<false>(process, b, nullptr);
+    return reorder_impl<false>(process, b, tc, nullptr);
 }
 
 } // namespace runtime

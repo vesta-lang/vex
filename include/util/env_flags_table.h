@@ -209,6 +209,14 @@ VESTA_ENV_FLAG(BundleStats, "VESTA_BUNDLE_STATS", Report, Scheduler, Bool, Any)
  * Fusionar es lo unico que baja el RECUENTO de instrucciones, asi que un
  * programa que cambie de resultado al apagarla senala directamente aqui.  Se
  * mira UNA vez por paquete formado, no al ejecutarlo. */
+/* ENCIENDE el reparto de un paquete entre dos nucleos.
+ *
+ * Al reves que los demas -- que APAGAN algo -- porque esto todavia es un
+ * experimento.  Y ademas es lo que enciende la BUSQUEDA del corte, que cuesta
+ * un 8% en cada formacion y no la puede pagar quien no reparte; por eso, sin
+ * este interruptor, el informe dice "no se busco" en vez de "0 partibles". */
+VESTA_ENV_FLAG(BundleOoo, "VESTA_BUNDLE_OOO", Report, Scheduler, Bool, Any)
+
 VESTA_ENV_FLAG(NoBundleFuse, "VESTA_NO_BUNDLE_FUSE", Report, Scheduler, Bool,
                Any)
 

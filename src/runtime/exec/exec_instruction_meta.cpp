@@ -49,6 +49,7 @@
  */
 
 #include "runtime/exec_instruction.h"
+#include "runtime/mem_full_semantics.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/exception_runtime.h"
 #include "runtime/native_invoke.h"
@@ -525,83 +526,44 @@ void exec_instr_setstatic(ProcessVM *vm, const DecodedInstr &instr) {
 // derraman como su patron de bits i64).  El banco FP se anade despues.
 // ==========================================================================
 
-/// @brief Calcula la direccion efectiva de un mld/mst
-///        (base +/- idx<<scale +/- disp).  base<16=rN, 16=rbp, 17=rsp.
-static inline uint64_t mem_full_addr(ProcessVM *vm, uint8_t base, int16_t disp,
-                                     uint8_t flags, uint8_t index,
-                                     uint8_t scale) {
-    uint64_t addr = base < 16
-                        ? vm->registers.regs[base].qword()
-                        : (base == 16 ? vm->registers.base_pointer.raw()
-                                      : vm->registers.stack_pointer.raw());
-    addr += static_cast<uint64_t>(static_cast<int64_t>(disp));
-    if (flags & 0x02) { // has_index
-        const uint64_t idx = vm->registers.regs[index].qword() << scale;
-        if (flags & 0x04)
-            addr -= idx; // idx_sub
-        else
-            addr += idx;
-    }
-    return addr;
-}
+/* `mem_full_addr` y la carga en si viven en `runtime/mem_full_semantics.h`: los
+ * comparte con la instruccion FUSIONADA que carga y opera en un paso.  Tenerlo
+ * escrito dos veces se separaria en cuanto alguien tocara un ancho o el signo,
+ * y entonces el mismo programa daria un valor suelto y otro dentro de un
+ * paquete. */
 
 void exec_instr_mld(ProcessVM *vm, const DecodedInstr &instr) {
     const auto &m = instr.data_instruction.mem_full;
     const uint64_t addr =
         mem_full_addr(vm, m.base, m.disp, m.flags, m.index, m.scale);
-    const bool host = (m.flags & 0x01) != 0;
-    uint64_t val = 0;
-    if (host) {
-        std::memcpy(&val, reinterpret_cast<const void *>(addr),
-                    m.width <= 8 ? m.width : 8);
-    } else {
-        switch (m.width) {
-        case 1: val = vm->vm_mem.read_u8(addr); break;
-        case 2: val = vm->vm_mem.read_u16(addr); break;
-        case 4: val = vm->vm_mem.read_u32(addr); break;
-        // read_u64_fast: page-cache -> memcpy directo en hit (~1 ns) vs TLB
-        // walk completo (~50 ns).  mld es la carga universal del hot loop
-        // (arrays, locales, campos): accesos MAYORMENTE en la misma pagina ->
-        // el cache acierta.  En scattered cae al camino lento (correcto, sin
-        // regresion).
-        default: val = vm->vm_mem.read_u64_fast(addr); break;
-        }
-    }
-    // Banco FP (bit 4): el valor cargado va DIRECTO al banco ZMM como float,
-    // sin pasar por GP + bitcast.  Los bits leidos SON la representacion IEEE;
-    // se reinterpretan (no se convierten) al escribir en el ZMM.  El sign_ext
-    // no aplica a floats.
-    if (m.flags & 0x10) {
+
+    /* Banco FP: el valor cargado va DIRECTO al banco ZMM como float, sin pasar
+     * por GP ni bitcast.  Los bits leidos SON la representacion IEEE; se
+     * reinterpretan, no se convierten.  Va aparte porque no produce un "valor
+     * cargado" en el sentido de `mem_full_load`: es otra operacion. */
+    if (m.flags & kMemFpBank) {
+        uint64_t raw = 0;
+        if (m.flags & kMemHost)
+            std::memcpy(&raw, reinterpret_cast<const void *>(addr),
+                        m.width <= 8 ? m.width : 8);
+        else if (m.width == 4)
+            raw = vm->vm_mem.read_u32(addr);
+        else
+            raw = vm->vm_mem.read_u64_fast(addr);
         ZmmRegister &z = vm->registers.zmm[m.reg];
         if (m.width == 4) {
             float f;
-            std::memcpy(&f, &val, 4);
+            std::memcpy(&f, &raw, 4);
             z.write_f32(f);
         } else {
             double d;
-            std::memcpy(&d, &val, 8);
+            std::memcpy(&d, &raw, 8);
             z.write_f64(d);
         }
         return;
     }
-    if (m.flags & 0x08) { // sign_extend para anchos < 8
-        switch (m.width) {
-        case 1:
-            val = static_cast<uint64_t>(
-                static_cast<int64_t>(static_cast<int8_t>(val)));
-            break;
-        case 2:
-            val = static_cast<uint64_t>(
-                static_cast<int64_t>(static_cast<int16_t>(val)));
-            break;
-        case 4:
-            val = static_cast<uint64_t>(
-                static_cast<int64_t>(static_cast<int32_t>(val)));
-            break;
-        default: break;
-        }
-    }
-    vm->registers.regs[m.reg].qword(val);
+
+    vm->registers.regs[m.reg].qword(mem_full_load(vm, m, addr));
 }
 
 void exec_instr_mst(ProcessVM *vm, const DecodedInstr &instr) {
@@ -626,19 +588,9 @@ void exec_instr_mst(ProcessVM *vm, const DecodedInstr &instr) {
     } else {
         val = vm->registers.regs[m.reg].qword();
     }
-    if (m.flags & 0x01) { // host
-        std::memcpy(reinterpret_cast<void *>(addr), &val,
-                    m.width <= 8 ? m.width : 8);
-    } else {
-        switch (m.width) {
-        case 1: vm->vm_mem.write_u8(addr, static_cast<uint8_t>(val)); break;
-        case 2: vm->vm_mem.write_u16(addr, static_cast<uint16_t>(val)); break;
-        case 4: vm->vm_mem.write_u32(addr, static_cast<uint32_t>(val)); break;
-        default:
-            vm->vm_mem.write_u64_fast(addr, val);
-            break; // page-cache (ver mld)
-        }
-    }
+    /* La escritura en si vive en `mem_full_semantics.h`: la comparte con las
+     * fusionadas que hacen varios accesos de una vez. */
+    mem_full_store(vm, m, addr, val);
 }
 
 // -------------------------------------------------------------------------

@@ -201,16 +201,37 @@ endif ()
 # lo que dispara el ICE de GCC 16 a -O3) y solo anade lo que el perfilador
 # necesita para atribuir tiempo:
 #
-#   -g                       simbolos; sin ellos hay que traducir direcciones a mano
+#   -g1                      lineas y funciones, que es lo que el perfilador
+#                            atribuye.  NO `-g`: ver abajo.
 #   -fno-omit-frame-pointer  pilas de llamada fiables (Release las omite)
+#
+# POR QUE -g1 Y NO -g.  Los NOMBRES de las funciones no vienen de `-g`: vienen
+# de no ESTRIPAR, que es la otra cosa que hace este perfil (ver el bloque de
+# opciones de enlazado).  `-g` anade DWARF completo -- tipos, variables
+# locales, todo --, que el perfilador no usa para atribuir tiempo y que en C++
+# con plantillas pesa una barbaridad.  Medido en este arbol:
+#
+#     libvx_lib.a     20 MB en Release  ->  400 MB con -g   (x20)
+#     libvmcore.a     26 MB             ->  297 MB          (x11)
+#     el ejecutable   36 MB             ->  715 MB
+#
+# Y eso no es solo disco: cada enlace mueve esos 715 MB, asi que UNA
+# compilacion de un test tardaba minutos.  Con `-g1` se conserva lo que hace
+# falta -- funcion y linea -- y desaparece el resto.
+#
+# Lo que SI se pierde es la informacion de funciones INLINADAS, o sea que VTune
+# deja de separar en marcos propios lo que el compilador metio en linea.  Para
+# esa pregunta concreta se configura un arbol aparte con `-g`; para saber que
+# quedo de verdad fuera de linea, `nm -C --defined-only` sobre el objeto es mas
+# fiable que el perfilador.
 #
 # El nivel de optimizacion NO se toca.  Si cambiara, volveriamos a medir un
 # programa distinto del que se ejecuta, que es justo el error que esto evita.
 #
 #   cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Profile -B cmake-build-profile
-set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE} -g -fno-omit-frame-pointer"
+set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE} -g1 -fno-omit-frame-pointer"
         CACHE STRING "Flags C++ para perfilar (Release + simbolos)" FORCE)
-set(CMAKE_C_FLAGS_PROFILE "${CMAKE_C_FLAGS_RELEASE} -g -fno-omit-frame-pointer"
+set(CMAKE_C_FLAGS_PROFILE "${CMAKE_C_FLAGS_RELEASE} -g1 -fno-omit-frame-pointer"
         CACHE STRING "Flags C para perfilar (Release + simbolos)" FORCE)
 set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}"
         CACHE STRING "Flags de enlazado para perfilar" FORCE)
@@ -413,16 +434,16 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/toolchain/")
 # main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
 # tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_closure.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_spimm.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_pattern.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_async.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_weak.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_sync.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_generic.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_distrib.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_exc.cpp)
-list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_string.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_closure.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_spimm.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_pattern.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_async.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_weak.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_sync.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_generic.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_distrib.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_exc.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_string.cpp)
 
 # Modulo de programacion distribuida (VDP protocol)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/distrib/mailbox.cpp)
@@ -582,6 +603,18 @@ set(VESTA_OPTS_CODIGO_RELEASE
         -DNDEBUG
 )
 
+# Lo que Profile anade a Release, en UN sitio.
+#
+# Estaba escrito TRES veces -- en `CMAKE_CXX_FLAGS_PROFILE` y en dos
+# `target_compile_options` --, y las de target van DESPUES, asi que ganaban.
+# Cambiar el nivel de depuracion en la primera no cambiaba el build y el
+# binario seguia saliendo igual de grande: el mismo modo de fallo que este
+# proyecto persigue en las tablas duplicadas, pero en el propio build.
+#
+# `-g1` y no `-g`: los NOMBRES de las funciones vienen de no estripar, no de
+# `-g`.  Ver el bloque de `CMAKE_CXX_FLAGS_PROFILE` para los tamanos medidos.
+set(VESTA_OPTS_PROFILE -g1 -fno-omit-frame-pointer)
+
 # ---------------------------------------------------------------------------
 # Con que se compila el codigo de la maquina.  UN sitio, no uno por target.
 #
@@ -611,7 +644,7 @@ target_compile_options(vesta_vm_flags INTERFACE
         >
         $<$<CONFIG:Release>:${VESTA_OPTS_CODIGO_RELEASE};-fomit-frame-pointer>
         # Mismo codigo que Release; solo se anade con que atribuir el tiempo.
-        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};-g;-fno-omit-frame-pointer>
+        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};${VESTA_OPTS_PROFILE}>
         $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
 )
 
@@ -711,7 +744,7 @@ add_custom_target(vm_build_info ALL
 add_dependencies(vmcore vm_build_info)
 
 # Nota: aqui habia exenciones `-fno-fast-math` para los dos ficheros que
-# calculan aritmetica del lenguaje (`src/runtime/exec_instruction_float.cpp` y
+# calculan aritmetica del lenguaje (`src/runtime/exec/exec_instruction_float.cpp` y
 # `src/ir/ir_optimizer.cpp`).  Sobran desde que `-ffast-math` no se usa en
 # ninguna parte -- ver la lista de opciones de Release --, y un flag muerto
 # confunde mas de lo que documenta.
@@ -2077,31 +2110,31 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/runtime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/scheduler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/manager_runtime.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/decode_instruction.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/decode_table.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/instr_db_vm_gen.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/instr_db_vm_narrow.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/effects_decode.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/decode/decode_instruction.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/decode/decode_table.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/isa/instr_db_vm_gen.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/isa/instr_db_vm_narrow.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/decode/effects_decode.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exception_runtime.cpp
 
         # Runtime - exec instructions (todas las familias del set)
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_alu.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_gc.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_oop.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_closure.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_pattern.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_async.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_spimm.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_weak.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_sync.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_generic.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_distrib.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_exc.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_string.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_meta.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_coro.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_alu.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_gc.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_oop.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_closure.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_pattern.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_async.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_spimm.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_weak.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_sync.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_generic.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_distrib.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_exc.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_string.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_meta.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_coro.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec/exec_instruction_float.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/host_alloca_tracker.cpp
         # Sprint D.6 (2026-06-03): profile counters runtime para PGO + C2.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/profile.cpp
@@ -2180,7 +2213,7 @@ target_compile_options(vesta_rt PRIVATE
         -D__STDC_LIMIT_MACROS
         -D__STDC_CONSTANT_MACROS
         $<$<CONFIG:Release>:${VESTA_OPTS_CODIGO_RELEASE};-fomit-frame-pointer>
-        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};-g;-fno-omit-frame-pointer>
+        $<$<CONFIG:Profile>:${VESTA_OPTS_CODIGO_RELEASE};${VESTA_OPTS_PROFILE}>
 )
 
 # Los tests.

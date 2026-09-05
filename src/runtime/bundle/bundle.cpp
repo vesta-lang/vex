@@ -21,6 +21,10 @@
 #include "disasm/disasm.h" // asm real en los volcados de la cache
 #include "runtime/instr_db_vm.h" // nombre del opcode en los volcados
 #include "util/env_flags.h" // VESTA_CACHE_DUMP: volcado del estado de caches
+#include "runtime/bundle/fuse_report.h"
+#include "runtime/bundle/bundle_touch_all.h"
+#include "runtime/bundle/liveness.h"
+#include "runtime/bundle/ooo.h"
 #include "runtime/exec_instruction.h"
 
 namespace runtime {
@@ -121,6 +125,7 @@ BundleArena *arena_of(ProcessVM *p) {
          * necesita variable ninguna. */
         if (::util::flag_on(::util::FlagId::BundleStats))
             p->bundle_stats_on = true;
+        if (::util::flag_on(::util::FlagId::BundleOoo)) p->bundle_ooo_on = true;
     }
     return static_cast<BundleArena *>(p->bundle_arena);
 }
@@ -392,7 +397,9 @@ void bundle_release(ProcessVM *process) {
             "\n[paquetes] formados=%llu no_formados=%llu aplazados=%llu "
             "recolecciones=%llu\n"
             "           despachos=%llu instr_dentro=%llu  -> %.1f por despacho\n"
-            "           abandonos=%llu encogidos=%llu encadenados=%llu\n"
+            "           abandonos=%llu encogidos=%llu encadenados=%llu "
+            "cabeceras_movidas=%llu\n"
+            "           fusionados=%llu pares\n"
             /* Cuanto movio el planificador, en INSTRUCCIONES y no en paquetes:
              * lo que interesa es si de verdad reordena algo, no cuantas veces
              * se le llamo.  Sobre el total de las que entraron en un paquete da
@@ -411,7 +418,8 @@ void bundle_release(ProcessVM *process) {
             s.dispatches ? (double)s.instrs_in_bundles / (double)s.dispatches
                          : 0.0,
             (unsigned long long)s.aborts, (unsigned long long)s.shrinks,
-            (unsigned long long)s.chained, (unsigned long long)s.reordered,
+            (unsigned long long)s.chained, (unsigned long long)s.head_shifts,
+            (unsigned long long)s.fused, (unsigned long long)s.reordered,
             s.instrs_in_bundles
                 ? 100.0 * (double)s.reordered / (double)s.instrs_in_bundles
                 : 0.0,
@@ -421,6 +429,44 @@ void bundle_release(ProcessVM *process) {
             (unsigned long long)s.reorder_wins[2],
             (unsigned long long)s.reorder_wins[3],
             (unsigned long long)s.reorder_choices);
+
+        /* Lo de la FUSION lo imprime su informe, que vive aparte: aqui se
+         * decide cuando se vuelca, no como se formatea. */
+        fuse_dump(process);
+
+        /* El REPARTO entre nucleos.  Los dos numeros juntos: cuantos paquetes
+         * se podian partir y en cuantos el ayudante lo cogio de verdad.  Con
+         * uno solo no se distingue "no hay donde partir" de "hay donde pero el
+         * traspaso nunca llega a tiempo". */
+        if (s.ooo_searched == 0) {
+            /* NADIE MIRO.  Decir "partibles=0" aqui seria decir "no hay donde
+             * partir", que es otra cosa: la busqueda va con el reparto porque
+             * cuesta un 8%, y sin el no llega a correr. */
+            std::fprintf(stderr,
+                         "           reparto: NO SE BUSCO (pide "
+                         "VESTA_BUNDLE_OOO; buscar cuesta ~8%%)\n");
+        } else {
+            std::fprintf(stderr,
+                         "           reparto: partibles=%llu  repartidos=%llu"
+                         "  (de %llu mirados)\n",
+                         (unsigned long long)s.ooo_splittable,
+                         (unsigned long long)s.ooo_split,
+                         (unsigned long long)s.ooo_searched);
+        }
+        /* Y POR QUE no se pudo partir.  Con "partibles=0" a secas no se sabe si
+         * es que no hay paralelismo o si una condicion mia lo descarta todo, y
+         * eso ya ha costado dos suposiciones equivocadas seguidas. */
+        static const char *const kPorQue[6] = {
+            "el paquete es muy corto",
+            "hay una barrera muy pronto",
+            "las dos mitades tocan los mismos campos",
+            "las dos mitades tocan memoria",
+            "las dos mitades comparten registros",
+            "en la mitad delegada hay algo que lee rip"};
+        for (uint32_t i = 0; i < 6; ++i)
+            if (s.ooo_reject[i] != 0)
+                std::fprintf(stderr, "             %-42s %10llu\n", kPorQue[i],
+                             (unsigned long long)s.ooo_reject[i]);
     }
     delete static_cast<BundleArena *>(process->bundle_arena);
     process->bundle_arena = nullptr;
@@ -478,6 +524,134 @@ void bundle_release(ProcessVM *process) {
     BSTAT(process, collects);
 }
 
+namespace {
+
+/**
+ * @brief Prepara un paquete recien formado: reordena, fusiona y busca corte.
+ *
+ * Va APARTE de `bundle_try_form`, y sin inlinar a proposito.  Metido dentro,
+ * el cuerpo de `bundle_touch_all` -- una pasada por instruccion con dos
+ * consultas a tablas cada una -- se expandia en linea y engordaba la funcion
+ * que se llama en CADA fallo de icache.  Se veia justo donde tenia que verse:
+ * en los bloques cortos, que son los que forman mas a menudo, y solo en los
+ * motores de paquetes; los escalares no se movieron ni un punto.
+ *
+ * @param process Proceso duenyo del paquete.
+ * @param b       Paquete recien formado, todavia local.
+ * @param next_pc Direccion de la instruccion siguiente al paquete.
+ */
+[[gnu::noinline]] void bundle_prepare(ProcessVM *process, Bundle &b,
+                                      uint64_t next_pc) {
+    /* QUE TOCA cada instruccion, UNA sola vez.
+     *
+     * Los tres pasos que vienen detras -- reordenar, fusionar y buscar por
+     * donde partir -- necesitan exactamente esto, y cada uno lo calculaba por
+     * su cuenta: ~32 consultas a la tabla de efectos, otras tantas a la de
+     * formas y un `regs_of_form` por instruccion, TRES veces.  Medido: anadir
+     * el tercero costo un 19% en el motor de paquetes, que ni reordena ni
+     * fusiona.
+     *
+     * Quien MUEVE instrucciones mueve esto con ellas -- el reordenador permuta,
+     * el fusionador compacta --.  Ver `bundle_touch_all`.
+     *
+     * Y se calcula solo si alguno de los tres va a mirarlo.  El motor de
+     * paquetes a secas no reordena ni fusiona ni reparte: calcularselo igual
+     * seria anadirle una pasada por instruccion que nadie lee, y eso se ve --
+     * costaba un 8%. */
+    const bool want_reorder =
+        process->bundle_reorder_on &&
+        !::util::flag_on(::util::FlagId::NoBundleReorder);
+    const bool want_split = process->bundle_ooo_on;
+    BundleTouch tc;
+    if (__builtin_expect(want_reorder || process->bundle_fuse_on || want_split,
+                         1))
+        bundle_touch_all(b, tc);
+
+    /* REORDENAR antes de publicar.  Aqui y no al ejecutar: se paga una vez por
+     * sitio y se cobra en cada una de las miles de entradas siguientes.
+     *
+     * Se hace sobre `b`, que todavia es local: si algo saliera mal, el paquete
+     * que se publica es el que ya estaba bien formado. */
+    if (__builtin_expect(want_reorder, 1))
+        /* Sin `BSTAT_ADD`: la telemetria del reordenamiento la lleva el propio
+         * `bundle_reorder`, que sabe ademas QUE criterio decidio cada posicion.
+         * Sumarla tambien aqui contaba dos veces lo mismo. */
+        (void)bundle_reorder(process, b, tc);
+
+    /* FUSIONAR, despues de reordenar y antes de publicar.
+     *
+     * Este orden no es casual: reordenar es lo que deja pegado un productor con
+     * su consumidor, y solo un par PEGADO se puede convertir en una sola
+     * instruccion.  Y va sobre `b`, que sigue siendo local: `k` cambia, y
+     * publicar un paquete a medio fusionar seria publicar otro programa. */
+    /* Lo que sigue vivo detras del paquete.  Se saca aqui y no dentro del
+     * fusionador porque hace falta el proceso para leer el bytecode, y de paso
+     * queda contado cuando la mirada se queda CIEGA -- que es una respuesta
+     * distinta de "el temporal sigue vivo", aunque las dos impidan fusionar. */
+    if (__builtin_expect(process->bundle_fuse_on, 1)) {
+        const FuseTelemetry tel = {process->bundle_stats.fuse_reject,
+                                   process->bundle_stats.uncovered,
+                                   process->bundle_stats.unmatched_second,
+                                   &process->bundle_stats.newop_ready,
+                                   &process->bundle_stats.newop_livewall};
+        BSTAT_ADD(process, fused,
+                  bundle_fuse(b, tc, process, next_pc,
+                              process->bundle_stats_on ? &tel : nullptr));
+    }
+
+    /* Y por donde se puede partir en dos mitades independientes, si se puede.
+     *
+     * Se busca AQUI, al formar, que es donde se puede pensar; ejecutar solo
+     * mira el campo.  Y se busca SIEMPRE, no solo con el reparto encendido:
+     * saber si un paquete es partible es un dato del paquete, y tenerlo
+     * apagado por defecto significaba que la telemetria decia cero sin haber
+     * mirado -- que no es lo mismo que "no hay".
+     *
+     * Se puede porque cuesta O(k) sobre datos que YA estan: dos pasadas para
+     * las uniones de prefijo y sufijo, y cada candidato es comparar dos
+     * mascaras.  Costo un 40% cuando recorria las dos mitades por cada corte
+     * (O(k^2)) y otro 19% cuando ademas recalculaba `Touch`; lo primero se
+     * arreglo con los prefijos y lo segundo compartiendo el analisis. */
+    /* Y SABER que es partible no es lo mismo que PARTIRLO.  El corte se busca
+     * siempre -- es un dato del paquete, y tenerlo apagado hacia que la
+     * telemetria dijera cero sin haber mirado --, pero solo se publica en
+     * `b.split` cuando el reparto esta pedido.
+     *
+     * Separarlo importa porque `split != 0` es lo que mira el bucle de
+     * EJECUCION: publicarlo mete una llamada a `ooo_dispatch` en el camino
+     * caliente, que es el 99,4% de las veces, y esa llamada arranca el hilo
+     * ayudante por su cuenta.  Publicandolo siempre, el reparto corria sin que
+     * nadie lo hubiera encendido y costaba un 21%.
+     *
+     * Y la busqueda va con el REPARTO, no con el observador.  Cuesta un 8% en
+     * el motor de paquetes -- una pasada mas por formacion y una llamada que
+     * no cruza unidades de traduccion --, asi que engancharla a las
+     * estadisticas hacia que MIRAR los numeros cambiara los numeros: el banco
+     * de MIPS enciende `bundle_stats_on` para su informe, y pagaba el 8% en
+     * todas las medidas.
+     *
+     * Lo que no puede pasar es que entonces la telemetria diga "0 partibles",
+     * que se lee como "no hay donde partir" cuando en realidad NADIE MIRO.  Por
+     * eso se apunta aparte si la busqueda llego a correr, y el informe lo dice
+     * con esas palabras. */
+    uint8_t split = 0, split_end = 0;
+    if (want_split) BSTAT(process, ooo_searched);
+    if (want_split &&
+        bundle_split_point(b, tc, split, split_end,
+                           process->bundle_stats_on
+                               ? process->bundle_stats.ooo_reject
+                               : nullptr)) {
+        BSTAT(process, ooo_splittable);
+        if (process->bundle_ooo_on) {
+            b.split = split;
+            b.split_end = split_end;
+        }
+    }
+
+}
+
+} // namespace
+
 /**
  * @brief Reinicia la region vieja.  Camino FRIO del punto de gracia.
  *
@@ -494,6 +668,36 @@ void bundle_release(ProcessVM *process) {
 
 void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
     if (!process->bundles_on) return;
+
+#if ICACHE_HEAD_SHIFT
+    /* DESPLAZAR LA CABECERA cuando su ranura ya la ocupa OTRA cabecera viva.
+     *
+     * Las cabeceras de paquete estan REGULARMENTE espaciadas -- `k`
+     * instrucciones por su tamano --, y un indice que enmascara una direccion
+     * en bytes convierte un paso regular en un puñado de ranuras: con k=32 y
+     * instrucciones de 4 bytes, una cabecera cada 128 y solo 32 ranuras
+     * alcanzables de 4096.  Cuanto MEJOR empaqueta, mas separadas quedan y
+     * peor es.
+     *
+     * Aqui se ataca desde la formacion en vez del indice: si la ranura ya
+     * tiene una cabecera de otra direccion, no se forma en `pc`.  Esa
+     * instruccion se queda normal, y al ejecutarla el fallo siguiente cae en
+     * `pc + tamano`, que es otra ranura.  El desplazamiento sale solo.
+     *
+     * Es REACTIVO, no aleatorio: solo actua donde hay colision de verdad, y no
+     * toca `k`, que sigue significando lo que significaba -- la longitud del
+     * tramo recto --.  El precio es un despacho de mas por entrada a esa
+     * region.
+     *
+     * No oscila: si se declina en `pc`, la condicion sigue siendo la misma la
+     * proxima vez, asi que `pc` no llega a ser cabecera nunca y la cabecera se
+     * queda fija en `pc + tamano`. */
+    if (process->icache_head_clash == pc) {
+        process->icache_head_clash = UINT64_MAX;
+        BSTAT(process, head_shifts);
+        return;
+    }
+#endif
 
     /* ARENA LLENA: se comprueba LO PRIMERO, y esto no es un detalle de estilo.
      *
@@ -600,18 +804,7 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
      * `Bundle::head`. */
     b.head = b.instr[0];
 
-    /* REORDENAR antes de publicar.  Aqui y no al ejecutar: se paga una vez por
-     * sitio y se cobra en cada una de las miles de entradas siguientes.
-     *
-     * Se hace sobre `b`, que todavia es local: si algo saliera mal, el paquete
-     * que se publica es el que ya estaba bien formado. */
-    if (__builtin_expect(process->bundle_reorder_on &&
-                             !::util::flag_on(::util::FlagId::NoBundleReorder),
-                         1))
-        /* Sin `BSTAT_ADD`: la telemetria del reordenamiento la lleva el propio
-         * `bundle_reorder`, que sabe ademas QUE criterio decidio cada posicion.
-         * Sumarla tambien aqui contaba dos veces lo mismo. */
-        (void)bundle_reorder(process, b);
+    bundle_prepare(process, b, next_pc);
 
     Bundle *rec = arena->alloc();
     *rec = b;
@@ -755,6 +948,26 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
             BSTAT_ADD(process, instrs_in_bundles, instrs);
 
             Bundle *hb = head_bundle;
+
+            /* La fusion, PONDERADA POR EJECUCION.  Va aqui y no al final por una
+             * razon que costo un reventon: al final, recorrer la icache para
+             * leer los paquetes no vale -- una entrada puede seguir diciendo
+             * "paquete" con el paquete ya recogido --.  Aqui el paquete se
+             * acaba de ejecutar, asi que es seguro por construccion.
+             *
+             * Y no cuesta: este sitio ya corre una vez por DESPACHO, no por
+             * instruccion, con la linea de cache caliente y detras de la misma
+             * bandera que el resto de la telemetria.
+             *
+             * Antes del `retired`, que si no se pierde lo del ultimo tramo. */
+            if (__builtin_expect(process->bundle_stats_on, 0)) {
+                auto &bs = process->bundle_stats;
+                bs.fused_weighted += (uint64_t)hb->fused_pairs * entries;
+                bs.newop_ready_weighted += (uint64_t)hb->newop_ready * entries;
+                bs.newop_livewall_weighted +=
+                    (uint64_t)hb->newop_livewall * entries;
+            }
+
             if (hb->retired) return;
             hb->entries += entries;
             hb->executed += instrs;
@@ -801,6 +1014,54 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
     // que lo que cuenta es quitar accesos, no acercar datos.
     DecodedInstr **const dp = &process->decoded_ptr;
     auto &rip = process->registers.rip;
+
+    /* --- REPARTIR EL PAQUETE ENTRE DOS NUCLEOS ------------------------------
+     *
+     * Si al formar se encontro un corte con dos mitades sin nada en comun, la
+     * segunda se le pasa al ayudante y esta se ejecuta aqui.  Al terminar se
+     * espera, y `rip` avanza lo de las DOS.
+     *
+     * Que salga a cuenta o no es justo lo que se esta probando: un paquete son
+     * decenas de nanosegundos y el traspaso entre nucleos no es gratis.  Por
+     * eso el traspaso esta hecho lo mas barato que se puede -- una atomica y
+     * espera activa -- y el ayudante atado a otro nucleo fisico: si aun asi
+     * pierde, pierde el mecanismo y no la implementacion.
+     *
+     * Se apaga con `VESTA_NO_BUNDLE_OOO`, que es lo que permite medir las dos
+     * cosas en la misma maquina y el mismo binario. */
+    if (__builtin_expect(b->split != 0, 0)) {
+        const uint32_t s = b->split, e = b->split_end;
+        if (ooo_dispatch(process, insts + s, e - s)) {
+            /* Esta mitad aqui, la otra en el ayudante, a la vez.
+             *
+             * `rip` avanza UNA A UNA, no en bloque al final: aqui puede haber
+             * instrucciones que lo LEEN -- `push` es la mas comun -- y en serie
+             * verian el valor acumulado hasta ellas.  Avanzarlo de golpe les
+             * daria otro, y eso no da un error: da otro resultado.  Las que lo
+             * leen se quedan en este hilo justamente por esto; al ayudante solo
+             * se le manda lo que no lo mira. */
+            for (uint32_t j = 0; j < s; ++j) {
+                insts[j].exec_cached(process, insts[j]);
+                rip.qword(rip.raw() + insts[j].flags_info.size_instr);
+                profit.instrs += 1u + insts[j].flags_info.absorbed;
+            }
+            ooo_join();
+
+            // Lo del ayudante no toca `rip`, asi que su avance va de una vez.
+            for (uint32_t j = s; j < e; ++j) {
+                rip.qword(rip.raw() + insts[j].flags_info.size_instr);
+                profit.instrs += 1u + insts[j].flags_info.absorbed;
+            }
+
+            /* Y se sigue EN SERIE desde donde acaba la parte repartible: ahi
+             * empieza la barrera que impidio repartir mas, y una barrera tiene
+             * que ejecutarse en su sitio.  Del resto se encarga el bucle
+             * normal. */
+            i = e;
+            BSTAT(process, ooo_split);
+        }
+    }
+
     while (i < k) {
         DecodedInstr &ins = insts[i];
         // La siguiente son otros 64 bytes, o sea OTRA linea de cache.  Un
@@ -855,7 +1116,7 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
          * `profit.instrs`, que ya lleva exactamente la misma cuenta y se
          * incrementa igual haya telemetria o no.  Contar dos veces lo mismo,
          * una de ellas en el sitio caro, era el error. */
-        ++profit.instrs;
+        profit.instrs += 1u + ins.flags_info.absorbed;
 
         const bool blocked = ins.flags_info.blocking;
         const bool jumped = ins.flags_info.did_jump;

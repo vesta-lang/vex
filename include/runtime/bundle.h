@@ -199,6 +199,44 @@ struct Bundle {
      * ENTRADA, porque encadena 656.000 veces en trozos de tres. */
     uint32_t entries = 0;  ///< veces que se entro (despachos + encadenados)
     uint32_t executed = 0; ///< instrucciones ejecutadas en total
+
+    /* --- Lo que hace falta para PONDERAR la fusion por ejecucion ------------
+     *
+     * Los dos de arriba no sirven: se reinician al juzgar si el paquete
+     * compensa, asi que en cualquier momento valen lo que lleve la ventana
+     * actual, no el total.
+     *
+     * Y sin ponderar, las cifras de fusion MIENTEN por el lado que mas duele:
+     * un paquete formado una vez y entrado un millon de veces cuenta lo mismo
+     * que uno de arranque que corre una sola vez.  Lo que importa es cuantas
+     * instrucciones se ahorran EJECUTANDO, no cuantos pares se juntaron al
+     * formar.
+     *
+     * Se llenan al FORMAR, nunca por instruccion, y quien los pondera es el
+     * bucle de entrada: multiplicarlos AL FINAL recorriendo la icache no vale,
+     * porque para entonces el paquete puede estar ya recogido.  Caben en un
+     * byte porque un paquete tiene como mucho 31 pares. */
+    /**
+     * @brief Desde donde el paquete se puede partir en dos mitades
+     *        INDEPENDIENTES, o 0 si no se puede.
+     *
+     * `instr[0..split)` y `instr[split..k)` no comparten nada: ni registros, ni
+     * banderas, ni memoria, y ninguna transfiere control.  Con eso las dos se
+     * pueden ejecutar A LA VEZ sin ninguna sincronizacion entre ellas.
+     *
+     * Se busca al FORMAR, que es donde se puede pensar; ejecutar solo mira este
+     * campo.  Cero es "no se puede", que es el caso comun.
+     */
+    uint8_t split = 0;
+
+    /// Donde ACABA la parte repartible.  Lo de aqui en adelante lo ejecuta el
+    /// hilo principal en orden: es lo que hay de la primera barrera para alla,
+    /// y una barrera no se puede adelantar.
+    uint8_t split_end = 0;
+
+    uint8_t fused_pairs = 0;    ///< pares que el fusionador junto aqui
+    uint8_t newop_ready = 0;    ///< pares que un opcode nuevo capturaria
+    uint8_t newop_livewall = 0; ///< ...y los que no, por seguir vivo el temporal
     bool retired = false;  ///< ya se devolvio la entrada de icache
 
     /// Entradas antes de juzgar.  Suficientes para que la media signifique algo
@@ -508,7 +546,122 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d);
  *                para agrupar accesos, y eso solo lo sabe quien elige.
  * @return Cuantas instrucciones cambiaron de sitio; 0 si se dejo igual.
  */
-uint32_t bundle_reorder(ProcessVM *process, Bundle &b, uint8_t *why = nullptr);
+struct BundleTouch; ///< `runtime/bundle/bundle_touch_all.h`
+
+uint32_t bundle_reorder(ProcessVM *process, Bundle &b, BundleTouch &tc,
+                        uint8_t *why = nullptr);
+
+/**
+ * @brief Convierte pares del paquete en UNA instruccion, y ACORTA `b.k`.
+ *
+ * Es lo unico que baja el RECUENTO, que es el cuello medido del interprete:
+ * reordenar prepara el orden y empaquetar ahorra despachos, pero las
+ * instrucciones siguen siendo las mismas.
+ *
+ * Va DESPUES de reordenar -- que es quien deja los pares pegados -- y ANTES de
+ * publicar, mientras el paquete todavia es local.  Ver `bundle_fuse.cpp` para
+ * que se fusiona y por que es seguro.
+ *
+ * @param b Paquete, ya reordenado.  Se modifica: la fusionada ocupa el hueco
+ *          de las dos y `k` baja.
+ * @return Cuantos pares se fusionaron.
+ */
+/**
+ * @brief Donde apunta el fusionador su telemetria.  Nulo = apagada.
+ *
+ * Va en un struct y no en punteros sueltos para no dar por hecho que los
+ * contadores del proceso esten pegados en memoria: el dia que alguien meta un
+ * campo en medio, un puntero al primero dejaria de valer para el segundo y la
+ * cuenta saldria mal SIN dar ningun error.
+ */
+struct FuseTelemetry {
+    uint64_t *reject;         ///< kFuseRejectCount contadores, por razon
+    uint64_t *uncovered;      ///< 512: que opcode encabeza un par sin patron
+    uint64_t *unmatched_second; ///< 512: que opcode va SEGUNDO y no encaja
+    uint64_t *newop_ready;    ///< pares que un opcode nuevo capturaria
+    uint64_t *newop_livewall; ///< ...y los que no, por seguir vivo el temporal
+};
+
+uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
+                     uint64_t next_pc,
+                     const FuseTelemetry *tel);
+
+/**
+ * @brief Que registros siguen VIVOS a partir de @p pc, mirando unas pocas
+ *        instrucciones hacia delante.
+ *
+ * Lo pide `bundle_fuse` para saber si el temporal de un par muere.  Con la
+ * respuesta trivial -- "todos" -- el patron de redirigir el destino no cuaja
+ * nunca, porque a ese temporal lo mata la instruccion que vuelve a escribirlo y
+ * esa cae fuera del paquete con facilidad.
+ *
+ * @param process Proceso del que leer el bytecode.
+ * @param pc      Primera direccion DESPUES del paquete.
+ * @return Mascara de registros generales vivos; 0xFFFF si no se pudo resolver.
+ */
+/**
+ * @brief Por que NO se fusiono un par.
+ *
+ * Un fusionador que solo dice "no" es indistinguible de uno roto: si sale 0%,
+ * no se sabe si es que no hay material, si el patron esta mal escrito o si lo
+ * que falla es el modelo de efectos que trae los pares.  Cada renuncia dice
+ * cual de las cinco razones fue, y la cuenta se imprime en el informe.
+ *
+ * Es la misma regla que rige los analisis del ASA: al renunciar, se dice POR
+ * QUE.  Un analisis que calla al renunciar parece que funciona.
+ */
+enum class FuseReject : uint8_t {
+    None = 0,      ///< se fusiona: no hay renuncia
+    NotAMov,       ///< la primera no encaja en ningun patron: ni es `mov`
+                   ///< reg,reg de 64 bits ni pisa su destino sin leerlo --
+                   ///< tipicamente porque ya viene fusionada del compilador
+    NoThreeOpForm, ///< la segunda no tiene variante de tres operandos
+    WidthMismatch, ///< alguna no opera a 64 bits
+    DestMismatch,  ///< la ALU no escribe lo que el `mov` acaba de dejar
+    SrcIsDest,     ///< la segunda fuente ES el destino: `alu3` leeria otro valor
+    TooMany,       ///< la fusionada no cabe en `absorbed` o en `size_instr`
+    /* --- del patron de REDIRIGIR EL DESTINO ------------------------------- */
+    CopyMismatch,  ///< la segunda no es un `mov` que copie lo que produjo la
+                   ///< primera
+    DestLiveOut    ///< el destino intermedio SIGUE VIVO al salir del paquete,
+                   ///< asi que no se le puede quitar la escritura
+};
+
+/// Cuantas razones hay.  Fija el tamano de los contadores del proceso.
+constexpr size_t kFuseRejectCount = 9;
+
+/**
+ * @brief Fusionaria el fusionador este par, y si no, por que no.
+ *
+ * No cambia nada: es la CONSULTA que responde `can_fuse`, expuesta para que el
+ * informe de pares diga cuanto del material medido esta al alcance del ABI de
+ * hoy sin volver a decidirlo por su cuenta.  Contestarla dos veces es como el
+ * informe acabo diciendo que habia un 44,6% de trabajo pendiente en un patron
+ * que el compilador ya emitia fusionado.
+ *
+ * @param a Primera del par (la que produce).
+ * @param b Segunda del par (la que consume).
+ * @return @c FuseReject::None si el par cae dentro de lo que hoy se sabe
+ *         fusionar; en otro caso, la razon de la renuncia.
+ */
+FuseReject fuse_would_apply(const DecodedInstr &a, const DecodedInstr &b);
+
+/**
+ * @brief Merece la pena poner estas dos JUNTAS?
+ *
+ * La FORMA de cualquiera de los patrones, sin las condiciones que dependen del
+ * contexto -- vivacidad, topes --.  Lo usa el REORDENADOR para decidir a quien
+ * acercar: si al final no fusiona se pierde una reordenacion, y no acercarlas
+ * pierde la fusion entera, asi que aqui sobra ser optimista.
+ *
+ * Existe para que el reordenador no tenga su propia idea de que es fusionable.
+ * La suya solo conocia el patron productor -> consumidor, y por eso era ciega a
+ * las TANDAS -- varios `mov` seguidos, varios accesos seguidos --, que no
+ * tienen ninguna dependencia entre si y hoy son las que mas rinden.
+ *
+ * Reordenar PARA fusionar no es un coste que evitar: es para lo que esta.
+ */
+bool fuse_pairable(const DecodedInstr &a, const DecodedInstr &b);
 
 /// Cuantos criterios pesa el planificador.  Ver `bundle_reorder.cpp`.
 constexpr uint8_t kBundleReorderCriteria = 4;
@@ -591,6 +744,10 @@ struct BundleStats {
     uint64_t flushes = 0;           ///< veces que la arena se lleno
     uint64_t shrinks = 0;           ///< paquetes recortados a su tramo real
     uint64_t chained = 0; ///< paquetes encadenados sin soltar despacho
+    /// Cabeceras que NO se formaron porque su ranura ya tenia otra: la
+    /// cabecera se corre a la instruccion siguiente.  Solo con
+    /// `ICACHE_HEAD_SHIFT`; sin el vale cero y dice la verdad.
+    uint64_t head_shifts = 0;
 
     /// Despachos AHORRADOS: cada instruccion de mas dentro de un paquete es un
     /// salto indirecto que el interprete no hizo.  Es la cifra que dice si esto

@@ -123,11 +123,64 @@ typedef struct DecodedInstr {
          */
         uint8_t direction : 1;
 
-        uint8_t size_instr : 4; ///< Tamanyo en bytes de la instruccion (maximo
-                                ///< 15 bytes)
+        /**
+         * @brief Tamanyo en bytes de la instruccion.  Maximo 63.
+         *
+         * Eran CUATRO bits -- 15 bytes --, que le sobran a cualquier
+         * instruccion del bytecode: la mayor de la ISA es `FIXED_11`.  El que
+         * se quedaba fuera era el FUSIONADOR, que tiene que declarar la SUMA de
+         * las que sustituye, y con 15 de tope quedaban bloqueadas fusiones que
+         * si valen la pena -- dos cargas (8+8), dos `mov` con inmediato
+         * (11+11), cuatro `mov` reg,reg (4x4) --.  Y no por su semantica: por
+         * un campo.
+         *
+         * SEIS bits, y el numero no es a ojo.  El techo que hay que cubrir sale
+         * de dos hechos:
+         *
+         *     mayor instruccion de la ISA   = 11 bytes (FIXED_11)
+         *     mayor tanda fusionable        =  4       (lo que admite `absorbed`)
+         *     techo                         = 44       -> no cabe en 5 bits (31)
+         *
+         * INVARIANTE: `size_instr` tiene que poder con `11 * (absorbed_max+1)`.
+         * El dia que `absorbed` crezca a tres bits -- ocho instrucciones --
+         * harian falta 88, o sea siete bits, y en este campo ya no quedan: son
+         * 31 de 32 usados.  Ese dia los dos campos se mudan, no se recortan.
+         *
+         * No es un cambio de formato: esto se rellena al DESCODIFICAR y no se
+         * escribe en ningun fichero.  Lo unico que lo lee es el avance de
+         * `rip`, y quedarse corto ahi no da un error -- deja `rip` corrido y el
+         * salto siguiente va a otro sitio --, asi que el fusionador lo
+         * comprueba antes de escribirlo.
+         */
+        uint8_t size_instr : 6;
+
+        /**
+         * @brief Cuantas instrucciones del PROGRAMA representa esta, MENOS una.
+         *
+         * Vale 0 en todo lo que se descodifica, y 1 en lo que sale de fusionar
+         * un par.  Existe porque al fusionar hay DOS cuentas distintas, y
+         * confundirlas le cambia el SIGNO a la medida:
+         *
+         *   - las que la maquina DESPACHA: bajan al fusionar, y esa bajada es
+         *     justo la ganancia;
+         *   - las que el PROGRAMA tiene: no cambian, porque el programa es el
+         *     mismo.
+         *
+         * Los MIPS son de las segundas.  Contando las primeras, fusionar BIEN
+         * se leeria como una regresion proporcional a lo bien que funciona.  Es
+         * el mismo fallo que ya mordio con los paquetes encadenados -- un bucle
+         * entero recorrido en un despacho contaba como UNA instruccion -- y se
+         * arregla igual: se retira lo que el programa dice, no lo que la
+         * maquina despacha.
+         *
+         * Dos bits y no uno: caben en los cinco que sobraban del campo de bits,
+         * no agrandan `DecodedInstr` (64 bytes) y dejan sitio para fusionar de
+         * tres en tres sin volver a tocar esto.
+         */
+        uint8_t absorbed : 2;
     } flags_info = {
         0,     0,     0, 0, false,
-        false, false, 0, 0}; ///< Campos de control inicializados a cero/false
+        false, false, 0, 0, 0}; ///< Campos de control inicializados a cero/false
 
     /**
      * @brief Operandos descodificados de la instruccion (union de todos los
@@ -515,6 +568,44 @@ static_assert((ICACHE_SETS & (ICACHE_SETS - 1)) == 0,
 #endif
 
 /**
+ * @brief Si la FORMACION desplaza una cabecera cuya ranura ya ocupa otra.
+ *
+ * 0 = como siempre.  1 = al formar en `pc`, si esa ranura de icache ya tiene
+ * la cabecera de OTRA direccion, no se forma ahi: la cabecera acaba en la
+ * instruccion siguiente, que cae en otra ranura.  Ver `bundle_try_form`.
+ *
+ * Ataca lo mismo que @ref ICACHE_SIZE_CLASS -- que un paso REGULAR solo
+ * alcance un punado de ranuras -- pero desde el otro lado: en vez de llevar
+ * mas bits del `pc` al indice, hace irregular el espaciado de las cabeceras.
+ * Es reactivo (solo donde hay colision) y no toca `k`, asi que no cambia lo
+ * que significa un paquete.
+ *
+ * ENCENDIDO POR DEFECTO, y con la medida delante.  Sobre la mezcla `float` con
+ * despacho de paquetes:
+ *
+ *      tramo    base   desplazando
+ *        512   494,2       459,4
+ *       1024   476,1       480,1
+ *       2048    46,4       352,5   <- 7,6x
+ *       8192    46,4       277,4   <- 6,0x
+ *
+ * Y los contadores dicen por que: a tramo 2048 las formaciones caen de 249.985
+ * a 4.033 -- el mismo sitio dejaba de reconstruirse 62 veces de cada 63 -- y la
+ * arena deja de necesitar recolecciones (30 -> 0).
+ *
+ * Lo que lo hace apto para el defecto es que es REACTIVO: a tramo 1024 marca
+ * `cabeceras_movidas=0`, o sea que no se dispara donde no hay colision y ahi no
+ * cuesta.  La alternativa que arregla lo mismo desde el indice
+ * (@ref ICACHE_SIZE_CLASS) es incondicional y se cobra un 14% en todas partes.
+ *
+ * El mando se queda para poder contrastar el MISMO binario con y sin el: si un
+ * programa cambiara de resultado al apagarlo, la culpa es de aqui.
+ */
+#ifndef ICACHE_HEAD_SHIFT
+#define ICACHE_HEAD_SHIFT 1
+#endif
+
+/**
  * @brief Conjunto de la icache al que va una direccion PC.
  *
  * @param pc Direccion del contador de programa de la instruccion.
@@ -843,6 +934,34 @@ class ProcessVM {
     /// Se mira donde `bundles_on`: en el fallo de icache, nunca en el hot path.
     bool bundle_reorder_on = true;
 
+    /// Fusionar pares dentro del paquete, por PROCESO.
+    ///
+    /// Mismo motivo que el de arriba, y por eso va al lado: la variable de
+    /// entorno `VESTA_NO_BUNDLE_FUSE` se lee una vez y no permite medir con y
+    /// sin fusion en la MISMA ejecucion, que es lo unico que hace comparables
+    /// los dos numeros.  Sin este eje aparte, la fusion quedaba dentro del
+    /// motor de paquetes y no se podia decir cuanto aporta.
+    ///
+    /// Se mira donde los otros dos: en el fallo de icache, nunca en el hot
+    /// path.
+    bool bundle_fuse_on = true;
+
+    /// Repartir un paquete entre dos nucleos, por PROCESO.  Apagado por
+    /// defecto: buscar el corte es O(k^2) en cada formacion, y mientras sea un
+    /// experimento no debe cobrarle nada al camino normal.  Lo enciende
+    /// `VESTA_BUNDLE_OOO` o quien mida.
+    bool bundle_ooo_on = false;
+
+    /**
+     * @brief El `pc` cuya entrada acaba de pisar la CABECERA de otro paquete.
+     *
+     * Lo pone el camino de fallo justo antes de sobrescribir la entrada, que es
+     * el unico momento en que se sabe QUE habia ahi; para cuando forma el
+     * paquete, el ocupante anterior ya se perdio.  Vale `UINT64_MAX` cuando no
+     * hay ninguno.  Solo con `ICACHE_HEAD_SHIFT`.
+     */
+    uint64_t icache_head_clash = UINT64_MAX;
+
     /**
      * @brief Contar lo que hace la maquinaria de paquetes: TODO, no solo el
      *        reordenamiento.
@@ -897,6 +1016,98 @@ class ProcessVM {
     struct {
         uint64_t formed, not_formed, dispatches, instrs_in_bundles, aborts,
             flushes, shrinks, chained, collects;
+        /// Cabeceras que NO se formaron porque su ranura de icache ya tenia
+        /// otra: la cabecera se corre a la instruccion siguiente.  Solo con
+        /// `ICACHE_HEAD_SHIFT`; sin el vale cero y eso es la verdad.
+        uint64_t head_shifts;
+        /// Pares convertidos en UNA instruccion al formar.  Es la unica cifra
+        /// que dice cuanto baja el RECUENTO, que es el cuello del interprete.
+        uint64_t fused;
+        /// Paquetes ejecutados REPARTIDOS entre dos nucleos.  Dice si el
+        /// reparto llega siquiera a intentarse, que es lo primero que hay que
+        /// saber antes de mirar si compensa.
+        uint64_t ooo_split;
+        /// Paquetes en los que SI se encontro un corte al formar.  Con este y
+        /// el de arriba se distingue "no hay donde partir" de "hay donde pero
+        /// el ayudante nunca lo coge".
+        /// Cuantos paquetes se MIRARON buscando corte.  Cero significa que la
+        /// busqueda no llego a correr -- va con el reparto, porque cuesta un
+        /// 8% --, y sin este contador "partibles=0" se leia como "no hay donde
+        /// partir", que es otra cosa muy distinta.
+        uint64_t ooo_searched;
+        uint64_t ooo_splittable;
+        /**
+         * @brief Por que NO se pudo partir un paquete.
+         *
+         * 0=corto  1=barrera_pronto  2=campos  3=memoria  4=registros
+         *
+         * Sin esto, "partibles=0" no dice si es que no hay paralelismo o si es
+         * que una condicion mia lo descarta todo.  Ya han fallado dos
+         * suposiciones seguidas por no tenerlo.
+         */
+        uint64_t ooo_reject[6];
+        /**
+         * @brief Por que NO se fusiono un par, contado por razon.
+         *
+         * Indexado por @c FuseReject.  Un fusionador que solo publica cuantos
+         * pares junto es indistinguible de uno roto: si sale cero, no se sabe
+         * si es que no habia material, si el patron esta mal escrito o si lo
+         * que aprieta es la ventana del paquete.  Es la misma regla que rige
+         * los analisis del ASA -- al renunciar, se dice POR QUE --, y la unica
+         * forma de afinar los patrones mirando datos.
+         */
+        uint64_t fuse_reject[9];
+        /// Veces que la mirada mas alla del paquete se quedo CIEGA: lo
+        /// primero que hay detras transfiere control o tiene efectos de cota
+        /// inferior, asi que todo se supone vivo.  Sin este contador no se
+        /// distingue "el temporal sigue vivo de verdad" de "no se pudo mirar".
+        uint64_t lookahead_blind;
+
+        /* --- Cuanto capturaria un opcode que NO existe ----------------------
+         *
+         * Son los dos numeros que deciden si merece la pena gastar una ranura
+         * de la tabla extendida, y hay que mirarlos JUNTOS.  Un par en el que
+         * la primera produce un valor que la segunda consume es candidato a
+         * fusionarse en una instruccion nueva, pero solo si ese valor MUERE:
+         * si sigue vivo, la fusionada tendria que escribirlo igual y no
+         * ahorraria nada.
+         *
+         * Separarlos importa porque distinguen dos conclusiones opuestas:
+         * "falta el opcode" y "el opcode no serviria de nada porque no se
+         * puede demostrar que el temporal muere".  Es la pared con la que ya
+         * choco el patron de redirigir el destino. */
+        /**
+         * @brief Que instruccion encabezaba un par que NINGuN patron miro.
+         *
+         * Indexado por `(extendida ? 256 : 0) + opcode`.  Es la lista de
+         * trabajo del fusionador: mientras el 84% de los rechazos sea "la
+         * primera no encaja", lo que falta son PATRONES, y esto dice cuales
+         * escribir por peso en vez de a ojo.
+         */
+        uint64_t uncovered[512];
+
+        /**
+         * @brief Que instruccion iba SEGUNDA cuando la primera si encajaba.
+         *
+         * El companyero del de arriba, y hace falta por lo mismo: al cubrir un
+         * patron nuevo, sus pares se mueven de "la primera no encaja" a "la
+         * segunda no vale", y sin esto ese bucket tampoco dice cual escribir.
+         * Entre los dos, la lista de trabajo esta completa por los dos lados.
+         */
+        uint64_t unmatched_second[512];
+
+        uint64_t newop_ready;    ///< el temporal muere: un opcode lo capturaria
+        uint64_t newop_livewall; ///< el temporal sigue vivo: no lo capturaria
+
+        /* Y los mismos PONDERADOS POR EJECUCION, que es lo que de verdad
+         * decide: un paquete de arranque que corre una vez no vale lo que el
+         * cuerpo de un bucle que corre un millon.  Se acumulan AL ENTRAR, que
+         * es el unico momento en que el paquete es seguro de leer: al final ya
+         * puede estar recogido. */
+        uint64_t fused_weighted;           ///< instrucciones ahorradas de verdad
+        uint64_t newop_ready_weighted;     ///< las que ahorraria un opcode nuevo
+        uint64_t newop_livewall_weighted;  ///< las que no rescataria ninguno
+
         /// Instrucciones que el planificador movio de sitio al formar.  Se
         /// cuenta en UNIDADES, no en veces: lo que interesa es cuanto se
         /// reordena, no cuantos paquetes se tocaron.

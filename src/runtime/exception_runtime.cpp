@@ -2289,11 +2289,37 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
      * y el paso a paso son del depurador, y las excepciones de C++ son control
      * de flujo normal de la propia VM.  Quedarselas romperia a quien las
      * espera. */
+    /* Lo que NO es un fallo del procesador y por tanto no es nuestro.
+     *
+     * La regla que de verdad decide es el BIT 29 del codigo: Windows lo reserva
+     * para lo que levanta el SOFTWARE a proposito (`STATUS_USER_DEFINED`).  Un
+     * `throw` de C++, un desenrollado forzado o cualquier senal que otra
+     * biblioteca se invente llevan ese bit; una division entre cero o un acceso
+     * invalido, no.  Quedarse una de esas romperia a quien la espera.
+     *
+     * Antes habia una LISTA de codigos concretos, y llevaba solo el de MSVC
+     * (`0xE06D7363`).  Este arbol se construye con MinGW/GCC, cuyos `throw`
+     * salen por `_Unwind_RaiseException` con codigo propio -- ese mismo bit 29,
+     * mas "GCC" en los bytes bajos --, asi que un `throw` normal no encajaba en
+     * ningun caso conocido, caia en "lo demas" y este manejador lo trataba como
+     * un fallo del PROCESADOR: desviaba la ejecucion al stub de recuperacion
+     * desde un marco que ya se estaba desenrollando, y ahi moria.
+     *
+     * Costaba de ver porque hacen falta dos cosas a la vez: que haya bytecode
+     * corriendo con la recuperacion armada Y que algo lance.  Se destapo
+     * encadenando treinta programas en un proceso, cuando la carga de un modulo
+     * nativo fallo y lanzo.
+     *
+     * Por eso ahora la condicion es la PROPIEDAD y no la lista: una lista de
+     * codigos ajenos se queda vieja en cuanto cambia el compilador o entra otra
+     * biblioteca, y su modo de fallar es este mismo. */
+    constexpr DWORD kSoftwareRaised = 0x20000000u; // STATUS_USER_DEFINED
+    if ((code & kSoftwareRaised) != 0) return EXCEPTION_CONTINUE_SEARCH;
+
     switch (code) {
     case EXCEPTION_BREAKPOINT:
     case EXCEPTION_SINGLE_STEP:
-    case 0xE06D7363u: // excepcion de C++ (msvc/mingw)
-    case 0x406D1388u: // nombre de hilo para el depurador
+    case 0x406D1388u: // nombre de hilo para el depurador (no lleva el bit 29)
         return EXCEPTION_CONTINUE_SEARCH;
     default: break;
     }
@@ -2309,6 +2335,39 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
         kind_local = 3;
     } else {
         kind_local = 4;
+        /* LO GRITA.  Un codigo que no esta en la lista se sigue tratando como
+         * fallo del procesador -- dejarlo pasar era morir en silencio, y eso ya
+         * mordio --, pero desviar la ejecucion al stub de recuperacion con algo
+         * que no lo es termina en un reventon DENTRO de este manejador, y ahi
+         * ya no hay ni mensaje ni cadena de llamadas: la pila que se ve es la
+         * del propio manejador y no dice nada de lo que paso.
+         *
+         * Asi que se dice ANTES de desviar, con el codigo y la direccion en
+         * datos.  Es lo unico que separa "un rato mirando el nuevo codigo" de
+         * una sesion entera de depuracion: la ultima costo justo eso.
+         *
+         * Se escribe a mano y no por el catalogo a proposito: esto corre en un
+         * manejador de excepciones del sistema, posiblemente durante un
+         * desenrollado, donde reservar memoria o construir cadenas es lo que
+         * revienta.  El mensaje CATALOGADO sale despues, en contexto normal,
+         * desde `pending_av_kind`/`pending_av_os_code`, que es a donde va este
+         * mismo dato.
+         *
+         * Y una sola vez: si se repite, se repite por millones. */
+        static volatile LONG dicho = 0;
+        if (InterlockedCompareExchange(&dicho, 1, 0) == 0)
+            std::fprintf(stderr,
+                         "\n[VestaVM] excepcion del sistema NO reconocida: "
+                         "codigo=0x%08lX en %p.\n"
+                         "          No es un fallo del procesador conocido y "
+                         "tampoco lo levanto el software (bit 29 a cero).\n"
+                         "          Se trata como fallo para no morir "
+                         "callando; si esto sale de un `throw` o de una "
+                         "biblioteca,\n"
+                         "          el codigo va en `vx_av_veh` "
+                         "(exception_runtime.cpp).\n",
+                         (unsigned long)code,
+                         info->ExceptionRecord->ExceptionAddress);
     }
     ProcessVM *proc = runtime::get_current_executing_process();
     if (proc == nullptr || !proc->av_recovery_active) {

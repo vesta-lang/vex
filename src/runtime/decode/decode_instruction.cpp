@@ -335,6 +335,18 @@ void decode_instr_simple_mov(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info._signed_instruct = (n1 >> 5) & 0b1; // extension de signo
     instr.flags_info.direction = (n1 >> 4) & 0b1; // direccion del movimiento
 
+    /* Y que ESTA instancia nombra un registro especial, que para `mov` es lo
+     * mismo que el bit de signo: `exec_instr_mov_reg` llega a rip/rsp/rbp solo
+     * por esa rama.
+     *
+     * Lo pone el decodificador y no lo deduce cada consumidor a partir del
+     * opcode, que es como estaba: un hecho POR OPCODE ("este `mov` PUEDE hablar
+     * con rip") usado donde hacia falta uno POR INSTANCIA ("este `mov` habla
+     * con rip").  Con la version gruesa, el reordenador y el reparto trataban
+     * como intocable a cualquier `mov`, y con `push` pasaba lo mismo -- el 75%
+     * de los paquetes no se podian repartir por eso. */
+    instr.flags_info.reg_ext = (instr.flags_info._signed_instruct != 0);
+
     // regs byte: reg2(4) | reg1(4)
     instr.data_instruction.reg_data.reg1 =
         static_cast<uint8_t>(n2 & 0xF); // nibble bajo = reg destino
@@ -1218,6 +1230,24 @@ void decode_instr_calln(const InstrCursor &c, DecodedInstr &instr) {
  * @return Los metadatos, o @c
  * nullptr si la instruccion no es utilizable.
  */
+/**
+ * @brief Puede este opcode tener variante por nivel de ISA y ancho?
+ *
+ * Solo los cuatro binarios de coma flotante (`fadd`, `fsub`, `fmul`, `fdiv`,
+ * extendidos 0xF1..0xF4) la tienen.  Preguntarlo AQUI ahorra una llamada entre
+ * unidades de traduccion por cada instruccion extendida descodificada -- que
+ * son casi todas -- para que la respuesta sea `nullptr`: `float_exec_specialized`
+ * vive en `exec_instruction_float.cpp`, asi que no se puede incrustar y el
+ * compilador tiene que montar la llamada entera.
+ *
+ * La resta sin signo hace el rango en UNA comparacion: cualquier opcode por
+ * debajo de 0xF1 se envuelve a un numero grande.
+ */
+[[gnu::always_inline]] inline bool has_float_variant(uint8_t opcode2,
+                                                     uint8_t b0) {
+    return b0 == 0x00 && (uint8_t)(opcode2 - 0xF1u) <= 3u;
+}
+
 static InstrFormat *select_metadata(uint8_t b0, uint8_t b1) {
     InstrFormat *table = decode_table_primary;
     uint8_t index = b0;
@@ -1238,16 +1268,41 @@ static constexpr size_t INSTR_BYTES_MAX = 16;
 /**
  * @brief Cursor sobre los bytes de la instruccion que hay en @p pc.
  *
- * Copia a un buffer del llamante porque la memoria de la VM es paginada y una
- * instruccion puede cruzar de pagina: un puntero crudo no serviria para las dos
- * mitades.  El coste es irrelevante -- descodificar solo ocurre al FALLAR la
- * icache, el 0,57% de las ejecuciones -- y a cambio los decoders dejan de
- * necesitar el proceso.
+ * SIN COPIAR cuando se puede, que es casi siempre.  `InstrCursor` ya es un
+ * puntero mas una longitud, asi que si los @ref INSTR_BYTES_MAX bytes caben
+ * enteros en la pagina que la memoria de la VM tiene cacheada, se apunta
+ * directamente a ella y no se mueve un solo byte.
+ *
+ * El respaldo -- copiar byte a byte -- sigue existiendo y hace falta: la
+ * memoria de la VM es paginada y una instruccion puede CRUZAR de pagina, y ahi
+ * un puntero crudo no serviria para las dos mitades.
+ *
+ * El comentario que habia aqui decia que el coste era irrelevante porque
+ * descodificar solo ocurre al fallar la icache, "el 0,57% de las ejecuciones".
+ * Medido con VTune, esa cifra es falsa: `cursor_en` retira 1.186 millones de
+ * instrucciones del anfitrion y el `operator[]` que llamaba 1.675 -- entre las
+ * dos, mas del 20% del trabajo en un programa cuyo bucle no cabe en la icache
+ * --.  Dieciseis accesos por descodificacion, para leer una instruccion que
+ * suele medir uno o cuatro bytes.
+ *
+ * El puntero vale mientras se descodifica: `m->decode` solo LEE bytes del
+ * cursor y no toca la memoria de la VM, asi que la pagina no se puede mover
+ * por debajo.
  */
 static InstrCursor cursor_en(ProcessVM *process, uint64_t pc,
                              uint8_t (&buf)[INSTR_BYTES_MAX]) {
+    auto &mem = process->vm_mem;
+    const uint64_t offset = pc & 0xFFF;
+    if (offset + INSTR_BYTES_MAX <= 4096) {
+        /* Un acceso para forzar la cache de pagina -- y de paso la asignacion
+         * perezosa si la pagina aun no existia --, y despues el puntero. */
+        (void)mem[pc];
+        uint8_t *host = mem.jit_cached_page_host();
+        if (host != nullptr && mem.jit_cached_page_vaddr() == (pc & ~0xFFFULL))
+            return InstrCursor{host + offset, INSTR_BYTES_MAX, pc};
+    }
     for (size_t i = 0; i < INSTR_BYTES_MAX; ++i)
-        buf[i] = process->vm_mem[pc + i];
+        buf[i] = mem[pc + i];
     return InstrCursor{buf, INSTR_BYTES_MAX, pc};
 }
 
@@ -1293,7 +1348,8 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
      * ejecucion: asi la aprovechan todos los consumidores, incluido
      * `exec_bundle`, que no pasa por la tabla de rutas rapidas del interprete
      * y por tanto no veria una especializacion que viviera solo alli. */
-    if (out.flags_info.is_not_extended == 0x00) {
+    if (has_float_variant(out.flags_info.opcode_index,
+                          out.flags_info.is_not_extended)) {
         if (auto *esp = float_exec_specialized(out.flags_info.opcode_index,
                                                out.flags_info.mode))
             out.exec_cached = esp;
@@ -1302,7 +1358,21 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
     return true;
 }
 
-void decode_instruction(ProcessVM *process) {
+/**
+ * @brief El cuerpo, con la consulta de icache como parametro de PLANTILLA.
+ *
+ * @tparam AlreadyMissed El llamante YA miro la icache y fallo.  Entonces
+ *                       volver a mirarla es una busqueda de mas en una tabla
+ *                       de 256 KB -- casi seguro un fallo de cache del
+ *                       anfitrion -- cuya respuesta ya se conoce.
+ *
+ * El camino caliente del planificador hace exactamente eso: consulta, y si
+ * falla llama aqui.  Los demas llamantes no consultan, asi que la comprobacion
+ * sigue existiendo para ellos.  Con dos instanciaciones no hay que elegir: la
+ * del planificador no lleva ni la busqueda ni la rama.
+ */
+template <bool AlreadyMissed>
+static void decode_impl(ProcessVM *process) {
     const bool measuring =
         process->scheduler.has_hooks; // activar medicion solo si hay hooks
     vm_hook(process, DebugStage::DecodeBegin); // hook de inicio de fase
@@ -1316,6 +1386,7 @@ void decode_instruction(ProcessVM *process) {
     // Si la entrada de la icache corresponde a este PC se reutiliza el
     // resultado anterior. Importante: la icache no detecta modificaciones en
     // tiempo de ejecucion del codigo.
+    if constexpr (!AlreadyMissed) {
     DecodedInstr *cached = icache_lookup(process, pc);
     if (cached != nullptr && process->decoded_ptr != nullptr) {
         process->decoded_ptr = cached; // apuntar al cache sin copiar
@@ -1326,6 +1397,7 @@ void decode_instruction(ProcessVM *process) {
         PROFILE_END("DECODER");
         vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
         return;
+    }
     }
 
     /**
@@ -1408,7 +1480,8 @@ void decode_instruction(ProcessVM *process) {
     metadata.decode(cursor_en(process, pc, instr_buf), decode_tmp);
     // Y AHORA, con `mode` ya puesto, la variante por ISA y ancho si la hay.
     // Ver el otro sitio que rellena `exec_cached`, mas arriba en este fichero.
-    if (decode_tmp.flags_info.is_not_extended == 0x00) {
+    if (has_float_variant(decode_tmp.flags_info.opcode_index,
+                          decode_tmp.flags_info.is_not_extended)) {
         if (auto *esp =
                 float_exec_specialized(decode_tmp.flags_info.opcode_index,
                                        decode_tmp.flags_info.mode))
@@ -1426,7 +1499,26 @@ void decode_instruction(ProcessVM *process) {
     // igual -- y solo cuesta que la proxima vez vuelva a fallar.
     DecodedInstr *slot = icache_victim(process, pc);
     if (slot == nullptr) slot = &process->decoded_scratch;
+#if VM_BUNDLES && ICACHE_HEAD_SHIFT
+    /* QUE HABIA AQUI ANTES, mirado ANTES de pisarlo.
+     *
+     * Si la entrada que se va a sobrescribir era la CABECERA de un paquete de
+     * otra direccion, esta ranura esta disputada: dos sitios del programa
+     * caen en ella y se desalojan el uno al otro en cada vuelta.  Se apunta,
+     * y `bundle_try_form` lo usa para correr la cabecera una instruccion.
+     *
+     * Tiene que ser aqui y no alli: cuando `bundle_try_form` corre, la entrada
+     * YA se reclamo para el `pc` nuevo y el ocupante anterior se perdio.  Se
+     * intento comprobarlo alli primero y no se disparaba ni una vez. */
+    const bool was_bundle_head =
+        (slot != &process->decoded_scratch) && slot->pc != pc &&
+        slot->exec_cached == &exec_bundle;
+#endif
     *slot = decode_tmp;
+
+#if VM_BUNDLES && ICACHE_HEAD_SHIFT
+    if (was_bundle_head) process->icache_head_clash = pc;
+#endif
 
 #if VM_BUNDLES
     // Formar paquete, si procede.  Va AQUI y no en el hot path a proposito:
@@ -1445,6 +1537,12 @@ void decode_instruction(ProcessVM *process) {
 
     PROFILE_END("DECODER");
     vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
+}
+
+void decode_instruction(ProcessVM *process) { decode_impl<false>(process); }
+
+void decode_instruction_after_miss(ProcessVM *process) {
+    decode_impl<true>(process);
 }
 
 /**

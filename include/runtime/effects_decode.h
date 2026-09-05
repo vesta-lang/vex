@@ -65,6 +65,21 @@
 namespace runtime {
 
 /**
+ * @brief Los cuatro campos IMPLICITOS, en el orden del derivador.
+ *
+ * Lo que una instruccion toca sin nombrarlo en ningun operando.  Viven aqui, y
+ * no donde se usan, porque los comparten dos que no se pueden incluir entre si:
+ * el modelo de "que toca" (`bundle/touch.h`) y las instrucciones FUSIONADAS,
+ * que tienen que declarar sus propios efectos.
+ */
+enum : uint8_t {
+    kFlags = 1u << 0,
+    kStack = 1u << 1,
+    kFrame = 1u << 2,
+    kPc = 1u << 3,
+};
+
+/**
  * @brief Donde vive un registro dentro de la instruccion ya descodificada.
  *
  * Hace falta para poder REESCRIBIRLO: fusionar dos instrucciones en una pasa

@@ -77,6 +77,16 @@ enum class BodyKind {
     Branch,  ///< saltos condicionales cortos: rompe el tramo recto a menudo
     Float,   ///< coma flotante escalar: OTRO banco de registros
     Mixed,   ///< las anteriores alternadas
+    /**
+     * @brief El patron que el FUSIONADOR sabe juntar: `mov` + ALU.
+     *
+     * Existe porque el codigo real no lo trae -- el emisor de intermedio ya lo
+     * baja fusionado --, y sin un programa que lo lleve, toda la maquinaria de
+     * fusion queda SIN EJERCITAR: no se comprueba que el resultado sea el
+     * mismo, ni que la cuenta de instrucciones no cambie.  Un mecanismo que no
+     * se ejecuta en ninguna prueba no es un mecanismo, es codigo.
+     */
+    Fusable,
 };
 
 /// @brief Nombre corto de una clase, para los nombres de fichero y las tablas.
@@ -87,6 +97,7 @@ inline const char *body_kind_name(BodyKind k) {
     case BodyKind::Memory: return "memoria";
     case BodyKind::Branch: return "ramas";
     case BodyKind::Float: return "float";
+    case BodyKind::Fusable: return "fusible";
     default: return "mixta";
     }
 }
@@ -126,6 +137,23 @@ inline std::string body_instruction(BodyKind kind, uint32_t i) {
         const std::string g = "f" + std::to_string((int)((i + 1) % 3) + 2);
         if (i % 2 == 0) return "    fadd " + f + ", " + g + "\n";
         return "    fsub " + f + ", " + g + "\n";
+    }
+    case BodyKind::Fusable: {
+        /* `mov rd, rs1` + ALU sobre rd: el par que el fusionador convierte en
+         * la variante de TRES operandos.
+         *
+         * El destino NO tiene que morir -- la fusionada lo escribe igual --,
+         * asi que basta con emitir los dos pegados.  Se alternan destino y
+         * operacion para que no salga un unico par repetido: lo que interesa es
+         * que pasen por el fusionador combinaciones distintas, con y sin signo.
+         *
+         * Se usan r5..r7 y se leen r2..r4, que es lo que el prologo deja
+         * inicializado; escribir en r0 estropearia el valor de retorno con el
+         * que el test compara. */
+        static const char *kOps[3] = {"adds", "subs", "xor"};
+        const std::string dst = std::to_string((int)(i % 3) + 5); // r5..r7
+        return "    mov r" + dst + ", r" + rn + "\n    " +
+               kOps[i % 3] + " r" + dst + ", r" + other + "\n";
     }
     default:
         if (i % 3 == 0) return "    adds r" + rn + ", 3\n";
@@ -242,6 +270,7 @@ default_bundle_programs(const char *prefix = "test_bundles") {
         {"ramas", 100000, 8, BodyKind::Branch},
         {"float", 200000, 8, BodyKind::Float},
         {"mixta", 150000, 12, BodyKind::Mixed},
+        {"fusible", 200000, 8, BodyKind::Fusable},
         {"desborda", 4, 300000, BodyKind::Mixed},
     };
 
