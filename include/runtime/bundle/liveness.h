@@ -83,25 +83,6 @@ void bundle_live_after(const Bundle &b, const Touch *t, uint16_t live_out,
  */
 uint16_t live_out_after(ProcessVM *process, uint64_t pc);
 
-/**
- * @brief Desde donde se puede partir @p b en dos mitades INDEPENDIENTES.
- *
- * Busca el corte mas EQUILIBRADO: lo que se gana al repartir es el tiempo de la
- * mitad mas corta, asi que cortar en la posicion 1 no ahorra nada y cuesta el
- * traspaso igual.
- *
- * @param tc    Lo que toca cada instruccion, ya calculado por quien forma el
- *              paquete.  Se recibe en vez de calcularse porque el
- *              reordenador y el fusionador quieren lo mismo: hacerlo aqui
- *              otra vez costaba un 19% en el motor de paquetes.
- * @param begin Sale con el indice del corte.
- * @param end   Sale con el final de la parte repartible: lo de ahi en adelante
- *              lo ejecuta el hilo principal, porque hay una barrera.
- * @return true si hay un corte valido.
- */
-bool bundle_split_point(const Bundle &b, const BundleTouch &tc,
-                        uint8_t &begin, uint8_t &end, uint64_t *reject);
-
 } // namespace runtime
 
 #endif // VM_BUNDLES

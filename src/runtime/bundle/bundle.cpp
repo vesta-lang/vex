@@ -58,6 +58,14 @@ namespace {
         if (__builtin_expect((p)->bundle_stats_on, 0))                         \
             (p)->bundle_stats.field += vm_bstat_n;                             \
     } while (0)
+/// Como `BSTAT` pero sobre una casilla de un array de motivos.  El indice se
+/// evalua siempre, igual que el argumento de `BSTAT_ADD` y por lo mismo.
+#define BSTAT_IDX(p, field, i)                                                 \
+    do {                                                                       \
+        const size_t vm_bstat_i = (size_t)(i);                                 \
+        if (__builtin_expect((p)->bundle_stats_on, 0))                         \
+            ++(p)->bundle_stats.field[vm_bstat_i];                             \
+    } while (0)
 
 /**
  * @brief Si esta instruccion NO puede ir dentro de un paquete.
@@ -452,21 +460,72 @@ void bundle_release(ProcessVM *process) {
                          (unsigned long long)s.ooo_splittable,
                          (unsigned long long)s.ooo_split,
                          (unsigned long long)s.ooo_searched);
+            /* Y el TAMANyO del bocado, que es lo que decide si compensa.  Va
+             * en la misma linea que los recuentos porque se leen juntos: cien
+             * mil repartos de seis instrucciones cada uno no son reparto, son
+             * cien mil traspasos. */
+            if (s.ooo_split != 0)
+                std::fprintf(stderr,
+                             "                    %.1f instr por entrega "
+                             "(%llu delegadas)\n",
+                             (double)s.ooo_delegated / (double)s.ooo_split,
+                             (unsigned long long)s.ooo_delegated);
+            /* Y CUANTAS VECES hubo que parar.  Es la cifra que dice si esto
+             * llego a ser una tuberia: una parada por entrega es el fork-join
+             * de antes con otro nombre, y entonces el reparto no puede ganar
+             * por mucho que crezca la racion. */
+            if (s.ooo_split != 0)
+                std::fprintf(stderr,
+                             "                    %llu paradas -- %.2f por "
+                             "entrega (1.00 = no hay tuberia)\n",
+                             (unsigned long long)s.ooo_drains,
+                             (double)s.ooo_drains / (double)s.ooo_split);
         }
-        /* Y POR QUE no se pudo partir.  Con "partibles=0" a secas no se sabe si
-         * es que no hay paralelismo o si una condicion mia lo descarta todo, y
-         * eso ya ha costado dos suposiciones equivocadas seguidas. */
-        static const char *const kPorQue[6] = {
-            "el paquete es muy corto",
-            "hay una barrera muy pronto",
-            "las dos mitades tocan los mismos campos",
-            "las dos mitades tocan memoria",
-            "las dos mitades comparten registros",
-            "en la mitad delegada hay algo que lee rip"};
+        /* El ANALISIS delegado, que es la otra mitad del reparto y se lee
+         * aparte.  Las tres cifras contestan tres preguntas distintas:
+         * cuantos se encargaron, cuantos se quedaron CRUDOS por falta de sitio
+         * -- correctos pero sin optimizar --, y cuantos llego a ESTRENAR el
+         * hilo de ejecucion.  Preparar mucho y estrenar poco significa que la
+         * version buena llega tarde, que no es lo mismo que no prepararla. */
+        if (s.ooo_prepares != 0 || s.ooo_prepares_lost != 0)
+            std::fprintf(stderr,
+                         "           analisis: encargados=%llu  aqui=%llu  "
+                         "estrenados=%llu\n",
+                         (unsigned long long)s.ooo_prepares,
+                         (unsigned long long)s.ooo_prepares_lost,
+                         (unsigned long long)s.ooo_improved);
+        /* Y POR QUE no se delego, cuando no se delego.  Con "repartidos=0" a
+         * secas no se sabe si es que no hay paralelismo o si una condicion mia
+         * lo descarta todo, y eso ya ha costado dos suposiciones seguidas.
+         *
+         * Los dos ultimos motivos importan mas de lo que parece: "la cola
+         * estaba llena" significa que el ayudante NO da abasto, que es el
+         * problema contrario a no encontrar trabajo independiente, y confundir
+         * los dos lleva a arreglar lo que no es. */
+        static const char *const kWhyNot[6] = {
+            "lleva algo que transfiere control",
+            "lleva algo que lee rip",
+            "depende de lo que ya esta en vuelo",
+            "la cola estaba llena",
+            "el ayudante lo tiene otro proceso",
+            "todavia no lo ha analizado nadie"};
         for (uint32_t i = 0; i < 6; ++i)
             if (s.ooo_reject[i] != 0)
-                std::fprintf(stderr, "             %-42s %10llu\n", kPorQue[i],
+                std::fprintf(stderr, "             %-42s %10llu\n", kWhyNot[i],
                              (unsigned long long)s.ooo_reject[i]);
+    }
+    /* Antes de soltar la arena: que no quede ningun encargo apuntando a ella ni
+     * a este proceso, y devolver el ayudante para que lo use el siguiente.
+     *
+     * Las dos cosas en este orden y las dos obligatorias.  Sin la espera, un
+     * encargo vivo escribiria en memoria ya liberada; sin soltar al duenyo, el
+     * primer proceso se lo queda para siempre y todos los demas se quedan sin
+     * reparto Y SIN ANALISIS, o sea con paquetes crudos.  Eso ultimo no falla
+     * -- solo rinde menos --, que es como estuvo pasando sin que nadie lo
+     * viera. */
+    if (process->bundle_ooo_on) {
+        ooo_drain_all();
+        ooo_release_owner(process);
     }
     delete static_cast<BundleArena *>(process->bundle_arena);
     process->bundle_arena = nullptr;
@@ -541,7 +600,8 @@ namespace {
  * @param next_pc Direccion de la instruccion siguiente al paquete.
  */
 [[gnu::noinline]] void bundle_prepare(ProcessVM *process, Bundle &b,
-                                      uint64_t next_pc) {
+                                      uint64_t next_pc,
+                                      const uint16_t *live_out_pre) {
     /* QUE TOCA cada instruccion, UNA sola vez.
      *
      * Los tres pasos que vienen detras -- reordenar, fusionar y buscar por
@@ -595,62 +655,53 @@ namespace {
                                    &process->bundle_stats.newop_ready,
                                    &process->bundle_stats.newop_livewall};
         BSTAT_ADD(process, fused,
-                  bundle_fuse(b, tc, process, next_pc,
+                  bundle_fuse(b, tc, process, next_pc, live_out_pre,
                               process->bundle_stats_on ? &tel : nullptr));
     }
 
-    /* Y por donde se puede partir en dos mitades independientes, si se puede.
+    /* Y QUE TOCA el paquete entero, para poder decidir al ejecutarlo si se le
+     * puede dar al ayudante sin volver a mirarlo instruccion a instruccion.
      *
-     * Se busca AQUI, al formar, que es donde se puede pensar; ejecutar solo
-     * mira el campo.  Y se busca SIEMPRE, no solo con el reparto encendido:
-     * saber si un paquete es partible es un dato del paquete, y tenerlo
-     * apagado por defecto significaba que la telemetria decia cero sin haber
-     * mirado -- que no es lo mismo que "no hay".
+     * Se resume AQUI, al formar, que es donde se puede pensar; ejecutar solo
+     * lee seis bytes.  Y solo con el reparto pedido: es una pasada mas por
+     * formacion, y engancharla a las ESTADISTICAS hacia que mirar los numeros
+     * los cambiara -- el banco de MIPS las enciende para su informe --.
      *
-     * Se puede porque cuesta O(k) sobre datos que YA estan: dos pasadas para
-     * las uniones de prefijo y sufijo, y cada candidato es comparar dos
-     * mascaras.  Costo un 40% cuando recorria las dos mitades por cada corte
-     * (O(k^2)) y otro 19% cuando ademas recalculaba `Touch`; lo primero se
-     * arreglo con los prefijos y lo segundo compartiendo el analisis. */
-    /* Y SABER que es partible no es lo mismo que PARTIRLO.  El corte se busca
-     * siempre -- es un dato del paquete, y tenerlo apagado hacia que la
-     * telemetria dijera cero sin haber mirado --, pero solo se publica en
-     * `b.split` cuando el reparto esta pedido.
-     *
-     * Separarlo importa porque `split != 0` es lo que mira el bucle de
-     * EJECUCION: publicarlo mete una llamada a `ooo_dispatch` en el camino
-     * caliente, que es el 99,4% de las veces, y esa llamada arranca el hilo
-     * ayudante por su cuenta.  Publicandolo siempre, el reparto corria sin que
-     * nadie lo hubiera encendido y costaba un 21%.
-     *
-     * Y la busqueda va con el REPARTO, no con el observador.  Cuesta un 8% en
-     * el motor de paquetes -- una pasada mas por formacion y una llamada que
-     * no cruza unidades de traduccion --, asi que engancharla a las
-     * estadisticas hacia que MIRAR los numeros cambiara los numeros: el banco
-     * de MIPS enciende `bundle_stats_on` para su informe, y pagaba el 8% en
-     * todas las medidas.
-     *
-     * Lo que no puede pasar es que entonces la telemetria diga "0 partibles",
-     * que se lee como "no hay donde partir" cuando en realidad NADIE MIRO.  Por
-     * eso se apunta aparte si la busqueda llego a correr, y el informe lo dice
-     * con esas palabras. */
-    uint8_t split = 0, split_end = 0;
-    if (want_split) BSTAT(process, ooo_searched);
-    if (want_split &&
-        bundle_split_point(b, tc, split, split_end,
-                           process->bundle_stats_on
-                               ? process->bundle_stats.ooo_reject
-                               : nullptr)) {
-        BSTAT(process, ooo_splittable);
-        if (process->bundle_ooo_on) {
-            b.split = split;
-            b.split_end = split_end;
+     * Cuando no corre, la telemetria dice "no se busco" en vez de "0
+     * delegados", que se leeria como "no hay nada que repartir" siendo otra
+     * cosa muy distinta. */
+    if (want_split) {
+        BSTAT(process, ooo_searched);
+        /* El resumen del paquete ENTERO, del mismo `tc` que ya esta calculado.
+         *
+         * Ya no se busca un corte DENTRO del paquete: eso repartia media
+         * docena de instrucciones y esperaba en el sitio.  Ahora la unidad es
+         * el paquete entero y la pregunta es otra -- puede irse tal cual? --,
+         * que se contesta con una union de mascaras. */
+        // Ya se ha mirado: se quita la marca de "no se sabe".
+        Bundle::Summary su;
+        su.flags = 0;
+        for (uint32_t i = 0; i < b.k; ++i) {
+            su.reg_read = (uint16_t)(su.reg_read | tc.t[i].reg_read);
+            su.reg_write = (uint16_t)(su.reg_write | tc.t[i].reg_write);
+            su.field = (uint8_t)(su.field | tc.t[i].field_read |
+                                 tc.t[i].field_write);
+            if (tc.t[i].mem) su.flags |= Bundle::SUM_MEM;
+            if (tc.kind[i] == TouchKind::Barrier) su.flags |= Bundle::SUM_BARRIER;
+            if (tc.kind[i] == TouchKind::ReadsPc) su.flags |= Bundle::SUM_READS_PC;
         }
+        b.summary = su;
+        if ((su.flags & Bundle::SUM_NOT_DELEGABLE) == 0)
+            BSTAT(process, ooo_splittable);
     }
-
 }
 
 } // namespace
+
+void bundle_prepare_worker(ProcessVM *process, Bundle &b, uint64_t next_pc,
+                           uint16_t live_out) {
+    bundle_prepare(process, b, next_pc, &live_out);
+}
 
 /**
  * @brief Reinicia la region vieja.  Camino FRIO del punto de gracia.
@@ -804,10 +855,56 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
      * `Bundle::head`. */
     b.head = b.instr[0];
 
-    bundle_prepare(process, b, next_pc);
-
+    /* PREPARAR: aqui mismo, o en el ayudante.
+     *
+     * Reordenar y fusionar no depende de ningun registro ni de ninguna memoria
+     * del programa -- es una funcion de las instrucciones, y esas ya estan --,
+     * asi que se puede hacer en otro nucleo mientras este ejecuta.  Y conviene:
+     * corre en CADA fallo de icache, o sea en el camino critico, y en los
+     * bloques cortos eso llego a medirse en un 8%.
+     *
+     * Con el reparto encendido, el paquete se publica CRUDO y la version buena
+     * llega despues.  Publicar crudo es correcto: las dos cosas son
+     * optimizaciones, no semantica, asi que lo unico que pasa mientras tanto es
+     * que las primeras vueltas van sin reordenar ni fusionar. */
     Bundle *rec = arena->alloc();
-    *rec = b;
+    bool delegated = false;
+    if (__builtin_expect(process->bundle_ooo_on, 0)) {
+        /* La copia la reserva ESTE hilo, porque la arena no es de varios.  Y
+         * solo si la cola tiene hueco: reservarla para descubrir despues que no
+         * cabe seria gastar una ranura de arena por nada. */
+        Bundle *scratch =
+            ooo_pending() < kOooSlots ? arena->alloc() : nullptr;
+        if (scratch != nullptr) {
+            *scratch = b;
+            /* La vivacidad se mira AQUI, no en el ayudante: exige descodificar
+             * hasta ocho instrucciones mas alla del paquete, o sea leer el
+             * bytecode del proceso, y eso desde otro hilo es una carrera.  Y de
+             * las malas: no falla, fusiona MAL -- el programa devolvia 0 donde
+             * esperaba 19 --. */
+            const uint16_t live_out = live_out_after(process, next_pc);
+            if (live_out == 0xFFFF) BSTAT(process, lookahead_blind);
+            // Crudo, para publicarlo ya: se ejecuta correcto desde la vuelta 1
+            // y la version buena lo sustituye cuando llegue.
+            *rec = b;
+            delegated =
+                ooo_push_prepare(process, rec, scratch, next_pc, live_out);
+            if (delegated) BSTAT(process, ooo_prepares);
+        }
+    }
+    /* Si no se pudo delegar, se prepara AQUI.
+     *
+     * Antes se dejaba crudo, y eso era un agujero: a un paquete ya formado no
+     * vuelve a preguntarle nadie, asi que "no cabia en la cola" se convertia en
+     * "sin reordenar ni fusionar PARA SIEMPRE".  Medido en un tramo recto
+     * largo: 32 de 65 paquetes se quedaban asi, o sea la mitad del programa
+     * corriendo sin optimizar.  Prepararlo aqui cuesta exactamente lo que
+     * costaba antes de que existiera el reparto. */
+    if (!delegated) {
+        bundle_prepare(process, b, next_pc, nullptr);
+        *rec = b;
+        if (process->bundle_ooo_on) BSTAT(process, ooo_prepares_lost);
+    }
 
     // La entrada pasa a ser cabecera de paquete: `pc` se queda (es la clave del
     // acierto) y `exec_cached` cambia de destino.  El hot path no se entera.
@@ -828,6 +925,23 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
 
 void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
     Bundle *b = bundle_of(d);
+    /* RECOGER la version preparada, si el ayudante ya la dejo.
+     *
+     * Una carga y una rama por DESPACHO -- no por instruccion --, y en x86-64
+     * un `acquire` de puntero alineado es una carga normal.  El intercambio lo
+     * hace ESTE hilo, que es el unico que escribe la entrada de icache: el
+     * ayudante solo publica el puntero.  Asi no hay dos hilos escribiendo lo
+     * mismo en ningun momento.
+     *
+     * El paquete crudo no se libera: la arena no recicla todavia, y en cuanto
+     * la entrada apunta a la version buena nadie vuelve a mirarlo. */
+    if (__builtin_expect(b->improved != nullptr, 0)) {
+        Bundle *imp = __atomic_load_n(&b->improved, __ATOMIC_ACQUIRE);
+        b->improved = nullptr; // ya recogido: no volver a mirarlo
+        bundle_store(const_cast<DecodedInstr *>(&d), imp);
+        b = imp;
+        BSTAT(process, ooo_improved);
+    }
     // `head` es la entrada de icache por la que ENTRO el run_loop, y no cambia
     // aunque se encadenen paquetes: es en ella donde hay que dejar `did_jump` y
     // `blocking`, porque es la que el run_loop va a mirar al volver.
@@ -1000,6 +1114,49 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
         }
     } profit{process, b, head};
 
+    /**
+     * @brief Nada delegado sobrevive a la salida del despacho.
+     *
+     * `exec_bundle` vuelve por media docena de sitios -- se bloqueo, salto
+     * fuera, se acabaron las reducciones -- y en cuanto vuelve, el planificador
+     * puede darle el turno a OTRO proceso.  Si quedara trabajo en vuelo, ese
+     * otro veria registros a medio escribir, y eso no da un error: da otro
+     * resultado.
+     *
+     * Va en un destructor y no en cada `return` por eso mismo: un camino de
+     * salida que alguien anyada manyana lo hereda gratis.  Y se declara DESPUES
+     * de `profit` para destruirse ANTES, porque `profit` lee el estado del
+     * proceso para decidir si el paquete compensa.
+     *
+     * En el caso normal -- reparto apagado, o nada en vuelo -- son dos cargas
+     * relajadas y una rama.
+     */
+    struct DrainGuard {
+        ProcessVM *p;
+        ~DrainGuard() {
+            /* `ooo_exec_dirty` va PRIMERO y es local.  La atomica que sigue la
+             * escribe el ayudante, asi que leerla trae su linea de cache: si se
+             * mirara siempre, cada despacho pagaria un rebote entre nucleos
+             * aunque no se hubiera delegado nada nunca.  Salia en el perfil. */
+            if (__builtin_expect(p->ooo_exec_dirty, 0) &&
+                g_ooo_exec_pending.load(std::memory_order_acquire) != 0) {
+                ooo_drain();
+                p->ooo_inflight = ProcessVM::OooInflight{};
+                p->ooo_exec_dirty = false;
+                BSTAT(p, ooo_drains);
+                /* Y CUENTA para la prueba, igual que la parada por dependencia.
+                 *
+                 * Sin esto la prueba miraba solo las paradas por choque y no
+                 * veia esta, que en los paquetes que no se encadenan es TODAS:
+                 * un despacho, una entrega, una espera aqui.  El resultado era
+                 * una entrega por parada -- fork-join -- con el contador de
+                 * choques a UNO, y la delegacion no se apagaba nunca.  Lo
+                 * delato el propio informe: 37.516 paradas y 1 dependencia. */
+                ++p->ooo_probe_drains;
+            }
+        }
+    } drain_guard{process};
+
     uint32_t turns = 0; ///< paquetes encadenados sin soltar el despacho
     uint32_t i = 0;
     // `k` y la base en locales: el bucle las leia a traves del puntero en cada
@@ -1015,50 +1172,102 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
     DecodedInstr **const dp = &process->decoded_ptr;
     auto &rip = process->registers.rip;
 
-    /* --- REPARTIR EL PAQUETE ENTRE DOS NUCLEOS ------------------------------
+    /* --- REPARTIR PAQUETES ENTEROS, EN TUBERIA ------------------------------
      *
-     * Si al formar se encontro un corte con dos mitades sin nada en comun, la
-     * segunda se le pasa al ayudante y esta se ejecuta aqui.  Al terminar se
-     * espera, y `rip` avanza lo de las DOS.
+     * Si este paquete no depende de lo que el ayudante tiene en vuelo y no
+     * lleva nada que transfiera control, se le entrega ENTERO y aqui no se
+     * ejecuta: solo avanza `rip` y se sigue con el paquete siguiente.  No se
+     * espera.
      *
-     * Que salga a cuenta o no es justo lo que se esta probando: un paquete son
-     * decenas de nanosegundos y el traspaso entre nucleos no es gratis.  Por
-     * eso el traspaso esta hecho lo mas barato que se puede -- una atomica y
-     * espera activa -- y el ayudante atado a otro nucleo fisico: si aun asi
-     * pierde, pierde el mecanismo y no la implementacion.
+     * Lo que se espera es OTRA cosa: cuando lo que viene SI depende de lo que
+     * vuela.  Ahi se vacia la cola.  Esa es toda la diferencia con la version
+     * anterior, que esperaba en cada vuelta y por eso no podia ganar --
+     * medido: `Serializing Operations` al 100% de los ciclos, 0,755 s
+     * esperando contra 0,411 s trabajando, y raciones de 15,9 instrucciones.
      *
      * Se apaga con `VESTA_NO_BUNDLE_OOO`, que es lo que permite medir las dos
      * cosas en la misma maquina y el mismo binario. */
-    if (__builtin_expect(b->split != 0, 0)) {
-        const uint32_t s = b->split, e = b->split_end;
-        if (ooo_dispatch(process, insts + s, e - s)) {
-            /* Esta mitad aqui, la otra en el ayudante, a la vez.
-             *
-             * `rip` avanza UNA A UNA, no en bloque al final: aqui puede haber
-             * instrucciones que lo LEEN -- `push` es la mas comun -- y en serie
-             * verian el valor acumulado hasta ellas.  Avanzarlo de golpe les
-             * daria otro, y eso no da un error: da otro resultado.  Las que lo
-             * leen se quedan en este hilo justamente por esto; al ayudante solo
-             * se le manda lo que no lo mira. */
-            for (uint32_t j = 0; j < s; ++j) {
-                insts[j].exec_cached(process, insts[j]);
+    if (__builtin_expect(process->bundle_ooo_on && process->ooo_try_exec, 0)) {
+        const Bundle::Summary &su = b->summary;
+        ProcessVM::OooInflight &fly = process->ooo_inflight;
+
+        /* Choca con lo que vuela?  Las tres formas: leer o escribir lo que el
+         * otro escribe, escribir lo que el otro lee, y coincidir en un recurso
+         * que no se puede desambiguar (los campos implicitos y la memoria de
+         * la VM). */
+        const bool clash =
+            (((uint16_t)(su.reg_read | su.reg_write) & fly.reg_write) != 0) ||
+            ((su.reg_write & fly.reg_read) != 0) ||
+            ((su.field & fly.field) != 0) ||
+            (((su.flags & Bundle::SUM_MEM) != 0) && fly.mem);
+
+        if (clash) {
+            /* Vaciar y limpiar.  Esto es lo unico que serializa, y CUANTAS
+             * veces pasa es la cifra que dice si esto llego a ser una tuberia:
+             * una por entrega seria el fork-join de antes con otro nombre. */
+            ooo_drain();
+            fly = ProcessVM::OooInflight{};
+            process->ooo_exec_dirty = false;
+            BSTAT(process, ooo_drains);
+            BSTAT_IDX(process, ooo_reject, 2);
+            ++process->ooo_probe_drains;
+        }
+
+        /* Y por que NO se delega, cuando no se delega.  Es lo que contesta "no
+         * le estamos dando bastante" frente a "no hay nada que dar". */
+        if ((su.flags & Bundle::SUM_UNKNOWN) != 0) {
+            /* Todavia no lo ha mirado nadie -- el analisis va en el ayudante y
+             * llega despues --, asi que NO se toca.  Tratarlo como delegable
+             * era delegar saltos: la telemetria decia `partibles=0
+             * repartidos=5`, cero declarados y cinco delegados. */
+            BSTAT_IDX(process, ooo_reject, 5);
+        } else if ((su.flags & Bundle::SUM_BARRIER) != 0) {
+            BSTAT_IDX(process, ooo_reject, 0);
+        } else if ((su.flags & Bundle::SUM_READS_PC) != 0) {
+            BSTAT_IDX(process, ooo_reject, 1);
+        } else if (ooo_push(process, insts, k)) {
+            /* Se va entero.  Aqui solo avanza `rip` -- de una vez, porque nada
+             * de lo delegado lo lee -- y la cuenta de instrucciones. */
+            for (uint32_t j = 0; j < k; ++j) {
                 rip.qword(rip.raw() + insts[j].flags_info.size_instr);
                 profit.instrs += 1u + insts[j].flags_info.absorbed;
             }
-            ooo_join();
+            fly.reg_read = (uint16_t)(fly.reg_read | su.reg_read);
+            fly.reg_write = (uint16_t)(fly.reg_write | su.reg_write);
+            fly.field = (uint8_t)(fly.field | su.field);
+            fly.mem = fly.mem || ((su.flags & Bundle::SUM_MEM) != 0);
+            process->ooo_exec_dirty = true;
 
-            // Lo del ayudante no toca `rip`, asi que su avance va de una vez.
-            for (uint32_t j = s; j < e; ++j) {
-                rip.qword(rip.raw() + insts[j].flags_info.size_instr);
-                profit.instrs += 1u + insts[j].flags_info.absorbed;
-            }
-
-            /* Y se sigue EN SERIE desde donde acaba la parte repartible: ahi
-             * empieza la barrera que impidio repartir mas, y una barrera tiene
-             * que ejecutarse en su sitio.  Del resto se encarga el bucle
-             * normal. */
-            i = e;
             BSTAT(process, ooo_split);
+            BSTAT_ADD(process, ooo_delegated, k);
+            i = k; // nada que ejecutar aqui: el bucle de abajo no entra
+
+            /* Y la PRUEBA: esto sirve o solo estorba?
+             *
+             * Si casi todas las entregas acabaron obligando a una parada, no
+             * hay tuberia -- es un fork-join con otro nombre -- y se deja de
+             * intentar.  El analisis se le sigue dando igual, que ese no
+             * depende de nada.
+             *
+             * Se mide en vez de decidirlo por adelantado porque la respuesta
+             * es del PROGRAMA, no del mecanismo: un bucle sobre un acumulador
+             * no tiene dos paquetes independientes seguidos, y otro codigo
+             * puede tenerlos. */
+            if (++process->ooo_probe_splits >= ProcessVM::kOooProbe) {
+                // Nueve de cada diez: por debajo de eso todavia hay tuberia.
+                process->ooo_try_exec =
+                    process->ooo_probe_drains * 10u <
+                    process->ooo_probe_splits * 9u;
+                process->ooo_probe_splits = 0;
+                process->ooo_probe_drains = 0;
+            }
+        } else {
+            /* La cola estaba llena o el ayudante lo tiene otro proceso.  Las
+             * dos se apuntan aparte: "llena" significa que el ayudante no da
+             * abasto, que es un problema MUY distinto de no encontrar trabajo
+             * independiente. */
+            BSTAT_IDX(process, ooo_reject,
+                      ooo_pending() >= kOooSlots ? 3u : 4u);
         }
     }
 

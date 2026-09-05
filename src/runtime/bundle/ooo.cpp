@@ -79,26 +79,64 @@ struct ProcessBasicAffinity {
 };
 #endif
 
-/// Girar, coger, ejecutar, avisar.
+/**
+ * @brief Girar sobre la cola: coger un encargo, ejecutarlo, avanzar.
+ *
+ * El indice `tail` se publica DESPUES de ejecutar, nunca antes: es lo que le
+ * dice al productor que ese encargo ya termino, y adelantarlo dejaria a
+ * `ooo_drain` volviendo con trabajo a medias.
+ *
+ * Y se avanza de uno en uno aunque haya varios encolados.  Publicar el ultimo y
+ * ya seria menos trafico entre nucleos, pero entonces el productor no sabria
+ * cuantas ranuras tiene libres hasta el final de la tanda y la cola se
+ * comportaria como una sola ranura grande -- que es justo lo que se quiere
+ * evitar.
+ */
 void worker_loop() {
     for (;;) {
-        const uint32_t s = g_ooo.state.load(std::memory_order_acquire);
-        if (s == kOooIdle) {
+        const uint32_t t = g_ooo.tail.load(std::memory_order_relaxed);
+        /* `acquire` sobre `head`: si hay encargo nuevo, su ranura tiene que
+         * verse ya escrita.  Es el otro lado del `release` de `ooo_push`. */
+        if (t == g_ooo.head.load(std::memory_order_acquire)) {
+            if (__builtin_expect(g_ooo.stop.load(std::memory_order_relaxed) != 0,
+                                 0))
+                return;
             ooo_pause();
             continue;
         }
-        if (s == kOooStop) return;
 
-        /* Las instrucciones de esta mitad no tocan nada de la otra: ni sus
-         * registros, ni las banderas, ni la memoria.  Por eso aqui no hay
-         * ninguna sincronizacion -- las condiciones estan en la cabecera, y las
-         * comprueba `bundle_split_point` al FORMAR. */
-        ProcessVM *proc = g_ooo.proc;
-        const DecodedInstr *p = g_ooo.instr;
-        const uint32_t n = g_ooo.n;
-        for (uint32_t i = 0; i < n; ++i) p[i].exec_cached(proc, p[i]);
+        const OooJob &job = g_ooo.job[t & (kOooSlots - 1)];
+        ProcessVM *proc = job.proc;
+        if (job.kind == OooKind::Execute) {
+            /* Lo de este encargo no toca nada de lo que el principal esta
+             * haciendo: ni sus registros, ni las banderas, ni su memoria.  Por
+             * eso aqui no hay ninguna sincronizacion -- las condiciones estan
+             * en la cabecera y las comprueba el productor contra el resumen
+             * del paquete antes de encolarlo. */
+            const DecodedInstr *p = job.instr;
+            const uint32_t n = job.n;
+            for (uint32_t i = 0; i < n; ++i) p[i].exec_cached(proc, p[i]);
+            /* `release`: los registros que se acaban de escribir tienen que
+             * verse ANTES de que el principal vea el contador a cero, que es
+             * lo que le dice que puede seguir. */
+            g_ooo_exec_pending.fetch_sub(1, std::memory_order_release);
+        } else {
+            /* PREPARAR: reordenar y fusionar una copia que nadie mas mira.
+             *
+             * No depende de ningun registro ni de ninguna memoria del programa
+             * -- es una funcion de las instrucciones, y esas ya estan --, asi
+             * que puede correr mientras el principal ejecuta el paquete crudo.
+             *
+             * Al terminar se publica el puntero con `release`: quien ejecuta lo
+             * lee con `acquire` y solo entonces mira el contenido, que para
+             * entonces ya esta escrito entero. */
+            bundle_prepare_worker(proc, *job.scratch, job.next_pc,
+                                  job.live_out);
+            __atomic_store_n(&job.target->improved, job.scratch,
+                             __ATOMIC_RELEASE);
+        }
 
-        g_ooo.state.store(kOooIdle, std::memory_order_release);
+        g_ooo.tail.store(t + 1, std::memory_order_release);
     }
 }
 
@@ -182,8 +220,10 @@ void ooo_start() {
 
 void ooo_shutdown() {
     if (!g_ooo_started.load(std::memory_order_acquire)) return;
-    ooo_join();
-    g_ooo.state.store(kOooStop, std::memory_order_release);
+    // Primero que acabe lo encolado, y solo despues la senyal de parar: al
+    // reves se perderia trabajo ya publicado.
+    ooo_drain_all();
+    g_ooo.stop.store(1, std::memory_order_release);
 #if defined(_WIN32)
     if (g_worker != nullptr) {
         NtWaitForSingleObject(g_worker, FALSE, nullptr);

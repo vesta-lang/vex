@@ -217,22 +217,86 @@ struct Bundle {
      * porque para entonces el paquete puede estar ya recogido.  Caben en un
      * byte porque un paquete tiene como mucho 31 pares. */
     /**
-     * @brief Desde donde el paquete se puede partir en dos mitades
-     *        INDEPENDIENTES, o 0 si no se puede.
+     * @brief Que toca el paquete ENTERO, resumido en seis bytes.
      *
-     * `instr[0..split)` y `instr[split..k)` no comparten nada: ni registros, ni
-     * banderas, ni memoria, y ninguna transfiere control.  Con eso las dos se
-     * pueden ejecutar A LA VEZ sin ninguna sincronizacion entre ellas.
+     * Es lo que permite decidir si dos paquetes CONSECUTIVOS son independientes
+     * sin volver a mirar sus instrucciones, y por tanto si el segundo se le
+     * puede dar al ayudante mientras este corriendo el primero.
      *
-     * Se busca al FORMAR, que es donde se puede pensar; ejecutar solo mira este
-     * campo.  Cero es "no se puede", que es el caso comun.
+     * Se llena al formar, a partir del mismo `BundleTouch` que usan el
+     * reordenador y el fusionador: no cuesta ni una consulta mas.
+     *
+     * Por que el paquete entero y no media: la version anterior repartia MEDIO
+     * paquete y esperaba en el sitio, o sea ~16 instrucciones por entrega --
+     * unos 47 ns de trabajo -- para un traspaso entre nucleos que cuesta
+     * cientos.  Medido: 0,755 s esperando contra 0,411 s trabajando.  El
+     * mecanismo no puede compensar con esa racion, y esto es lo que hace falta
+     * para darle una mas grande.
      */
-    uint8_t split = 0;
+    struct Summary;
+    /// El paquete toca memoria de la VM.  Sin desambiguar direcciones, dos
+    /// accesos cualesquiera pueden ir al mismo sitio.
+    static constexpr uint8_t SUM_MEM = 1u << 0;
+    /// Hay algo que transfiere control, se bloquea o puede abortar.  Un paquete
+    /// asi no se delega: si aborta, lo que corriera en paralelo no debia haber
+    /// corrido.
+    static constexpr uint8_t SUM_BARRIER = 1u << 1;
+    /// Hay algo que lee `rip`.  Su valor depende de cuantas se hayan ejecutado
+    /// ya, y eso lo sabe quien las lleva en orden, no quien recibe un bloque.
+    static constexpr uint8_t SUM_READS_PC = 1u << 2;
+    /**
+     * @brief NADIE HA MIRADO todavia lo que hace este paquete.
+     *
+     * Puesto por defecto, y esa es toda la gracia.  El resumen lo llena quien
+     * PREPARA el paquete, y con el reparto encendido eso ocurre en el ayudante
+     * y despues de publicarlo: entre medias hay un paquete vivo del que no se
+     * sabe nada.
+     *
+     * Sin este bit, "no se sabe nada" se codificaba como todo a cero -- ni
+     * barreras, ni registros, ni memoria --, que se lee exactamente igual que
+     * "no toca nada", o sea PERFECTAMENTE DELEGABLE.  El resultado era delegar
+     * paquetes sin mirarlos, saltos incluidos.  Se vio porque la telemetria
+     * decia `partibles=0  repartidos=5`: cero declarados delegables y cinco
+     * delegados.
+     *
+     * No poder demostrar que algo es seguro no es demostrar que sea inseguro,
+     * pero tampoco autoriza a tratarlo como seguro: mientras no se sepa, no se
+     * toca.
+     */
+    static constexpr uint8_t SUM_UNKNOWN = 1u << 3;
+    /// Lo que impide delegar un paquete entero.
+    static constexpr uint8_t SUM_NOT_DELEGABLE =
+        SUM_BARRIER | SUM_READS_PC | SUM_UNKNOWN;
 
-    /// Donde ACABA la parte repartible.  Lo de aqui en adelante lo ejecuta el
-    /// hilo principal en orden: es lo que hay de la primera barrera para alla,
-    /// y una barrera no se puede adelantar.
-    uint8_t split_end = 0;
+    struct Summary {
+        uint16_t reg_read = 0;  ///< registros que LEE, en total
+        uint16_t reg_write = 0; ///< registros que ESCRIBE, en total
+        uint8_t field = 0;      ///< campos implicitos que toca (banderas, pila)
+        /// @see SUM_MEM, SUM_BARRIER, SUM_READS_PC, SUM_UNKNOWN.  Arranca en
+        /// `SUM_UNKNOWN`: hasta que alguien mire, el paquete no se delega.
+        uint8_t flags = SUM_UNKNOWN;
+    };
+    Summary summary;
+
+    /**
+     * @brief La version PREPARADA de este paquete, o null mientras no la haya.
+     *
+     * Cuando el reparto esta encendido, el paquete se publica CRUDO -- sin
+     * reordenar ni fusionar, que es correcto porque las dos cosas son
+     * optimizaciones y no semantica -- y el ayudante prepara una copia por su
+     * cuenta.  Al terminar deja aqui el puntero, y quien ejecuta lo recoge en
+     * su siguiente pasada y cambia la entrada de icache.
+     *
+     * Es el UNICO dato que los dos hilos comparten, y por eso se lee y se
+     * escribe con `release`/`acquire` explicitos.  Se deja como puntero pelado
+     * y no como `std::atomic` porque `Bundle` se copia con `*rec = b` y un
+     * atomico no es copiable; los accesos van por los intrinsecos del
+     * compilador, que hacen lo mismo sin romper la copia.
+     *
+     * En x86-64 un `acquire` de puntero alineado es una carga normal, asi que
+     * mirarlo cuesta una carga y una rama por DESPACHO -- no por instruccion.
+     */
+    Bundle *improved = nullptr;
 
     uint8_t fused_pairs = 0;    ///< pares que el fusionador junto aqui
     uint8_t newop_ready = 0;    ///< pares que un opcode nuevo capturaria
@@ -489,6 +553,23 @@ inline Bundle *bundle_of(const DecodedInstr &d) {
         static_cast<uintptr_t>(d.data_instruction.raw_data.raw1));
 }
 
+/**
+ * @brief Reordena y fusiona @p b, desde el hilo AYUDANTE.
+ *
+ * Es la misma preparacion que corre al formar; existe aparte solo para que el
+ * ayudante pueda llamarla sin que `bundle.cpp` tenga que exponer su interior.
+ *
+ * @param process Proceso duenyo, para los interruptores y la telemetria.
+ * @param b       La COPIA sobre la que trabajar.  Nadie mas la mira.
+ * @param next_pc  Direccion siguiente al paquete, para los mensajes.
+ * @param live_out Registros vivos detras del paquete, calculados YA por el
+ *                 hilo duenyo.  No se pueden mirar aqui: exige descodificar
+ *                 bytecode del proceso, y eso desde otro hilo es una carrera
+ *                 que fusiona MAL en vez de fallar.
+ */
+void bundle_prepare_worker(ProcessVM *process, Bundle &b, uint64_t next_pc,
+                           uint16_t live_out);
+
 /// Guarda el paquete en la entrada de icache.
 inline void bundle_store(DecodedInstr *d, Bundle *b) {
     d->data_instruction.raw_data.raw1 =
@@ -582,8 +663,13 @@ struct FuseTelemetry {
     uint64_t *newop_livewall; ///< ...y los que no, por seguir vivo el temporal
 };
 
+/// @param live_out_pre Registros vivos detras del paquete, YA calculados, o
+///        null para mirarlo aqui.  Viene dado cuando esto corre en el hilo
+///        ayudante: mirarlo exige descodificar bytecode del proceso, y hacerlo
+///        desde otro hilo mientras el principal ejecuta es una carrera que no
+///        falla ruidosamente -- fusiona MAL y el programa da otro valor --.
 uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
-                     uint64_t next_pc,
+                     uint64_t next_pc, const uint16_t *live_out_pre,
                      const FuseTelemetry *tel);
 
 /**

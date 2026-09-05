@@ -946,11 +946,73 @@ class ProcessVM {
     /// path.
     bool bundle_fuse_on = true;
 
-    /// Repartir un paquete entre dos nucleos, por PROCESO.  Apagado por
-    /// defecto: buscar el corte es O(k^2) en cada formacion, y mientras sea un
-    /// experimento no debe cobrarle nada al camino normal.  Lo enciende
-    /// `VESTA_BUNDLE_OOO` o quien mida.
+    /// Repartir paquetes a un hilo ayudante, por PROCESO.  Apagado por
+    /// defecto: mientras sea un experimento no debe cobrarle nada al camino
+    /// normal.  Lo enciende `VESTA_BUNDLE_OOO` o quien mida.
     bool bundle_ooo_on = false;
+
+    /**
+     * @brief Lo que tocan los paquetes que estan EN VUELO en el ayudante.
+     *
+     * Es un marcador, y es lo que permite no esperar por paquete: mientras lo
+     * que viene no coincida con esto, el hilo principal sigue sin sincronizar
+     * con nadie.  Cuando coincide, se vacia la cola y se limpia.
+     *
+     * Sin el, la unica forma segura de continuar seria esperar despues de cada
+     * entrega -- que es lo que hacia la version anterior, y por eso perdia: la
+     * barrera estaba en el camino critico SIEMPRE.
+     */
+    struct OooInflight {
+        uint16_t reg_read = 0;
+        uint16_t reg_write = 0;
+        uint8_t field = 0;
+        bool mem = false;
+    };
+    OooInflight ooo_inflight;
+
+    /**
+     * @brief He delegado ejecucion desde la ultima espera?
+     *
+     * Local al proceso, y por eso existe: sin el, comprobar si queda algo en
+     * vuelo obliga a leer una atomica que el AYUDANTE escribe, o sea a traerse
+     * su linea de cache en CADA despacho -- aunque no se haya delegado nada en
+     * toda la ejecucion --.  Eso es rebote entre nucleos puro y salia en el
+     * perfil.
+     *
+     * Y no es una aproximacion: solo este hilo encola ejecucion, asi que si no
+     * ha encolado nada desde la ultima espera, no hay nada que esperar.  Cuando
+     * si lo hay, entonces si toca mirar la atomica.
+     */
+    bool ooo_exec_dirty = false;
+
+    /**
+     * @brief Se sigue intentando delegar EJECUCION?
+     *
+     * Delegar la ejecucion de un paquete solo sirve si el siguiente es
+     * independiente, y en un bucle no lo es: el cuerpo que viene comparte el
+     * acumulador consigo mismo.  Cuando pasa eso, cada entrega obliga a una
+     * parada y el reparto es un fork-join con otro nombre -- puro coste --.
+     *
+     * En vez de decidirlo por adelantado, se MIDE: se prueba durante las
+     * primeras `kOooProbe` entregas y, si practicamente todas acabaron en
+     * parada, se deja de intentar.  Delegar el ANALISIS sigue igual, que ese no
+     * depende de nada y siempre compensa.
+     *
+     * Se apaga solo, no se enciende solo: un programa que empieza dependiente y
+     * se vuelve paralelo mas adelante es raro, y reintentar seria pagar la
+     * comprobacion para siempre.
+     */
+    bool ooo_try_exec = true;
+    uint32_t ooo_probe_splits = 0; ///< entregas contadas durante la prueba
+    uint32_t ooo_probe_drains = 0; ///< ...y cuantas acabaron en parada
+    /// Cuantas entregas se prueban antes de decidir.
+    ///
+    /// Treinta y dos.  Bastantes para que la proporcion signifique algo -- una
+    /// racha de treinta y dos entregas seguidas acabando en parada no es
+    /// casualidad -- y pocas para no arrastrar la perdida: la prueba se paga en
+    /// CADA proceso, y con 256 los programas cortos se pasaban la vida
+    /// probando.
+    static constexpr uint32_t kOooProbe = 32;
 
     /**
      * @brief El `pc` cuya entrada acaba de pisar la CABECERA de otro paquete.
@@ -1027,25 +1089,62 @@ class ProcessVM {
         /// reparto llega siquiera a intentarse, que es lo primero que hay que
         /// saber antes de mirar si compensa.
         uint64_t ooo_split;
-        /// Paquetes en los que SI se encontro un corte al formar.  Con este y
-        /// el de arriba se distingue "no hay donde partir" de "hay donde pero
-        /// el ayudante nunca lo coge".
+        /**
+         * @brief Instrucciones DELEGADAS, sumadas.
+         *
+         * Dividida por `ooo_split` da el TAMANyO del bocado: cuantas
+         * instrucciones se le dan al ayudante en cada entrega.  Es la cifra que
+         * decide si el reparto puede compensar, y no estaba.
+         *
+         * Sin ella se lee mal el perfil: con 0,755 s esperando contra 0,411 s
+         * trabajando, la conclusion parece "coordinar es caro" cuando lo que
+         * dice de verdad es que el bocado es diminuto.  Un traspaso entre
+         * nucleos cuesta cientos de nanosegundos y no se amortiza con media
+         * docena de instrucciones, pero eso no es un limite del mecanismo: es
+         * un limite de lo que se le esta dando.
+         */
+        uint64_t ooo_delegated;
         /// Cuantos paquetes se MIRARON buscando corte.  Cero significa que la
         /// busqueda no llego a correr -- va con el reparto, porque cuesta un
         /// 8% --, y sin este contador "partibles=0" se leia como "no hay donde
         /// partir", que es otra cosa muy distinta.
         uint64_t ooo_searched;
+        /// Paquetes en los que SI se encontro un corte al formar.  Con este y
+        /// `ooo_split` se distingue "no hay donde partir" de "hay donde pero el
+        /// ayudante nunca lo coge".
         uint64_t ooo_splittable;
         /**
-         * @brief Por que NO se pudo partir un paquete.
+         * @brief Por que NO se delego un paquete, al EJECUTARLO.
          *
-         * 0=corto  1=barrera_pronto  2=campos  3=memoria  4=registros
+         * 0=tiene una barrera         1=lee rip
+         * 2=depende de lo que vuela   3=la cola estaba llena
+         * 4=el ayudante lo tiene otro proceso
          *
-         * Sin esto, "partibles=0" no dice si es que no hay paralelismo o si es
+         * Sin esto, "delegados=0" no dice si es que no hay paralelismo o si es
          * que una condicion mia lo descarta todo.  Ya han fallado dos
          * suposiciones seguidas por no tenerlo.
          */
         uint64_t ooo_reject[6];
+        /// Cuantas veces hubo que VACIAR la cola porque lo siguiente dependia
+        /// de lo que estaba en vuelo.  Dividido por `ooo_split` dice si esto es
+        /// una tuberia o un fork-join disfrazado: uno a uno seria lo segundo.
+        uint64_t ooo_drains;
+        /// Paquetes cuyo ANALISIS se le encargo al ayudante.
+        uint64_t ooo_prepares;
+        /// ...y los que hubo que preparar AQUI porque no habia sitio en la cola
+        /// o en la arena.  Va aparte porque es la medida de si el ayudante da
+        /// abasto: si esto domina, el reparto del analisis no esta quitando
+        /// nada del camino critico.
+        ///
+        /// Antes estos paquetes se quedaban CRUDOS -- correctos pero sin
+        /// reordenar ni fusionar, y para siempre, porque a un paquete ya
+        /// formado no vuelve a preguntarle nadie --.  Eran 32 de 65 en un tramo
+        /// recto largo.
+        uint64_t ooo_prepares_lost;
+        /// Versiones preparadas que el hilo de ejecucion llego a RECOGER.  Con
+        /// la de arriba dice si la preparacion llega a tiempo de servir para
+        /// algo o el paquete muere antes de estrenarla.
+        uint64_t ooo_improved;
         /**
          * @brief Por que NO se fusiono un par, contado por razon.
          *

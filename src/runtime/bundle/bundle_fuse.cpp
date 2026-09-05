@@ -678,7 +678,7 @@ FuseReject fuse_would_apply(const DecodedInstr &a, const DecodedInstr &b) {
 
 
 uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
-                     uint64_t next_pc,
+                     uint64_t next_pc, const uint16_t *live_out_pre,
                      const FuseTelemetry *tel) {
     if (b.k < 2) return 0;
     if (__builtin_expect(::util::flag_on(::util::FlagId::NoBundleFuse), 0))
@@ -707,8 +707,20 @@ uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
     bool live_ready = false;
     const auto live_at = [&](uint32_t idx) -> uint16_t {
         if (!live_ready) {
-            const uint16_t live_out = live_out_after(process, next_pc);
-            if (live_out == 0xFFFF && process->bundle_stats_on)
+            /* O viene dado, o se mira aqui.
+             *
+             * Viene dado cuando esto corre en el hilo AYUDANTE, y no es un
+             * detalle: `live_out_after` DESCODIFICA bytecode del proceso, y
+             * hacerlo desde otro hilo mientras el principal ejecuta es una
+             * carrera.  Y no una que falle ruidosamente -- daba un paquete
+             * fusionado MAL, o sea el programa devolviendo 0 donde esperaba
+             * 19 --.  Por eso lo calcula quien puede: el que es duenyo del
+             * proceso, antes de encargar nada. */
+            const uint16_t live_out = live_out_pre != nullptr
+                                          ? *live_out_pre
+                                          : live_out_after(process, next_pc);
+            if (live_out == 0xFFFF && live_out_pre == nullptr &&
+                process->bundle_stats_on)
                 ++process->bundle_stats.lookahead_blind;
             bundle_live_after(b, t, live_out, live_after);
             live_ready = true;

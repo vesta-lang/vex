@@ -180,8 +180,16 @@ enum class Engine : uint8_t {
     Reorder,       ///< paquetes + reorden
     Fuse,          ///< paquetes + fusion, SIN reordenar
     FuseReorder,   ///< paquetes + reorden + fusion: los tres a la vez
+    /* Y los mismos CON REPARTO entre dos nucleos.  Van al final y no
+     * intercalados para no correr los indices de `base[]`, que es posicional:
+     * meterlos en medio invalidaria en silencio toda la calibracion. */
+    ScalarOoo,      ///< sin paquetes, con el reparto pedido -- el tercer control
+    BundlesOoo,     ///< paquetes + reparto
+    ReorderOoo,     ///< paquetes + reorden + reparto
+    FuseOoo,        ///< paquetes + fusion + reparto
+    FuseReorderOoo, ///< los cuatro ejes a la vez
 };
-constexpr uint32_t kEngines = 7;
+constexpr uint32_t kEngines = 12;
 
 /* Los SIETE, en el orden en que se miden: las tres combinaciones de los ejes
  * que hacen algo, mas los dos controles.
@@ -193,9 +201,17 @@ constexpr uint32_t kEngines = 7;
  * `paq+fus+reord` miden cosas distintas y la diferencia entre las dos ES la
  * interaccion.  Sin las dos filas no se puede ni ver. */
 constexpr Engine kEngineList[kEngines] = {
-    Engine::Scalar,  Engine::ScalarReorder, Engine::ScalarFuse,
-    Engine::Bundles, Engine::Reorder,       Engine::Fuse,
-    Engine::FuseReorder};
+    Engine::Scalar,     Engine::ScalarReorder, Engine::ScalarFuse,
+    Engine::Bundles,    Engine::Reorder,       Engine::Fuse,
+    Engine::FuseReorder,
+    /* El cuarto eje.  Aparte de los otros tres por lo mismo que ellos entre
+     * si: repartir un paquete entre dos nucleos y fusionar sus pares no son la
+     * misma cosa, y sumadas en una sola fila no se sabria cual aporta que.  Y
+     * ademas INTERACTuAN en el sentido contrario a lo que uno diria -- fusionar
+     * acorta el paquete, y un paquete mas corto tiene menos que repartir --,
+     * asi que `paq+reparto` y `paq+fus+reparto` miden cosas distintas. */
+    Engine::ScalarOoo,  Engine::BundlesOoo,    Engine::ReorderOoo,
+    Engine::FuseOoo,    Engine::FuseReorderOoo};
 
 /// @brief Nombre corto del motor, para las tablas.
 const char *engine_name(Engine e) {
@@ -206,7 +222,15 @@ const char *engine_name(Engine e) {
     case Engine::Bundles: return "paquetes";
     case Engine::Reorder: return "paq+reord";
     case Engine::Fuse: return "paq+fusion";
-    default: return "paq+fus+reord";
+    case Engine::FuseReorder: return "paq+fus+reord";
+    /* Los del reparto llevan la palabra ENTERA aunque sean mas largos.  Con
+     * abreviaturas encadenadas -- `paq+f+r+rep` -- nadie sabe que fila esta
+     * leyendo, y una tabla que hay que descifrar no se mira. */
+    case Engine::ScalarOoo: return "esc+reparto";
+    case Engine::BundlesOoo: return "paq+reparto";
+    case Engine::ReorderOoo: return "paq+reord+rep";
+    case Engine::FuseOoo: return "paq+fusion+rep";
+    default: return "paq+fus+reo+rep";
     }
 }
 
@@ -220,7 +244,9 @@ const char *engine_color(Engine e) {
     case Engine::Bundles: return ansi::WHITE;
     case Engine::Reorder: return ansi::BR_WHITE;
     case Engine::Fuse: return ansi::BR_CYAN;
-    default: return ansi::BR_MAGENTA;
+    case Engine::FuseReorder: return ansi::BR_MAGENTA;
+    case Engine::ScalarOoo: return ansi::BR_BLACK;
+    default: return ansi::BR_YELLOW; // el eje que esta en obras
     }
 }
 
@@ -234,7 +260,8 @@ const char *engine_color(Engine e) {
  * mal es el interruptor, no la medida.
  */
 bool engine_is_control(Engine e) {
-    return e == Engine::ScalarReorder || e == Engine::ScalarFuse;
+    return e == Engine::ScalarReorder || e == Engine::ScalarFuse ||
+           e == Engine::ScalarOoo;
 }
 
 /**
@@ -427,6 +454,11 @@ struct SweepBase {
  * testigo dentro del margen.  Importa decirlo: una tanda con la maquina cargada
  * da la mitad en las ultimas filas y nada mas que en ellas, porque se recorren
  * en orden.  Eso es lo que vigila el testigo.
+ *
+ * Solo estan los SIETE primeros motores.  Los cinco del reparto se quedan a
+ * cero -- o sea sin calibrar, que informa y no falla -- a proposito: ese eje
+ * esta en obras y calibrarlo ahora seria fijar como linea base un numero que
+ * todavia se mueve.  Se calibran cuando el reparto deje de cambiar.
  *
  *                          esc  e+reo  e+fus    paq  p+reo  p+fus  p+f+r */
 const SweepBase kSweepBases[] = {
@@ -714,14 +746,29 @@ uint64_t run_program(const std::string &velb, Engine engine, uint64_t *r0,
      * distintas mete de por medio el estado de la maquina. */
     proc->bundle_reorder_on =
         (engine == Engine::Reorder || engine == Engine::FuseReorder ||
-         engine == Engine::ScalarReorder);
+         engine == Engine::ScalarReorder || engine == Engine::ReorderOoo ||
+         engine == Engine::FuseReorderOoo);
     /* Y la FUSION, tercer eje.  Va aparte de los paquetes a proposito: metida
      * dentro, la tabla no podria decir cuanto aporta convertir pares en
      * super-instrucciones frente a solo ahorrar despachos.  Es el mismo
      * criterio por el que el reorden ya estaba separado. */
     proc->bundle_fuse_on =
         (engine == Engine::Fuse || engine == Engine::FuseReorder ||
-         engine == Engine::ScalarFuse);
+         engine == Engine::ScalarFuse || engine == Engine::FuseOoo ||
+         engine == Engine::FuseReorderOoo);
+
+    /* Y el REPARTO entre dos nucleos, cuarto eje.
+     *
+     * Enciende dos cosas a la vez y conviene tenerlo presente al leer la
+     * tabla: la BuSQUEDA del corte, que corre al formar y cuesta lo suyo, y el
+     * traspaso al hilo ayudante, que corre al ejecutar.  Un motor con reparto
+     * que empate con el suyo sin reparto no significa "el reparto no aporta":
+     * puede significar que aporta justo lo que cuesta buscarlo.  Para separarlo
+     * estan los contadores `partibles` y `repartidos` del informe. */
+    proc->bundle_ooo_on =
+        (engine == Engine::BundlesOoo || engine == Engine::ReorderOoo ||
+         engine == Engine::FuseOoo || engine == Engine::FuseReorderOoo ||
+         engine == Engine::ScalarOoo);
 
     /* Y CONTAR lo que hace, que se pide aparte.
      *
@@ -967,7 +1014,7 @@ int sweep_peak(uint64_t loops, int repeats) {
                 ansi::c(ansi::BR_YELLOW), DIM, ansi::c(ansi::YELLOW), DIM,
                 ansi::c(ansi::BR_RED), DIM, ansi::c(ansi::RED), DIM, RESET);
 
-    std::printf("%s  %-8s %-14s", DIM, "mezcla", "despacho");
+    std::printf("%s  %-8s %-16s", DIM, "mezcla", "despacho");
     for (uint64_t length : kLengths)
         std::printf("%6llu", (unsigned long long)(length + 4));
     std::printf("%s%7s%s\n", BOLD, "media", RESET);
@@ -1016,7 +1063,7 @@ int sweep_peak(uint64_t loops, int repeats) {
     for (Mix m : kMixes)
         for (uint32_t modo = 0; modo < kEngines; ++modo) {
             const Engine engine = kEngineList[modo];
-            std::printf("  %s%-8s%s %s%-14s%s", ansi::c(mix_color(m)),
+            std::printf("  %s%-8s%s %s%-16s%s", ansi::c(mix_color(m)),
                         modo == 0 ? mix_name(m) : "", RESET,
                         ansi::c(engine_color(engine)), engine_name(engine),
                         RESET);
@@ -1125,7 +1172,7 @@ int sweep_peak(uint64_t loops, int repeats) {
         if (eng_n[e] == 0) continue;
         const Engine eng = kEngineList[e];
         const double avg = eng_sum[e] / (double)eng_n[e];
-        std::printf("    %s%-14s%s %s%6.0f MIPS%s", ansi::c(engine_color(eng)),
+        std::printf("    %s%-16s%s %s%6.0f MIPS%s", ansi::c(engine_color(eng)),
                     engine_name(eng), RESET, ansi::c(mips_color(avg)), avg,
                     RESET);
         if (base_avg > 0.0 && eng != Engine::Scalar)
@@ -1272,10 +1319,10 @@ int main(int argc, char **argv) {
 
     /* La cabecera y la regla salen atenuadas para que el ojo caiga en los
      * numeros, que es lo que se viene a mirar. */
-    std::printf("%s  %-8s %-16s %6s %-14s %9s  %9s  %10s  %9s%s\n", DIM,
+    std::printf("%s  %-8s %-16s %6s %-16s %9s  %9s  %10s  %9s%s\n", DIM,
                 "mezcla", "bloque", "recto", "despacho", "MIPS", "vs base",
                 "instr", "ms", RESET);
-    std::printf("%s  %s%s\n", DIM, std::string(92, '-').c_str(), RESET);
+    std::printf("%s  %s%s\n", DIM, std::string(94, '-').c_str(), RESET);
 
     int failures = 0;
     for (const Case &c : kCases)
@@ -1330,7 +1377,7 @@ int main(int argc, char **argv) {
             uint64_t r0 = 0, counted = 0;
             const uint64_t ns = run_program(velb, engine, &r0, &counted);
             if (ns == 0) {
-                std::printf("  %s%-8s %-16s %6s %-14s  FALLO: no termino en el "
+                std::printf("  %s%-8s %-16s %6s %-16s  FALLO: no termino en el "
                             "plazo%s\n",
                             ROJO, mix_name(c.mix), c.shape, "",
                             mode_name, RESET);
@@ -1341,7 +1388,7 @@ int main(int argc, char **argv) {
              * bucle que termina antes de la cuenta saldria como una mejora
              * espectacular en vez de como el fallo que es. */
             if (r0 != v) {
-                std::printf("  %s%-8s %-16s %6s %-14s  FALLO: R0 = %llu, se "
+                std::printf("  %s%-8s %-16s %6s %-16s  FALLO: R0 = %llu, se "
                             "esperaba %llu%s\n",
                             ROJO, mix_name(c.mix), c.shape, "",
                             mode_name, (unsigned long long)r0,
@@ -1370,7 +1417,7 @@ int main(int argc, char **argv) {
              * nada.  Comparandola con el generador, cualquiera de las dos sale
              * a la primera. */
             if (counted != expected_count) {
-                std::printf("  %s%-8s %-16s %6s %-14s  FALLO: la VM conto %llu "
+                std::printf("  %s%-8s %-16s %6s %-16s  FALLO: la VM conto %llu "
                             "instrucciones y se generaron %llu%s\n",
                             ROJO, mix_name(c.mix), c.shape, "",
                             mode_name, (unsigned long long)counted,
@@ -1418,7 +1465,7 @@ int main(int argc, char **argv) {
         else
             std::snprintf(vs, sizeof(vs), "%8s", "-");
 
-        std::printf("  %s%-8s%s %-16s %6s %s%-14s%s %s%9.1f%s  %s%8s%s  "
+        std::printf("  %s%-8s%s %-16s %6s %s%-16s%s %s%9.1f%s  %s%8s%s  "
                     "%s%10llu  %9.1f%s\n",
                     ansi::c(mix_color(c.mix)), primera ? mix_name(c.mix) : "",
                     RESET, primera ? c.shape : "", recto,
