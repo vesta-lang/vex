@@ -50,6 +50,7 @@
 #include <cstddef>
 
 #include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
+#include "util/small_vector.h" // los operandos casi siempre son uno o dos
 #include <cstring>
 #include <string>
 #include <utility>
@@ -822,6 +823,61 @@ using IrValueId = uint32_t;
 static constexpr IrValueId IR_NO_VALUE = 0xFFFFFFFFu;
 
 /**
+ * @brief Los operandos de una instruccion.
+ *
+ * Con almacenamiento en LINEA para los tres primeros: casi toda instruccion
+ * tiene uno o dos operandos de cuatro bytes, asi que con un `std::vector` cada
+ * una pedia memoria para guardar ocho.  En un modulo de 24.000 funciones eran
+ * cerca de un millon de reservas de ese tamano.
+ *
+ * Se le da nombre para que las firmas que reciben operandos no tengan que
+ * escribir el tipo entero -- y para que cambiar el numero de los que caben en
+ * linea sea tocar UNA linea, no todas ellas.
+ */
+using IrOperands = util::SmallVector<IrValueId, 3>;
+
+/**
+ * @brief Una LISTA de valores que solo se va a leer.
+ *
+ * Puntero y tamano, nada mas.  Existe porque los operandos dejaron de ser un
+ * `std::vector` y hay cuarenta firmas por el compilador que solo los recorren:
+ * cambiarlas todas al tipo concreto ataria cada una a como estan guardados hoy,
+ * y volveria a haber que tocarlas el dia que cambie.
+ *
+ * Convierte sola desde las dos formas en que viven, asi que ningun llamante
+ * cambia.  Y no es duena de nada: vale mientras viva el contenedor del que
+ * salio, que es justo el caso de un parametro.
+ */
+class IrValueList {
+  public:
+    IrValueList() = default;
+    IrValueList(const IrOperands &v) : p_(v.data()), n_(v.size()) {}
+    IrValueList(const std::vector<IrValueId> &v) : p_(v.data()), n_(v.size()) {}
+    /**
+     * @brief Desde una lista escrita en la llamada: `f(..., {a, b})`.
+     *
+     * Es seguro COMO ARGUMENTO y solo asi: el array que respalda la lista vive
+     * hasta el final de la expresion completa, o sea hasta que la llamada
+     * termina.  GUARDAR una vista construida de esta forma deja un puntero a
+     * memoria que ya no existe -- por eso esto no es duenyo de nada y no debe
+     * sobrevivir a la llamada en la que aparece.
+     */
+    IrValueList(std::initializer_list<IrValueId> il)
+        : p_(il.begin()), n_(il.size()) {}
+
+    size_t size() const noexcept { return n_; }
+    bool empty() const noexcept { return n_ == 0; }
+    IrValueId operator[](size_t i) const noexcept { return p_[i]; }
+    const IrValueId *begin() const noexcept { return p_; }
+    const IrValueId *end() const noexcept { return p_ + n_; }
+    const IrValueId *data() const noexcept { return p_; }
+
+  private:
+    const IrValueId *p_ = nullptr;
+    size_t n_ = 0;
+};
+
+/**
  * @brief Identificador de un bloque basico.
  */
 using IrBlockId = uint32_t;
@@ -1009,7 +1065,23 @@ struct IrInstr {
     IrType type;   ///< tipo del resultado (VOID si sin resultado)
     IrValueId dst; ///< registro destino (IR_NO_VALUE si sin resultado)
 
-    std::vector<IrValueId> operands; ///< operandos de la instruccion
+    /**
+     * @brief Operandos de la instruccion, con los primeros DENTRO del objeto.
+     *
+     * Con un `std::vector` esto era una reserva por instruccion, y de las mas
+     * pequenas que existen: la inmensa mayoria de las instrucciones tienen uno
+     * o dos operandos de cuatro bytes.  En un modulo de 24.000 funciones eso
+     * son cerca de un millon de reservas para guardar ocho bytes cada una.
+     *
+     * Medido con VTune sobre ese modulo, hacer crecer vectores era el 4,2 % de
+     * las instrucciones del proceso y el asignador otro 12 %.
+     *
+     * TRES en linea: cubre practicamente todas las operaciones -- unarias,
+     * binarias y las de tres operandos --, y lo que se pase sigue funcionando
+     * porque se va al monton.  Cuesta doce bytes por instruccion, que frente a
+     * quitar la reserva es un cambio a favor.
+     */
+    IrOperands operands;
 
     uint64_t imm; ///< literal para CONST, ALLOCA, GETFIELD, SETFIELD, CALLVIRT
 
@@ -1377,6 +1449,204 @@ struct AsmMicro {
 };
 
 /**
+ * @enum IrParamClaim
+ * @brief Que promete un parametro sobre la region a la que apunta.
+ *
+ * Una entrada por promesa, y cada una ocupa el MISMO bit en las dos mascaras
+ * del contrato: una dice que la promesa vale, la otra que esta demostrada.  Es
+ * lo que hace que anadir una promesa manana sea una entrada aqui y nada mas --
+ * la certeza, el volcado y la serializacion salen ya hechos --.
+ *
+ * Ninguna se colapsa con otra por parecerse.  Dos promesas distintas llevan a
+ * decisiones distintas, y fundirlas hace que la mas fuerte herede la certeza de
+ * la mas debil sin que nadie lo note.
+ */
+enum class IrParamClaim : uint16_t {
+    /// Se puede LEER lo apuntado.  Sin este bit no se afirma que no se lea:
+    /// se afirma que no se ha dicho.
+    MayRead = 0,
+    /// Se puede ESCRIBIR lo apuntado.
+    MayWrite,
+    /**
+     * La region no la alcanza NINGUN OTRO PARAMETRO de la misma llamada.
+     *
+     * Es lo unico que distingue "se sabe que estas dos regiones no coinciden"
+     * de "son dos indices distintos": la raiz de un parametro es su POSICION,
+     * o sea un nombre y no un objeto, y nada impide que el que llama pase la
+     * misma direccion dos veces.  Autoriza a reordenar DENTRO de la funcion.
+     */
+    ExclusiveCall,
+    /**
+     * En esta EJECUCION no alcanza esa region nadie mas.
+     *
+     * La promesa fuerte, y OTRA proposicion, no un grado de la anterior:
+     * aquella habla de los argumentos de una llamada, esta de todo lo que corre
+     * a la vez -- otro hilo, otro proceso de la maquina, un puntero guardado
+     * antes --.  Es la que responde a si dos escrituras pueden ser una CARRERA,
+     * a si hace falta una barrera, y a si dos regiones caen en la misma linea
+     * de cache (COMPARTICION FALSA: el programa es correcto y el hardware
+     * serializa igual).
+     *
+     * Leer la debil como si fuera esta no da un error: da una carrera, tarde y
+     * en otra maquina.
+     */
+    ExclusiveRun,
+    /// No es nula.  El lenguaje ya lo dice con `nonnull`, y hoy el pase que
+    /// quita comprobaciones lo vuelve a descubrir por su cuenta.
+    NonNull,
+    /// El puntero no sobrevive a la llamada.  Lo que el analisis de escape
+    /// deduce cuando puede; declarado, vale tambien cuando no puede.
+    NoEscape,
+    /**
+     * La region es OBSERVABLE por fuera del programa: hardware mapeado en
+     * memoria.
+     *
+     * Ni reordenar, ni fundir dos accesos en uno, ni quitar uno que "no se
+     * usa": cada acceso es un evento y su numero y su orden IMPORTAN.  Es lo
+     * contrario del resto de este enum -- las demas AUTORIZAN, esta PROHIBE --
+     * y por eso no puede faltar: sin ella, un puntero a un registro de
+     * dispositivo es indistinguible de uno a memoria normal, y las mismas
+     * optimizaciones que ahi son correctas aqui rompen el dispositivo.
+     */
+    Observable,
+    /// Nadie la escribe MIENTRAS dura la llamada.  Mas fuerte que solo leer por
+    /// ahi: permite sacar una lectura de un bucle que contiene llamadas.
+    ImmutableDuringCall,
+    COUNT
+};
+
+/// @brief Bit de @p c en las mascaras de @c IrParamContract.
+///
+/// De 64 bits, no de 32: lo que limita cuantas promesas caben no es el tipo del
+/// enum sino la MASCARA, y quedarse en 32 seria poner el techo justo donde no
+/// se ve.  Ocho ocupadas hoy, cincuenta y seis libres.
+inline constexpr uint64_t ir_param_claim_bit(IrParamClaim c) noexcept {
+    return uint64_t{1} << static_cast<uint32_t>(c);
+}
+
+/**
+ * @struct IrParamLevel
+ * @brief Lo que se sabe de UN NIVEL de indirecion de un parametro.
+ *
+ * Un nivel, y no un parametro entero, porque el lenguaje ya distingue por
+ * nivel: `const i32* p` dice que no se escribe lo APUNTADO, `i32* const q` que
+ * no se escribe el PUNTERO, y `out T const**` -- que el propio contrato de la
+ * direccion cita -- tiene tres.  Colapsarlos haria inexpresable justo lo que se
+ * puede escribir hoy.
+ *
+ * Las promesas de si/no van en mascaras y son TERNARIAS: @c holds dice cuales
+ * valen, @c denied cuales NO valen, y lo que no esta en ninguna es lo que nadie
+ * ha dicho.  Los tres estados hacen falta -- confundir "no lo se" con "se que
+ * no" es el mismo error que hacia que dos parametros puntero se dieran por
+ * regiones distintas --: sin @c denied, un `const T*` -- que AFIRMA que por ahi
+ * no se escribe, y el compilador lo hace cumplir -- quedaba indistinguible de
+ * un `T*` del que nadie dijo nada.
+ *
+ * @c proven califica a las DOS: una promesa puede valer demostrada o solo
+ * declarada, y negarse demostrada o solo declarada.  Lo demostrado no hay que
+ * comprobarlo en ningun sitio de llamada; lo declarado SI, y hay que avisar
+ * cuando se incumpla -- que es lo que a `restrict` de C le falta y lo que lo
+ * convierte en una fuente de fallos que solo salen al optimizar.
+ *
+ * Y las que son un NUMERO tienen su campo, porque un bit no puede llevar un
+ * tamano.  Tambien son por nivel: lo que mide lo apuntado no es lo que mide el
+ * puntero.
+ */
+struct IrParamLevel {
+    /// Centinela de @c extent_from_param: ningun parametro lleva la longitud.
+    static constexpr uint32_t kNoParam = 0xFFFFFFFFu;
+
+    /// @c IrParamClaim -> la promesa VALE.
+    uint64_t holds = 0;
+    /// @c IrParamClaim -> la promesa NO vale, y eso se AFIRMA.
+    uint64_t denied = 0;
+    /// @c IrParamClaim -> lo afirmado (valga o no) esta DEMOSTRADO.
+    uint64_t proven = 0;
+    /// Bytes validos desde el puntero.  Negativo = no se dijo.  Es lo que
+    /// separa "se donde escribe" de "se si se SALE", que es la mitad que le
+    /// falta al analisis de regiones cuando el desplazamiento es de ejecucion.
+    int64_t extent_bytes = -1;
+    /// Indice del parametro que LLEVA la longitud, cuando no es constante --
+    /// `void f(u8* p, usize n)` --.  @c kNoParam = no se dijo.  Sin esto, la
+    /// forma mas comun de pasar un bufer no se puede describir.
+    uint32_t extent_from_param = kNoParam;
+    /// Alineacion garantizada en bytes (potencia de dos).  0 = no se dijo.  La
+    /// quiere el vectorizador para elegir el movimiento alineado, y hace falta
+    /// junto con la extension para saber si dos regiones comparten linea.
+    uint32_t align_bytes = 0;
+
+    /// @brief Vale la promesa @p c?
+    bool has(IrParamClaim c) const noexcept {
+        return (holds & ir_param_claim_bit(c)) != 0u;
+    }
+    /// @brief Se afirma que @p c NO vale?
+    bool denies(IrParamClaim c) const noexcept {
+        return (denied & ir_param_claim_bit(c)) != 0u;
+    }
+    /// @brief Vale Y esta demostrada?
+    bool has_proven(IrParamClaim c) const noexcept {
+        return (holds & proven & ir_param_claim_bit(c)) != 0u;
+    }
+    /// @brief Se niega Y esta demostrado?
+    bool denies_proven(IrParamClaim c) const noexcept {
+        return (denied & proven & ir_param_claim_bit(c)) != 0u;
+    }
+    /// @brief Afirma @p c.  @p is_proven distingue demostrado de declarado.
+    void set(IrParamClaim c, bool is_proven) noexcept {
+        holds |= ir_param_claim_bit(c);
+        if (is_proven) proven |= ir_param_claim_bit(c);
+    }
+    /// @brief NIEGA @p c: se afirma que no vale.
+    void deny(IrParamClaim c, bool is_proven) noexcept {
+        denied |= ir_param_claim_bit(c);
+        if (is_proven) proven |= ir_param_claim_bit(c);
+    }
+    /// @brief Ningun campo dice nada -> no hace falta guardarlo.
+    bool empty() const noexcept {
+        return holds == 0 && denied == 0 && extent_bytes < 0 &&
+               extent_from_param == kNoParam && align_bytes == 0;
+    }
+};
+
+/**
+ * @struct IrParamContract
+ * @brief Lo que se sabe de un parametro, NIVEL A NIVEL.
+ *
+ * @c levels[0] es el puntero que se recibe; @c levels[1] lo que apunta, y asi.
+ * Un parametro que no sea puntero tiene un solo nivel.  Vacio = nadie prometio
+ * nada, que es el caso comun y no ocupa.
+ *
+ * No hay tope de dos niveles a proposito: `out T const**` -- que la
+ * documentacion de la direccion cita como escribible -- tiene tres, y cortar en
+ * dos lo dejaria sin representar.  El tope esta donde deja de haber tipos
+ * reales, y pasarse SE DICE en vez de truncar callando.
+ */
+struct IrParamContract {
+    /// Cuantos niveles se guardan como mucho.  Generoso a proposito: un tipo
+    /// con mas indirecciones que esto existe, pero no aparece; lo que no vale
+    /// es truncar sin decirlo, y por eso quien construya esto avisa al pasarse.
+    static constexpr size_t kMaxLevels = 8;
+
+    /// De fuera hacia dentro: [0] el puntero, [1] lo apuntado, ...
+    std::vector<IrParamLevel> levels;
+
+    /// @brief El nivel @p n, o uno vacio si no se guardo.
+    const IrParamLevel &at(size_t n) const noexcept {
+        static const IrParamLevel none;
+        return n < levels.size() ? levels[n] : none;
+    }
+    /// @brief El nivel de lo APUNTADO, que es por donde se pregunta casi
+    ///        siempre: "se escribe ahi?" habla del contenido, no del puntero.
+    const IrParamLevel &pointee() const noexcept { return at(1); }
+    /// @brief Nadie dijo nada de ningun nivel.
+    bool empty() const noexcept {
+        for (const IrParamLevel &l : levels)
+            if (!l.empty()) return false;
+        return true;
+    }
+};
+
+/**
  * @brief Funcion completa en forma SSA.
  *
  * Contiene el grafo de bloques basicos y el pool de valores.
@@ -1409,6 +1679,30 @@ struct IrFunction {
     /// Vacio TAMBIEN cuando NINGUN param tiene ABI custom (caso comun -> no
     /// ocupa espacio en el 99% de funciones).
     std::vector<std::string> param_abi_regs;
+    /**
+     * @brief Lo que se sabe de cada parametro sobre la region a la que apunta.
+     *
+     * Alineado con @c params.  VACIO cuando ningun parametro promete nada, que
+     * es el caso comun: no ocupa espacio en casi ninguna funcion.
+     *
+     * Varias formas del lenguaje escriben aqui, y son eso -- formas de escribir
+     * lo mismo --, no mecanismos distintos:
+     *
+     *     in T* p          -> lee
+     *     out T* p         -> escribe        + exclusivo-llamada (DECLARADO)
+     *     inout T* p       -> lee y escribe  + exclusivo-llamada (DECLARADO)
+     *     borrow<T> p      -> lee
+     *     borrow_mut<T> p  -> lee y escribe  + exclusivo-llamada (DEMOSTRADO)
+     *     unique<T> p      -> lee y escribe  + exclusivo-llamada (DEMOSTRADO)
+     *     nonnull T* p     -> no nulo                            (DEMOSTRADO)
+     *
+     * Tenerlas separadas obligaba a que cada consumidor las conociera todas, y
+     * el resultado fue que ninguno conocia ninguna: el modelo de memoria daba
+     * exactamente la misma respuesta para un `i64*` crudo, que no promete nada,
+     * y para un `borrow_mut<i64>`, que lo tiene demostrado por el comprobador
+     * de prestamos.
+     */
+    std::vector<IrParamContract> param_contracts;
     std::vector<IrValue> values; ///< pool de todos los valores SSA
     std::vector<IrBlock> blocks; ///< bloques basicos (bloques[0] = entry)
     /// Llamadas que se aplanaron aqui al inlinar.  Las instrucciones apuntan a

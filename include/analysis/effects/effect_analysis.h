@@ -182,6 +182,7 @@ class EffectAnalysis {
         return ranges_of(fn);
     }
 
+
     // ---- Invalidacion ----
     /// Un nodo muto: borra su cache local + marca su funcion sucia.
     void invalidate_node(const ir::IrFunction &fn, const ir::IrInstr &ins);

@@ -843,7 +843,7 @@ AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width) {
 
 std::vector<ir::IrValueId>
 single_values_of_slots(const ir::IrFunction &fn,
-                       const std::vector<ir::IrValueId> &slots) {
+                       ir::IrValueList slots) {
     std::vector<ir::IrValueId> out(slots.size(), ir::IR_NO_VALUE);
     if (slots.empty()) return out;
 
@@ -879,7 +879,11 @@ single_values_of_slots(const ir::IrFunction &fn,
 ir::IrValueId single_value_of_slot(const ir::IrFunction &fn,
                                    ir::IrValueId slot) {
     if (slot == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-    return single_values_of_slots(fn, {slot})[0];
+    /* La lista vive en la pila: `IrValueList` es una VISTA y no puede
+     * construirse de una lista temporal sin dejar un puntero colgando. */
+    ir::IrOperands uno;
+    uno.push_back(slot);
+    return single_values_of_slots(fn, uno)[0];
 }
 
 } // namespace analysis

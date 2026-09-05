@@ -186,7 +186,7 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                 } avance{paso};
                 /* En un punto al que no se llega no hay nada que comprobar, y
                  * senalarlo seria acusar a codigo que no se ejecuta. */
-                if (!paso.alcanzable()) continue;
+                if (!paso.reachable()) continue;
                 ++n_instrs;
                 const auto t_ef = RelojLim::now();
                 const EffectAnalysisResult r = ea.local(fn, in);

@@ -169,7 +169,7 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                         !in.operands.empty()) {
                         in.op = ir::IrOp::CALLIND;
                         in.func_ptr = in.operands[0];
-                        in.operands.erase(in.operands.begin());
+                        in.operands.erase_at(0);
                         in.func_name.clear();
                     }
                     break;

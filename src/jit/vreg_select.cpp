@@ -738,19 +738,107 @@ bool emit_bulk_vm(std::vector<MInstr> &O, MFunction &out,
  * @param tri     Registros del objetivo, de donde salen los de rascar.
  * @return false si este tramo no va por aqui.
  */
+/**
+ * @brief La operacion de bloque del procesador (@c rep movsb / @c rep stosb).
+ *
+ * Las dos piden sus operandos en registros FIJOS -- contador en RCX, destino en
+ * RDI, y origen en RSI o el byte en AL --, asi que hay que salvar los que haya
+ * vivos, colocar los tres y restaurar.  Una sola funcion para las dos porque es
+ * la misma coreografia: lo unico que cambia es cual es el tercer fijo y que
+ * instruccion se emite al final.
+ *
+ * Todo pasa por la PILA, no por registros de rascar.  Esto no es un rodeo: en
+ * x86-32 los de rascar del reasignador SON precisamente ESI y EDI, o sea los
+ * mismos que la instruccion necesita fijos, asi que colocar ahi los operandos
+ * se pisaba a si mismo -- el binario de 32 bits moria en violacion de segmento
+ * justo en el @c rep stosb --.  Por la pila no hay tal colision, y sale el
+ * MISMO codigo para las dos anchuras.
+ *
+ * El orden es el que importa: los tres operandos se LEEN antes de tocar ningun
+ * fijo (a esa altura siguen intactos, esten donde esten), y los fijos se salvan
+ * antes de que el de rascar los machaque.
+ *
+ * @param O       Donde emitir.
+ * @param tri     Registros del objetivo: de ahi salen el de rascar y el ancho.
+ * @param dst     Destino, ya resuelto a operando maquina.
+ * @param second  Origen si se copia, byte a repetir si se rellena.
+ * @param len     Cuantos bytes.
+ * @param is_copy @c true copia, @c false rellena.
+ * @return false si el objetivo no ofrece un registro de rascar entero.
+ */
+bool emit_rep_block(std::vector<MInstr> &O, const TargetRegInfo &tri,
+                    const MOperand &dst, const MOperand &second,
+                    const MOperand &len, bool is_copy) {
+    const auto &gpsc = tri.scratch[static_cast<size_t>(RegClass::GP)];
+    if (gpsc.empty()) return false;
+    const MReg sc = static_cast<MReg>(gpsc[0]);
+    const uint8_t w = tri.pointer_size ? tri.pointer_size : 8u;
+    /* El tercer fijo: el origen al copiar, el valor al rellenar (en AL). */
+    const MReg third = is_copy ? MReg::RSI : MReg::RAX;
+
+    auto push_reg = [&](MReg r) {
+        O.push_back(MInstr::make_unary(MOp::PUSH, MOperand::none(),
+                                       MOperand::make_reg(r, w)));
+    };
+    auto pop_reg = [&](MReg r) {
+        O.push_back(MInstr::make_unary(MOp::POP, MOperand::make_reg(r, w),
+                                       MOperand::none()));
+    };
+    // Un operando cualquiera a la pila, pasando por el de rascar: el de rascar
+    // se reutiliza para los tres, asi que nunca hay dos vivos a la vez.
+    auto push_value = [&](const MOperand &v) {
+        O.push_back(MInstr::make_unary(MOp::MOV, MOperand::make_reg(sc, w), v));
+        push_reg(sc);
+    };
+
+    /* 1. Salvar los fijos.  Va PRIMERO porque el de rascar puede ser uno de
+     *    ellos, y entonces el paso 2 lo machacaria. */
+    push_reg(MReg::RDI);
+    push_reg(third);
+    push_reg(MReg::RCX);
+    /* 2. Los tres operandos a la pila, leidos de donde el reasignador los haya
+     *    dejado.  Ninguno de los fijos se ha escrito todavia. */
+    push_value(dst);
+    push_value(second);
+    push_value(len);
+    /* 3. Y de la pila a los fijos, en orden inverso al de entrada. */
+    pop_reg(MReg::RCX);   // len
+    pop_reg(third);       // origen / valor
+    pop_reg(MReg::RDI);   // destino
+    /* 4. La operacion. */
+    O.push_back(is_copy ? MInstr::make_rep_movsb() : MInstr::make_rep_stosb());
+    /* 5. Restaurar, en orden inverso al de salvado. */
+    pop_reg(MReg::RCX);
+    pop_reg(third);
+    pop_reg(MReg::RDI);
+    return true;
+}
+
 bool emit_short_fill(std::vector<MInstr> &O, const MOperand &addr, int64_t len,
                      uint8_t value, uint64_t lane_w, bool fp_ok,
                      const TargetRegInfo &tri) {
-    /* El umbral: cuatro lanes de 16, que es donde el bucle de la maquina
-     * empieza a compensar su arranque.  Es una cota RAZONADA, no medida, y por
-     * eso se queda corta a proposito -- pasarse aqui cambia codigo caliente que
-     * hoy funciona. */
+    /* MEDIDO: un bucle que pone a cero un registro de 32 bytes veinte millones
+     * de veces pasa de ~148 ms a ~75 ms, la MITAD.  Intercalado y en los dos
+     * ordenes, seis tomas de cada, sin solape entre las dos series
+     * (`VESTA_NO_SHORT_FILL=1` apaga esto sin recompilar).
+     *
+     * El umbral, en cambio, sigue siendo una cota RAZONADA: cuatro lanes de 16
+     * es por donde el bucle de la maquina empieza a compensar su arranque, pero
+     * no esta medido donde cae el cruce exacto.  Se queda corto a proposito --
+     * pasarse cambia codigo caliente que hoy funciona. */
     constexpr int64_t kMaxBytes = 64;
-    if (!fp_ok || value != 0 || len <= 0 || len > kMaxBytes) return false;
+    static const bool off_by_flag = util::flag_on(util::FlagId::NoShortFill);
+    if (off_by_flag || !fp_ok || value != 0 || len <= 0 || len > kMaxBytes)
+        return false;
     const auto &gpsc = tri.scratch[static_cast<size_t>(RegClass::GP)];
     const auto &fpsc = tri.scratch[static_cast<size_t>(RegClass::FP)];
-    if (gpsc.empty() || fpsc.empty()) return false;
+    /* DOS de rascar enteros: uno lleva la direccion y el otro el cero de la
+     * cola.  Y salen del OBJETIVO, no escritos aqui: en x86-64 son R10/R11 pero
+     * en x86-32 son RSI/RDI, asi que nombrar uno a mano pisaria un registro que
+     * alli si esta repartido -- y eso no da un error, da otro resultado. */
+    if (gpsc.size() < 2 || fpsc.empty()) return false;
     const MReg gp0 = static_cast<MReg>(gpsc[0]);
+    const MReg gp1 = static_cast<MReg>(gpsc[1]);
     const MReg fp0 = static_cast<MReg>(fpsc[0]);
 
     O.push_back(MInstr::make_unary(MOp::MOV, MOperand::make_reg(gp0, 8), addr));
@@ -775,15 +863,14 @@ bool emit_short_fill(std::vector<MInstr> &O, const MOperand &addr, int64_t len,
     /* Y la cola, con registro entero: por debajo de una lane no hay lane que
      * usar.  El cero se deja en el otro registro de rascar. */
     if (rem > 0) {
-        O.push_back(MInstr::make_unary(MOp::MOV,
-                                       MOperand::make_reg(MReg::R11, 8),
+        O.push_back(MInstr::make_unary(MOp::MOV, MOperand::make_reg(gp1, 8),
                                        MOperand::make_imm32(0)));
         for (uint8_t w = 8; w >= 1; w = static_cast<uint8_t>(w / 2)) {
             while (rem >= static_cast<int64_t>(w)) {
                 O.push_back(MInstr::make_unary(
                     MOp::MOV,
                     MOperand::make_mem(gp0, static_cast<int32_t>(off)),
-                    MOperand::make_reg(MReg::R11, w)));
+                    MOperand::make_reg(gp1, w)));
                 off += w;
                 rem -= w;
             }
@@ -1248,7 +1335,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * arg_reg via MOVSD.  Devuelve false si algun arg excede los arg_regs de
      * su clase (paso por pila no soportado en v1). */
     auto emit_host_args =
-        [&](const std::vector<ir::IrValueId> &operands, std::vector<MInstr> &OO,
+        [&](ir::IrValueList operands, std::vector<MInstr> &OO,
             const std::vector<std::string> *abi_regs = nullptr) -> bool {
         const size_t gmax =
             tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
@@ -3888,24 +3975,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
 
             /* MEMCPY %dst_ptr, %src_ptr, %len -> `rep movsb` (memcpy x86
-             * nativo, perf strings 2026-06-18).  REP MOVSB copia RCX bytes
-             * desde [RSI] a [RDI].  Secuencia AUTO-CONTENIDA respecto al
-             * regalloc: salvamos RSI/RDI/RCX con PUSH (por si tienen vregs
-             * vivos a traves -- RSI/RDI son callee-saved asignables en
-             * Win64, RCX caller-saved asignable) y los restauramos con POP.
-             * Asi NO importa que asignacion fisica tengan los operandos.
-             *
-             * Orden de carga (sin colisiones):
-             *   MOV R10, dst   ; R10/R11 = scratch del rewrite (NO asignables)
-             *   MOV R11, src   ;   -> vr(dst)/vr(src) jamas estan en R10/R11
-             *   PUSH RDI ; PUSH RSI ; PUSH RCX   (salvar fijos)
-             *   MOV RCX, len   ; len desde su fisico (RSI/RDI/RCX aun intactos)
-             *   MOV RDI, R10   ; dst
-             *   MOV RSI, R11   ; src
-             *   REP MOVSB      ; copia RCX bytes [RSI]->[RDI]
-             *   POP RCX ; POP RSI ; POP RDI       (restaurar)
-             * No es call-position: PUSH/POP preservan todo; el unico uso de
-             * los vregs operandos es ANTES de clobear RSI/RDI/RCX. */
+             * nativo, perf strings 2026-06-18).  La coreografia de registros
+             * fijos vive en @c emit_rep_block, compartida con el relleno. */
             case ir::IrOp::MEMCPY: {
                 flush_pending();
                 if (in.operands.size() != 3)
@@ -3918,69 +3989,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         return vreg_bail(fn.name.c_str(), __LINE__);
                     break;
                 }
-                /* 1. dst/src a los scratch reservados (R10/R11): el rewrite
-                 *    resuelve cada vr() a su fisico/spill; como el DESTINO es
-                 *    un reg fisico, emite MOV reg,reg o MOV reg,[rbp-off]
-                 *    directo (no recurre a R10/R11 como intermediario). */
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(MReg::R10, 8),
-                                               vr(in.operands[0]))); // dst
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(MReg::R11, 8),
-                                               vr(in.operands[1]))); // src
-                /* 2. Salvar los fijos (pueden tener vregs vivos a traves). */
-                O.push_back(
-                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
-                                       MOperand::make_reg(MReg::RDI, 8)));
-                O.push_back(
-                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
-                                       MOperand::make_reg(MReg::RSI, 8)));
-                O.push_back(
-                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
-                                       MOperand::make_reg(MReg::RCX, 8)));
-                /* 3. len -> RCX (leido de su fisico ANTES de clobear los
-                 *    fijos; RSI/RDI/RCX aun intactos en este punto). */
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(MReg::RCX, 8),
-                                               vr(in.operands[2]))); // len
-                /* 4. dst/src desde los scratch a los fijos. */
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::RDI, 8),
-                    MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::RSI, 8),
-                    MOperand::make_reg(MReg::R11, 8)));
-                /* 5. La copia. */
-                O.push_back(MInstr::make_rep_movsb());
-                /* 6. Restaurar los fijos (orden inverso). */
-                O.push_back(MInstr::make_unary(MOp::POP,
-                                               MOperand::make_reg(MReg::RCX, 8),
-                                               MOperand::none()));
-                O.push_back(MInstr::make_unary(MOp::POP,
-                                               MOperand::make_reg(MReg::RSI, 8),
-                                               MOperand::none()));
-                O.push_back(MInstr::make_unary(MOp::POP,
-                                               MOperand::make_reg(MReg::RDI, 8),
-                                               MOperand::none()));
+                if (!emit_rep_block(O, tri_sel, vr(in.operands[0]),
+                                    vr(in.operands[1]), vr(in.operands[2]),
+                                    /*is_copy=*/true))
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 break;
             }
 
             /* MEMSET %dst_ptr, %val, %len -> `rep stosb`.  Gemelo exacto de
-             * MEMCPY: REP STOSB escribe AL en [RDI] RCX veces.  Misma
-             * disciplina auto-contenida respecto al regalloc -- los operandos
-             * se leen a los scratch del rewrite (R10/R11, no asignables) ANTES
-             * de tocar los fisicos fijos, que se salvan con PUSH y se
-             * restauran con POP; asi da igual que asignacion tengan.
-             *
-             * Los fijos aqui son RDI (destino), RCX (contador) y RAX (el byte
-             * en AL).  RAX ademas es el registro de retorno, de ahi que se
-             * salve tambien.
-             *
-             *   MOV R10, dst ; MOV R11, val
-             *   PUSH RDI ; PUSH RCX ; PUSH RAX
-             *   MOV RCX, len ; MOV RDI, R10 ; MOV RAX, R11
-             *   REP STOSB
-             *   POP RAX ; POP RCX ; POP RDI */
+             * MEMCPY: REP STOSB escribe AL en [RDI] RCX veces, y la
+             * coreografia de los fijos la lleva @c emit_rep_block, la misma
+             * que la copia. */
             case ir::IrOp::MEMSET: {
                 flush_pending();
                 if (in.operands.size() != 3)
@@ -4028,40 +4047,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         static_cast<uint8_t>(fn.values[in.operands[1]].const_val),
                         vec_host_w(), fp_ok, tri_sel))
                     break;
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(MReg::R10, 8),
-                                               vr(in.operands[0]))); // dst
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(MReg::R11, 8),
-                                               vr(in.operands[1]))); // val
-                O.push_back(
-                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
-                                       MOperand::make_reg(MReg::RDI, 8)));
-                O.push_back(
-                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
-                                       MOperand::make_reg(MReg::RCX, 8)));
-                O.push_back(
-                    MInstr::make_unary(MOp::PUSH, MOperand::none(),
-                                       MOperand::make_reg(MReg::RAX, 8)));
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(MReg::RCX, 8),
-                                               vr(in.operands[2]))); // len
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::RDI, 8),
-                    MOperand::make_reg(MReg::R10, 8)));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(MReg::RAX, 8),
-                    MOperand::make_reg(MReg::R11, 8))); // AL = byte de relleno
-                O.push_back(MInstr::make_rep_stosb());
-                O.push_back(MInstr::make_unary(MOp::POP,
-                                               MOperand::make_reg(MReg::RAX, 8),
-                                               MOperand::none()));
-                O.push_back(MInstr::make_unary(MOp::POP,
-                                               MOperand::make_reg(MReg::RCX, 8),
-                                               MOperand::none()));
-                O.push_back(MInstr::make_unary(MOp::POP,
-                                               MOperand::make_reg(MReg::RDI, 8),
-                                               MOperand::none()));
+                if (!emit_rep_block(O, tri_sel, vr(in.operands[0]),
+                                    vr(in.operands[1]), vr(in.operands[2]),
+                                    /*is_copy=*/false))
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 break;
             }
 
@@ -7173,8 +7162,23 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * de funcion valido para CALLIND.  Base del despacho de
                  * helpers multi-versionados por CPU (Inc 2). */
                 if (abi == AbiKind::HOST_LEAF) {
-                    const uint32_t sidx =
-                        out.intern_reloc_symbol("fnsym:" + in.func_name);
+                    /* Un label puede nombrar CODIGO o DATO, y no se resuelven
+                     * igual: una funcion por su sitio en `.text`, un hueco de
+                     * datos por el suyo en `.rodata`.  Los de datos se llaman
+                     * `s_<N>` -- el mismo hueco que `STR_LIT_ADDR` pide como
+                     * `rodata.<N>`, con otro nombre --, y buscarlos entre las
+                     * funciones no los encuentra: el enlazado moria con
+                     * "direccion de funcion no resuelta: 's_1'" sobre algo que
+                     * no es una funcion.  Sale, por ejemplo, del nombre de la
+                     * clase que `findclass` necesita. */
+                    const bool es_dato =
+                        in.func_name.size() > 2 &&
+                        in.func_name.compare(0, 2, "s_") == 0 &&
+                        in.func_name.find_first_not_of("0123456789", 2) ==
+                            std::string::npos;
+                    const uint32_t sidx = out.intern_reloc_symbol(
+                        es_dato ? ("rodata." + in.func_name.substr(2))
+                                : ("fnsym:" + in.func_name));
                     /* x86-32: mov r32,imm32 (ABS32) -- x86-32 no tiene lea[rip]
                      * (ver STR_LIT_ADDR).  El label_addr de una FUNCION
                      * guardado en memoria (campo cfn de un static ctx) exige

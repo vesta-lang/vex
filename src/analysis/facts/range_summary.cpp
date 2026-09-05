@@ -184,6 +184,7 @@ RangeSummaries compute_range_summaries(const ir::IrModule &mod,
              * rango por cada valor SSA mas el estado de entrada de cada bloque.
              * Esto esta dentro del bucle, asi que la copia se pagaba en CADA
              * vuelta del punto fijo, no una vez por funcion. */
+            const RangeRequester mark(RangeAsker::Summaries);
             const std::shared_ptr<const RangeFacts> rf_ptr =
                 compute_ranges_ptr(fn, hechos[i], op, &out);
             const RangeFacts &rf = *rf_ptr;

@@ -27,6 +27,7 @@
 #include "analysis/effects/effects.h"   // AbstractLoc
 #include "analysis/facts/ir_facts.h"    // IrFacts (def_of, param_of)
 #include "analysis/facts/value_range.h" // acotar el desplazamiento variable
+#include "ir/ssa_ir.h" // IrValueList: una lista de valores solo para leer
 
 #include <cstdint>
 #include <vector>
@@ -150,6 +151,21 @@ struct PointsToEntry {
      * construyen esta estructura por posicion.
      */
     bool root_is_symbol = false;
+    /**
+     * @brief El parametro del que sale DECLARO su direccion (`in`/`out`/
+     *        `inout`).
+     *
+     * Solo tiene sentido en @c ArgDerived, y ahi es lo unico que separa "se
+     * sabe que estas dos regiones no coinciden" de "son dos indices distintos".
+     * La diferencia no es de matiz: en las demas clases la raiz ES una
+     * identidad -- dos @c alloca son dos reservas, dos sitios de reserva dos
+     * regiones -- mientras que la de un parametro es su POSICION, o sea un
+     * nombre.  Nada impide que el que llama pase la misma direccion dos veces.
+     *
+     * Al FINAL, como los de arriba y por lo mismo: media docena de sitios
+     * construyen esta estructura por posicion.
+     */
+    bool declared_dir = false;
 };
 
 /**
@@ -263,7 +279,7 @@ ir::IrValueId single_value_of_slot(const ir::IrFunction &fn,
  */
 std::vector<ir::IrValueId>
 single_values_of_slots(const ir::IrFunction &fn,
-                       const std::vector<ir::IrValueId> &slots);
+                       ir::IrValueList slots);
 
 } // namespace analysis
 

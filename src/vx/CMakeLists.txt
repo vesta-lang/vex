@@ -82,6 +82,10 @@ add_library(vx_lib STATIC
     lexer.cpp
     ast.cpp
     parser.cpp
+    # Que declara el modulo, indexado UNA vez.  Buscar una declaracion por
+    # nombre estaba escrito a mano, con un recorrido del modulo entero, en 33
+    # sitios del frontend; varios corren por cada identificador del programa.
+    module_index.cpp
     # Sistema UNICO de efectos del compilador: modelo (SemanticEffects/
     # MachineEffects/reticulo AbstractLoc + combinadores seq/join), summaries por
     # funcion/modulo, contratos DECLARATIVOS por reglas, y el gestor de analisis

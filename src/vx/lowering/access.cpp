@@ -754,11 +754,11 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
     // pero para const con inicializador literal podemos emitir un CONST
     // inline en el call site.  Cero overhead, util para nombrar codigos
     // de tecla (KEY_*), VK constants, magic numbers.
-    for (auto &decl : mod_.decls) {
-        if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
-        auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
-        if (gv->name != e->name) continue;
-        if (!gv->is_const || !gv->init) break;
+    /* Por INDICE, no recorriendo el modulo.  Esto corre por cada identificador
+     * que se baja, asi que el recorrido lo hacia O(n^2) en tamano del modulo:
+     * medido con VTune sobre 24.000 funciones, esta sola linea era el 1,8 % de
+     * las instrucciones de todo el proceso. */
+    if (ast::GlobalVarDecl *gv = decls_index_.const_global(mod_, e->name)) {
         // Tipo destino: del declarado (i32, i64, ...).  Default i64.
         ir::IrType t = ir::IrType::I64;
         if (gv->type && gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
@@ -825,7 +825,6 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
         }
         // Otros tipos de inicializador (FloatLit, BinaryExpr)
         // -- a implementar cuando los necesite.
-        break;
     }
     // Constantes ENC_* (encoding numerico para builtins de string como
     // @c str_convert(s, ENC_UTF16)).  Cero overhead: emit const i32

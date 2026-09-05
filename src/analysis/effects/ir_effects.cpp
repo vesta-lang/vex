@@ -248,6 +248,7 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         const bool tengo = env.rangos != nullptr && env.rangos_de == &fn;
         if (!tengo) {
             hechos_propios = analysis::build_ir_facts(fn);
+            const analysis::RangeRequester mark(analysis::RangeAsker::Effects);
             rangos_propios = analysis::compute_ranges_ptr(fn, hechos_propios);
         }
         const analysis::RangeFacts &rangos =
@@ -470,7 +471,7 @@ static const ir::IrNativeEffects *buscar_decl(const NativeDecls &d,
  */
 template <typename LocFn>
 static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
-                         const std::vector<ir::IrValueId> &ops, LocFn &&loc) {
+                         const ir::IrOperands &ops, LocFn &&loc) {
     for (uint32_t i = 0; i < ops.size() && i < 32; ++i) {
         const uint32_t bit = uint32_t(1) << i;
         if (d.reads_pointee & bit) add_read(e, loc(ops[i], 0));
@@ -523,7 +524,7 @@ static void aplicar_decl(SemanticEffects &e, const ir::IrNativeEffects &d,
 /// decide que hacer con eso -- que NO es meterla en el conjunto, porque ahi
 /// absorbe todo lo demas.
 static AbstractLoc instanciar_loc(const AbstractLoc &l,
-                                  const std::vector<ir::IrValueId> &args,
+                                  const ir::IrOperands &args,
                                   const analysis::PointsTo &pt) {
     switch (l.kind) {
     case AbstractLoc::Kind::ArgDerived: {
@@ -554,8 +555,7 @@ static AbstractLoc instanciar_loc(const AbstractLoc &l,
 
 /// Traduce un conjunto de localizaciones, quedandose con las que SI se pueden
 /// nombrar aqui y avisando si quedo alguna fuera.
-static LocSet instanciar_locset(const LocSet &s,
-                                const std::vector<ir::IrValueId> &args,
+static LocSet instanciar_locset(const LocSet &s, const ir::IrOperands &args,
                                 const analysis::PointsTo &pt, bool &completo) {
     LocSet out;
     if (s.is_top) {
@@ -578,7 +578,7 @@ static LocSet instanciar_locset(const LocSet &s,
 }
 
 EfectoEnLlamada instanciar_en_llamada(const SemanticEffects &callee_eff,
-                                      const std::vector<ir::IrValueId> &args,
+                                      const ir::IrOperands &args,
                                       const analysis::PointsTo &pt) {
     EfectoEnLlamada out;
     out.lee = instanciar_locset(callee_eff.mem.reads, args, pt, out.completo);

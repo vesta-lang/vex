@@ -442,6 +442,23 @@ StatsDump::~StatsDump() {
         (unsigned long long)s.small_allocs, (unsigned long long)s.small_frees,
         (unsigned long long)s.remote_frees, (unsigned long long)s.large_allocs,
         (unsigned long long)s.chunks);
+    /* CUANTA memoria se ha quedado, que es la pregunta que la cuenta de
+     * reservas no contesta.  `bytes_reserved` se llevaba desde siempre y no lo
+     * enseñaba nadie: sin el, para saber a donde iba mas de un giga habia que
+     * multiplicar trozos por su tamano a mano.
+     *
+     * Y lo que queda VIVO al terminar: un trozo solo se puede devolver cuando
+     * se vacia entero, asi que unos pocos objetos vivos repartidos lo dejan
+     * comprometido.  La distancia entre "vivo" y "reservado" es la
+     * fragmentacion, y es lo que hay que mirar cuando el pico no baja. */
+    const long long vivos = (long long)s.small_allocs -
+                            (long long)s.small_frees -
+                            (long long)s.remote_frees;
+    std::fprintf(stderr,
+                 "[asignador] reservado=%.1f MiB en trozos de %zu KiB | "
+                 "pequenas VIVAS al salir=%lld\n",
+                 (double)s.bytes_reserved / (1024.0 * 1024.0),
+                 (size_t)(kChunkBytes / 1024), vivos);
     static const char *kNames[kSizeBuckets] = {
         "<=64", "<=256", "<=1K", "<=2K", "<=4K", "<=8K", "<=16K", ">16K"};
     uint64_t total = 0;

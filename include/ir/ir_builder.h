@@ -208,19 +208,19 @@ class IrBuilder {
 
     /// CALL directa por nombre.  Lo resuelve el linker al patchear.
     IrValueId call(const std::string &fn_name,
-                   const std::vector<IrValueId> &args, IrType ret_type);
+                   IrValueList args, IrType ret_type);
     /// Version sin valor de retorno (void).
     void call_void(const std::string &fn_name,
-                   const std::vector<IrValueId> &args);
+                   IrValueList args);
 
     /// CALL indirecta via puntero a funcion (en runtime).
     IrValueId call_indirect(IrValueId fn_ptr,
-                            const std::vector<IrValueId> &args,
+                            IrValueList args,
                             IrType ret_type);
 
     /// CALL nativa (FFI).  @p lib_func = "lib:func" (ver vesta_io etc.).
     IrValueId call_native(const std::string &lib_func,
-                          const std::vector<IrValueId> &args, IrType ret_type);
+                          IrValueList args, IrType ret_type);
 
     // -- Helpers comunes ----------------------------------------------------
 

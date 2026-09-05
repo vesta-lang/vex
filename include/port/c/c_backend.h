@@ -167,26 +167,26 @@ class CBackend : public IPortBackend {
     // -------- LLAMADAS --------
     void emit_call(EmitContext &ctx, ir::IrValueId dst,
                    const std::string &func_name,
-                   const std::vector<ir::IrValueId> &args,
+                   ir::IrValueList args,
                    ir::IrType ret_type) override;
     void emit_call_indirect(EmitContext &ctx, ir::IrValueId dst,
                             ir::IrValueId fn_ptr,
-                            const std::vector<ir::IrValueId> &args,
+                            ir::IrValueList args,
                             ir::IrType ret_type) override;
     void emit_callvirt(EmitContext &ctx, ir::IrValueId dst, ir::IrValueId obj,
                        uint32_t vtable_idx,
-                       const std::vector<ir::IrValueId> &args,
+                       ir::IrValueList args,
                        ir::IrType ret_type) override;
 
     void emit_call_closure(EmitContext &ctx, ir::IrValueId dst,
                            ir::IrValueId slot_ptr,
-                           const std::vector<ir::IrValueId> &args,
+                           ir::IrValueList args,
                            ir::IrType ret_type,
                            const ir::IrInstr &ins) override;
 
     void emit_callm(EmitContext &ctx, ir::IrValueId dst, ir::IrValueId obj,
                     ir::IrValueId method_ptr,
-                    const std::vector<ir::IrValueId> &args,
+                    ir::IrValueList args,
                     ir::IrType ret_type) override;
 
     void emit_spawn_trampoline_call(EmitContext &ctx, ir::IrValueId fn_ptr,
@@ -211,7 +211,7 @@ class CBackend : public IPortBackend {
      */
     void emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
                       const std::string &asm_text,
-                      const std::vector<ir::IrValueId> &operands,
+                      ir::IrValueList operands,
                       ir::IrType t) override;
 
     ///  AS inc.3: inline asm nativo (IrOp::INLINE_ASM) -> bloque
@@ -236,7 +236,7 @@ class CBackend : public IPortBackend {
      */
     void emit_native_call(EmitContext &ctx, ir::IrValueId dst,
                           const std::string &lib, const std::string &sym,
-                          const std::vector<ir::IrValueId> &args,
+                          ir::IrValueList args,
                           ir::IrType ret_type);
 
     /**

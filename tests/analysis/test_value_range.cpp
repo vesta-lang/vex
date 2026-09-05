@@ -626,7 +626,7 @@ static void probar_consulta_por_punto() {
           "guardas");
 
     RangeWalk dentro(fn, hechos, r, bt);
-    check(dentro.alcanzable(), "punto: a la rama verdadera si se llega");
+    check(dentro.reachable(), "punto: a la rama verdadera si se llega");
     check(es(dentro.rango(x), kU32, 0, 9),
           "punto: por PUNTO, dentro de la rama x esta en [0,9]");
     RangeWalk fuera(fn, hechos, r, bf);
@@ -832,6 +832,95 @@ static void probar_tope_de_presupuesto() {
           "presupuesto: y las demas constantes tambien");
 }
 
+/**
+ * @brief La consulta bajo demanda no puede AFIRMAR MAS que el motor completo.
+ *
+ * Los dos son sobre-aproximaciones correctas del mismo valor, pero el completo
+ * es sensible al flujo y el otro no, asi que la respuesta perezosa tiene que
+ * CONTENER a la del motor.  Si alguna vez saliera mas estrecha, uno de los dos
+ * estaria afirmando algo que no se sigue -- y eso, en un dominio del que
+ * dependen el comprobador de limites y el optimizador, no es perder precision:
+ * es dar otro programa.
+ *
+ * Se comprueba sobre las mismas funciones que ya construyen los demas casos,
+ * que es donde estan las formas que importan (guardas, PHI, bucles).
+ */
+static void comparar_con_demanda(const ir::IrFunction &fn,
+                                 const char *etiqueta) {
+    const IrFacts f = build_ir_facts(fn);
+    const RangeFacts completo = compute_ranges(fn, f);
+    RangeQuery bajo_demanda(fn, f);
+    int mas_estrechos = 0, contestados = 0;
+    for (ir::IrValueId v = 0; v < (ir::IrValueId)fn.values.size(); ++v) {
+        const ValueRange &e = completo.at(v);
+        const ValueRange &d = bajo_demanda.of(v);
+        if (!e.acotada() || !d.acotada()) continue;
+        int64_t elo = 0, ehi = 0, dlo = 0, dhi = 0;
+        if (!e.vista_con_signo(elo, ehi) || !d.vista_con_signo(dlo, dhi))
+            continue;
+        ++contestados;
+        if (dlo > elo || dhi < ehi) ++mas_estrechos;
+    }
+    check(mas_estrechos == 0,
+          std::string("demanda ") + etiqueta +
+              ": ninguna respuesta es mas estrecha que la del motor");
+    check(contestados > 0,
+          std::string("demanda ") + etiqueta + ": contesta a algo");
+}
+
+/// Las mismas formas que el resto del fichero, vistas por la consulta.
+static void probar_bajo_demanda() {
+    {   // guardas: `if (x < 10)`
+        ir::IrFunction fn;
+        fn.name = "demanda_guarda";
+        const uint32_t b0 = fn.new_block("entry");
+        const uint32_t bt = fn.new_block("si");
+        const uint32_t bf = fn.new_block("no");
+        const ir::IrValueId x = fn.new_value(ir::IrType::U32);
+        fn.params.push_back(x);
+        const ir::IrValueId diez = cte(fn, b0, ir::IrType::U32, 10);
+        const ir::IrValueId c = fn.new_value(ir::IrType::BOOL);
+        emitir(fn, b0, ir::IrOp::CMP_ULT, c, {x, diez});
+        {
+            ir::IrInstr &br =
+                emitir(fn, b0, ir::IrOp::BR_COND, ir::IR_NO_VALUE, {c});
+            br.target_block = bt;
+            br.false_block = bf;
+        }
+        const ir::IrValueId en_si = fn.new_value(ir::IrType::U32);
+        emitir(fn, bt, ir::IrOp::MOV, en_si, {x});
+        emitir(fn, bt, ir::IrOp::RET, ir::IR_NO_VALUE, {en_si});
+        const ir::IrValueId en_no = fn.new_value(ir::IrType::U32);
+        emitir(fn, bf, ir::IrOp::MOV, en_no, {x});
+        emitir(fn, bf, ir::IrOp::RET, ir::IR_NO_VALUE, {en_no});
+        comparar_con_demanda(fn, "guarda");
+    }
+    {   // aritmetica encadenada: es lo que la recursion tiene que resolver
+        ir::IrFunction fn;
+        fn.name = "demanda_cadena";
+        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrValueId a = cte(fn, b0, ir::IrType::I64, 7);
+        const ir::IrValueId b = cte(fn, b0, ir::IrType::I64, 5);
+        const ir::IrValueId s = fn.new_value(ir::IrType::I64);
+        emitir(fn, b0, ir::IrOp::ADD, s, {a, b});
+        const ir::IrValueId m = fn.new_value(ir::IrType::I64);
+        emitir(fn, b0, ir::IrOp::MUL, m, {s, b});
+        emitir(fn, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {m});
+
+        const IrFacts f = build_ir_facts(fn);
+        RangeQuery q(fn, f);
+        check(es(q.of(s), kI64, 12, 12), "demanda cadena: 7+5 = 12");
+        check(es(q.of(m), kI64, 60, 60), "demanda cadena: 12*5 = 60");
+        /* Y NO se evalua lo que nadie pregunta: la cadena tiene cuatro
+         * valores y contestar por `s` solo puede tocar los suyos. */
+        RangeQuery q2(fn, f);
+        (void)q2.of(s);
+        check(q2.evaluated() <= 3,
+              "demanda cadena: contestar por uno no evalua la funcion entera");
+        comparar_con_demanda(fn, "cadena");
+    }
+}
+
 int main() {
     probar_reticulo();
     probar_tipos();
@@ -849,6 +938,7 @@ int main() {
     probar_bucle(ir::IrType::U32, kU32, "u32");
     probar_bucle(ir::IrType::I32, kI32, "i32");
     probar_tope_de_presupuesto();
+    probar_bajo_demanda();
     std::printf("=== rangos de valor: %d checks, %d fallos ===\n", total,
                 fallos);
     return fallos == 0 ? 0 : 1;

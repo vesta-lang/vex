@@ -212,6 +212,7 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {
                       * con esos rangos, rangos con las cotas --, que recupera
                       * los limites que no son un literal sin cerrar el
                       * circulo.  Pasarlas desde aqui SALTABA ese escalon. */
+                     const RangeRequester mark(RangeAsker::FactBase);
                      return compute_ranges_ptr(fn, structure(fn),
                                                RangeOptions{}, nullptr,
                                                nullptr);

@@ -65,6 +65,7 @@
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
 #include "vx/hook_points.h" // vocabulario de @Hook: puntos y campos
+#include "vx/module_index.h" // que declara el modulo, indexado una vez
 #include "vx/type_checker.h"
 
 namespace vx {
@@ -795,8 +796,7 @@ class Lowering {
      * Si el programa define una funcion con ese nombre, gana la suya: asi se
      * puede sustituir la salida entera desde Vesta sin tocar el compilador.
      */
-    void emit_io_prim(const std::string &prim,
-                      const std::vector<ir::IrValueId> &args,
+    void emit_io_prim(const std::string &prim, ir::IrValueList args,
                       uint32_t source_line);
 
     /**
@@ -3237,6 +3237,16 @@ class Lowering {
     ast::ModuleNode &mod_;
     const TypeChecker &tc_;
     Diagnostics &diags_;
+
+    /**
+     * @brief Que declara el modulo, indexado UNA vez (@c vx::ModuleIndex).
+     *
+     * Buscar una declaracion por nombre estaba escrito a mano y con un
+     * recorrido del modulo entero en treinta y tres sitios del frontend.  Aqui
+     * se pregunta; el indice se construye solo y se rehace si la
+     * monomorfizacion anade declaraciones.
+     */
+    ModuleIndex decls_index_;
     /**
      * @brief Donde se PIDEN los analisis, en vez de calcularlos aqui.
      *

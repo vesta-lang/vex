@@ -605,7 +605,7 @@ IrBuilder::phi(IrType type,
  * linker reportara unresolved symbol al final.
  */
 IrValueId IrBuilder::call(const std::string &fn_name,
-                          const std::vector<IrValueId> &args, IrType ret_type) {
+                          IrValueList args, IrType ret_type) {
     // Si el callee no devuelve nada, no reservamos SSA value (dst queda
     // como IR_NO_VALUE).  Asi el DCE no intenta mantener viva una
     // "variable" sin definicion conceptual.
@@ -629,7 +629,7 @@ IrValueId IrBuilder::call(const std::string &fn_name,
  * del frontend cuando se ejecuta una funcion por sus efectos laterales.
  */
 void IrBuilder::call_void(const std::string &fn_name,
-                          const std::vector<IrValueId> &args) {
+                          IrValueList args) {
     IrInstr ins{};
     ins.op = IrOp::CALL;
     ins.type = IrType::VOID;
@@ -647,7 +647,7 @@ void IrBuilder::call_void(const std::string &fn_name,
  * por simplicidad; el frontend Vesta tiene helpers especializados).
  */
 IrValueId IrBuilder::call_indirect(IrValueId fn_ptr,
-                                   const std::vector<IrValueId> &args,
+                                   IrValueList args,
                                    IrType ret_type) {
     const IrValueId id =
         (ret_type == IrType::VOID) ? IR_NO_VALUE : new_value(ret_type);
@@ -671,7 +671,7 @@ IrValueId IrBuilder::call_indirect(IrValueId fn_ptr,
  * via @c dlsym / @c GetProcAddress al cargar el modulo nativo.
  */
 IrValueId IrBuilder::call_native(const std::string &lib_func,
-                                 const std::vector<IrValueId> &args,
+                                 IrValueList args,
                                  IrType ret_type) {
     const IrValueId id =
         (ret_type == IrType::VOID) ? IR_NO_VALUE : new_value(ret_type);

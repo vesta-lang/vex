@@ -42,19 +42,27 @@ const IrFacts &EffectAnalysis::facts_of(const ir::IrFunction &fn) {
 }
 
 const RangeFacts &EffectAnalysis::ranges_of(const ir::IrFunction &fn) {
-    // Otro hecho fundacional cacheado por el gestor: un productor, muchos
-    // consumidores (points-to lo usa para acotar; el comprobador de limites,
-    // para juzgar).
-    /* El PUNTERO, no una copia: ver la nota de `ranges_of` en el optimizador.
-     * `RangeFacts` lleva dentro el estado de entrada de cada bloque, y debajo
-     * ya existe una sola instancia en la cache por dependencias. */
+    /* La MISMA instancia que la de por punto, quedandose con su mitad.
+     *
+     * Un productor, dos consumidores: points-to pregunta por valor y el
+     * comprobador de limites por punto.  Calcularlos aparte serian dos puntos
+     * fijos por funcion, y lo caro es el punto fijo -- no el estado por bloque
+     * que uno de los dos no mira --.  Medido al separarlos: 500 analisis
+     * pasaban a 600.
+     *
+     * Con los resumenes si alguien los dio, que es lo que hace que los dos
+     * juzguen sobre exactamente la misma informacion. */
+    /* UN productor, DOS consumidores: points-to pregunta por valor y el
+     * comprobador de limites por punto, y los dos salen de este mismo
+     * resultado.  El estado por bloque que necesita el segundo NO se paga
+     * aparte: el punto fijo ya lo lleva y sacarlo es moverlo.
+     *
+     * Se probo separarlos en dos analisis para que el primero no cargara con
+     * el estado, y salia peor -- 500 analisis pasaban a 600 --: lo caro es el
+     * punto fijo, no el estado. */
     return *facts_mgr_.get_or_compute<
         RangeAnalysis, std::shared_ptr<const RangeFacts>>(fn.name, [&]() {
-        /* Con los resumenes si alguien los dio.  Es lo que convierte esto
-         * en el unico productor: quien necesita rangos acotados por lo que
-         * cruza las fronteras -- el comprobador de limites -- ya no tiene
-         * que calcularse los suyos aparte.  Y de paso points-to trabaja con
-         * rangos mas estrechos, que solo puede mejorar lo que distingue. */
+        const RangeRequester mark(RangeAsker::Effects);
         return compute_ranges_ptr(fn, facts_of(fn), RangeOptions{}, resumenes_);
     });
 }
@@ -224,7 +232,10 @@ struct CallInfo {
      */
     struct Sitio {
         std::string callee;
-        std::vector<ir::IrValueId> args;
+        /* MISMO tipo que los operandos de la instruccion: asi guardar un sitio
+         * de llamada es copiar lo que casi siempre cabe dentro del objeto, y
+         * no una reserva por cada llamada del modulo. */
+        ir::IrOperands args;
     };
     std::vector<Sitio> sitios;
     /// La funcion donde estan esos sitios, para resolver sus argumentos.

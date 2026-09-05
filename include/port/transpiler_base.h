@@ -344,13 +344,13 @@ class IPortBackend {
     /** Emite call directo: @c "v0 = my_func(v_a, v_b);". */
     virtual void emit_call(EmitContext &ctx, ir::IrValueId dst,
                            const std::string &func_name,
-                           const std::vector<ir::IrValueId> &args,
+                           ir::IrValueList args,
                            ir::IrType ret_type) = 0;
 
     /** Emite call indirecto via puntero: @c "v0 = ((fn_t)v_fn)(v_a, ...);". */
     virtual void emit_call_indirect(EmitContext &ctx, ir::IrValueId dst,
                                     ir::IrValueId fn_ptr,
-                                    const std::vector<ir::IrValueId> &args,
+                                    ir::IrValueList args,
                                     ir::IrType ret_type) = 0;
 
     /**
@@ -363,7 +363,7 @@ class IPortBackend {
      */
     virtual void emit_callvirt(EmitContext &ctx, ir::IrValueId dst,
                                ir::IrValueId obj, uint32_t vtable_idx,
-                               const std::vector<ir::IrValueId> &args,
+                               ir::IrValueList args,
                                ir::IrType ret_type) {
         (void)ctx;
         (void)dst;
@@ -388,7 +388,7 @@ class IPortBackend {
      */
     virtual void emit_callm(EmitContext &ctx, ir::IrValueId dst,
                             ir::IrValueId obj, ir::IrValueId method_ptr,
-                            const std::vector<ir::IrValueId> &args,
+                            ir::IrValueList args,
                             ir::IrType ret_type) {
         (void)dst;
         (void)obj;
@@ -411,7 +411,7 @@ class IPortBackend {
      */
     virtual void emit_call_closure(EmitContext &ctx, ir::IrValueId dst,
                                    ir::IrValueId slot_ptr,
-                                   const std::vector<ir::IrValueId> &args,
+                                   ir::IrValueList args,
                                    ir::IrType ret_type,
                                    const ir::IrInstr &ins) {
         (void)dst;
@@ -474,8 +474,7 @@ class IPortBackend {
      */
     virtual void emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
                               const std::string &asm_text,
-                              const std::vector<ir::IrValueId> &operands,
-                              ir::IrType t) {
+                              ir::IrValueList operands, ir::IrType t) {
         (void)dst;
         (void)asm_text;
         (void)operands;

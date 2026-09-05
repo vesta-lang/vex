@@ -31,6 +31,7 @@
 
 #include "util/fnv.h"
 #include "util/reloj.h"
+#include "util/small_vector.h" // el estado casi siempre es diminuto
 
 #include <cstring> // memcmp: comparar dos estados de una vez
 
@@ -138,7 +139,7 @@ namespace {
  * al empezar cada funcion: lo que se quiere saber es el coste de ESTA, no un
  * acumulado del proceso.  Acaban en @c RangeStats, que es donde vive.
  */
-struct CosteEstado {
+struct CostCounters {
     uint64_t inserciones = 0;
     uint64_t reescrituras = 0;
     uint64_t copias = 0;
@@ -181,10 +182,10 @@ struct CosteEstado {
     uint64_t redundant_floor = 0; ///< entradas que repiten el suelo
     uint64_t floor_seen = 0;      ///< entradas miradas
 };
-thread_local CosteEstado g_coste;
+thread_local CostCounters g_cost;
 
 /**
- * @brief Si se estan contando los costes.  Se mira ANTES de tocar @c g_coste.
+ * @brief Si se estan contando los costes.  Se mira ANTES de tocar @c g_cost.
  *
  * En MinGW cada acceso a una variable de hilo es una LLAMADA
  * (`__emutls_get_address`), y los contadores estan en lo mas caliente del
@@ -196,7 +197,7 @@ thread_local CosteEstado g_coste;
  *
  * La medida no puede salir gratis, pero si puede salir gratis NO medir.
  */
-static const bool g_medir_coste = util::flag_on(util::FlagId::RangeStats);
+static const bool g_measure_cost = util::flag_on(util::FlagId::RangeStats);
 
 /// Escape para comparar: conservar las entradas que solo repiten el suelo.
 static const bool g_keep_floor_entries =
@@ -233,20 +234,23 @@ static const bool g_no_range_cache = util::flag_on(util::FlagId::NoRangeCache);
  * -- donde al crecer el bufer viejo SI se devuelve y se reaprovecha.
  */
 struct Estado {
-    bool alcanzable = false;
-    std::vector<RangeEntry> ref;
+    bool reachable = false;
+    /* MISMO tipo que el del hecho publico (@c RangeRefs), y eso no es un
+     * detalle: es lo que permite MOVER el estado de cada bloque al resultado
+     * en vez de copiarlo. */
+    RangeRefs ref;
 
     Estado() = default;
     /// Copiar un estado es el otro coste de la representacion dispersa: hay que
     /// contarlo aqui porque es donde ocurre (una copia por bloque y vuelta).
-    Estado(const Estado &o) : alcanzable(o.alcanzable), ref(o.ref) {
-        if (g_medir_coste) ++g_coste.copias;
+    Estado(const Estado &o) : reachable(o.reachable), ref(o.ref) {
+        if (g_measure_cost) ++g_cost.copias;
     }
     Estado &operator=(const Estado &o) {
         if (this != &o) {
-            alcanzable = o.alcanzable;
+            reachable = o.reachable;
             ref = o.ref;
-            if (g_medir_coste) ++g_coste.copias;
+            if (g_measure_cost) ++g_cost.copias;
         }
         return *this;
     }
@@ -257,14 +261,14 @@ struct Estado {
     /// estado recien calculado quedandose con el bufer del que sustituye, de
     /// modo que el de trabajo conserve su capacidad para la siguiente vuelta.
     void swap(Estado &o) noexcept {
-        std::swap(alcanzable, o.alcanzable);
+        std::swap(reachable, o.reachable);
         ref.swap(o.ref);
     }
 
     /// La ENTRADA, no el rango: aplanada ya no hay ningun `ValueRange` dentro
     /// al que apuntar.  Quien quiera el rango pide @c range().
     const RangeEntry *buscar(ir::IrValueId v) const {
-        if (g_medir_coste) ++g_coste.busquedas;
+        if (g_measure_cost) ++g_cost.busquedas;
         auto it = std::lower_bound(
             ref.begin(), ref.end(), v,
             [](const RangeEntry &p, ir::IrValueId x) { return p.id < x; });
@@ -276,19 +280,22 @@ struct Estado {
             [](const RangeEntry &p, ir::IrValueId x) { return p.id < x; });
         if (it != ref.end() && it->id == v) {
             it->set_range(r);
-            if (g_medir_coste) ++g_coste.reescrituras;
+            if (g_measure_cost) ++g_cost.reescrituras;
         } else {
-            ref.insert(it, RangeEntry::make(v, r)); // desplaza lo de detras
-            if (g_medir_coste) ++g_coste.inserciones;
+            /* Por INDICE: el bufer puede moverse al crecer, y un iterador
+             * calculado antes apuntaria al viejo. */
+            ref.insert_at(static_cast<size_t>(it - ref.begin()),
+                          RangeEntry::make(v, r)); // desplaza lo de detras
+            if (g_measure_cost) ++g_cost.inserciones;
         }
     }
-    void inalcanzable() {
-        alcanzable = false;
+    void set_unreachable() {
+        reachable = false;
         ref.clear();
     }
     bool operator==(const Estado &o) const {
-        if (alcanzable != o.alcanzable) return false;
-        if (!alcanzable) return true; // dos inalcanzables son el mismo estado
+        if (reachable != o.reachable) return false;
+        if (!reachable) return true; // dos inalcanzables son el mismo estado
         if (ref.size() != o.ref.size()) return false;
         /* De una vez y no campo a campo.  Comparar estados es lo que decide
          * cada vuelta del punto fijo, y campo a campo eran cinco comparaciones
@@ -427,7 +434,7 @@ struct Contexto {
 
     ValueRange valor(const Estado &e, ir::IrValueId v) const {
         if (v == ir::IR_NO_VALUE || v >= suelo.size()) return ValueRange::top();
-        if (!e.alcanzable) return ValueRange::bottom(suelo[v].t);
+        if (!e.reachable) return ValueRange::bottom(suelo[v].t);
         if (const RangeEntry *r = e.buscar(v)) return r->range();
         return suelo[v];
     }
@@ -458,7 +465,40 @@ struct Contexto {
     std::vector<RangeFacts::Wrap> *wraps_out = nullptr;
 
     /// Que operacion del dominio corresponde a cada op del IR.  Nada mas.
-    void transferir(const ir::IrInstr &in, Estado &e) const;
+    /**
+     * @brief Efecto de @p in sobre @p e.
+     *
+     * @param drop_dead_at  Bloque cuyo predicado de vivacidad se aplica al
+     *                      RESULTADO, o @c kNoDropDead para no filtrar.
+     *
+     * Filtrar aqui es la unica forma de bajar las altas, que es donde se va el
+     * coste: se anotaban 89.587 refinamientos para un estado que de media
+     * lleva 0,7 entradas, porque la poda del final descartaba el 63 %.  Meter
+     * lo que se va a sacar cuesta dos veces -- la insercion y la poda -- y no
+     * aporta nada por el medio.
+     *
+     * NO se filtra en los otros dos usos de la transferencia, y no es un
+     * descuido: la proyeccion final lee el resultado JUSTO despues de
+     * anotarlo, asi que filtrarlo le devolveria el suelo; y el recorrido por
+     * punto contesta sobre valores que el llamante elige, que no tienen por
+     * que seguir vivos al final del bloque.
+     */
+    void transferir(const ir::IrInstr &in, Estado &e,
+                    ir::IrBlockId drop_dead_at) const;
+
+    /// Que no se filtre nada.  No es un bloque valido a proposito.
+    static constexpr ir::IrBlockId kNoDropDead =
+        static_cast<ir::IrBlockId>(-1);
+
+    /// Ultimo bloque donde se USA cada valor.  Lo rellena @c Motor; se declara
+    /// aqui porque quien transfiere es quien puede no anotar lo ya muerto.
+    std::vector<uint32_t> ultimo_uso;
+
+    /// Si @p v sigue teniendo algun uso en @p bi o despues.
+    bool is_live(ir::IrValueId v, ir::IrBlockId bi) const {
+        return ultimo_uso.empty() || v >= ultimo_uso.size() ||
+               ultimo_uso[v] >= bi;
+    }
 };
 
 // ===========================================================================
@@ -512,8 +552,10 @@ struct Motor : Contexto {
      * donde aparece.  Los argumentos de PHI cuentan en el bloque del que
      * VIENEN, no donde esta la PHI: ahi es donde el valor tiene que seguir
      * vivo.
+     *
+     * (Declarado en @c Contexto, que es quien transfiere y por tanto quien
+     * puede decidir NO anotar un refinamiento muerto.  Lo rellena @c Motor.)
      */
-    std::vector<uint32_t> ultimo_uso;
 
     void calcular_ultimo_uso() {
         ultimo_uso.assign(suelo.size(), 0);
@@ -657,11 +699,11 @@ struct Motor : Contexto {
      * en que eso pasa se resuelven antes de tocarlo.
      */
     void unir_en(const Estado &a, const Estado &b, Estado &out) const {
-        if (!a.alcanzable) {
+        if (!a.reachable) {
             if (&out != &b) out = b;
             return;
         }
-        if (!b.alcanzable) {
+        if (!b.reachable) {
             if (&out != &a) out = a;
             return;
         }
@@ -680,8 +722,8 @@ struct Motor : Contexto {
 
     /// El cuerpo de la fusion, con @p out ya vacio y distinto de las fuentes.
     void unir_cuerpo(const Estado &a, const Estado &b, Estado &out) const {
-        if (g_medir_coste) ++g_coste.uniones;
-        out.alcanzable = true;
+        if (g_measure_cost) ++g_cost.uniones;
+        out.reachable = true;
         /* Se reserva la cota superior: el resultado nunca es mayor que el
          * origen, porque se recorre y se filtra.
          *
@@ -704,13 +746,13 @@ struct Motor : Contexto {
             while (j < b.ref.size() && b.ref[j].id < p.id)
                 ++j;
             const bool hay = (j < b.ref.size() && b.ref[j].id == p.id);
-            if (g_medir_coste)
-                ++g_coste.busquedas; // comparable con la version vieja
+            if (g_measure_cost)
+                ++g_cost.busquedas; // comparable con la version vieja
             const ValueRange u =
                 p.range().unir(hay ? b.ref[j].range() : suelo[p.id]);
             if (!u.es_top()) {
                 out.ref.push_back(RangeEntry::make(p.id, u));
-                if (g_medir_coste) ++g_coste.unidos;
+                if (g_measure_cost) ++g_cost.unidos;
             }
         }
     }
@@ -720,13 +762,13 @@ struct Motor : Contexto {
     /// Sobre un destino REUTILIZADO; ver el motivo en @c narrow_into.
     void widen_into(const Estado &viejo, const Estado &nuevo,
                     Estado &out) const {
-        if (!viejo.alcanzable || !nuevo.alcanzable) {
+        if (!viejo.reachable || !nuevo.reachable) {
             if (&out != &nuevo) out = nuevo;
             return;
         }
         out.ref.clear();
-        if (g_medir_coste) ++g_coste.uniones;
-        out.alcanzable = true;
+        if (g_measure_cost) ++g_cost.uniones;
+        out.reachable = true;
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
         // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
         size_t j = 0;
@@ -734,7 +776,7 @@ struct Motor : Contexto {
             while (j < viejo.ref.size() && viejo.ref[j].id < p.id)
                 ++j;
             const bool hay = (j < viejo.ref.size() && viejo.ref[j].id == p.id);
-            if (g_medir_coste) ++g_coste.busquedas;
+            if (g_measure_cost) ++g_cost.busquedas;
             const ValueRange base = hay ? viejo.ref[j].range() : suelo[p.id];
             /* Ensanchar SIN pasarse del suelo.
              *
@@ -756,7 +798,7 @@ struct Motor : Contexto {
             if (p.id < suelo.size()) w = encajar_en(w, suelo[p.id]);
             if (!w.es_top()) {
                 out.ref.push_back(RangeEntry::make(p.id, w));
-                if (g_medir_coste) ++g_coste.unidos;
+                if (g_measure_cost) ++g_cost.unidos;
             }
         }
     }
@@ -775,13 +817,13 @@ struct Motor : Contexto {
      * al entrar, asi que conserva su capacidad de la vuelta anterior. */
     void narrow_into(const Estado &viejo, const Estado &nuevo,
                      Estado &out) const {
-        if (!nuevo.alcanzable || !viejo.alcanzable) {
+        if (!nuevo.reachable || !viejo.reachable) {
             if (&out != &nuevo) out = nuevo;
             return;
         }
         out.ref.clear();
-        if (g_medir_coste) ++g_coste.uniones;
-        out.alcanzable = true;
+        if (g_measure_cost) ++g_cost.uniones;
+        out.reachable = true;
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
         // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
         size_t j = 0;
@@ -789,7 +831,7 @@ struct Motor : Contexto {
             while (j < viejo.ref.size() && viejo.ref[j].id < p.id)
                 ++j;
             const bool hay = (j < viejo.ref.size() && viejo.ref[j].id == p.id);
-            if (g_medir_coste) ++g_coste.busquedas;
+            if (g_measure_cost) ++g_cost.busquedas;
             ValueRange r = p.range();
             if (hay) {
                 const ValueRange c = r.cortar(viejo.ref[j].range());
@@ -797,7 +839,7 @@ struct Motor : Contexto {
             }
             if (!r.es_top()) {
                 out.ref.push_back(RangeEntry::make(p.id, r));
-                if (g_medir_coste) ++g_coste.unidos;
+                if (g_measure_cost) ++g_cost.unidos;
             }
         }
     }
@@ -840,7 +882,7 @@ struct Motor : Contexto {
             if (ahora.es_bottom()) {
                 /* Por aqui no se pasa.  Es una respuesta, no una duda: la
                  * guarda contradice lo que ya se sabia del valor. */
-                e.inalcanzable();
+                e.set_unreachable();
                 return false;
             }
             if (ahora.es_top() || ahora == antes) return false;
@@ -853,7 +895,7 @@ struct Motor : Contexto {
          * traer mas; el tope es para que un IR roto no cuelgue el compilador,
          * no por miedo a un ciclo -- en SSA no puede haberlo. */
         ir::IrValueId v = v0;
-        for (int saltos = 0; saltos < 4 && e.alcanzable; ++saltos) {
+        for (int saltos = 0; saltos < 4 && e.reachable; ++saltos) {
             const ir::IrInstr *d = facts.def(v);
             if (d == nullptr || d->operands.empty()) return;
             const ValueRange rv = valor(e, v);
@@ -915,7 +957,7 @@ struct Motor : Contexto {
      * -- que es exactamente lo que hay que hacer.
      */
     void estrechar_por_guarda(Estado &e, ir::IrValueId cond, bool rama) const {
-        if (!e.alcanzable) return;
+        if (!e.reachable) return;
         const ir::IrInstr *d = facts.def(cond);
         if (!d || d->operands.size() != 2) return;
         const ir::IrValueId va = d->operands[0], vb = d->operands[1];
@@ -949,16 +991,16 @@ struct Motor : Contexto {
         // valor.
         auto aplicar = [&](ir::IrValueId v, const ValueRange &orig,
                            const ValueRange &restringido) {
-            if (!e.alcanzable) return;
+            if (!e.reachable) return;
             if (v == ir::IR_NO_VALUE || v >= suelo.size()) return;
             if (restringido.es_bottom()) {
-                e.inalcanzable();
+                e.set_unreachable();
                 return;
             }
             const ValueRange nuevo =
                 orig.cortar(restringido.reinterpretar(orig.t));
             if (nuevo.es_bottom()) {
-                e.inalcanzable();
+                e.set_unreachable();
                 return;
             }
             if (nuevo.es_top()) return;
@@ -1012,7 +1054,7 @@ struct Motor : Contexto {
      * distinguirlo.
      */
     void estrechar_por_caso(Estado &e, const Arista &a) const {
-        if (!e.alcanzable) return;
+        if (!e.reachable) return;
         if (a.sel == ir::IR_NO_VALUE || a.sel >= suelo.size()) return;
         const ValueRange orig = valor(e, a.sel);
         if (!orig.acotada()) return;
@@ -1021,7 +1063,7 @@ struct Motor : Contexto {
         const ValueRange nuevo = a.dentro ? orig.restringir_igual(caso)
                                           : orig.restringir_fuera(caso);
         if (nuevo.es_bottom()) {
-            e.inalcanzable();
+            e.set_unreachable();
             return;
         }
         if (!nuevo.es_top()) e.poner(a.sel, nuevo);
@@ -1039,14 +1081,14 @@ struct Motor : Contexto {
      */
     void calcular_in(ir::IrBlockId bi, Estado &dst) const {
         dst.ref.clear();
-        dst.alcanzable = false;
+        dst.reachable = false;
         for (uint32_t ai : entrantes[bi])
-            if (out_arista[ai].alcanzable) {
+            if (out_arista[ai].reachable) {
                 unir_en(dst, out_arista[ai], union_scratch_);
                 dst.swap(union_scratch_);
             }
-        if (bi == 0) dst.alcanzable = true; // a la entrada siempre se llega
-        if (!dst.alcanzable) return;
+        if (bi == 0) dst.reachable = true; // a la entrada siempre se llega
+        if (!dst.reachable) return;
         resolver_phis(bi, dst);
     }
 
@@ -1075,7 +1117,7 @@ struct Motor : Contexto {
             for (const ir::IrPhiArg &pa : in.phi_args)
                 for (uint32_t ai : entrantes[bi])
                     if (aristas[ai].desde == pa.block &&
-                        out_arista[ai].alcanzable)
+                        out_arista[ai].reachable)
                         acc = acc.unir(valor(out_arista[ai], pa.value));
             e.poner(in.dst, encajar_en(acc, suelo[in.dst]));
         }
@@ -1105,14 +1147,14 @@ struct Motor : Contexto {
          * dejar de valerlo tras la transferencia.  Esa sigue al final. */
         copy_live(in, dst, bi);
         for (const ir::IrInstr &instr : fn.blocks[bi].instrs)
-            if (instr.op != IrOp::PHI) transferir(instr, dst);
+            if (instr.op != IrOp::PHI) transferir(instr, dst, bi);
         podar_muertos(dst, bi);
     }
 
     /// Copia @p in en @p dst quedandose solo con lo que sigue vivo en @p bi.
     /// Conserva la capacidad de @p dst, que es lo que evita pedir memoria.
     void copy_live(const Estado &in, Estado &dst, ir::IrBlockId bi) const {
-        if (g_medir_coste) ++g_coste.copias;
+        if (g_measure_cost) ++g_cost.copias;
         auto is_live = [&](ir::IrValueId v) {
             return v >= ultimo_uso.size() || ultimo_uso[v] >= bi;
         };
@@ -1129,7 +1171,7 @@ struct Motor : Contexto {
             dst.ref.resize(w);
             return;
         }
-        dst.alcanzable = in.alcanzable;
+        dst.reachable = in.reachable;
         if (ultimo_uso.empty()) { // sin vivacidad no hay nada que filtrar
             dst.ref = in.ref;
             return;
@@ -1181,24 +1223,24 @@ struct Motor : Contexto {
                 e.ref[r].range() == suelo[v])
                 vivo = false;
             if (vivo) {
-                if (g_medir_coste) {
+                if (g_measure_cost) {
                     // Anchura de lo que SOBREVIVE, que es lo que se guarda,
                     // se copia y se compara.
-                    ++g_coste.width_seen;
-                    if (e.ref[r].t.bits <= 32) ++g_coste.narrow_width_count;
+                    ++g_cost.width_seen;
+                    if (e.ref[r].t.bits <= 32) ++g_cost.narrow_width_count;
                 }
                 if (w != r) e.ref[w] = e.ref[r];
                 ++w;
             }
         }
-        if (g_medir_coste) {
-            g_coste.prune_seen += e.ref.size();
-            g_coste.pruned_count += e.ref.size() - w;
+        if (g_measure_cost) {
+            g_cost.prune_seen += e.ref.size();
+            g_cost.pruned_count += e.ref.size() - w;
             for (size_t k = 0; k < w; ++k) {
-                ++g_coste.floor_seen;
+                ++g_cost.floor_seen;
                 const ir::IrValueId id = e.ref[k].id;
                 if (id < suelo.size() && e.ref[k].range() == suelo[id])
-                    ++g_coste.redundant_floor;
+                    ++g_cost.redundant_floor;
             }
         }
         e.ref.resize(w); // conserva el orden y la capacidad
@@ -1223,15 +1265,15 @@ struct Motor : Contexto {
     void propagar(ir::IrBlockId bi, std::deque<ir::IrBlockId> &cola) {
         calcular_out(bi, in_bloque[bi], out_scratch_);
         const Estado &out = out_scratch_;
-        if (g_medir_coste) {
-            ++g_coste.out_computed;
-            if (out == in_bloque[bi]) ++g_coste.out_equals_in;
+        if (g_measure_cost) {
+            ++g_cost.out_computed;
+            if (out == in_bloque[bi]) ++g_cost.out_equals_in;
         }
-        if (g_medir_coste && !ultimo_uso.empty()) {
-            g_coste.elems_vivos_total += out.ref.size();
+        if (g_measure_cost && !ultimo_uso.empty()) {
+            g_cost.elems_vivos_total += out.ref.size();
             for (const RangeEntry &p : out.ref)
                 if (p.id < ultimo_uso.size() && ultimo_uso[p.id] < bi)
-                    ++g_coste.elems_muertos;
+                    ++g_cost.elems_muertos;
         }
         for (uint32_t ai : salientes[bi]) {
             /* Una arista sin guarda ni caso no estrecha nada, asi que lo que
@@ -1271,7 +1313,7 @@ struct Motor : Contexto {
     /// ciclo por el que ya se ha vuelto a pasar.
     bool cierra_ciclo(ir::IrBlockId bi) const {
         for (uint32_t ai : entrantes[bi])
-            if (aristas[ai].retroceso && out_arista[ai].alcanzable) return true;
+            if (aristas[ai].retroceso && out_arista[ai].reachable) return true;
         return false;
     }
 
@@ -1298,7 +1340,7 @@ struct Motor : Contexto {
                 stats.ensanches++;
             }
             if (!(nuevo_in == in_bloque[bi])) {
-                if (g_medir_coste) {
+                if (g_measure_cost) {
                     /* Recorrido en paralelo de los dos, que estan ordenados
                      * por identificador: cuenta las entradas que solo estan en
                      * uno mas las que estan en ambos con distinto rango. */
@@ -1319,8 +1361,8 @@ struct Motor : Contexto {
                         }
                     }
                     d += (na.size() - i) + (vi.size() - j);
-                    g_coste.changed_entries += d;
-                    g_coste.changed_state_size +=
+                    g_cost.changed_entries += d;
+                    g_cost.changed_state_size +=
                         vi.size() > na.size() ? vi.size() : na.size();
                 }
                 // Intercambiar, no mover: el bufer se queda con la capacidad
@@ -1329,7 +1371,7 @@ struct Motor : Contexto {
                 vueltas_ciclo[bi]++;
                 stats.cambios++;
             }
-            if (!in_bloque[bi].alcanzable) continue;
+            if (!in_bloque[bi].reachable) continue;
             propagar(bi, cola);
         }
         return true;
@@ -1375,7 +1417,7 @@ struct Motor : Contexto {
                 in_bloque[bi].swap(narrow_scratch_);
                 stats.estrechados++;
             }
-            if (!in_bloque[bi].alcanzable) continue;
+            if (!in_bloque[bi].reachable) continue;
             propagar(bi, cola);
         }
         return true;
@@ -1392,11 +1434,15 @@ struct Motor : Contexto {
      * copiar el estado de cada bloque seria copiarlo para tirar el original
      * acto seguido.  Se llama despues de @c en_definicion, que si los lee.
      */
-    std::vector<RangeBlockState> estados_de_entrada() {
+    std::vector<RangeBlockState> block_entry_states() {
         std::vector<RangeBlockState> out(fn.blocks.size());
         for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
-            out[bi].alcanzable = in_bloque[bi].alcanzable;
-            out[bi].refinamientos = std::move(in_bloque[bi].ref);
+            out[bi].reachable = in_bloque[bi].reachable;
+            /* MOVIDO, no copiado: el hecho publico lleva el mismo tipo que el
+             * estado de trabajo, asi que aqui no se paga nada.  Cuando los dos
+             * lados no coincidian, esto era una copia del estado de CADA
+             * bloque en CADA analisis. */
+            out[bi].refinements = std::move(in_bloque[bi].ref);
         }
         return out;
     }
@@ -1405,10 +1451,12 @@ struct Motor : Contexto {
     std::vector<ValueRange> en_definicion() const {
         std::vector<ValueRange> out = suelo;
         for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
-            if (!in_bloque[bi].alcanzable) continue;
+            if (!in_bloque[bi].reachable) continue;
             Estado e = in_bloque[bi];
             for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
-                if (in.op != IrOp::PHI) transferir(in, e);
+                /* Sin filtrar: el resultado se lee JUSTO debajo, asi que
+                 * descartarlo por muerto devolveria el suelo. */
+                if (in.op != IrOp::PHI) transferir(in, e, kNoDropDead);
                 if (in.dst != ir::IR_NO_VALUE && in.dst < out.size())
                     out[in.dst] = valor(e, in.dst);
             }
@@ -1417,14 +1465,36 @@ struct Motor : Contexto {
     }
 };
 
-void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
-    if (!e.alcanzable) return;
-    if (in.dst == ir::IR_NO_VALUE || in.dst >= suelo.size()) return;
-    const ValueRange piso = suelo[in.dst];
-    auto arg = [&](size_t i) {
-        return i < in.operands.size() ? valor(e, in.operands[i])
-                                      : ValueRange::top();
-    };
+/**
+ * @brief QUE VALE el destino de @p in dados los rangos de sus operandos.
+ *
+ * La semantica del dominio, y NADA mas: aqui no hay estado, ni bloques, ni
+ * punto fijo.  De donde salen los rangos de los operandos lo decide quien
+ * llama, a traves de @p arg.
+ *
+ * Existe separada porque hay DOS motores que la necesitan y no puede haber dos
+ * versiones de lo que significa un `add`.  El de punto fijo pasa "leelo del
+ * estado del bloque"; el de consulta bajo demanda pasa "evaluate ese operando
+ * ahora, recursivamente".  El dia que se separaran, el mismo programa daria
+ * dos respuestas segun quien preguntara y nadie lo notaria.
+ *
+ * @param cx        Contexto: el suelo, los resumenes y la funcion.
+ * @param in        Instruccion cuyo destino se evalua.
+ * @param piso      Lo que el destino vale por su tipo (mas su constante).
+ * @param arg       `arg(i)` da el rango del operando i-esimo.
+ * @param wraps_out Donde apuntar una operacion constante que da la vuelta, o
+ *                  nullptr para no apuntarlas.
+ */
+template <typename ArgFn>
+static ValueRange evaluate_op(const Contexto &cx, const ir::IrInstr &in,
+                              const ValueRange &piso, ArgFn &&arg,
+                              std::vector<RangeFacts::Wrap> *wraps_out) {
+    const auto &fn = cx.fn;
+    const auto &facts = cx.facts;
+    /* NO const: el lector de resumenes APUNTA lo que se le consulta, y de esa
+     * lista salen las dependencias con las que la cache decide si un resultado
+     * sigue valiendo.  Por eso el miembro es `mutable`. */
+    auto &sum = cx.sum;
     ValueRange nuevo = ValueRange::top(piso.t);
     switch (in.op) {
     case IrOp::CONST:
@@ -1512,6 +1582,27 @@ void Contexto::transferir(const ir::IrInstr &in, Estado &e) const {
             }
         }
     }
+    return nuevo;
+}
+
+void Contexto::transferir(const ir::IrInstr &in, Estado &e,
+                          ir::IrBlockId drop_dead_at) const {
+    if (!e.reachable) return;
+    if (in.dst == ir::IR_NO_VALUE || in.dst >= suelo.size()) return;
+    const ValueRange piso = suelo[in.dst];
+    // Los operandos, LEIDOS DEL ESTADO de este bloque.
+    const ValueRange nuevo = evaluate_op(
+        *this, in, piso,
+        [&](size_t i) {
+            return i < in.operands.size() ? valor(e, in.operands[i])
+                                          : ValueRange::top();
+        },
+        wraps_out);
+    /* Si el resultado ya no lo mira nadie de aqui en adelante, no se anota.
+     * La poda del final del bloque lo tiraria igual; la diferencia es que asi
+     * no se paga la insercion -- ni el desplazamiento que arrastra -- para
+     * nada. */
+    if (drop_dead_at != kNoDropDead && !is_live(in.dst, drop_dead_at)) return;
     e.poner(in.dst, encajar_en(nuevo, piso));
 }
 
@@ -1604,7 +1695,7 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
     // Sin registro no se afirma nada: se recalcula.  Es la misma regla que rige
     // el resto del analisis -- no haber mirado no es haber comprobado.
     if (!d.registrada) return false;
-    if (d.huella_opciones != util::fnv_bytes(util::kFnvOffset, &op, sizeof(op)))
+    if (d.huella_opciones != op.fingerprint())
         return false;
     if (d.huella_ir != huella_de_funcion(fn)) return false;
     /* HABIA resumenes entonces y los hay ahora?  Esta comprobacion no la puede
@@ -1646,10 +1737,50 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                                        const RangeSummaries *sum,
                                        const LoopIvBounds *ivb);
 
+/* Quien pidio el analisis que se esta haciendo.  Sin esto el recuento total no
+ * es accionable: dice cuantos hay, no de quien son ni cuales sobran.
+ *
+ * Un enumerado y un array plano, no cadenas ni un mapa: esto se toca en CADA
+ * analisis, y construir y hashear una cadena para llevar una cuenta seria
+ * pagar mas por medir que por lo medido. */
+thread_local RangeAsker g_asker = RangeAsker::Unknown;
+static std::atomic<long long> g_by_asker[static_cast<size_t>(RangeAsker::Count)];
+
+/* Con la bandera apagada NO se toca la variable de hilo.  En MinGW cada acceso
+ * a una de ellas es una llamada (`__emutls_get_address`), y esto se pone en
+ * sitios que se recorren mucho: quien no mide no puede pagar por medir.  Es la
+ * misma guarda que ya lleva el contador de costes de este fichero. */
+RangeRequester::RangeRequester(RangeAsker who) noexcept
+    : previous_(RangeAsker::Unknown) {
+    if (!g_measure_cost) return;
+    previous_ = g_asker;
+    g_asker = who;
+}
+RangeRequester::~RangeRequester() {
+    if (!g_measure_cost) return;
+    g_asker = previous_;
+}
+
+const char *range_asker_name(RangeAsker a) {
+    switch (a) {
+    case RangeAsker::FactBase: return "base-de-hechos";
+    case RangeAsker::Optimizer: return "optimizador";
+    case RangeAsker::OptimizerAsm: return "optimizador-asm";
+    case RangeAsker::Effects: return "efectos";
+    case RangeAsker::Summaries: return "resumenes";
+    case RangeAsker::Bounds: return "limites";
+    case RangeAsker::IvStaging: return "cotas-escalonadas";
+    default: return "sin-identificar";
+    }
+}
+
 static RangeFacts calcular_rangos(const ir::IrFunction &fn,
                                   const IrFacts &facts, const RangeOptions &op,
                                   const RangeSummaries *sum,
                                   const LoopIvBounds *ivb) {
+    if (g_measure_cost)
+        g_by_asker[static_cast<size_t>(g_asker)].fetch_add(
+            1, std::memory_order_relaxed);
     /* Si quien pregunta no trae las cotas de induccion, se sacan AQUI.
      *
      * Antes dependia del llamante, y de los ocho consumidores solo UNO las
@@ -1698,6 +1829,8 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
          * el doble por nada, medido. */
         if (ivb_propias.no_const_init != 0 ||
             ivb_propias.no_const_bound != 0) {
+            // Que se vea de quien es esta pasada de mas.
+            const RangeRequester mark(RangeAsker::IvStaging);
             const RangeFacts sin_cotas =
                 calcular_rangos_impl(fn, facts, op, sum, nullptr);
             LoopIvBounds mejores =
@@ -1713,9 +1846,17 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
     const uint64_t t = util::reloj::ahora();
     RangeFacts r = calcular_rangos_impl(fn, facts, op, sum, ivb);
     g_ns_motor += util::reloj::a_ns(util::reloj::ahora() - t);
-    if (g_medir_coste && (++g_n_motor % 100) == 0)
+    if (g_measure_cost && (++g_n_motor % 100) == 0) {
         std::fprintf(stderr, "[motor-rangos] %lld analisis | %lld ms\n",
                      g_n_motor.load(), g_ns_motor.load() / 1000000);
+        for (size_t i = 0; i < static_cast<size_t>(RangeAsker::Count); ++i) {
+            const long long c =
+                g_by_asker[i].load(std::memory_order_relaxed);
+            if (c != 0)
+                std::fprintf(stderr, "[motor-rangos]   %-20s %8lld\n",
+                             range_asker_name(static_cast<RangeAsker>(i)), c);
+        }
+    }
     return r;
 }
 
@@ -1740,7 +1881,7 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
      * Es una cache, no un buffer reaprovechado: se indexa por la entrada, no se
      * pisa mientras vale, y varios hilos pueden leer la misma. */
     RangeFacts out;
-    g_coste = CosteEstado{}; // el coste que se mide es el de ESTA funcion
+    g_cost = CostCounters{}; // el coste que se mide es el de ESTA funcion
     Motor m(fn, facts, op, sum);
     /* Las cotas de induccion entran como SUELO, igual que lo que dicen los
      * resumenes de un parametro: no son una fase mas del motor, son lo que ya
@@ -1810,7 +1951,17 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
     m.wraps_out = &out.wraps;
     out.r = m.en_definicion();
     m.wraps_out = nullptr;
-    out.entrada = m.estados_de_entrada();
+    /* SIEMPRE, y no cuesta: el punto fijo ya lleva el estado de cada bloque --
+     * no puede no llevarlo, es el algoritmo --, asi que sacarlo de aqui es
+     * MOVERLO, no calcularlo.
+     *
+     * Hubo un rato en que si costaba, y fue un fallo propio: al guardar el
+     * estado de trabajo en un vector con almacenamiento en linea y dejar el
+     * hecho publico con `std::vector`, los dos lados dejaron de coincidir y el
+     * movimiento se convirtio en una copia por bloque y por analisis.  Con los
+     * dos tipos iguales vuelve a ser gratis.  Lo que hay que vigilar no es si
+     * guardarlo compensa, es que los dos lados no se separen. */
+    out.block_entry = m.block_entry_states();
 
     /* Lo que se leyo para llegar aqui.  No se enumera: se recoge de lo que el
      * lector fue apuntando, asi que incluye lo que se consulto de verdad --
@@ -1823,8 +1974,7 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
      * comprobarla --, porque alli solo se tiene la funcion.  El resultado era
      * una comparacion que no coincidia nunca: la cache no acertaba jamas.
      * Medido en su momento: anadirlos no quitaba ni un caso incoherente. */
-    out.deps.huella_opciones =
-        util::fnv_bytes(util::kFnvOffset, &op, sizeof(op));
+    out.deps.huella_opciones = op.fingerprint();
     out.deps.resumenes = m.sum.soltar();
     /* Y si HABIA resumenes, que es lo que el guardia de arriba mira y la lista
      * de lecturas no puede contar: sin resumenes no se consulta ninguno, y una
@@ -1837,21 +1987,21 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
     // un estado.  Es lo que decide si conviene guardar el estado DISPERSO (como
     // ahora) o DENSO indexado por valor; suponerlo seria elegir a ciegas.
     out.stats.valores = static_cast<uint32_t>(m.suelo.size());
-    for (const RangeBlockState &e : out.entrada) {
-        if (!e.alcanzable) continue;
-        const uint32_t n = static_cast<uint32_t>(e.refinamientos.size());
+    for (const RangeBlockState &e : out.block_entry) {
+        if (!e.reachable) continue;
+        const uint32_t n = static_cast<uint32_t>(e.refinements.size());
         if (n > out.stats.ref_max) out.stats.ref_max = n;
         out.stats.ref_suma += n;
         ++out.stats.ref_muestras;
     }
-    out.stats.inserciones = g_coste.inserciones;
-    out.stats.reescrituras = g_coste.reescrituras;
-    out.stats.copias = g_coste.copias;
-    out.stats.busquedas = g_coste.busquedas;
-    out.stats.uniones = g_coste.uniones;
-    out.stats.unidos = g_coste.unidos;
+    out.stats.inserciones = g_cost.inserciones;
+    out.stats.reescrituras = g_cost.reescrituras;
+    out.stats.copias = g_cost.copias;
+    out.stats.busquedas = g_cost.busquedas;
+    out.stats.uniones = g_cost.uniones;
+    out.stats.unidos = g_cost.unidos;
 
-    if (g_medir_coste) {
+    if (g_measure_cost) {
         if (g_stats_verbose) {
             /* Rehacer un analisis no es lo mismo que hacer trabajo: si el
              * resultado sale IGUAL que la vez anterior, la vuelta entera sobro
@@ -1860,9 +2010,9 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
             uint64_t h = util::kFnvOffset;
             for (const ValueRange &r : out.r)
                 h = mezcla_rango(h, r);
-            for (const RangeBlockState &e : out.entrada) {
-                h = util::fnv_mix(h, e.alcanzable ? 1u : 0u);
-                for (const RangeEntry &p : e.refinamientos) {
+            for (const RangeBlockState &e : out.block_entry) {
+                h = util::fnv_mix(h, e.reachable ? 1u : 0u);
+                for (const RangeEntry &p : e.refinements) {
                     h = util::fnv_mix(h, p.id);
                     h = mezcla_rango(h, p.range());
                 }
@@ -1916,26 +2066,26 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                 (unsigned long long)out.stats.uniones,
                 (unsigned long long)out.stats.unidos, out.stats.pasos,
                 out.stats.cambios, out.stats.ensanches, out.stats.estrechados,
-                (unsigned long long)g_coste.elems_muertos,
-                (unsigned long long)g_coste.elems_vivos_total);
+                (unsigned long long)g_cost.elems_muertos,
+                (unsigned long long)g_cost.elems_vivos_total);
             std::fprintf(
                 stderr,
                 "[anchura] estrechas=%llu de %llu | pruned_count=%llu de "
                 "%llu\n",
-                (unsigned long long)g_coste.narrow_width_count,
-                (unsigned long long)g_coste.width_seen,
-                (unsigned long long)g_coste.pruned_count,
-                (unsigned long long)g_coste.prune_seen);
+                (unsigned long long)g_cost.narrow_width_count,
+                (unsigned long long)g_cost.width_seen,
+                (unsigned long long)g_cost.pruned_count,
+                (unsigned long long)g_cost.prune_seen);
             std::fprintf(stderr,
                          "[delta] difieren=%llu de %llu | salida=entrada %llu "
                          "de %llu\n",
-                         (unsigned long long)g_coste.changed_entries,
-                         (unsigned long long)g_coste.changed_state_size,
-                         (unsigned long long)g_coste.out_equals_in,
-                         (unsigned long long)g_coste.out_computed);
+                         (unsigned long long)g_cost.changed_entries,
+                         (unsigned long long)g_cost.changed_state_size,
+                         (unsigned long long)g_cost.out_equals_in,
+                         (unsigned long long)g_cost.out_computed);
             std::fprintf(stderr, "[suelo] redundantes=%llu de %llu\n",
-                         (unsigned long long)g_coste.redundant_floor,
-                         (unsigned long long)g_coste.floor_seen);
+                         (unsigned long long)g_cost.redundant_floor,
+                         (unsigned long long)g_cost.floor_seen);
         }
     }
     return out;
@@ -1976,9 +2126,10 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
      * analisis (funcion + opciones); lo que solo se sabe despues -- que
      * resumenes se consultaron -- se comprueba releyendolos.  Por eso un cajon
      * puede tener varias entradas: mismo codigo, distinto entorno. */
+    // Campo a campo, no bytes crudos: la estructura tiene relleno sin
+    // inicializar y hashearlo hacia que la clave saliera distinta cada vez.
     const uint64_t clave =
-        util::fnv_mix(huella_de_funcion(fn),
-                      util::fnv_bytes(util::kFnvOffset, &op, sizeof(op)));
+        util::fnv_mix(huella_de_funcion(fn), op.fingerprint());
     {
         std::lock_guard<std::mutex> g(mx_cache);
         auto it = cache.find(clave);
@@ -2008,6 +2159,7 @@ std::shared_ptr<const RangeFacts> compute_ranges_ptr(const ir::IrFunction &fn,
                                                      const LoopIvBounds *ivb) {
     return rangos_de(fn, facts, op, sum, ivb);
 }
+
 
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op, const RangeSummaries *sum,
@@ -2044,14 +2196,15 @@ struct RangeWalk::Impl {
         bloque = nullptr;
         if (b >= ctx.fn.blocks.size()) return;
         bloque = &ctx.fn.blocks[b];
-        if (b < rf.entrada.size()) {
-            estado.alcanzable = rf.entrada[b].alcanzable;
-            estado.ref = rf.entrada[b].refinamientos;
+        if (b < rf.block_entry.size()) {
+            estado.reachable = rf.block_entry[b].reachable;
+            // Mismo tipo a los dos lados: una asignacion y ya.
+            estado.ref = rf.block_entry[b].refinements;
         } else {
             /* Sin estado guardado -- rangos que no convergieron, o un bloque
              * anadido despues -- no se puede afirmar por punto, pero tampoco
              * hay que mentir: se responde lo que diga la definicion. */
-            estado.alcanzable = true;
+            estado.reachable = true;
         }
     }
 };
@@ -2072,8 +2225,8 @@ void RangeWalk::situar(ir::IrBlockId b) {
     if (impl_ != nullptr) impl_->situar(b);
 }
 
-bool RangeWalk::alcanzable() const {
-    return impl_ != nullptr && impl_->estado.alcanzable;
+bool RangeWalk::reachable() const {
+    return impl_ != nullptr && impl_->estado.reachable;
 }
 
 ValueRange RangeWalk::rango(ir::IrValueId v) const {
@@ -2094,7 +2247,103 @@ void RangeWalk::avanzar() {
     const ir::IrInstr &in = impl_->bloque->instrs[impl_->idx++];
     /* Las PHI no se reproducen: su valor lo fijo el motor leyendo el estado de
      * cada ARISTA entrante, y eso ya viene resuelto en el estado de entrada. */
-    if (in.op != ir::IrOp::PHI) impl_->ctx.transferir(in, impl_->estado);
+    /* Sin filtrar: aqui se contesta por PUNTO, y el valor por el que pregunte
+     * el llamante no tiene por que seguir vivo al final del bloque. */
+    if (in.op != ir::IrOp::PHI)
+        impl_->ctx.transferir(in, impl_->estado, Contexto::kNoDropDead);
 }
+
+// ===========================================================================
+//  Consulta BAJO DEMANDA
+// ===========================================================================
+
+struct RangeQuery::Impl {
+    Contexto ctx;
+    const LoopIvBounds *ivb;
+    std::vector<ValueRange> memo;
+    /// 0 = sin mirar, 1 = evaluandose ahora, 2 = ya resuelto.
+    std::vector<uint8_t> state;
+    uint64_t evaluated_count = 0;
+
+    Impl(const ir::IrFunction &fn, const IrFacts &facts,
+         const LoopIvBounds *b, const RangeSummaries *s)
+        : ctx(fn, facts, s), ivb(b) {
+        memo = ctx.suelo; // el suelo es la respuesta por defecto
+        state.assign(memo.size(), 0);
+    }
+
+    /// Lo que las cotas de induccion digan de @p v, si dicen algo.
+    const ValueRange *iv_bound_of(ir::IrValueId v) const {
+        if (ivb == nullptr) return nullptr;
+        for (const IvBound &c : ivb->bounds)
+            if (c.value == v) return &c.range;
+        return nullptr;
+    }
+
+    const ValueRange &of(ir::IrValueId v, int depth) {
+        if (v == ir::IR_NO_VALUE || v >= memo.size()) {
+            static const ValueRange kTop = ValueRange::top();
+            return kTop;
+        }
+        if (state[v] == 2) return memo[v];
+        /* Ya se esta evaluando mas arriba: es un ciclo del grafo de valores --
+         * una PHI de bucle --.  Se contesta el suelo, que es cierto y no
+         * depende de la vuelta.  Es lo que hace que esto TERMINE sin punto
+         * fijo, y lo que se paga por no tenerlo. */
+        if (state[v] == 1) return memo[v];
+        /* Tope de profundidad: una cadena muy larga de operaciones se corta y
+         * se contesta el suelo.  Sin el, una expresion generada podria costar
+         * mas que el analisis completo, que es justo lo que se venia a
+         * evitar. */
+        if (depth > 24) return memo[v];
+
+        state[v] = 1;
+        ++evaluated_count;
+        ValueRange r = memo[v]; // el suelo, si nada mejora
+        /* Lo que ya sabe la forma del bucle manda sobre lo que se pueda
+         * deducir aqui: la cota sale de como esta escrito el bucle y esta
+         * recursion no puede llegar a ella (se cortaria en la PHI). */
+        if (const ValueRange *c = iv_bound_of(v)) {
+            r = r.acotada() ? r.cortar(*c) : *c;
+        } else if (const ir::IrInstr *def = ctx.facts.def(v)) {
+            if (def->op != ir::IrOp::PHI) {
+                const ValueRange floor_v = ctx.suelo[v];
+                const ValueRange x = evaluate_op(
+                    ctx, *def, floor_v,
+                    [&](size_t i) {
+                        return i < def->operands.size()
+                                   ? of(def->operands[i], depth + 1)
+                                   : ValueRange::top();
+                    },
+                    /*wraps_out=*/nullptr);
+                r = Contexto::encajar_en(x, floor_v);
+            } else {
+                /* Una PHI sin cota conocida: se unen sus argumentos.  Los que
+                 * vuelvan por la arista de retroceso se cortaran solos con la
+                 * marca de "evaluandose", y ahi la union se lleva el suelo --
+                 * correcto, y mas ancho. */
+                bool first = true;
+                for (const auto &a : def->phi_args) {
+                    const ValueRange &va = of(a.value, depth + 1);
+                    r = first ? va : r.unir(va);
+                    first = false;
+                }
+                if (first) r = ctx.suelo[v];
+            }
+        }
+        memo[v] = r;
+        state[v] = 2;
+        return memo[v];
+    }
+};
+
+RangeQuery::RangeQuery(const ir::IrFunction &fn, const IrFacts &facts,
+                       const LoopIvBounds *ivb, const RangeSummaries *sum)
+    : impl_(new Impl(fn, facts, ivb, sum)) {}
+RangeQuery::RangeQuery(RangeQuery &&) noexcept = default;
+RangeQuery::~RangeQuery() = default;
+
+const ValueRange &RangeQuery::of(ir::IrValueId v) { return impl_->of(v, 0); }
+uint64_t RangeQuery::evaluated() const { return impl_->evaluated_count; }
 
 } // namespace analysis

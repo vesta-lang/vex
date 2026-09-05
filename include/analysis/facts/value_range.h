@@ -56,6 +56,8 @@
 
 #include "analysis/asa/fact.h" // UnknownReason: por que no se pudo afirmar mas
 #include "analysis/facts/ir_facts.h"
+#include "util/fnv.h"          // huella de las opciones, campo a campo
+#include "util/small_vector.h" // el estado de un punto casi siempre es diminuto
 
 #include <cstddef> // offsetof: las aserciones que fijan el layout de RangeEntry
 #include <cstdint>
@@ -437,6 +439,29 @@ struct RangeOptions {
     /// Vueltas del descenso.  El descenso solo estrecha, asi que pararlo antes
     /// cuesta precision, nunca correccion.
     uint32_t pasos_descenso = 8;
+
+    /**
+     * @brief Huella de las opciones, CAMPO A CAMPO.
+     *
+     * No con `fnv_bytes(&op, sizeof(op))`: eso hashea tambien el RELLENO de la
+     * estructura, que no se inicializa.  Mientras fueron cuatro `uint32_t` no
+     * habia relleno y colaba; al anadir un `bool` la estructura pasó a 20
+     * bytes con 3 indeterminados, y la huella empezo a salir distinta en cada
+     * construccion.
+     *
+     * El sintoma no fue un error: la cache dejo de acertar EN SILENCIO y los
+     * analisis se multiplicaron por tres (de 500 a mas de 1.700 en una
+     * compilacion).  Un hash sobre bytes crudos de una estructura con relleno
+     * es una bomba de relojeria: funciona hasta que alguien anade un campo.
+     */
+    uint64_t fingerprint() const {
+        /* UN solo hash, sobre una imagen construida aqui: cinco campos son
+         * cinco mezclas, y no hacen falta.  Lo que no se puede es hashear la
+         * estructura tal cual, que es de donde venia el fallo. */
+        const uint32_t packed[4] = {retardo_ensanche, pasos_por_bloque,
+                                    pasos_extra, pasos_descenso};
+        return util::fnv_bytes(util::kFnvOffset, packed, sizeof(packed));
+    }
 };
 
 /**
@@ -560,9 +585,28 @@ static_assert(offsetof(RangeEntry, lo_c) == 8, "layout fijado: ver el memcmp");
 static_assert(offsetof(RangeEntry, hi_c) == 16, "layout fijado: ver el memcmp");
 static_assert(sizeof(RangeType) == 2, "layout fijado: ver el memcmp");
 
+/**
+ * @brief Cuantos refinamientos caben DENTRO del estado, sin pedir memoria.
+ *
+ * Medido: el estado medio lleva 0,7 entradas y el mayor visto son 25.  Con un
+ * `std::vector` eso era una reserva por estado para guardar casi nada.
+ *
+ * DOS, y el numero se midio: con ocho, las reservas bajaban (el trabajo de
+ * `std::vector` caia un 32 %) pero el total SUBIA un 1,1 %, porque el estado
+ * pasaba de ~32 a 216 bytes y hay uno por bloque -- el conjunto de trabajo se
+ * multiplicaba por seis y se perdia en cache lo ganado en reservas.
+ */
+constexpr size_t kInlineRefs = 2;
+
+/// Los refinamientos de un punto.  MISMO tipo que usa el motor por dentro, y
+/// eso es lo que permite que el resultado se MUEVA en vez de copiarse: en
+/// cuanto los dos lados dejan de coincidir, guardar el estado de cada bloque
+/// pasa a ser una copia por bloque y por analisis.
+using RangeRefs = util::SmallVector<RangeEntry, kInlineRefs>;
+
 struct RangeBlockState {
-    bool alcanzable = false;
-    std::vector<RangeEntry> refinamientos;
+    bool reachable = false;
+    RangeRefs refinements;
 };
 
 // Los resumenes se declaran aparte (range_summary.h incluye a este, no al
@@ -668,8 +712,17 @@ compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
 
 struct RangeFacts {
     std::vector<ValueRange> r;
-    /// Estado a la entrada de cada bloque, para @c RangeWalk.
-    std::vector<RangeBlockState> entrada;
+    /**
+     * @brief Estado a la entrada de cada bloque.  VACIO salvo por @c
+     *        compute_point_ranges.
+     *
+     * No se lee directamente: quien pregunta por PUNTO lo hace con
+     * @c RangeWalk, y este exige un @c PointRangeFacts, que es el unico tipo
+     * que garantiza que esto esta relleno.  Guardarlo cuesta una copia del
+     * estado por bloque, y la inmensa mayoria de los consumidores preguntan
+     * por VALOR y no lo miran nunca.
+     */
+    std::vector<RangeBlockState> block_entry;
     /**
      * @brief Si el calculo llego a PUNTO FIJO o se paro por presupuesto.
      *
@@ -805,6 +858,108 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
  * definicion.  Los dos son ciertos ahi -- en SSA la definicion domina a todos
  * sus usos --, y quedarse solo con uno perderia lo que sabe el otro.
  */
+/**
+ * @brief Quien esta pidiendo rangos ahora mismo.
+ *
+ * Un analisis de rangos no se dispara solo: lo pide alguien.  Y como el
+ * intermedio cambia entre pase y pase, el mismo consumidor puede provocar
+ * varios sobre la misma funcion sin que ninguno sea un fallo de cache.
+ *
+ * Sin esto, el recuento total no dice nada accionable: se sabe que hay 550
+ * analisis para 117 funciones, pero no CUALES sobran ni de quien son.  Con la
+ * marca puesta, el informe los reparte por peticionario y se puede decidir con
+ * datos a quien merece la pena hacer perezoso.
+ *
+ * Es un marcador de PILA: se pone al entrar y se quita al salir, asi que
+ * peticiones anidadas -- el escalonado de las cotas pide rangos dentro de una
+ * peticion de rangos -- quedan atribuidas a quien de verdad las provoco.
+ */
+enum class RangeAsker : uint8_t {
+    Unknown = 0,   ///< nadie se identifico.
+    FactBase,      ///< la base de hechos del ASA.
+    Optimizer,     ///< un pase del optimizador.
+    OptimizerAsm,  ///< los pases del optimizador que miran bloques de asm.
+    Effects,       ///< el modelo de efectos.
+    Summaries,     ///< los resumenes de frontera del modulo.
+    Bounds,        ///< el comprobador de limites.
+    IvStaging,     ///< la pasada extra que despeja cotas con rangos.
+    Count
+};
+
+/// Nombre estable de cada peticionario, para el informe.
+const char *range_asker_name(RangeAsker a);
+
+class RangeRequester {
+  public:
+    explicit RangeRequester(RangeAsker who) noexcept;
+    ~RangeRequester();
+    RangeRequester(const RangeRequester &) = delete;
+    RangeRequester &operator=(const RangeRequester &) = delete;
+
+  private:
+    RangeAsker previous_;
+};
+
+/**
+ * @brief El rango de UN valor, sin calcular el de todos.
+ *
+ * El motor de punto fijo contesta por la funcion entera: recorre los bloques
+ * hasta converger llevando un estado por bloque, y ese estado se copia, se
+ * fusiona y se poda en cada vuelta.  Medido sobre una compilacion en frio, ese
+ * mecanismo es el 13,8 % de las instrucciones del compilador, y sus dos
+ * terceras partes son la manipulacion del estado, no la aritmetica de
+ * intervalos.
+ *
+ * Lo que hace caro ese diseno es que paga la sensibilidad al flujo POR
+ * ADELANTADO y PARA TODOS los valores.  Y resulta que los consumidores no
+ * preguntan asi: el pase que quita normalizaciones consulta los valores de las
+ * instrucciones que le interesan, y el comprobador de limites los simbolos de
+ * los accesos que mira.  Preguntan por unos pocos, y se les calculaba todo.
+ *
+ * Esto contesta al reves: se parte del valor, se miran sus operandos, y se
+ * para.  Sin estado por bloque, sin copias y sin punto fijo.
+ *
+ * QUE SE PIERDE, dicho claro: no incorpora lo que afirman las guardas.  El
+ * motor completo sabe que dentro de `if (i < 10)` la `i` vale [0,9]; esto
+ * responde por la DEFINICION, como @c RangeFacts::r.  Quien necesite el punto
+ * sigue teniendo @c RangeWalk.
+ *
+ * Y NO se reimplementa la semantica: cada nodo se evalua llamando a la MISMA
+ * transferencia que usa el motor, con los rangos de sus operandos ya
+ * resueltos.  Dos implementaciones de lo que significa un `add` acabarian
+ * separandose, y el dia que lo hicieran nadie lo notaria.
+ *
+ * Los bucles se cortan con las COTAS DE INDUCCION cuando se traen -- que salen
+ * de la forma del bucle y no llevan punto fijo -- y con el suelo del tipo
+ * cuando no.  Una recursion que se muerde la cola devuelve el suelo: es
+ * correcto, solo menos preciso.
+ */
+class RangeQuery {
+  public:
+    /**
+     * @param fn     Funcion a consultar.  Debe vivir mas que la consulta.
+     * @param facts  Def-use de esa misma funcion.
+     * @param ivb    Cotas de induccion, si se tienen.  Sin ellas, la variable
+     *               de un bucle vale todo su tipo.
+     * @param sum    Resumenes de frontera, si se tienen.
+     */
+    RangeQuery(const ir::IrFunction &fn, const IrFacts &facts,
+               const LoopIvBounds *ivb = nullptr,
+               const RangeSummaries *sum = nullptr);
+    RangeQuery(RangeQuery &&) noexcept;
+    ~RangeQuery();
+
+    /// El rango de @p v en su punto de definicion.  Memoizado.
+    const ValueRange &of(ir::IrValueId v);
+
+    /// Cuantos nodos se han llegado a evaluar.  Para medir si la pereza paga.
+    uint64_t evaluated() const;
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 class RangeWalk {
   public:
     /// Se coloca al principio de @p b.  @p rf debe venir del mismo @p fn.
@@ -830,7 +985,7 @@ class RangeWalk {
     void situar(ir::IrBlockId b);
 
     /// Si se llega a ejecutar el punto en curso.
-    bool alcanzable() const;
+    bool reachable() const;
     /// Rango de @p v JUSTO ANTES de la instruccion en curso.
     ValueRange rango(ir::IrValueId v) const;
     /// Consume la instruccion en curso y pasa a la siguiente.
@@ -856,6 +1011,7 @@ struct RangeAnalysis {
     using Result = RangeFacts;
     static char ID;
 };
+
 
 } // namespace analysis
 

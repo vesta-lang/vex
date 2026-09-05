@@ -235,7 +235,7 @@ struct EfectoEnLlamada {
  * @return Lo que toca, en memoria del llamante.
  */
 EfectoEnLlamada instanciar_en_llamada(const SemanticEffects &callee_eff,
-                                      const std::vector<ir::IrValueId> &args,
+                                      const ir::IrOperands &args,
                                       const analysis::PointsTo &pt);
 
 /// Efecto LOCAL de UNA instruccion IR (con completeness + motivo).  El asm

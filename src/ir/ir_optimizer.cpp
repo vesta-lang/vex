@@ -37,6 +37,7 @@
 #include "ir/passes/unroll.h" // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h" // canonicalizacion algebraica de SELECT
 #include "analysis/asa/fact_base.h" // la puerta UNICA a los hechos del ASA
+#include "analysis/facts/loop_iv_bounds.h" // hasta donde llega la variable de un bucle
 #include "analysis/facts/demanded_bits.h" // cuantos bits de un valor mira alguien
 #include "analysis/facts/alignment.h"  // de cuanto es multiplo un valor
 #include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
@@ -2998,7 +2999,7 @@ inline void sr_forward_mem_marks(IrFunction &fn, IrValueId load_dst,
  * @return true si la reescritura es posible / se aplico; false -> abortar.
  */
 bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
-                     const std::vector<IrValueId> &args, IrFunction &fn,
+                     IrValueList args, IrFunction &fn,
                      bool apply) {
     const IrType T = ld.type; /* tipo leido del campo */
     /* Solo enteros por ahora (float/ptr/handle -> abortar, conservador). */
@@ -3276,7 +3277,7 @@ SrDom sr_compute_dom(const IrFunction &fn) {
 //  un CALL de helper.  El GC-mode (stack_mode=false) queda byte-identico.
 bool sr_mem2reg_object(
     IrFunction &fn, const SrCtorModel *model, size_t call_bi, size_t call_ii,
-    IrValueId obj, const std::vector<IrValueId> &args,
+    IrValueId obj, IrValueList args,
     const std::unordered_map<IrValueId, uint32_t> &fieldaddr_off,
     std::string &reason, bool stack_mode = false) {
     const size_t N = fn.blocks.size();
@@ -3888,7 +3889,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
         if (site.ins_idx >= seed_blk.instrs.size()) continue;
         IrInstr &call_ins = seed_blk.instrs[site.ins_idx];
         if (call_ins.op != IrOp::CALL || call_ins.dst != obj) continue;
-        const std::vector<IrValueId> args = call_ins.operands; /* copia */
+        const IrOperands args = call_ins.operands; /* copia */
         if (args.size() != model->num_new_args) continue; /* arity mismatch */
 
         /* --- Recolectar TODOS los usos de obj.  Deben ser solo
@@ -4739,7 +4740,7 @@ bool ir_pass_fuse_fma(IrFunction &fn) {
                 const IrValueId a = mul->operands[0];
                 const IrValueId b = mul->operands[1];
                 in.op = IrOp::FMA;
-                in.operands.assign({a, b, cval});
+                in.operands = {a, b, cval};
                 // El fmul queda muerto (t sin usos) -> lo elimina el DCE.
                 changed = true;
                 break;
@@ -6942,7 +6943,7 @@ static bool strength_reduce_with_facts(
 // queda.  Quitar de menos solo cuesta velocidad; no hay forma de que
 // produzca un resultado equivocado.
 static bool
-ir_pass_elide_narrow_norm(IrFunction &fn, const analysis::RangeFacts &ranges,
+ir_pass_elide_narrow_norm(IrFunction &fn, analysis::RangeQuery &ranges,
                           const analysis::DemandedBits &demanded) {
     if (fn.blocks.empty()) return false;
 
@@ -6956,7 +6957,7 @@ ir_pass_elide_narrow_norm(IrFunction &fn, const analysis::RangeFacts &ranges,
     /* El rango de un valor, como par con signo.  Falso si no se sabe. */
     auto range_of = [&](IrValueId v, int64_t &lo, int64_t &hi) {
         if (v >= fn.values.size()) return false;
-        const analysis::ValueRange &r = ranges.at(v);
+        const analysis::ValueRange &r = ranges.of(v);
         if (!r.acotada() || r.es_todo()) return false;
         return r.vista_con_signo(lo, hi);
     };
@@ -7267,19 +7268,65 @@ ir_pass_elide_narrow_norm(IrFunction &fn, const analysis::RangeFacts &ranges,
  * siguen saliendo de aqui.
  */
 static void seed_facts_from_asa(const IrFunction &fn, FactsTable &facts) {
+    /* SOLO SI LA FUNCION TIENE BUCLES.
+     *
+     * De donde sale el sobrecoste, medido: no de que dos productores calculen
+     * lo mismo -- el recorrido de este pase es UNO y del mismo switch salen
+     * `lo/hi`, `kz/ko` y `reg_exact`, asi que quitarle los rangos no ahorraria
+     * el recorrido --, sino de PEDIRLE al ASA su punto fijo aqui dentro, donde
+     * su cache no puede acertar: el intermedio cambia entre pase y pase y solo
+     * el 0,2 % de las peticiones repiten una huella ya vista.
+     *
+     * Y se pide donde paga.  Lo que el ASA aporta de mas -- y este pase no
+     * puede sacar propagando valor a valor -- es hasta donde llega la variable
+     * de un bucle, que sale de la FORMA del bucle.  En una funcion sin bucles
+     * no hay nada que ganar, y son la mayoria: preguntar ahi era pagar el
+     * punto fijo entero para no cambiar ni un hecho.
+     *
+     * Se probo antes traer SOLO las cotas en vez de los rangos, que es mas
+     * barato; no vale, porque lo que habilita la vectorizacion son los rangos
+     * de los valores DERIVADOS de la variable, no la variable sola.  Medido:
+     * con las cotas solas el `.velb` sale identico al de antes. */
     const analysis::IrFacts ir_facts = analysis::build_ir_facts(fn);
-    const std::shared_ptr<const analysis::RangeFacts> asa =
-        analysis::compute_ranges_ptr(fn, ir_facts);
-    const size_t n = std::min(fn.values.size(), asa->r.size());
-    for (IrValueId v = 0; v < static_cast<IrValueId>(n); ++v) {
-        if (fn.values[v].type != IrType::I64) continue;
-        const analysis::ValueRange &r = asa->r[v];
+    /* BAJO DEMANDA.  Este pase corre muchas veces durante la optimizacion y el
+     * intermedio cambia entre una y otra, asi que la cache del motor completo
+     * no puede acertar: cada peticion era un punto fijo entero con su estado
+     * por bloque.  La consulta contesta por la definicion, que es lo que aqui
+     * se necesita, sin estado y sin iterar. */
+    analysis::RangeQuery asa(fn, ir_facts);
+    for (IrValueId v = 0; v < static_cast<IrValueId>(fn.values.size()); ++v) {
+        const analysis::ValueRange &r = asa.of(v);
         if (!r.acotada() || r.es_todo()) continue;
-        if (r.t.bits != 64 || r.t.sin_signo) continue;
+        if (r.t.sin_signo) continue; // otro convenio de extremos
         int64_t lo = 0, hi = 0;
         if (!r.vista_con_signo(lo, hi) || lo > hi) continue;
-        ValueFacts f = facts.get(v);
-        if (facts.have(v)) {
+        const ValueFacts f0 = facts.get(v);
+        const bool had_facts = facts.have(v);
+        /* QUE la cota se pueda adoptar depende de si el REGISTRO es el VALOR.
+         *
+         * La cota habla del valor segun su tipo; `ValueFacts` habla del
+         * registro de 64 bits, que es lo que afirma `reg_exact` y de lo que
+         * dependen el puente rango->bits y el plegado de comparaciones.  En
+         * esta maquina no son lo mismo: escribir un `i32` NO limpia los bits
+         * altos -- de ahi que exista `loadz` --.
+         *
+         * Hay dos casos en que si coinciden, y ninguno es una suposicion:
+         *
+         *   - el valor es de 64 bits: no hay bits de arriba que puedan
+         *     desentonar;
+         *   - o este mismo pase ya marco `reg_exact`, o sea que YA establecio
+         *     que ahi el registro es el valor.  Entonces la cota del valor lo
+         *     es tambien del registro.
+         *
+         * Sin el segundo caso esto no servia para lo que mas importa: una
+         * variable de bucle `i32` -- `for (i32 i = 0; i < 7; i++)`, que es
+         * como se escriben -- se quedaba fuera por el ancho, y con ella toda
+         * la vectorizacion que la cota habilita. */
+        const bool reg_is_value =
+            fn.values[v].type == IrType::I64 || (had_facts && f0.reg_exact);
+        if (!reg_is_value) continue;
+        ValueFacts f = f0;
+        if (had_facts) {
             /* Interseccion: los dos valen a la vez.  Si se cruzaran seria un
              * fallo de uno de los dos y no se puede elegir en silencio, asi
              * que en ese caso se deja lo que habia. */
@@ -7290,8 +7337,6 @@ static void seed_facts_from_asa(const IrFunction &fn, FactsTable &facts) {
             f.lo = lo;
             f.hi = hi;
         }
-        /* El registro ES el valor en 64 bits, que es justo lo que esta marca
-         * afirma; sin ella ningun consumidor lo mira. */
         f.reg_exact = true;
         facts.set(v, f);
     }
@@ -8205,6 +8250,8 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
             // ~50 del de la biblioteca estandar, que es la diferencia entre ver
             // esto y no.
             const uint64_t t_r = util::reloj::ahora();
+            const analysis::RangeRequester mark(
+                analysis::RangeAsker::OptimizerAsm);
             fx_rangos = analysis::compute_ranges_ptr(fn, hechos);
             fx_env.rangos = fx_rangos.get();
             fx_env.rangos_de = &fn;
@@ -9060,6 +9107,8 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                 PassTimer crono__("  dse:hechos(calculados aqui)");
                 lig_asm_fn = analysis::compute_asm_bindings(fn);
                 hechos_fn = analysis::build_ir_facts(fn);
+                const analysis::RangeRequester mark(
+                    analysis::RangeAsker::OptimizerAsm);
                 rangos_fn = analysis::compute_ranges_ptr(fn, hechos_fn);
                 lig_usar = &lig_asm_fn;
                 hechos_usar = &hechos_fn;
@@ -10632,12 +10681,34 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
      * Se reconoce por el nombre: la del interprete conserva el desnudo y la
      * del JIT lleva el sufijo, que es el mismo contrato que usa el JIT al
      * elegir.  Sin tabla ni campo nuevo. */
-    auto tiene_variante_por_motor = [&](const std::string &nombre) -> bool {
-        static constexpr const char *kSufijo = "__jit";
-        const std::string con_sufijo = nombre + kSufijo;
+    /* Los nombres que TIENEN variante, recogidos UNA vez y ya sin el sufijo.
+     *
+     * Esto era un barrido lineal del modulo por cada funcion, con una cadena
+     * nueva en cada llamada para pegarle el sufijo.  O sea O(n^2) en numero de
+     * funciones: con 24.000, hasta 576 millones de comparaciones de cadena.
+     *
+     * Medido con VTune sobre ese caso, la linea del bucle era el 11,0 % de
+     * TODAS las instrucciones del proceso -- 8.530 millones --, y de ahi salia
+     * tambien el 4,3 % que aparecia en `basic_string.h`.  Es la razon de que el
+     * tiempo creciera mas que el trabajo: al doblar las funciones de 12.000 a
+     * 24.000, la memoria hacia x1,9 y el tiempo x2,7.
+     *
+     * Ahora se recorre el modulo una vez y la consulta no reserva nada: se
+     * guarda el nombre DESNUDO de cada variante, asi que preguntar es buscar
+     * el nombre tal cual. */
+    std::unordered_set<std::string> names_with_engine_variant;
+    {
+        static constexpr const char *kSuffix = "__jit";
+        const size_t suffix_len = std::strlen(kSuffix);
         for (const auto &f : mod.functions)
-            if (f.name == con_sufijo) return true;
-        return false;
+            if (f.name.size() > suffix_len &&
+                f.name.compare(f.name.size() - suffix_len, suffix_len,
+                               kSuffix) == 0)
+                names_with_engine_variant.insert(
+                    f.name.substr(0, f.name.size() - suffix_len));
+    }
+    auto has_engine_variant = [&](const std::string &name) -> bool {
+        return names_with_engine_variant.count(name) != 0;
     };
     auto is_inlineable = [&](const IrFunction &fn) -> bool {
         if (fn.is_native) return false;
@@ -10649,7 +10720,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * JIT.  Por eso una funcion con variante no se inlina: se cambia una
          * llamada por poder elegir, que es justo lo que el usuario pidio al
          * escribir dos versiones. */
-        if (tiene_variante_por_motor(fn.name)) return false;
+        if (has_engine_variant(fn.name)) return false;
         // Salida manual (`ret`/`iret`) en el asm -> no inlinable (ver helper).
         if (asm_has_manual_return(fn)) return false;
         if (is_blacklisted(fn.name)) return false;
@@ -11735,8 +11806,8 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
                 }
 
             std::vector<IrInstr> woven;
-            auto emit_call = [&](const std::string &callee,
-                                 std::vector<IrValueId> ops, IrValueId dst) {
+            auto emit_call = [&](const std::string &callee, IrValueList ops,
+                                 IrValueId dst) {
                 IrInstr c{};
                 c.op = IrOp::CALL;
                 c.type = orig.type;
@@ -11760,7 +11831,7 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
                 if (a.kind != loader::ADVICE_AFTER &&
                     a.kind != loader::ADVICE_AFTER_RETURNING)
                     continue;
-                std::vector<IrValueId> ops = orig.operands;
+                IrOperands ops = orig.operands;
                 /* `@AfterReturning` recibe el RESULTADO en el sitio del primer
                  * argumento declarado; un `@After` a secas ve los originales.
                  */
@@ -11825,7 +11896,7 @@ bool ir_pass_speculative_devirt(IrFunction &fn,
         const IrInstr cv = fn.blocks[bidx].instrs[i];
         const IrType rtype = cv.type;
         const IrValueId orig_dst = cv.dst;
-        const std::vector<IrValueId> ops = cv.operands; /* [obj, args...] */
+        const IrOperands ops = cv.operands; /* [obj, args...] */
         const uint32_t srcline = cv.source_line;
         if (ops.empty()) continue; /* sin receptor: no especulable */
 
@@ -12431,7 +12502,7 @@ bool ir_pass_spec_devirt(IrFunction &fn) {
         const IrInstr callins = fn.blocks[bidx].instrs[i];
         const IrType rtype = callins.type;
         const IrValueId orig_dst = callins.dst;
-        const std::vector<IrValueId> ops =
+        const IrOperands ops =
             callins.operands; /* [obj, (meta), args...] */
         const uint32_t srcline = callins.source_line;
         if (ops.empty()) continue; /* sin receptor: no especulable */
@@ -12441,7 +12512,7 @@ bool ir_pass_spec_devirt(IrFunction &fn) {
          * ops[1] y CALLM lleva el method_ptr en ops[1] -> se quitan; CALLVIRT
          * no tiene metadata -> se mantienen todos.  El SRET retbuf (cuando
          * aplica) va tras ops[1], asi que se conserva. */
-        std::vector<IrValueId> call_ops;
+        IrOperands call_ops;
         if (callop == IrOp::CALLVIRT) {
             call_ops = ops;
         } else {
@@ -14643,7 +14714,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             analysis::RangeAnalysis,
             std::shared_ptr<const analysis::RangeFacts>>(
             fn.name, fn.version,
-            [&]() { return analysis::compute_ranges_ptr(fn, facts_of(fn)); });
+            [&]() {
+                const analysis::RangeRequester mark(
+                    analysis::RangeAsker::Optimizer);
+                return analysis::compute_ranges_ptr(fn, facts_of(fn));
+            });
     };
     auto hechos_asm_de = [&](IrFunction &fn) {
         HechosDeAsmParaDse h;
@@ -15084,12 +15159,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         for (auto &fn : mod.functions) {
             if (fn.is_native || fn.blocks.empty()) continue;
             const analysis::IrFacts fx = analysis::build_ir_facts(fn);
-            /* Por PUNTERO: `RangeFacts` lleva dentro el estado de entrada de
-             * cada bloque, asi que pedirlo por valor copia todo eso -- tambien
-             * cuando la cache acierta y no habia nada que calcular.  Esa misma
-             * copia costo 16 s de una compilacion de 26 en el camino del asm. */
-            const std::shared_ptr<const analysis::RangeFacts> rx =
-                analysis::compute_ranges_ptr(fn, fx);
+            /* BAJO DEMANDA: este pase pregunta por los valores de las
+             * normalizaciones que mira, no por todos. */
+            analysis::RangeQuery rx(fn, fx);
             /* Y cuantos bits de cada valor mira alguien, que es la otra mitad
              * de la pregunta y la contesta su propio dominio. */
             const analysis::DemandedBits dbx =
@@ -15100,7 +15172,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * lleva y el phi apunta a un valor que ya no existe.  Lo que
              * quede muerto lo limpian los pases de despues, que corren de
              * todas formas. */
-            ir_pass_elide_narrow_norm(fn, *rx, dbx);
+            ir_pass_elide_narrow_norm(fn, rx, dbx);
         }
     }
 
