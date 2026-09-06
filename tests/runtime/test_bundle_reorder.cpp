@@ -52,6 +52,11 @@
 #include "disasm/disasm.h"
 #include "jit/auto_jit.h"
 #include "runtime/bundle.h"
+/* El analisis de que toca cada instruccion es ahora un ARGUMENTO de reordenar,
+ * no algo que reordenar calcule por su cuenta: se hace una vez por formacion y
+ * lo comparten reordenar, fusionar y repartir.  Quien llame al reordenador
+ * tiene que traerlo, y este test es un llamante mas. */
+#include "runtime/bundle/bundle_touch_all.h"
 #include "runtime/decode_instruction.h"
 #include "runtime/instr_db_vm.h"
 #include "runtime/manager_runtime.h"
@@ -362,7 +367,12 @@ void probar(const std::string &fichero, bool detalle) {
             }
         runtime::Bundle copia = antes;
         uint8_t why[BUNDLE_MAX] = {};
-        const uint32_t n = runtime::bundle_reorder(proc, copia, why);
+        /* Se calcula sobre `copia` y JUSTO antes: reordenar permuta el analisis
+         * a la vez que las instrucciones, asi que tiene que corresponder al
+         * orden en el que entra. */
+        runtime::BundleTouch tc;
+        runtime::bundle_touch_all(copia, tc);
+        const uint32_t n = runtime::bundle_reorder(proc, copia, tc, why);
         validar(proc, antes, copia, donde);
         ++mirados;
         if (n != 0) {
@@ -374,7 +384,9 @@ void probar(const std::string &fichero, bool detalle) {
              * no converge, dos formaciones del mismo sitio dan ordenes
              * distintos y nada de lo que se mida encima significa nada. */
             runtime::Bundle otra = copia;
-            check(runtime::bundle_reorder(proc, otra, nullptr) == 0,
+            runtime::BundleTouch tc_otra;
+            runtime::bundle_touch_all(otra, tc_otra);
+            check(runtime::bundle_reorder(proc, otra, tc_otra) == 0,
                   "reordenar lo ya reordenado lo vuelve a mover", donde);
         }
         if (mirados >= 200) break; // suficiente: mas no anade casos, solo tiempo
