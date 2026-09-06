@@ -12,6 +12,9 @@
  * Ver `include/runtime/bundle.h` para el porque y el diseno.
  */
 
+#include <cstddef>
+#include "util/vesta_memcpy.h"
+
 #include "runtime/bundle.h"
 
 #if VM_BUNDLES
@@ -27,6 +30,26 @@
 #include "runtime/bundle/liveness.h"
 #include "runtime/bundle/ooo.h"
 #include "runtime/exec_instruction.h"
+
+/* ALINEAR EL BUCLE A LA VENTANA DE CAPTACION: probado y NO compensa.
+ *
+ * Al alinear `Bundle::instr` a linea de cache, el perfil de hardware decia que
+ * lo que empeoraba era el FRONT-END, no la memoria: `Front-End Bound` del 5,0%
+ * al 22,3%, `Retiring` del 67,1% al 48,8% y `Split Loads` a CERO en los dos --
+ * o sea que no habia ni una carga partida y el problema era donde caia el
+ * CODIGO, no el dato --.  La ventana de captacion de esta microarquitectura es
+ * de 32 bytes y GCC alinea bucles a 16, asi que subirlo parecia lo indicado.
+ *
+ * Con `#pragma GCC optimize("align-loops=32")` sobre esta unidad, medido
+ * intercalado y en tres muestras por punto:
+ *
+ *     independ:256:paquetes   458 -> 499   (recupera la mitad)
+ *     mixta:1024:paquetes     305 -> 316   (recupera todo)
+ *     alu:260:paquetes        348 -> 335   (lo pierde)
+ *
+ * Y sobre los 1008 puntos del barrido, 302,8 contra 303,8: ruido.  Reparte el
+ * tiempo de sitio sin ganar nada, y a cambio ata la unidad a un pragma no
+ * portable con efectos secundarios conocidos en GCC.  No entra. */
 
 namespace runtime {
 
@@ -551,6 +574,13 @@ void bundle_release(ProcessVM *process) {
          * haber un instante en el que otro proceso ya sea duenyo y la tabla
          * todavia tenga lo viejo. */
         predecode_clear();
+        /* Y que el ayudante SUELTE la pagina que tenga cacheada, por la misma
+         * razon por la que se vacia lo adelantado: la memoria de este proceso
+         * esta a punto de liberarse y su cache guarda un puntero a ella.  Sin
+         * esto, el proceso siguiente pedia la misma direccion virtual, la cache
+         * acertaba, y se adelantaba lo que hubiera quedado en esa memoria
+         * reciclada -- publicado bajo un `pc` legitimo --. */
+        ooo_new_epoch();
         ooo_release_owner(process);
     }
     delete static_cast<BundleArena *>(process->bundle_arena);
@@ -625,6 +655,35 @@ namespace {
  * @param b       Paquete recien formado, todavia local.
  * @param next_pc Direccion de la instruccion siguiente al paquete.
  */
+/**
+ * @brief Copia de @p src a @p dst la cabecera y SOLO las `k` instrucciones.
+ *
+ * La asignacion de struct mueve `sizeof(Bundle)` -- 2.176 bytes -- siempre,
+ * incluidas las ranuras que el paquete no usa.  Un paquete de 13 necesita
+ * 128 + 13*64 = 960, o sea menos de la mitad, y los tramos cortos son los que
+ * mas veces se forman.
+ *
+ * Se copia por partes en vez de con la asignacion entera para que el tamano lo
+ * ponga `k` y no `BUNDLE_MAX`.  Los campos previos al array son una cabecera
+ * contigua, asi que van de una pieza.
+ */
+static void bundle_copy_head_and_k(Bundle &dst, const Bundle &src) {
+    /* Con la copia del proyecto, no la de la biblioteca estandar: esa elige el
+     * mejor camino de ESTA CPU en ejecucion, que es como se aprovecha un ancho
+     * mayor sin subir `-march` -- el binario tiene que seguir arrancando en
+     * cualquier maquina --.
+     *
+     * La cabecera son 128 bytes de tamano CONSTANTE, asi que el despachador se
+     * pliega hasta dejar la copia recta.
+     *
+     * Y el array va con la version CON TIPO, que cuenta objetos en vez de
+     * bytes: asi el despachador sabe `alignof(DecodedInstr)` al compilar y se
+     * ahorra el prologo que alinea el destino en ejecucion -- que es lo que
+     * convierte un tamano en variable y le impide desenrollar el bucle --. */
+    ::util::vesta_memcpy(&dst, &src, offsetof(Bundle, instr));
+    ::util::vesta_memcopy(dst.instr, src.instr, src.k);
+}
+
 [[gnu::noinline]] void bundle_prepare(ProcessVM *process, Bundle &b,
                                       uint64_t next_pc,
                                       vm::VirtualMemory::PageView *view) {
@@ -836,8 +895,28 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
     // Si en el camino hay un salto, el paquete lo incluye igual y es el
     // manejador quien, al ver `did_jump` en ejecucion, abandona el resto.  Se
     // decide con el destino REAL en vez de con uno predicho al formar.
-    Bundle b;
+    /* SE CONSTRUYE EN LA ARENA, no en una local que luego se copia.
+     *
+     * Un `Bundle` mide 2.176 bytes.  Construirlo en la pila y volcarlo despues
+     * era una copia entera por formacion en el camino sin reparto, y DOS con
+     * el -- una para la version que se publica y otra para la que el ayudante
+     * reordena --.  Construyendo aqui, el camino sin reparto no copia nada y
+     * el del reparto se queda en una sola copia, que esa si es irreducible: el
+     * ayudante necesita su propia version mientras el principal ejecuta la
+     * cruda.
+     *
+     * Hay que reservar ANTES de saber si el tramo dara para un paquete, asi
+     * que si no da se devuelve la ranura -- ver `BundleArena::undo_alloc` --.
+     * Y no puede colarse otra reserva por medio: descodificar por delante no
+     * toca la arena, que es lo que dice el comentario de arriba. */
+    Bundle *rec = arena->alloc();
+    if (rec == nullptr) {
+        BSTAT(process, not_formed);
+        return;
+    }
+    Bundle &b = *rec;
     b.k = 1;
+    b.improved = nullptr; // la ranura se reutiliza: no heredar la anterior
     b.instr[0] = *slot;
     // El pc va DENTRO de la instruccion, no en un array paralelo: se pone una
     // vez aqui y el bucle de ejecucion no lo toca.  `DecodedInstr` ya tiene el
@@ -863,7 +942,8 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
 
     if (b.k < 2) {
         // Una sola instruccion no es un paquete: seria pagar la indireccion de
-        // la arena para no ahorrar ni un despacho.
+        // la arena para no ahorrar ni un despacho.  La ranura se devuelve.
+        arena->undo_alloc();
         BSTAT(process, not_formed);
         return;
     }
@@ -895,7 +975,6 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
      * llega despues.  Publicar crudo es correcto: las dos cosas son
      * optimizaciones, no semantica, asi que lo unico que pasa mientras tanto es
      * que las primeras vueltas van sin reordenar ni fusionar. */
-    Bundle *rec = arena->alloc();
     bool delegated = false;
     if (__builtin_expect(process->bundle_ooo_on, 0)) {
         /* La copia la reserva ESTE hilo, porque la arena no es de varios.  Y
@@ -904,12 +983,16 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
         Bundle *scratch =
             ooo_pending() < kOooSlots ? arena->alloc() : nullptr;
         if (scratch != nullptr) {
-            *scratch = b;
-            // Crudo, para publicarlo ya: se ejecuta correcto desde la vuelta 1
-            // y la version buena lo sustituye cuando llegue.
-            *rec = b;
+            /* Y se copian solo las `k` que HAY, no las 32 que caben.
+             *
+             * La asignacion de struct movia los 2.176 bytes siempre, incluidas
+             * las ranuras vacias.  Un paquete de 13 instrucciones necesita
+             * 128 + 13*64 = 960 bytes, o sea menos de la mitad; y los tramos
+             * cortos son justo los que mas veces se forman. */
+            bundle_copy_head_and_k(*scratch, b);
             delegated = ooo_push_prepare(process, rec, scratch, next_pc);
             if (delegated) BSTAT(process, ooo_prepares);
+            if (!delegated) arena->undo_alloc(); // el scratch no se usa
         }
         /* Y de paso, que vaya DESCODIFICANDO lo que viene detras.
          *
@@ -933,8 +1016,8 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
      * corriendo sin optimizar.  Prepararlo aqui cuesta exactamente lo que
      * costaba antes de que existiera el reparto. */
     if (!delegated) {
+        // Sobre `b`, que YA ES la ranura de la arena: no queda copia ninguna.
         bundle_prepare(process, b, next_pc, nullptr);
-        *rec = b;
         if (process->bundle_ooo_on) BSTAT(process, ooo_prepares_lost);
     }
 
@@ -1183,10 +1266,16 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
                 p->vm_mem.reclaim_translation_tables();
 
             if (__builtin_expect(p->ooo_exec_dirty, 0) &&
-                g_ooo_exec_pending.load(std::memory_order_acquire) != 0) {
-                ooo_drain();
+                ooo_exec_inflight()) {
+                const uint32_t spins = ooo_drain();
                 p->ooo_inflight = ProcessVM::OooInflight{};
                 p->ooo_exec_dirty = false;
+                if (spins < kOooDrainSlack) {
+                    /* Se junto sin esperar: el ayudante ya habia terminado, o
+                     * sea que el solape fue completo.  Eso no es una parada,
+                     * asi que ni se apunta ni cuenta para la sonda. */
+                    return;
+                }
                 BSTAT(p, ooo_drains);
                 /* Y CUENTA para la prueba, igual que la parada por dependencia.
                  *
@@ -1272,6 +1361,27 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
         const Bundle::Summary &su = b->summary;
         ProcessVM::OooInflight &fly = process->ooo_inflight;
 
+        /* RETIRAR lo que ya termino, ANTES de mirar si choca.
+         *
+         * El marcador de "en vuelo" solo se limpiaba al vaciar, asi que seguia
+         * acusando a un paquete que el ayudante habia terminado hacia rato: el
+         * siguiente que tocara uno de sus registros contaba como choque, se
+         * vaciaba una cola YA vacia y se apuntaba una parada que no ocurrio.
+         *
+         * No es un detalle de contabilidad.  La sonda decide por esa
+         * proporcion, asi que en la mezcla `independiente` -- donde los grupos
+         * de registros se alternan y el tercer paquete vuelve al grupo del
+         * primero -- salian 224 entregas y 224 paradas, una por entrega, y el
+         * reparto se apagaba solo dandose por inutil.
+         *
+         * Y se mira SOLO cuando el paquete choca, no en cada paquete.  Esa
+         * lectura es de una linea que el AYUDANTE escribe, o sea un viaje al
+         * L3 por paquete: en el perfil de hardware las cargas atomicas eran el
+         * primer consumidor de tiempo del reparto -- 0,789 s contra 0,226 s de
+         * ejecutar --.  Dentro del choque se lee como mucho una vez por
+         * dependencia, y es donde cambia algo: sin choque no hay nada que
+         * decidir. */
+
         /* Choca con lo que vuela?  Las tres formas: leer o escribir lo que el
          * otro escribe, escribir lo que el otro lee, y coincidir en un recurso
          * que no se puede desambiguar (los campos implicitos y la memoria de
@@ -1306,20 +1416,40 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
             (((su.flags & Bundle::SUM_MEM) != 0) && fly.mem);
 
         if (clash) {
-            /* Vaciar y limpiar.  Esto es lo unico que serializa, y CUANTAS
-             * veces pasa es la cifra que dice si esto llego a ser una tuberia:
-             * una por entrega seria el fork-join de antes con otro nombre. */
-            ooo_drain();
-            fly = ProcessVM::OooInflight{};
-            process->ooo_exec_dirty = false;
-            BSTAT(process, ooo_drains);
-            BSTAT_IDX(process, ooo_reject, 2);
-            ++process->ooo_probe_drains;
+            /* RETIRAR o VACIAR, y son cosas distintas.
+             *
+             * Si el ayudante ya termino, el choque no existe: era el marcador
+             * el que seguia acusando a un paquete que ya no vuela.  Se limpia y
+             * se sigue sin esperar a nadie ni apuntar parada -- contarla apagaba
+             * la sonda justo cuando mejor iba --.
+             *
+             * Y si de verdad esta en vuelo, entonces si toca esperar.  CUANTO
+             * se espera es la cifra que dice si esto llego a ser una tuberia;
+             * juntarse sin esperar es exactamente lo que se busca. */
+            if (!ooo_exec_inflight()) {
+                fly = ProcessVM::OooInflight{};
+                process->ooo_exec_dirty = false;
+            } else {
+                const uint32_t spins = ooo_drain();
+                fly = ProcessVM::OooInflight{};
+                process->ooo_exec_dirty = false;
+                BSTAT_IDX(process, ooo_reject, 2);
+                if (spins >= kOooDrainSlack) {
+                    BSTAT(process, ooo_drains);
+                    ++process->ooo_probe_drains;
+                }
+            }
         }
 
         /* Y por que NO se delega, cuando no se delega.  Es lo que contesta "no
          * le estamos dando bastante" frente a "no hay nada que dar". */
-        if (!process->ooo_try_exec) {
+        if (process->ooo_owner_turn) {
+            /* LE TOCA A ESTE HILO.  Se delega uno y se ejecuta uno para que
+             * trabajen los dos nucleos; ver `ooo_owner_turn`.  El turno se
+             * gasta aqui, al quedarse el paquete, no al ejecutarlo: lo que
+             * viene detras de este `return` es el bucle que lo ejecuta. */
+            process->ooo_owner_turn = false;
+        } else if (!process->ooo_try_exec) {
             /* La sonda dice que aqui no compensa delegar.  Se ha llegado hasta
              * este punto solo por la comprobacion de choque de arriba, que es
              * de correccion y no de rendimiento. */
@@ -1350,7 +1480,8 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
 
             BSTAT(process, ooo_split);
             BSTAT_ADD(process, ooo_delegated, k);
-            delegated = true; // nada que ejecutar aqui
+            delegated = true;                 // nada que ejecutar aqui
+            process->ooo_owner_turn = true;   // el siguiente es para este hilo
 
             /* Y la PRUEBA: esto sirve o solo estorba?
              *
@@ -1395,23 +1526,62 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
         return delegated;
     };
 
-    /* Delegado el paquete, aqui no queda nada que ejecutar.
+    /* Delegado el paquete, se SIGUE con el siguiente sin soltar el despacho.
      *
-     * PENDIENTE, y medido: esto TERMINA el despacho.  El hilo principal ya no
-     * ejecuta la ultima instruccion del paquete, asi que no ve ningun salto y
-     * no encadena con el siguiente -- y al volver, el guardia espera --.  El
-     * resultado es una entrega y una parada, o sea el fork-join de siempre con
-     * otro nombre, y pasa INCLUSO con material perfectamente independiente: la
-     * mezcla `independ` esta hecha para distinguir eso de "no hay nada que
-     * repartir", y da 1,00 paradas por entrega igual.
+     * Es lo que convierte esto en una tuberia.  Sin ello, delegar terminaba el
+     * despacho -- el principal ya no ejecutaba la ultima instruccion del
+     * paquete, asi que no veia ningun salto y no encadenaba -- y al volver el
+     * guardia esperaba: una entrega y una parada, el fork-join de siempre con
+     * otro nombre.  Pasaba INCLUSO con material perfectamente independiente,
+     * que es justo lo que la mezcla `independiente` esta hecha para distinguir.
      *
-     * Se intento seguir con el paquete siguiente dentro del mismo despacho y
-     * NO vale: no aumentaba las entregas y daba valores incorrectos
-     * (`memoria` devolvia 0 donde esperaba 615).  Queda apuntado como lo que
-     * hay que resolver para que esto llegue a ser una tuberia, no como algo
-     * que ya funcione. */
-    if (try_delegate()) i = k;
+     * Se intento antes y daba valores incorrectos, pero la causa NO era esto:
+     * era que un paquete sin analizar tenia el resumen a cero y cero se lee
+     * igual que "no toca nada", asi que pasaba la comprobacion de choque
+     * diciendo que no chocaba con nada y se ejecutaba aqui mientras el anterior
+     * seguia en vuelo.  Con `SUM_UNKNOWN` chocando contra todo, eso ya no pasa.
+     *
+     * Los topes son los del encadenado normal: ni mas vueltas que
+     * `BUNDLE_LOOP_MAX`, ni gastar mas reducciones de las que quedan.  Un
+     * despacho que no suelta el turno deja sin correr a los demas. */
+    bool gone = false;
+    for (;;) {
+        if (!try_delegate()) break; // este no se va: se ejecuta aqui abajo
+        gone = true;
+        if (turns >= BUNDLE_LOOP_MAX ||
+            process->reductions_remaining <= b->k)
+            break;
+        DecodedInstr *next = icache_lookup(process, rip.raw());
+        if (next == nullptr || next->metadata != &g_bundle_format) break;
+        ++turns;
+        ++profit.entries;
+        BSTAT(process, chained);
+        process->reductions_remaining -= b->k;
+        b = bundle_of(*next);
+        k = b->k;
+        insts = b->instr;
+        gone = false; // el nuevo todavia no se ha ido
+    }
+    if (gone) i = k; // nada que ejecutar: el bucle de abajo no entra
 
+    /* POR QUE ESTE BUCLE NO SE ENVUELVE EN OTRO.
+     *
+     * Se intento seguir por el paquete siguiente sin soltar el despacho
+     * mientras hubiera trabajo en vuelo, para que la juntada con el ayudante se
+     * pagara una vez por muchos paquetes en vez de una por cada dos.  Funciona
+     * -- las paradas por entrega bajaron de 0,26 a 0,08 --, pero envolver este
+     * bucle en otro le cuesta el mundo al motor que SI gana, porque `i`, `k`,
+     * `insts` y `b` pasan a estar vivos entre vueltas de la envoltura y dejan
+     * de vivir en registros.  Medido, y no es un matiz:
+     *
+     *     alu:260:paquetes       350,4  ->  296,6   (-16%)
+     *     mixta:1024:paquetes    316,8  ->  246,7   (-21%)
+     *     memoria:256:paquetes   336,2  ->  314,7   (-6,5%)
+     *
+     * O sea: se le cobraba hasta un 21% al camino bueno para amortizar una
+     * espera del reparto, que aun asi sigue perdiendo.  No compensa.  Si algun
+     * dia hace falta, el sitio es una funcion aparte que vuelva a entrar, no
+     * una envoltura alrededor del bucle por instruccion. */
     while (i < k) {
         DecodedInstr &ins = insts[i];
         // La siguiente son otros 64 bytes, o sea OTRA linea de cache.  Un

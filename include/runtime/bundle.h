@@ -310,6 +310,23 @@ struct Bundle {
      * En x86-64 un `acquire` de puntero alineado es una carga normal, asi que
      * mirarlo cuesta una carga y una rama por DESPACHO -- no por instruccion.
      */
+    /* COMPARTE LINEA con `k`, `entries`, `executed` y `summary`, que el
+     * principal toca en cada despacho, y lo escribe el AYUDANTE.  Es false
+     * sharing de libro, y aun asi se queda donde esta: se probo separarlo y
+     * sale MUCHO mas caro.
+     *
+     * Ponerle `alignas(64)` lo empuja al siguiente multiplo de 64 y desplaza
+     * todo lo que va detras por un delta que NO es multiplo de 64, o sea que
+     * descoloca `instr[]` -- y ahi cada instruccion mide una linea justa, asi
+     * que desalineada cuesta dos.  Medido, intercalado y en los dos ordenes:
+     *
+     *     independ:256:paquetes     535-554  ->  460-467   (-15%)
+     *     independ:256:paq+reparto  298-315  ->  295-305   (igual)
+     *
+     * O sea que se le cobraba un 15% al motor que gana para arreglarle al
+     * reparto algo que ni se nota: `improved` se escribe UNA vez por formacion
+     * de paquete, no por entrega.  Ver el `static_assert` de abajo, que es lo
+     * que de verdad hacia falta proteger. */
     Bundle *improved = nullptr;
 
     uint8_t fused_pairs = 0;    ///< pares que el fusionador junto aqui
@@ -346,8 +363,43 @@ struct Bundle {
      */
     DecodedInstr head;
 
-    DecodedInstr instr[BUNDLE_MAX]; ///< ya descodificadas, en orden de ejec.
+    /* ALINEADO A LINEA DE CACHE, y no es cosmetica.
+     *
+     * `DecodedInstr` mide 64 bytes -- una linea justa -- pero solo esta
+     * alineada a 8, asi que nada obligaba a que el array empezara en una linea.
+     * Y no empezaba: caia en el byte 112, o sea 48 dentro de la linea, con lo
+     * que CADA instruccion del bucle mas caliente del interprete cruzaba dos
+     * lineas.  El doble de busquedas por instruccion, y el `prefetch` de la
+     * siguiente traia solo una de las dos.
+     *
+     * `sizeof(Bundle)` tampoco era multiplo de 64 (2160), asi que ademas cada
+     * paquete de la arena caia con una descolocacion distinta.  Alinear el
+     * array arregla las dos cosas: fija el comienzo y, al subir la alineacion
+     * del paquete entero, redondea su tamano.
+     *
+     * Los `static_assert` de abajo son lo que impide que vuelva a perderse al
+     * anadir o quitar un campo: sin ellos el sintoma seria "el interprete va
+     * mas lento" sin ninguna pista. */
+    alignas(64) DecodedInstr instr[BUNDLE_MAX]; ///< en orden de ejecucion
 };
+
+/* EL ARRAY DE INSTRUCCIONES TIENE QUE EMPEZAR EN UNA LINEA DE CACHE.
+ *
+ * Cada `DecodedInstr` mide una linea justa, asi que si el array empieza
+ * descolocado TODAS quedan a caballo de dos lineas y el bucle por instruccion
+ * -- que es el camino mas caliente del interprete -- paga el doble de
+ * busquedas.  Medido al descolocarlo sin querer: -15% en `paquetes`.
+ *
+ * Hasta ahora se cumplia por accidente de la disposicion de los campos de
+ * arriba, sin que nada lo garantizara: anadir o quitar un campo lo rompia en
+ * silencio, y el sintoma habria sido "el interprete va mas lento" sin ninguna
+ * pista de por que.  Con esto, romperlo no compila. */
+static_assert(offsetof(Bundle, instr) % 64 == 0,
+              "instr[] tiene que empezar en linea de cache: si no, cada "
+              "instruccion cae a caballo de dos y el bucle paga el doble");
+static_assert(sizeof(Bundle) % 64 == 0,
+              "el paso entre paquetes de la arena tiene que ser multiplo de "
+              "linea, o cada paquete cae con una alineacion distinta");
 
 /**
  * @struct BundleArena
@@ -486,6 +538,23 @@ struct BundleArena {
         /// Reinicia SIN soltar los bloques.  Lo que se reutiliza es el espacio.
         void reset() { used = 0; }
 
+        /**
+         * @brief Devuelve la ULTIMA ranura pedida.
+         *
+         * Existe para poder construir el paquete DIRECTAMENTE en la arena en
+         * vez de en una local que luego se copia: al formar no se sabe si el
+         * tramo dara para un paquete hasta haberlo recorrido, asi que hay que
+         * reservar antes y poder arrepentirse.
+         *
+         * Es exacto porque esto es un asignador por tope y entre la reserva y
+         * el arrepentimiento no cabe otra: descodificar por delante no toca la
+         * arena.  El bloque que la reserva pudiera haber pedido se queda, que
+         * es lo correcto -- se usara en la siguiente --.
+         */
+        void undo_alloc() {
+            if (used != 0) --used;
+        }
+
         /// @brief El paquete @p i de esta region, o nullptr si no existe.
         ///        Con esto se puede recorrer la region sin conocer los bloques.
         Bundle *at(uint32_t i) {
@@ -524,6 +593,8 @@ struct BundleArena {
     uint32_t total() const { return half[current].used; }
 
     Bundle *alloc() { return half[current].alloc(); }
+    /// Devuelve la ultima ranura pedida.  Ver `Half::undo_alloc`.
+    void undo_alloc() { half[current].undo_alloc(); }
 };
 
 /**
