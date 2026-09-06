@@ -288,6 +288,11 @@ endif()
 # Include directories globales
 set(VM_INCLUDES
         ${CMAKE_SOURCE_DIR}/include
+        # El asignador del anfitrion vive en su propia libreria, con sus
+        # cabeceras bajo `util/`.  Los objetivos que enlazan `vesta_alloc` lo
+        # heredan solos, pero los que solo usan esta lista -- los tests sueltos
+        # -- lo necesitan aqui.
+        libs/SourceCode/vesta_alloc/include
         libs/SourceCode/json
         libs/SourceCode/cxxopts
         libs/SourceCode/capstone/include

@@ -23,17 +23,18 @@
 
 #include <cstddef>
 
-#include "util/gc_diag.h" // VGC_CERR/COUT (neutralizable en freestanding)
-#include "util/os_memory.h" // tamano de pagina, preguntado UNA vez
+#include "util/gc_diag.h"   // VGC_CERR/COUT (neutralizable en freestanding)
+#include "util/os_memory.h" // apalabrar, entregar y permisos; sin cabeceras del sistema
 
-#if defined(_WIN32) || defined(_WIN64)
-#include <windows.h>
-#else
-#include <sys/mman.h>
-#include <unistd.h>
-#include <cerrno>
-#include <cstring>
-#endif
+/* AQUI YA NO SE INCLUYE `windows.h` NI `sys/mman.h`, y es un alivio: esta
+ * cabecera la incluye media docena de subsistemas, y `windows.h` define `VOID`
+ * como macro -- lo que rompe cualquier `enum class` que use ese nombre -- ademas
+ * de arrastrar miles de lineas a cada unidad que la toque.  Ya obligo a aislar
+ * `ThreadPool` en su propio `.cpp`.
+ *
+ * Lo unico que las necesitaba era reservar memoria, y eso lo hace ahora
+ * `util/os_memory.h`, cuya cabecera no incluye nada del sistema: la traduccion
+ * de permisos a `PAGE_*` o `PROT_*` vive en su `.cpp`. */
 
 #include "net/net.h"
 
@@ -125,43 +126,33 @@ constexpr size_t round_up_to(size_t n, size_t a) {
 }
 
 /**
- * @brief Traduce permisos a la constante que entiende el sistema.
+ * @brief Traduce los permisos de la VM a los de la capa del sistema.
  *
- * Suelta y @c constexpr a proposito: en todos los sitios de llamada los
- * permisos son una constante escrita a mano (`READ | WRITE`), asi que la
- * cadena entera de comparaciones se PLIEGA a un numero al compilar y lo que
- * queda de @c allocate_memory es lo bastante pequeno como para meterse dentro
- * de quien la llama.  Con la traduccion metida en medio de la funcion, no.
+ * `MemPerm` y `util::OsProt` dicen lo mismo con bits distintos, y esto es el
+ * puente.  Es `constexpr` y en todos los sitios de llamada los permisos son una
+ * constante escrita a mano (`READ | WRITE`), asi que se pliega a un numero al
+ * compilar.
  *
- * @note En Windows, EXEC+WRITE sin READ se traduce a PAGE_EXECUTE_READWRITE
- *       porque no existe una proteccion de solo escritura y ejecucion.
+ * QUIEN HABLA CON EL SISTEMA.  Ya no este fichero.  La traduccion a
+ * `PAGE_EXECUTE_READWRITE` o a `PROT_READ` -- y las llamadas a `VirtualAlloc` y
+ * `mmap` -- viven en `util/os_memory.cpp`, que es la unica capa del proyecto que
+ * trata con el sistema por debajo de las reservas.  Aqui quedan los conceptos
+ * de la MAQUINA VIRTUAL: arenas, bloques, mapeos y tablas de paginas del
+ * invitado.
+ *
+ * Que no es lo mismo, y merece decirse: `vesta_alloc` sirve la memoria del
+ * ANFITRION -- mas rapida que `malloc`/`free` --, y esto de aqui sirve la
+ * memoria VIRTUAL que ve el programa que corre dentro.  Dos asignadores para
+ * dos cosas distintas, y por eso el de abajo no puede depender del de arriba.
  */
-#if defined(_WIN32) || defined(_WIN64)
-constexpr DWORD os_protection_of(MemPerm perms) {
-    return has_perm(perms, MemPerm::EXEC)
-               ? (has_perm(perms, MemPerm::READ) &&
-                          has_perm(perms, MemPerm::WRITE)
-                      ? PAGE_EXECUTE_READWRITE
-                      : has_perm(perms, MemPerm::READ)
-                            ? PAGE_EXECUTE_READ
-                            : has_perm(perms, MemPerm::WRITE)
-                                  ? PAGE_EXECUTE_READWRITE
-                                  : PAGE_EXECUTE)
-               : (has_perm(perms, MemPerm::READ) &&
-                          has_perm(perms, MemPerm::WRITE)
-                      ? PAGE_READWRITE
-                      : has_perm(perms, MemPerm::READ)
-                            ? PAGE_READONLY
-                            : has_perm(perms, MemPerm::WRITE) ? PAGE_READWRITE
-                                                              : PAGE_NOACCESS);
+constexpr util::OsProt os_protection_of(MemPerm perms) {
+    return (has_perm(perms, MemPerm::READ) ? util::OsProt::Read
+                                           : util::OsProt::None) |
+           (has_perm(perms, MemPerm::WRITE) ? util::OsProt::Write
+                                            : util::OsProt::None) |
+           (has_perm(perms, MemPerm::EXEC) ? util::OsProt::Exec
+                                           : util::OsProt::None);
 }
-#else
-constexpr int os_protection_of(MemPerm perms) {
-    return (has_perm(perms, MemPerm::READ) ? PROT_READ : 0) |
-           (has_perm(perms, MemPerm::WRITE) ? PROT_WRITE : 0) |
-           (has_perm(perms, MemPerm::EXEC) ? PROT_EXEC : 0);
-}
-#endif
 
 /**
  * @brief Reserva memoria del sistema con los permisos indicados.
@@ -181,58 +172,17 @@ constexpr int os_protection_of(MemPerm perms) {
  *       PAGE_EXECUTE_READWRITE porque no existe PAGE_EXECUTE_WRITE.
  */
 inline void *allocate_memory(size_t size, MemPerm perms) {
-    if (size == 0) return nullptr; // tamanyo nulo: nada que reservar
-
-    /* El tamano de pagina se PREGUNTA UNA VEZ en toda la vida del proceso, no
-     * en cada reserva.  Antes habia aqui un `GetSystemInfo` (o un `sysconf`)
-     * por llamada: cuarenta bytes de estructura en la pila mas una consulta al
-     * sistema para averiguar un numero que no cambia nunca, y ademas bastaba
-     * para que la funcion no cupiera dentro de quien la llama. */
-    size = round_up_to(size, util::os_page_size());
-
-#ifdef _WIN32
-    // Se pliega a una constante cuando los permisos lo son, que es siempre.
-    const DWORD flProtect = os_protection_of(perms);
-
-    void *mem = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, flProtect);
-    if (!mem) {
-        /* CONTAR POR QUE FALLO SOLO EN DEBUG, y no por ahorrar: las dos cosas
-         * que hacen falta para dar el mensaje -- los flujos de C++ y
-         * `FormatMessageA` con `FORMAT_MESSAGE_ALLOCATE_BUFFER` -- PIDEN
-         * MEMORIA.  Contar que no hay memoria pidiendo memoria es reentrar por
-         * el mismo sitio, y en el peor momento: cuando el sistema acaba de
-         * decir que no.  El que llama sigue enterandose por el nullptr, que es
-         * un fallo ruidoso igual, solo que sin texto. */
-#ifndef NDEBUG
-        DWORD err = GetLastError();
-        LPVOID msg;
-        FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER |
-                           FORMAT_MESSAGE_FROM_SYSTEM |
-                           FORMAT_MESSAGE_IGNORE_INSERTS,
-                       NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                       (LPSTR)&msg, 0, NULL);
-        VGC_CERR << "VirtualAlloc fallo. Codigo: " << err << " - "
-                 << (msg ? (char *)msg : "Error desconocido") << "\n";
-        if (msg) LocalFree(msg); // liberar el buffer de mensaje
-#endif
-        return nullptr;
-    }
-    return mem;
-#else
-    // Se pliega a una constante cuando los permisos lo son, que es siempre.
-    const int prot = os_protection_of(perms);
-
-    void *mem = mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (mem == MAP_FAILED) {
-        // Mismo motivo que en la rama de Windows: los flujos reservan.
-#ifndef NDEBUG
-        VGC_CERR << "mmap fallo: " << std::strerror(errno)
-                 << "\n"; // mostrar error de sistema
-#endif
-        return nullptr;
-    }
-    return mem;
-#endif
+    /* Ya no hay aqui ni un `VirtualAlloc` ni un `mmap`: los hace
+     * `util::os_alloc`, que ademas redondea a paginas preguntando el tamano UNA
+     * vez en toda la vida del proceso.  Antes habia un `GetSystemInfo` (o un
+     * `sysconf`) POR RESERVA para averiguar un numero que no cambia nunca.
+     *
+     * Y ya no se cuenta por que fallo.  Las dos cosas que hacian falta para dar
+     * el mensaje -- los flujos de C++ y `FormatMessageA` con
+     * `FORMAT_MESSAGE_ALLOCATE_BUFFER` -- PIDEN MEMORIA, o sea que se contaba
+     * que no hay memoria pidiendo memoria, justo cuando el sistema acaba de
+     * decir que no.  El que llama se entera igual por el nullptr. */
+    return util::os_alloc(size, os_protection_of(perms));
 }
 
 /**
@@ -247,13 +197,11 @@ inline void *allocate_memory(size_t size, MemPerm perms) {
  * @param size Tamanyo original del bloque (antes del redondeo).
  */
 inline void free_memory(void *mem, size_t size) {
-#ifdef _WIN32
-    (void)size; // con MEM_RELEASE el tamano no se usa
-    VirtualFree(mem, 0, MEM_RELEASE); // libera todo el rango reservado
-#else
-    // Redondear IGUAL que en allocate, o `munmap` deja un trozo colgando.
-    munmap(mem, round_up_to(size, util::os_page_size()));
-#endif
+    // El redondeo a paginas -- que fuera de Windows hace falta o `munmap` deja
+    // un trozo colgando -- lo hace la capa de abajo, igual que al reservar.  Es
+    // lo que garantiza que las dos cuentas coincidan: antes estaban escritas
+    // dos veces.
+    util::os_free(mem, size);
 }
 
 /**
