@@ -24,6 +24,7 @@
 #include <cstddef>
 
 #include "util/gc_diag.h" // VGC_CERR/COUT (neutralizable en freestanding)
+#include "util/os_memory.h" // tamano de pagina, preguntado UNA vez
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
@@ -83,7 +84,7 @@ enum class MemPerm : uint8_t {
  * @param b Segundo conjunto de permisos.
  * @return  Union de los permisos indicados.
  */
-inline MemPerm operator|(MemPerm a, MemPerm b) {
+constexpr MemPerm operator|(MemPerm a, MemPerm b) {
     return static_cast<MemPerm>(static_cast<uint8_t>(a) |
                                 static_cast<uint8_t>(b));
 }
@@ -105,11 +106,62 @@ inline MemPerm operator|(MemPerm a, MemPerm b) {
  *   has_perm(p, MemPerm::EXEC);  // false
  *   has_perm(p, MemPerm::WRITE); // true
  */
-inline bool has_perm(MemPerm perms, MemPerm test) {
+constexpr bool has_perm(MemPerm perms, MemPerm test) {
     // La operacion AND extrae el bit del permiso buscado; si es != 0 esta
     // presente
     return (static_cast<uint8_t>(perms) & static_cast<uint8_t>(test)) != 0;
 }
+
+/**
+ * @brief Redondea @p n hacia arriba al multiplo de @p a.
+ * @param a Tiene que ser potencia de dos (un tamano de pagina lo es).
+ *
+ * El nombre que prometia el encabezado de este fichero era `round_to_page`,
+ * pero nunca existio: se redondeaba a mano en dos sitios con dos copias de la
+ * misma cuenta.
+ */
+constexpr size_t round_up_to(size_t n, size_t a) {
+    return (n + a - 1) & ~(a - 1);
+}
+
+/**
+ * @brief Traduce permisos a la constante que entiende el sistema.
+ *
+ * Suelta y @c constexpr a proposito: en todos los sitios de llamada los
+ * permisos son una constante escrita a mano (`READ | WRITE`), asi que la
+ * cadena entera de comparaciones se PLIEGA a un numero al compilar y lo que
+ * queda de @c allocate_memory es lo bastante pequeno como para meterse dentro
+ * de quien la llama.  Con la traduccion metida en medio de la funcion, no.
+ *
+ * @note En Windows, EXEC+WRITE sin READ se traduce a PAGE_EXECUTE_READWRITE
+ *       porque no existe una proteccion de solo escritura y ejecucion.
+ */
+#if defined(_WIN32) || defined(_WIN64)
+constexpr DWORD os_protection_of(MemPerm perms) {
+    return has_perm(perms, MemPerm::EXEC)
+               ? (has_perm(perms, MemPerm::READ) &&
+                          has_perm(perms, MemPerm::WRITE)
+                      ? PAGE_EXECUTE_READWRITE
+                      : has_perm(perms, MemPerm::READ)
+                            ? PAGE_EXECUTE_READ
+                            : has_perm(perms, MemPerm::WRITE)
+                                  ? PAGE_EXECUTE_READWRITE
+                                  : PAGE_EXECUTE)
+               : (has_perm(perms, MemPerm::READ) &&
+                          has_perm(perms, MemPerm::WRITE)
+                      ? PAGE_READWRITE
+                      : has_perm(perms, MemPerm::READ)
+                            ? PAGE_READONLY
+                            : has_perm(perms, MemPerm::WRITE) ? PAGE_READWRITE
+                                                              : PAGE_NOACCESS);
+}
+#else
+constexpr int os_protection_of(MemPerm perms) {
+    return (has_perm(perms, MemPerm::READ) ? PROT_READ : 0) |
+           (has_perm(perms, MemPerm::WRITE) ? PROT_WRITE : 0) |
+           (has_perm(perms, MemPerm::EXEC) ? PROT_EXEC : 0);
+}
+#endif
 
 /**
  * @brief Reserva memoria del sistema con los permisos indicados.
@@ -131,46 +183,27 @@ inline bool has_perm(MemPerm perms, MemPerm test) {
 inline void *allocate_memory(size_t size, MemPerm perms) {
     if (size == 0) return nullptr; // tamanyo nulo: nada que reservar
 
-    // Redondear al multiplo de pagina del sistema operativo
-#ifdef _WIN32
-    SYSTEM_INFO si{};
-    GetSystemInfo(&si); // obtener info del sistema
-    size = (size + si.dwPageSize - 1) &
-           ~(si.dwPageSize - 1); // redondeo hacia arriba
-#else
-    long pagesize = sysconf(_SC_PAGESIZE); // tamanyo de pagina en POSIX
-    size = (size + pagesize - 1) & ~(pagesize - 1); // redondeo hacia arriba
-#endif
+    /* El tamano de pagina se PREGUNTA UNA VEZ en toda la vida del proceso, no
+     * en cada reserva.  Antes habia aqui un `GetSystemInfo` (o un `sysconf`)
+     * por llamada: cuarenta bytes de estructura en la pila mas una consulta al
+     * sistema para averiguar un numero que no cambia nunca, y ademas bastaba
+     * para que la funcion no cupiera dentro de quien la llama. */
+    size = round_up_to(size, util::os_page_size());
 
 #ifdef _WIN32
-    // Traducir permisos MemPerm a constantes PAGE_* de VirtualAlloc
-    DWORD flProtect = 0;
-    if (has_perm(perms, MemPerm::EXEC)) {
-        // Paginas ejecutables
-        if (has_perm(perms, MemPerm::READ) && has_perm(perms, MemPerm::WRITE))
-            flProtect = PAGE_EXECUTE_READWRITE; // RWX
-        else if (has_perm(perms, MemPerm::READ))
-            flProtect = PAGE_EXECUTE_READ; // RX
-        else if (has_perm(perms, MemPerm::WRITE))
-            flProtect =
-                PAGE_EXECUTE_READWRITE; // WX -> no existe WX solo, se usa RWX
-        else
-            flProtect = PAGE_EXECUTE; // solo ejecucion
-    } else {
-        // Paginas sin ejecucion
-        if (has_perm(perms, MemPerm::READ) && has_perm(perms, MemPerm::WRITE))
-            flProtect = PAGE_READWRITE; // RW
-        else if (has_perm(perms, MemPerm::READ))
-            flProtect = PAGE_READONLY; // R
-        else if (has_perm(perms, MemPerm::WRITE))
-            flProtect = PAGE_READWRITE; // W -> no existe solo W, se usa RW
-        else
-            flProtect = PAGE_NOACCESS; // sin acceso
-    }
+    // Se pliega a una constante cuando los permisos lo son, que es siempre.
+    const DWORD flProtect = os_protection_of(perms);
 
     void *mem = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, flProtect);
     if (!mem) {
-        // Obtener y mostrar el mensaje de error de Windows
+        /* CONTAR POR QUE FALLO SOLO EN DEBUG, y no por ahorrar: las dos cosas
+         * que hacen falta para dar el mensaje -- los flujos de C++ y
+         * `FormatMessageA` con `FORMAT_MESSAGE_ALLOCATE_BUFFER` -- PIDEN
+         * MEMORIA.  Contar que no hay memoria pidiendo memoria es reentrar por
+         * el mismo sitio, y en el peor momento: cuando el sistema acaba de
+         * decir que no.  El que llama sigue enterandose por el nullptr, que es
+         * un fallo ruidoso igual, solo que sin texto. */
+#ifndef NDEBUG
         DWORD err = GetLastError();
         LPVOID msg;
         FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER |
@@ -181,22 +214,21 @@ inline void *allocate_memory(size_t size, MemPerm perms) {
         VGC_CERR << "VirtualAlloc fallo. Codigo: " << err << " - "
                  << (msg ? (char *)msg : "Error desconocido") << "\n";
         if (msg) LocalFree(msg); // liberar el buffer de mensaje
+#endif
         return nullptr;
     }
     return mem;
 #else
-    // Construir mascara de proteccion POSIX
-    int prot = 0;
-    if (has_perm(perms, MemPerm::READ)) prot |= PROT_READ; // permiso de lectura
-    if (has_perm(perms, MemPerm::WRITE))
-        prot |= PROT_WRITE; // permiso de escritura
-    if (has_perm(perms, MemPerm::EXEC))
-        prot |= PROT_EXEC; // permiso de ejecucion
+    // Se pliega a una constante cuando los permisos lo son, que es siempre.
+    const int prot = os_protection_of(perms);
 
     void *mem = mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED) {
+        // Mismo motivo que en la rama de Windows: los flujos reservan.
+#ifndef NDEBUG
         VGC_CERR << "mmap fallo: " << std::strerror(errno)
                  << "\n"; // mostrar error de sistema
+#endif
         return nullptr;
     }
     return mem;
@@ -216,14 +248,11 @@ inline void *allocate_memory(size_t size, MemPerm perms) {
  */
 inline void free_memory(void *mem, size_t size) {
 #ifdef _WIN32
-    VirtualFree(
-        mem, 0,
-        MEM_RELEASE); // libera todo el rango reservado; tamanyo ignorado
+    (void)size; // con MEM_RELEASE el tamano no se usa
+    VirtualFree(mem, 0, MEM_RELEASE); // libera todo el rango reservado
 #else
-    long pagesize = sysconf(_SC_PAGESIZE); // tamanyo de pagina
-    size = (size + pagesize - 1) &
-           ~(pagesize - 1); // redondear igual que en allocate
-    munmap(mem, size);      // desmapear rango
+    // Redondear IGUAL que en allocate, o `munmap` deja un trozo colgando.
+    munmap(mem, round_up_to(size, util::os_page_size()));
 #endif
 }
 

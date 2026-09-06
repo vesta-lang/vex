@@ -61,6 +61,14 @@ prevalecen sobre este fichero para el codigo respectivo:
   - OpenSSL                                                Apache-2.0 (ver Exc. 2)
   - LibPEparse           (libs/SourceCode/LibPEparse)      MIT (David Lopez T.)
   - DistanciaLevenshtein (libs/SourceCode/DistanciaLevenshtein) MIT (David Lopez T.)
+  - vesta_alloc          (libs/SourceCode/vesta_alloc)     MIT (David Lopez T.)
+
+El ultimo es NUESTRO, no de un tercero: es el asignador de memoria del
+anfitrion, que se saco a su propio repositorio para poder reusarse.  Lleva MIT
+y no la GPLv2 de aqui a proposito -- una biblioteca de proposito general con
+copyleft arrastraria a su licencia a todo programa que la enlace, y entonces no
+seria reutilizable.  En esta direccion no hay friccion: codigo MIT entra en un
+proyecto GPLv2 sin problema.
 
 
 Nota

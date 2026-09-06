@@ -17,3 +17,6 @@
 	path = libs/SourceCode/LibPEparse
 	url = https://github.com/desmonHak/LibPEparse.git
 	branch = main
+[submodule "libs/SourceCode/vesta_alloc"]
+	path = libs/SourceCode/vesta_alloc
+	url = https://github.com/vesta-lang/vesta_alloc.git

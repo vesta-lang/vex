@@ -17,6 +17,7 @@
 #include "ir/parallel_for.h"
 
 #include "util/ThreadPool.h"
+#include "util/host_allocator.h" // la etiqueta de reservas viaja con la tarea
 #include "util/thread_slot.h"
 
 #include <atomic>
@@ -63,10 +64,25 @@ inline void set_in_pool_task(bool v) noexcept {
     g_in_pool_task.set(v ? reinterpret_cast<void *>(1) : nullptr);
 }
 
-/// Pone la marca mientras vive.  Se usa dentro de cada tarea del pool.
+/**
+ * @brief Pone la marca mientras vive.  Se usa dentro de cada tarea del pool.
+ *
+ * Y ADEMAS lleva la etiqueta de reservas del hilo que reparte hasta el que
+ * trabaja.  No es un extra: un `util::AllocScope` vale para SU hilo, asi que
+ * una fase etiquetada cuyo trabajo se reparta por el pool contaria todo lo que
+ * reservan los trabajadores como "no se".  Eso no seria un dato que falta,
+ * seria un dato FALSO -- y este compilador reparte casi todo.
+ *
+ * Por eso la etiqueta se pide como parametro y no se lee aqui dentro: aqui
+ * dentro ya estamos en el hilo equivocado.  Quien anada un sitio de reparto
+ * nuevo se encuentra con que el constructor se la exige.
+ */
 struct InPoolTaskScope {
     const bool previous;
-    InPoolTaskScope() noexcept : previous(in_pool_task()) {
+    const util::AllocScope inherited_tag;
+
+    explicit InPoolTaskScope(util::AllocTag parent) noexcept
+        : previous(in_pool_task()), inherited_tag(parent) {
         set_in_pool_task(true);
     }
     ~InPoolTaskScope() { set_in_pool_task(previous); }
@@ -168,13 +184,13 @@ void for_each_function(IrModule &mod,
     /* Lo que quede del presupuesto, no la maquina entera: puede haber un
      * reparto por MODULO en marcha que ya se quedo con casi todo.  Ver
      * @c available_threads. */
-    const unsigned hilos = available_threads();
+    const unsigned threads = available_threads();
     /* Reentrada: dentro de una tarea del pool se trabaja en fila de uno.
      * Encolar en el mismo pool desde dentro de una de sus tareas es un bloqueo
      * clasico: los workers estan todos ocupados con las tareas de fuera, las de
      * dentro no arrancan nunca, y las de fuera no terminan porque esperan a las
      * de dentro. */
-    if (hilos <= 1 || n < 8 || in_pool_task()) {
+    if (threads <= 1 || n < 8 || in_pool_task()) {
         g_stats.serial_walks.fetch_add(1, std::memory_order_relaxed);
         for (auto &fn : mod.functions)
             f(fn);
@@ -220,32 +236,38 @@ void for_each_function(IrModule &mod,
      * convierte en un cuelgue mudo: el contador no avanza, el que espera gira
      * para siempre y nadie sabe que paso.  Es exactamente lo que ocurrio. */
     std::mutex m_error;
-    std::exception_ptr primer_error;
+    std::exception_ptr first_error;
 
-    auto trabajar = [&] {
+    /* La etiqueta de reservas se lee AQUI, en el hilo que reparte, porque
+     * dentro de la tarea ya seria la del trabajador.  Vive hasta que la espera
+     * de mas abajo termina, asi que la lambda la puede tomar por referencia. */
+    const util::AllocTag parent_tag = util::AllocScope::current();
+
+    auto work = [&] {
         /* Avisa al salir, salga por donde salga. */
         struct OnExit {
             std::atomic<unsigned> &v;
             ~OnExit() { v.fetch_sub(1); }
         } on_exit{alive};
         /* Dentro de una tarea: lo que corra aqui no puede volver a encolar en
-         * este mismo pool.  Ver @c InPoolTaskScope. */
-        const InPoolTaskScope dentro;
+         * este mismo pool, y lo que reserve se cuenta con la etiqueta del que
+         * reparte.  Ver @c InPoolTaskScope. */
+        const InPoolTaskScope in_task{parent_tag};
         for (;;) {
             const size_t i = next.fetch_add(1);
             if (i >= n) return;
             /* El contador sube al SALIR, pase lo que pase.  Contarlo despues
              * de `f()` dejaba de contar cuando `f()` lanzaba, y entonces la
              * espera de abajo no podia terminar nunca. */
-            struct Contar {
+            struct CountOnExit {
                 std::atomic<size_t> &c;
-                ~Contar() { c.fetch_add(1); }
-            } contar{done};
+                ~CountOnExit() { c.fetch_add(1); }
+            } count_on_exit{done};
             try {
                 f(mod.functions[i]);
             } catch (...) {
                 std::lock_guard<std::mutex> lk(m_error);
-                if (!primer_error) primer_error = std::current_exception();
+                if (!first_error) first_error = std::current_exception();
                 return; // este hilo se retira; los demas siguen y acaban
             }
         }
@@ -260,13 +282,13 @@ void for_each_function(IrModule &mod,
      * de otro modulo a la vez -- vea la maquina ya ocupada y no la
      * sobresuscriba.  Puede conceder MENOS de lo pedido, y entonces se reparte
      * entre menos: el presupuesto manda. */
-    const OuterParallelScope reservation(hilos);
+    const OuterParallelScope reservation(threads);
     const unsigned used =
         reservation.granted() > 0 ? reservation.granted() : 1u;
     alive.store(used);
     for (unsigned h = 0; h + 1 < used; ++h)
-        pool.enqueue(trabajar);
-    trabajar();
+        pool.enqueue(work);
+    work();
 
     /* Y al terminar su parte, el principal espera a que acaben los demas.  Se
      * espera a que TODAS esten hechas y no a que la cola se vacie: una tarea
@@ -292,7 +314,7 @@ void for_each_function(IrModule &mod,
 
     /* Y se relanza en el hilo que espera.  Tragarse un fallo del compilador es
      * peor que caerse: el programa sale mal y nadie lo sabe. */
-    if (primer_error) std::rethrow_exception(primer_error);
+    if (first_error) std::rethrow_exception(first_error);
 }
 
 } // namespace ir

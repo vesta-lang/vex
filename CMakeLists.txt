@@ -466,6 +466,18 @@ set(CAPSTONE_USE_LTO OFF CACHE BOOL "" FORCE)
 # instalador igualmente hay que poder construirlo -- o no construirlo, que es
 # lo que se hace mas abajo con la herramienta de linea de comandos de keystone.
 
+# El asignador de memoria del anfitrion.  Vive en `libs/SourceCode` y no en
+# `src/util` porque no depende de NADA del compilador -- solo del sistema
+# operativo --, tiene sus propias pruebas, ejemplos y bancos, y se puede
+# construir suelto.  Ver su README.
+#
+# Es una biblioteca de OBJETOS a proposito, no un archivo: reemplaza
+# `operator new` global, y de un archivo el enlazador solo saca lo que alguien
+# nombra.  A `operator new` no lo nombra nadie -- la llamada la pone el
+# compilador --, asi que de un `.a` no se extraeria y el binario se quedaria con
+# el asignador del sistema SIN dar ningun error.  Con objetos entran siempre.
+add_subdirectory(libs/SourceCode/vesta_alloc)
+
 # Capstone (desensamblador)
 add_subdirectory(libs/SourceCode/capstone)
 
@@ -688,6 +700,15 @@ foreach (_lib vx_lib vxdbg_lib diag_lib)
 endforeach()
 add_library(vmcore STATIC ${VM_CORE_SOURCES})
 target_link_libraries(vmcore PUBLIC vesta_vm_flags miniz)
+
+# El asignador entra COMO OBJETOS dentro de `vmcore`, no como una libreria que
+# se enlaza detras.  Es la unica forma de que su `operator new` global llegue al
+# binario: de un archivo el enlazador solo extrae lo que alguien nombra, y a
+# `operator new` no lo nombra nadie.  `vmcore` ya entra entero
+# (`$<LINK_LIBRARY:WHOLE_ARCHIVE,vmcore>`), asi que metiendolo aqui llega igual
+# que cuando sus fuentes vivian en `src/util`.
+target_sources(vmcore PRIVATE $<TARGET_OBJECTS:vesta_alloc>)
+target_link_libraries(vmcore PUBLIC vesta_alloc)
 
 # NO hay cabeceras precompiladas, y es una decision MEDIDA, no un olvido.
 #
@@ -1115,7 +1136,7 @@ add_executable(test_analysis_manager tests/analysis/test_manager.cpp
                                      src/util/name_pool.cpp
                                      # Lo que ESTE hilo tiene cogido vive en
                                      # una ranura, no en un `thread_local`.
-                                     src/util/thread_slot.cpp
+                                     libs/SourceCode/vesta_alloc/src/thread_slot.cpp
                                      # Y el cerrojo del gestor es el nuestro,
                                      # no el de la emulacion de pthreads.
                                      src/util/shared_mutex.cpp)
@@ -1528,7 +1549,7 @@ add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/util/env_flags.cpp
                                 # `env_flags` guarda su buffer relido en una
                                 # ranura por hilo (nada de `thread_local`).
-                                src/util/thread_slot.cpp
+                                libs/SourceCode/vesta_alloc/src/thread_slot.cpp
                                 src/vxdbg/store.cpp
                                 src/vxdbg/pack_store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
@@ -1947,7 +1968,7 @@ add_executable(test_crono_precision tests/util/test_crono_precision.cpp
                                     src/util/crono_tramo.cpp
                                     # El acumulador de cada hilo vive en una
                                     # ranura, no en un `thread_local`.
-                                    src/util/thread_slot.cpp
+                                    libs/SourceCode/vesta_alloc/src/thread_slot.cpp
                                     src/util/reloj.cpp)
 target_include_directories(test_crono_precision PRIVATE ${VM_INCLUDES})
 if (NOT WIN32)
@@ -1966,7 +1987,7 @@ add_executable(test_asa_fact_file_lnx tests/analysis/test_asa_fact_file_lnx.cpp
                                       src/util/env_flags.cpp
                                       # `env_flags` guarda su buffer relido en
                                       # una ranura por hilo.
-                                      src/util/thread_slot.cpp
+                                      libs/SourceCode/vesta_alloc/src/thread_slot.cpp
                                       src/util/serialize.cpp)
 target_include_directories(test_asa_fact_file_lnx PRIVATE ${VM_INCLUDES})
 
