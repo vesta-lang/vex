@@ -459,6 +459,33 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     for (const auto &r : fn.param_abi_regs)
         write_str(out, r);
 
+    /* El contrato de cada parametro.  Viaja porque el modelo de memoria lo
+     * consulta: sin el, una funcion que llega de otro modulo pierde sus
+     * promesas y sus parametros vuelven a lo conservador.  Seria correcto, pero
+     * haria que el codigo dependiera de si el modulo se compilo junto o aparte
+     * -- justo la clase de diferencia que no debe existir.
+     *
+     * Cada registro lleva su TAMANO delante.  Anadir una promesa manana sube la
+     * version igual, pero con el tamano el cuerpo se puede SALTAR sin
+     * conocerlo: un lector lee lo que entiende y descarta el resto, en vez de
+     * descuadrarse y leer el campo siguiente como si fuera otra cosa. */
+    write_u32(out, static_cast<uint32_t>(fn.param_contracts.size()));
+    for (const IrParamContract &c : fn.param_contracts) {
+        /* Cuantos NIVELES lleva este parametro.  Van dentro porque el contrato
+         * es por nivel: `const T*` habla de lo apuntado y `T* const` del
+         * puntero, y son cosas distintas. */
+        write_u32(out, static_cast<uint32_t>(c.levels.size()));
+        for (const IrParamLevel &l : c.levels) {
+            write_u32(out, 40u); // bytes del cuerpo: 8 + 8 + 8 + 8 + 4 + 4
+            write_u64(out, l.holds);
+            write_u64(out, l.denied);
+            write_u64(out, l.proven);
+            write_u64(out, static_cast<uint64_t>(l.extent_bytes));
+            write_u32(out, l.extent_from_param);
+            write_u32(out, l.align_bytes);
+        }
+    }
+
     // Values: TODOS los SSA values de la funcion.  El indice en este
     // array ES el IrValueId (los ids son densos 0..N-1).
     write_u32(out, static_cast<uint32_t>(fn.values.size()));
@@ -611,6 +638,40 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         std::string r;
         if (!read_str(in, off, r)) return false;
         out.param_abi_regs.push_back(std::move(r));
+    }
+
+    /* Direccion declarada de cada parametro (ver el lado que escribe). */
+    /* El contrato de cada parametro (ver el lado que escribe).  El TAMANO de
+     * cada registro se lee y se respeta: lo que este lector no entienda se
+     * salta, en vez de descuadrar el resto. */
+    uint32_t n_contracts = 0;
+    if (!read_u32(in, off, n_contracts)) return false;
+    out.param_contracts.clear();
+    out.param_contracts.reserve(n_contracts);
+    for (uint32_t k = 0; k < n_contracts; ++k) {
+        uint32_t n_levels = 0;
+        if (!read_u32(in, off, n_levels)) return false;
+        if (n_levels > IrParamContract::kMaxLevels) return false;
+        IrParamContract c;
+        c.levels.reserve(n_levels);
+        for (uint32_t li = 0; li < n_levels; ++li) {
+            uint32_t body = 0;
+            if (!read_u32(in, off, body)) return false;
+            const size_t fin = off + body;
+            if (fin > in.size()) return false;
+            IrParamLevel l;
+            uint64_t ext = 0;
+            if (!read_u64(in, off, l.holds)) return false;
+            if (!read_u64(in, off, l.denied)) return false;
+            if (!read_u64(in, off, l.proven)) return false;
+            if (!read_u64(in, off, ext)) return false;
+            if (!read_u32(in, off, l.extent_from_param)) return false;
+            if (!read_u32(in, off, l.align_bytes)) return false;
+            l.extent_bytes = static_cast<int64_t>(ext);
+            off = fin; // lo que sobre es de una version que no se conoce
+            c.levels.push_back(l);
+        }
+        out.param_contracts.push_back(std::move(c));
     }
 
     /* values */

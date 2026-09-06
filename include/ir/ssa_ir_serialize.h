@@ -108,9 +108,20 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    14; // v14: el cuerpo va COMPRIMIDO (deflate).  v13: + clase declarada de
-        // cada ligadura de asm (AsmRegBinding::reg_class); comparte
-        // serialize_function con la cache, asi que su formato cambia a la vez
+    16; // v16: el contrato de un parametro es POR NIVEL de indireccion, y cada
+        // nivel lleva ademas lo que se NIEGA.  Hacian falta las dos cosas:
+        // `const T*` habla de lo apuntado y `T* const` del puntero, asi que con
+        // un solo registro las dos se guardaban igual; y sin la negacion, "no
+        // consta que escriba" y "consta que NO escribe" tampoco se
+        // distinguian.  v15: + direccion declarada de cada parametro
+        // (`in`/`out`/`inout`) en
+        // dos mascaras.  Sin ella, una funcion que llega de otro modulo pierde
+        // la marca y su memoria vuelve a lo conservador: correcto, pero peor --
+        // y lo peor es que dependeria de si el modulo se recompilo junto o
+        // aparte.  v14: el cuerpo va COMPRIMIDO (deflate).  v13: + clase
+        // declarada de cada ligadura de asm (AsmRegBinding::reg_class);
+        // comparte serialize_function con la cache, asi que su formato cambia a
+        // la vez
 
 /**
  * @brief Banderas del campo reservado de la cabecera de la seccion.
@@ -180,7 +191,13 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    14; // v14: + los ejes `blocks` y `traps` de una nativa declarada
+    16; // v16: el contrato de cada parametro, por NIVEL y con la cara negativa.
+        // v15: + el contrato de cada parametro.  Sube A LA VEZ que
+        // IR_SECTION_VERSION porque las dos comparten `serialize_function`:
+        // olvidarla no da un error de version -- la comprobacion pasa -- sino un
+        // cuerpo leido con el reparto equivocado, y de ahi salen funciones
+        // PERDIDAS y un simbolo sin resolver muy lejos del sitio.
+        // v14: + los ejes `blocks` y `traps` de una nativa declarada
 
 /**
  * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vxir`.

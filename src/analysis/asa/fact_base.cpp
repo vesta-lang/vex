@@ -114,14 +114,16 @@ FactBase::~FactBase() {
                  queries_, computations_);
 }
 
-std::string FactBase::key_of(const ir::IrFunction &fn) {
-    if (!fn.name.empty()) return fn.name;
+const std::string *FactBase::key_of(const ir::IrFunction &fn) {
+    if (!fn.name.empty()) return fn.name_key();
     /* Anonima: la direccion la identifica sin ambiguedad mientras viva, y una
      * base no sobrevive al modulo cuyas funciones consulta. */
     char buf[40];
     std::snprintf(buf, sizeof buf, "<anonima:%p>",
                   static_cast<const void *>(&fn));
-    return std::string(buf);
+    /* Internado tambien: asi la clave es un puntero venga de donde venga, y
+     * dos consultas sobre la misma funcion anonima dan el mismo. */
+    return util::intern_name(std::string(buf));
 }
 
 void FactBase::mark(const char *producer, const std::string &key, Certainty c,
@@ -142,13 +144,13 @@ void FactBase::mark(const char *producer, const std::string &key, Certainty c,
 
 const IrFacts &FactBase::structure(const ir::IrFunction &fn) {
     ++queries_;
-    const std::string key = key_of(fn);
+    const std::string *key = key_of(fn);
     if (!manager_.cached<IRFactsAnalysis>(key)) {
         ++computations_;
         /* Un recorrido, sin reticulo ni punto fijo: lo que sale de aqui esta
          * DEMOSTRADO, no inferido.  Los def-use y el CFG son lo que el IR dice,
          * no una aproximacion de lo que podria pasar. */
-        mark(kProducerStructure, key, Certainty::Proven);
+        mark(kProducerStructure, *key, Certainty::Proven);
     }
     return manager_.get_or_compute<IRFactsAnalysis, IrFacts>(
         key, [&fn]() { return build_ir_facts(fn); });
@@ -156,7 +158,7 @@ const IrFacts &FactBase::structure(const ir::IrFunction &fn) {
 
 const DemandedBits &FactBase::demanded(const ir::IrFunction &fn) {
     ++queries_;
-    const std::string key = key_of(fn);
+    const std::string *key = key_of(fn);
     const bool fresh = !manager_.cached<DemandedBitsAnalysis>(key);
     if (fresh) ++computations_;
     /* Por el gestor, como los rangos: los tres que preguntan -- el pase que
@@ -174,7 +176,7 @@ const DemandedBits &FactBase::demanded(const ir::IrFunction &fn) {
         /* La certeza sale del analisis: llegar a punto fijo es haber visto
          * todo lo que podia contradecirlo; cortar por la cota deja una cota
          * valida pero no demostrada al maximo. */
-        mark(kProducerDemandedBits, key,
+        mark(kProducerDemandedBits, *key,
              db.converged ? Certainty::Proven : Certainty::Inferred, nullptr);
     }
     return db;
@@ -182,7 +184,7 @@ const DemandedBits &FactBase::demanded(const ir::IrFunction &fn) {
 
 const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {
     ++queries_;
-    const std::string key = key_of(fn);
+    const std::string *key = key_of(fn);
     const bool fresh = !manager_.cached<RangeAnalysis>(key);
     if (fresh) ++computations_;
     /* La factoria pide la estructura POR LA BASE, no por su cuenta: asi el
@@ -222,7 +224,7 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {
          * punto fijo es haber visto todo lo que podia contradecirlo; pararse
          * por presupuesto es "hasta aqui he llegado", que sostiene una decision
          * con red pero no permite quitar una comprobacion. */
-        mark(kProducerRanges, key,
+        mark(kProducerRanges, *key,
              rf.convergio ? Certainty::Proven : Certainty::Inferred,
              kProducerStructure);
     }
@@ -231,14 +233,14 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn) {
 
 const PointsTo &FactBase::memory(const ir::IrFunction &fn) {
     ++queries_;
-    const std::string key = key_of(fn);
+    const std::string *key = key_of(fn);
     if (!manager_.cached<MemoryAnalysis>(key)) {
         ++computations_;
         /* El conjunto de sitios a los que un puntero PUEDE referirse es una
          * sobre-aproximacion COMPLETA: nada que no este dentro puede ocurrir.
          * Que un puntero concreto quede en "cualquier cosa" no rebaja el hecho
          * -- eso lo dice la propia entrada, no su certeza. */
-        mark(kProducerMemory, key, Certainty::Proven, kProducerStructure);
+        mark(kProducerMemory, *key, Certainty::Proven, kProducerStructure);
     }
     return manager_.get_or_compute<MemoryAnalysis, PointsTo>(
         key, [this, &fn]() { return compute_points_to(fn, structure(fn)); });
@@ -246,10 +248,10 @@ const PointsTo &FactBase::memory(const ir::IrFunction &fn) {
 
 const LoopFacts &FactBase::loops(const ir::IrFunction &fn) {
     ++queries_;
-    const std::string key = key_of(fn);
+    const std::string *key = key_of(fn);
     if (!manager_.cached<LoopsAnalysis>(key)) {
         ++computations_;
-        mark(kProducerLoops, key, Certainty::Proven);
+        mark(kProducerLoops, *key, Certainty::Proven);
     }
     return manager_.get_or_compute<LoopsAnalysis, LoopFacts>(
         key, [&fn]() { return compute_loop_facts(fn); });
@@ -257,14 +259,14 @@ const LoopFacts &FactBase::loops(const ir::IrFunction &fn) {
 
 const LoopIvBounds &FactBase::iv_bounds(const ir::IrFunction &fn) {
     ++queries_;
-    const std::string key = key_of(fn);
+    const std::string *key = key_of(fn);
     if (!manager_.cached<IvBoundsAnalysis>(key)) {
         ++computations_;
         /* Demostrado: sale de la FORMA del bucle y de constantes escritas, sin
          * punto fijo que pueda pararse por presupuesto ni aproximacion que
          * pueda quedarse corta.  Por eso puede alimentar a los rangos y no al
          * reves -- si preguntara, se morderian la cola. */
-        mark(kProducerLoops, key, Certainty::Proven, kProducerStructure);
+        mark(kProducerLoops, *key, Certainty::Proven, kProducerStructure);
     }
     return manager_.get_or_compute<IvBoundsAnalysis, LoopIvBounds>(
         key, [this, &fn]() {
@@ -274,7 +276,9 @@ const LoopIvBounds &FactBase::iv_bounds(const ir::IrFunction &fn) {
 
 const RangeSummaries &FactBase::boundary(const ir::IrModule &mod) {
     ++queries_;
-    const std::string key = kModuleUnit;
+    // Internada tambien: la clave es un puntero, hable de una funcion o del
+    // modulo entero.
+    const std::string *key = util::intern_name(kModuleUnit);
     const bool fresh = !manager_.cached<BoundaryAnalysis>(key);
     if (fresh) ++computations_;
     const RangeSummaries &rs =
@@ -283,7 +287,7 @@ const RangeSummaries &FactBase::boundary(const ir::IrModule &mod) {
     if (fresh) {
         /* Sin punto fijo del grafo de llamadas los resumenes se abren solos, y
          * entonces lo que se sabe es nada -- no algo menos preciso. */
-        mark(kProducerBoundary, key,
+        mark(kProducerBoundary, *key,
              rs.convergio ? Certainty::Proven : Certainty::Unknown,
              kProducerStructure);
     }
@@ -297,8 +301,8 @@ effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,
      * empezar se le entregaria al comprobador de regiones despues de que el
      * modulo haya cambiado: un resumen de codigo que ya no existe.  No falla --
      * avisa de accesos que ya no estan, o deja de avisar de uno real. */
-    const std::string key =
-        std::string(kModuleUnit) + "@" + (stage != nullptr ? stage : "");
+    const std::string *key = util::intern_name(
+        std::string(kModuleUnit) + "@" + (stage != nullptr ? stage : ""));
     const bool fresh = !manager_.cached<EffectsSummaryAnalysis>(key);
     if (fresh) ++computations_;
     /* Se guarda por PUNTERO: el motor lleva dentro sus tablas y el resumen
@@ -317,7 +321,7 @@ effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,
          * que se queda a medias -- una nativa sin declarar, un puntero a
          * funcion sin resolver -- lo dice el propio resumen en sus lagunas, y
          * el sello no puede afirmar mas que el. */
-        mark(kProducerEffects, key, Certainty::Proven, kProducerStructure);
+        mark(kProducerEffects, *key, Certainty::Proven, kProducerStructure);
     }
     return *engine;
 }
@@ -325,7 +329,9 @@ effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,
 const std::unordered_map<std::string, EscapeInfo> &
 FactBase::escape(const ir::IrModule &mod) {
     ++queries_;
-    const std::string key = kModuleUnit;
+    // Internada tambien: la clave es un puntero, hable de una funcion o del
+    // modulo entero.
+    const std::string *key = util::intern_name(kModuleUnit);
     const bool fresh = !manager_.cached<EscapeAnalysisId>(key);
     if (fresh) ++computations_;
     /* La estructura y la memoria de cada funcion se piden POR LA BASE, no
@@ -349,13 +355,13 @@ FactBase::escape(const ir::IrModule &mod) {
         /* El punto fijo se cierra sobre el grafo de llamadas: un callee que no
          * se ve captura TODO, que es la respuesta correcta sin su cuerpo.  Lo
          * que sale de ahi esta demostrado. */
-        mark(kProducerEscape, key, Certainty::Proven, kProducerMemory);
+        mark(kProducerEscape, *key, Certainty::Proven, kProducerMemory);
     }
     return res;
 }
 
 void FactBase::invalidate(const ir::IrFunction &fn) {
-    const std::string key = key_of(fn);
+    const std::string *key = key_of(fn);
     /* La estructura arrastra en cascada a todo lo que se derivo de ella; los
      * demas se descartan tambien de forma explicita por si alguien los pidio
      * antes de que existiera esa dependencia. */
@@ -366,13 +372,13 @@ void FactBase::invalidate(const ir::IrFunction &fn) {
     /* Y su sello con ellos: un hecho muerto que deja su procedencia atras hace
      * que el volcado afirme lo que ya no se sabe. */
     for (auto &domain : seals_)
-        domain.second.erase(key);
+        domain.second.erase(*key);
 }
 
 Seal FactBase::seal(const char *producer, const ir::IrFunction &fn) const {
     auto d = seals_.find(producer);
     if (d == seals_.end()) return Seal{};
-    auto it = d->second.find(key_of(fn));
+    auto it = d->second.find(*key_of(fn));
     /* Nadie ha preguntado todavia: no se sabe nada, que no es lo mismo que
      * saber que no hay nada. */
     if (it == d->second.end()) return Seal{};

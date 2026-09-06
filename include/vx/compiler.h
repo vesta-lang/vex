@@ -907,8 +907,25 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                                  bool decir_lo_no_acotado, const char *backend,
                                  analysis::asa::FactStore &facts);
 
+/**
+ * @brief Avisa de los accesos que se salen de su region.
+ *
+ * @param mod   Modulo ya optimizado: lo que se va a emitir.
+ * @param diags Donde deja los avisos.
+ * @param file  Fichero al que apuntan.
+ * @param base  La base de hechos de ESTA compilacion.  El resumen de efectos
+ *              que esto necesita lo puede haber pedido ya otro, y pedirlo por
+ *              la base es lo que hace que se calcule UNA vez -- construir un
+ *              motor propio significa rehacer el escape y los resumenes del
+ *              modulo entero.
+ *
+ *              Se pide por MOMENTO (`post-opt`) y no a secas: el efecto de una
+ *              funcion cambia al optimizarla, asi que el resumen que miro el
+ *              optimizador al empezar no vale aqui.  No son el mismo hecho
+ *              repetido; son dos, y cada uno solo es cierto en el suyo.
+ */
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
-                      const std::string &file);
+                      const std::string &file, analysis::asa::FactBase &base);
 
 } // namespace vx
 

@@ -1,0 +1,76 @@
+namespace ejemplos.params_alias;
+
+// -----------------------------------------------------------------------------
+// Dos punteros parametro PUEDEN ser la misma memoria
+// -----------------------------------------------------------------------------
+// La raiz de un parametro es su POSICION, o sea un nombre, y no un objeto: nada
+// impide que quien llama pase la misma direccion dos veces, o dos que se
+// solapen.  Eso lo separa de un `alloca` o de una reserva, donde dos raices
+// distintas SI son dos regiones distintas.
+//
+// Confundir las dos cosas no da un error, da otro resultado.  Y lo peor no es
+// el numero: es que dependia de si el optimizador habia inlinado la llamada --
+// al inlinar, las dos direcciones vuelven a su reserva comun y entonces si se
+// veian solapadas --.  El mismo programa, dos respuestas.
+//
+// Lo que si demuestra que dos regiones no coinciden es que el programador lo
+// DIGA: `out` / `inout`, o un tipo que ya lo garantice (`borrow_mut<T>`,
+// `unique<T>`).  Sin decir nada, lo conservador.
+
+// Copia campo a campo, sin prometer nada de sus dos punteros.
+void mueve(i64* d, i64* s) {
+	d[0] = s[0];
+	d[1] = s[1];
+	d[2] = s[2];
+}
+
+// La misma, con la direccion DECLARADA.  Aqui el programador afirma que las dos
+// regiones son de quien las recibe, y el compilador puede reordenar.
+void mueve_declarado(out i64* d, in i64* s) {
+	d[0] = s[0];
+	d[1] = s[1];
+	d[2] = s[2];
+}
+
+i64 suma4(i64* m) {
+	return m[0] * 1000 + m[1] * 100 + m[2] * 10 + m[3];
+}
+
+i64 main() {
+	i64* m = (i64*)malloc(128);
+
+	// Destino UNA POSICION por delante del origen: se pisan.
+	m[0] = 1_i64;
+	m[1] = 2_i64;
+	m[2] = 3_i64;
+	m[3] = 4_i64;
+	mueve(m + 1, m);
+	// Secuencial: m[1]=m[0]=1, luego m[2]=m[1]=1, luego m[3]=m[2]=1.
+	i64 solapado = suma4(m); // 1111
+
+	// Sin solape, la misma funcion da lo obvio.
+	m[0] = 1_i64;
+	m[1] = 2_i64;
+	m[2] = 3_i64;
+	m[3] = 4_i64;
+	mueve(m + 4, m);
+	i64 disjunto = suma4(m + 4); // 1230 (m[4..6] = 1,2,3; m[7] sin tocar = 0)
+
+	println("solapado=${solapado} disjunto=${disjunto}");
+
+	// Y con la direccion declarada, sin solape: mismo resultado.
+	m[0] = 1_i64;
+	m[1] = 2_i64;
+	m[2] = 3_i64;
+	m[3] = 4_i64;
+	mueve_declarado(m + 8, m);
+	i64 declarado = suma4(m + 8); // 1230
+
+	println("declarado=${declarado}");
+	free(m);
+	// Se devuelve un numero pequenyo a proposito: un codigo de salida se trunca
+	// a un byte, y 1111 saldria como 87 solo en el modo nativo -- un caso que
+	// falla por como se mide, no por lo que hace.  El valor de verdad esta en
+	// las lineas de arriba.
+	return (i64)(solapado / 10); // 111
+}

@@ -1304,12 +1304,84 @@ void ir_print(const IrModule &mod, std::ostream &o) {
         // @function nombre(param: tipo, ...) -> tipo_retorno [flags] {
         o << "@function " << fn.name << "(";
         bool first = true;
-        for (IrValueId pid : fn.params) {
+        for (size_t pi = 0; pi < fn.params.size(); ++pi) {
+            const IrValueId pid = fn.params[pi];
             if (!first) o << ", ";
             first = false;
             if (pid < static_cast<IrValueId>(fn.values.size())) {
                 const IrValue &pv = fn.values[pid];
                 o << pv.name << ": " << ir_type_name(pv.type);
+            }
+            /* Y lo que ese parametro PROMETE, entre corchetes.
+             *
+             * Se vuelca porque el modelo de memoria lo consulta, y sin verlo
+             * dos volcados que difieren en si una lectura pudo adelantar a una
+             * escritura no se distinguen en NADA: el motivo queda invisible,
+             * que es lo contrario de lo que este volcado existe para hacer.
+             *
+             * No se imprime la palabra del fuente (`in`/`out`/`borrow_mut`)
+             * sino la PROMESA, porque es lo que el consumidor mira: varias
+             * palabras escriben la misma, y quien lee el volcado quiere saber
+             * que se afirmo, no con cual de las formas se escribio.
+             *
+             * El `!` marca lo DEMOSTRADO frente a lo declarado.  Es la
+             * diferencia entre algo que nadie tiene que comprobar y algo que
+             * hay que comprobar en cada sitio de llamada.
+             *
+             * Cada asterisco baja un NIVEL de indireccion: sin asterisco habla
+             * del puntero, `*` de lo apuntado, `**` de lo apuntado por eso.  Es
+             * la misma lectura que en el fuente, y hace falta porque
+             * `const T*` y `T* const` prometen cosas distintas: sin el nivel
+             * las dos se volcarian igual.
+             *
+             * El `-` es una NEGACION afirmada: `*-write` no es "no consta que
+             * escriba", es "consta que NO escribe".  Que no se pueda demostrar
+             * algo y que se pueda demostrar lo contrario son respuestas
+             * distintas, y quien lee el volcado tiene que poder separarlas. */
+            if (pi < fn.param_contracts.size()) {
+                const IrParamContract &c = fn.param_contracts[pi];
+                if (!c.empty()) {
+                    static const char *kNames[] = {
+                        "read",    "write",     "excl-call", "excl-run",
+                        "nonnull", "no-escape", "observable", "immutable"};
+                    o << " [";
+                    bool sep = false;
+                    for (size_t lvl = 0; lvl < c.levels.size(); ++lvl) {
+                        const IrParamLevel &l = c.levels[lvl];
+                        const std::string stars(lvl, '*');
+                        for (uint32_t k = 0;
+                             k < static_cast<uint32_t>(IrParamClaim::COUNT);
+                             ++k) {
+                            const IrParamClaim cl = static_cast<IrParamClaim>(k);
+                            const bool vale = l.has(cl);
+                            const bool niega = l.denies(cl);
+                            if (!vale && !niega) continue;
+                            if (sep) o << ' ';
+                            sep = true;
+                            o << stars;
+                            if (niega) o << '-';
+                            o << kNames[k];
+                            if (niega ? l.denies_proven(cl) : l.has_proven(cl))
+                                o << '!';
+                        }
+                        if (l.extent_bytes >= 0) {
+                            if (sep) o << ' ';
+                            sep = true;
+                            o << stars << "extent=" << l.extent_bytes;
+                        }
+                        if (l.extent_from_param != IrParamLevel::kNoParam) {
+                            if (sep) o << ' ';
+                            sep = true;
+                            o << stars << "extent=#" << l.extent_from_param;
+                        }
+                        if (l.align_bytes != 0) {
+                            if (sep) o << ' ';
+                            sep = true;
+                            o << stars << "align=" << l.align_bytes;
+                        }
+                    }
+                    o << ']';
+                }
             }
         }
         o << ") -> " << ir_type_name(fn.ret_type);

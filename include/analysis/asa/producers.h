@@ -143,6 +143,44 @@ struct ProductionSummary {
 };
 
 /**
+ * @struct ModuleWalk
+ * @brief El modulo recorrido UNA vez, con lo que todos los productores repiten.
+ *
+ * Cada productor recorria el modulo por su cuenta, y las HUELLAS lo recorrian
+ * otra vez cada una -- solo para calcular un hash, antes de que nadie
+ * produjera nada --.  Con diez dominios eso son trece pasadas completas donde
+ * hace falta una.  Y el coste no es solo el tiempo: cada pasada se trae el
+ * modulo entero a la cache y lo tira, asi que las trece se pisan.
+ *
+ * Es el mismo invariante del ASA aplicado al RECORRIDO: un hecho, un productor.
+ * Si recorrer el modulo produce algo que a otro le sirve, se produce una vez.
+ *
+ * Lo que vive aqui es lo COMUN -- la lista plana de instrucciones, quien llama
+ * a quien --, no lo de cada dominio.  Un dato que solo mira uno no gana nada
+ * subiendo aqui y ademas obliga a los demas a pagarlo.
+ */
+struct ModuleWalk {
+    /// Una instruccion, con la funcion a la que pertenece.
+    struct Site {
+        const ir::IrFunction *fn;
+        const ir::IrInstr *instr;
+    };
+    /// De cada funcion llamada, DONDE se la llama.  Lo necesita cualquiera que
+    /// quiera mirar los argumentos con los que se la usa de verdad.
+    std::unordered_map<std::string, std::vector<Site>> calls;
+    /* NO hay aqui una lista plana de todas las instrucciones, y no es un
+     * olvido: se escribio y se quito.  Recorrerla seria mas rapido que ir por
+     * bloques, pero hoy no la lee NADIE -- los productores siguen recorriendo
+     * lo suyo --, y materializarla cuesta dieciseis bytes por instruccion de
+     * memoria a cambio de nada.  Entra el dia que alguien la consuma, que es
+     * cuando deja de ser "por si acaso" y pasa a ahorrar una pasada de verdad.
+     */
+
+    /// @brief Recorre @p mod una vez y lo llena.
+    static ModuleWalk of(const ir::IrModule &mod);
+};
+
+/**
  * @brief Lo que un productor recibe.
  *
  * Trae la base de hechos ya montada -- un productor tampoco reconstruye lo
@@ -150,6 +188,10 @@ struct ProductionSummary {
  */
 struct Production {
     const ir::IrModule &mod;
+    /// El modulo ya recorrido.  Un productor NO vuelve a recorrerlo: lo que
+    /// necesite de la travesia se pide aqui, y si no esta, se anade AQUI para
+    /// que lo tengan todos.
+    const ModuleWalk &walk;
     FactBase &base;
     FactStore &store;
     ProductionSummary &summary;
@@ -312,6 +354,17 @@ void register_overlays_producer();
  * que llegaron despues del nucleo.
  */
 void register_demanded_bits_producer();
+
+/**
+ * @brief Da de alta el dominio de los contratos de los parametros.
+ *
+ * Publica lo que cada parametro promete de su region -- y, sobre todo, lo que
+ * NO promete: sin la marca, dos parametros no se pueden dar por regiones
+ * distintas, y eso decide si una lectura puede adelantar a una escritura o si
+ * una copia campo a campo se reduce a una operacion de bloque.  Callarlo dejaba
+ * al programador sin saber que una palabra suya cambia el codigo que sale.
+ */
+void register_param_contracts_producer();
 
 /**
  * @brief El sujeto de un hecho que habla de UN VALOR.

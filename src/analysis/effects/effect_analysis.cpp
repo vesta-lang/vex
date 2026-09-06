@@ -38,7 +38,7 @@ const IrFacts &EffectAnalysis::facts_of(const ir::IrFunction &fn) {
     // vez por funcion y se reusan (antes se reconstruian en cada consulta local
     // -> O(n^2) por funcion; ahora O(n)).
     return facts_mgr_.get_or_compute<IRFactsAnalysis, IrFacts>(
-        fn.name, [&]() { return build_ir_facts(fn); });
+        fn.name_key(), [&]() { return build_ir_facts(fn); });
 }
 
 const RangeFacts &EffectAnalysis::ranges_of(const ir::IrFunction &fn) {
@@ -61,7 +61,7 @@ const RangeFacts &EffectAnalysis::ranges_of(const ir::IrFunction &fn) {
      * el estado, y salia peor -- 500 analisis pasaban a 600 --: lo caro es el
      * punto fijo, no el estado. */
     return *facts_mgr_.get_or_compute<
-        RangeAnalysis, std::shared_ptr<const RangeFacts>>(fn.name, [&]() {
+        RangeAnalysis, std::shared_ptr<const RangeFacts>>(fn.name_key(), [&]() {
         const RangeRequester mark(RangeAsker::Effects);
         return compute_ranges_ptr(fn, facts_of(fn), RangeOptions{}, resumenes_);
     });
@@ -74,7 +74,7 @@ const PointsTo &EffectAnalysis::points_to_of(const ir::IrFunction &fn) {
      * y pasa a ser un intervalo.  Se piden por el mismo gestor, asi que se
      * calculan una vez por funcion y los comparte quien los necesite. */
     return facts_mgr_.get_or_compute<PointsToAnalysis, PointsTo>(
-        fn.name, [&]() {
+        fn.name_key(), [&]() {
             const IrFacts &f = facts_of(fn);
             const RangeFacts &rg = ranges_of(fn);
             return compute_points_to(fn, f, &rg);
@@ -682,7 +682,9 @@ void EffectAnalysis::invalidate_function(const std::string &fn_name) {
     module_dirty_ = true;
     // Los hechos (def-use/CFG) de la funcion cambiaron -> invalidar en el
     // manager para que se recomputen la proxima vez que se pidan.
-    facts_mgr_.invalidate<IRFactsAnalysis>(fn_name);
+    /* Se INTERNA aqui: la invalidacion llega con un nombre suelto, no con una
+     * funcion.  Internar da el mismo puntero que uso quien lo guardo. */
+    facts_mgr_.invalidate<IRFactsAnalysis>(util::intern_name(fn_name));
     // TODO: propagar a los callers transitivos por el callgraph (SCC) cuando el
     // cierre interprocedural se cachee por-funcion (hoy module_summary lo
     // rehace).

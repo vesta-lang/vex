@@ -2115,3 +2115,142 @@ es = "la constante que se escribe no cabe en un byte: un relleno de bloque repit
 ["bulk.run_in_machine_memory"]
 en = "the run is in the machine's own memory, not the host's: the IR distinguishes the two block operations, but the JIT emits the host one for both, so reducing this would write somewhere else"
 es = "el tramo esta en la memoria de la propia maquina, no en la del anfitrion: el intermedio distingue las dos operaciones de bloque, pero el JIT emite la del anfitrion para las dos, asi que reducirlo escribiria en otro sitio"
+
+# --- lo que cada parametro promete de su region, y lo que no ---
+# Varias formas del lenguaje escriben en el mismo eje: `in`/`out`/`inout`,
+# `borrow`/`borrow_mut`, `unique<T>` y `nonnull`.  Lo que las separa no es lo que
+# afirman sino QUIEN responde: la direccion es un contrato del que llama y hay
+# que comprobarla en cada sitio de llamada; el resto lo hace cumplir el
+# compilador.
+["param.may_read"]
+en = "may READ what it points at"
+es = "puede LEER lo que apunta"
+
+["param.may_write"]
+en = "may WRITE what it points at"
+es = "puede ESCRIBIR lo que apunta"
+
+["param.exclusive_call"]
+en = "its region is reached by no OTHER PARAMETER of the same call, so a read through another one may move ahead of a write through this one"
+es = "su region no la alcanza NINGUN OTRO PARAMETRO de la misma llamada, asi que una lectura por otro puede adelantar a una escritura por este"
+
+["param.exclusive_run"]
+en = "in this execution nobody else reaches that region: not another thread, not a pointer saved earlier. It is the one that answers whether two writes can be a race and whether two regions share a cache line"
+es = "en esta ejecucion no alcanza esa region nadie mas: ni otro hilo, ni un puntero guardado antes.  Es la que responde a si dos escrituras pueden ser una carrera y a si dos regiones comparten linea de cache"
+
+["param.nonnull"]
+en = "it is not null"
+es = "no es nula"
+
+["param.no_escape"]
+en = "the pointer does not outlive the call"
+es = "el puntero no sobrevive a la llamada"
+
+# La cara NEGATIVA de cada promesa.  No es lo mismo "no consta que escriba" que
+# "consta que NO escribe": lo primero es no haber mirado, lo segundo es un dato
+# del programa.  Con una sola cara los dos casos se leian igual, y quien
+# consultaba no podia distinguir un analisis ciego de uno concluyente.
+["param.not_may_read"]
+en = "it does NOT read what it points at"
+es = "NO lee lo que apunta"
+
+["param.not_may_write"]
+en = "it does NOT write what it points at"
+es = "NO escribe lo que apunta"
+
+["param.not_exclusive_call"]
+en = "its region MAY be reached by another parameter of the same call, so no access through it may be reordered against another parameter's"
+es = "su region PUEDE alcanzarla otro parametro de la misma llamada, asi que ningun acceso por el se puede reordenar contra el de otro parametro"
+
+["param.not_exclusive_run"]
+en = "its region MAY be reached by somebody else during the run: another thread, or a pointer saved earlier"
+es = "su region PUEDE alcanzarla alguien mas durante la ejecucion: otro hilo, o un puntero guardado antes"
+
+["param.not_observable"]
+en = "the region is not observable from outside the program: its accesses may be reordered, merged or removed"
+es = "la region no es observable desde fuera del programa: sus accesos se pueden reordenar, fundir o quitar"
+
+["param.not_immutable"]
+en = "somebody MAY write it while the call lasts, so a read of it cannot be lifted out of a loop containing calls"
+es = "alguien PUEDE escribirla mientras dura la llamada, asi que una lectura suya no se puede sacar de un bucle que contenga llamadas"
+
+# Promesas del PUNTERO mismo, no de lo que apunta.  `const T*` y `T* const` no
+# dicen lo mismo, y sin separar los dos niveles las dos se publicaban igual: la
+# segunda decia de la region lo que solo valia para la variable.
+["param.ptr.may_write"]
+en = "the pointer itself may be reassigned"
+es = "el puntero mismo se puede reasignar"
+
+["param.ptr.not_may_write"]
+en = "the pointer itself is NOT reassigned: it names the same region for the whole call"
+es = "el puntero mismo NO se reasigna: nombra la misma region durante toda la llamada"
+
+["param.ptr.not_nonnull"]
+en = "the pointer MAY be null"
+es = "el puntero PUEDE ser nulo"
+
+["param.ptr.not_no_escape"]
+en = "the pointer DOES outlive the call"
+es = "el puntero SI sobrevive a la llamada"
+
+# Y lo que no tiene entrada propia porque vive mas hondo.  `out T const**` habla
+# de tres niveles; solo los dos primeros tienen una frase natural, asi que a
+# partir del tercero se dice el nivel y la promesa por su nombre en vez de
+# callarse el hecho o inventar una frase por combinacion.
+["param.claim_at_level"]
+en = "at indirection level {0}, parameter {1} promises: {2}"
+es = "en el nivel {0} de indireccion, el parametro {1} promete: {2}"
+
+["param.denied_at_level"]
+en = "at indirection level {0}, parameter {1} promises the OPPOSITE of: {2}"
+es = "en el nivel {0} de indireccion, el parametro {1} promete lo CONTRARIO de: {2}"
+
+["param.observable"]
+en = "the region is observable from outside the program (memory-mapped hardware): accesses must not be reordered, merged or removed -- each one is an event and its order and count matter"
+es = "la region es observable desde fuera del programa (hardware mapeado en memoria): sus accesos no se reordenan, ni se funden, ni se quitan -- cada uno es un evento y su orden y su numero importan"
+
+["param.immutable"]
+en = "nobody writes it while the call lasts, so a read of it can be lifted out of a loop that contains calls"
+es = "nadie la escribe mientras dura la llamada, asi que una lectura suya se puede sacar de un bucle que contenga llamadas"
+
+["param.extent"]
+en = "it is valid for {0} bytes (-1 = the length is carried by parameter {1})"
+es = "vale para {0} bytes (-1 = la longitud la lleva el parametro {1})"
+
+["param.align"]
+en = "it is aligned to {0} bytes"
+es = "esta alineado a {0} bytes"
+
+# El que mas ayuda: lo que se PIERDE por no declarar, con lo que hay que
+# escribir para recuperarlo.  Sin esto, el programador no tenia forma de saber
+# que una palabra suya cambia el codigo que sale de su funcion.
+["param.regions_not_provably_distinct"]
+en = "{2} pointer parameters do not say whether their region is their own, so none of them can be taken as distinct from another: inside this function no read may move ahead of a write, and a field-by-field copy cannot be reduced to a block operation. Declaring the direction (`out` / `in` / `inout`), or using a type that already guarantees it (`borrow_mut<T>`, `unique<T>`), recovers it"
+es = "{2} parametros puntero no dicen si su region es suya, asi que ninguno se puede dar por distinto de otro: dentro de esta funcion ninguna lectura puede adelantar a una escritura, y una copia campo a campo no se reduce a una operacion de bloque.  Declarar la direccion (`out` / `in` / `inout`), o usar un tipo que ya lo garantice (`borrow_mut<T>`, `unique<T>`), lo recupera"
+
+# --- lo que se sabe MIRANDO LAS LLAMADAS ---
+# Pedirle al programador que declare sin haber mirado los sitios de llamada es
+# derrotista: en la llamada se ven los argumentos, y ahi casi siempre se sabe.
+["param.call_site_overlaps"]
+en = "at this call the arguments for parameters {0} and {1} ARE the same memory, or overlap. This is a fact about the program, not a limit of the analysis: declaring the direction would not fix it, it would make the declaration false"
+es = "en esta llamada los argumentos de los parametros {0} y {1} SI son la misma memoria, o se solapan.  Es un dato del programa, no un limite del analisis: declarar la direccion no lo arreglaria, la haria falsa"
+
+["param.disjoint_in_all_calls"]
+en = "parameters {0} and {1} never receive overlapping regions: every call is visible and none of them does. Nothing needs declaring here"
+es = "los parametros {0} y {1} no reciben nunca regiones que se solapen: todas las llamadas se ven y ninguna lo hace.  Aqui no hay nada que declarar"
+
+["param.disjoint_in_seen_calls"]
+en = "in every call SEEN, parameters {0} and {1} receive disjoint regions -- but the function is public, so there may be others. Declaring the direction makes it hold for all of them"
+es = "en todas las llamadas QUE SE VEN, los parametros {0} y {1} reciben regiones disjuntas -- pero la funcion es publica, asi que puede haber otras.  Declarar la direccion lo hace valer para todas"
+
+["param.call_site_undecidable"]
+en = "it could not be decided whether parameters {2} receive overlapping regions: some call passes an address whose root is not resolved. Declaring the direction (`out` / `in` / `inout`), or a type that guarantees it (`borrow_mut<T>`, `unique<T>`), settles it without looking at the calls"
+es = "no se pudo decidir si los parametros {2} reciben regiones que se solapen: alguna llamada pasa una direccion cuya raiz no se resuelve.  Declarar la direccion (`out` / `in` / `inout`), o un tipo que lo garantice (`borrow_mut<T>`, `unique<T>`), lo zanja sin mirar las llamadas"
+
+# Que un puntero SOBREVIVA a la llamada tambien es una respuesta, y accionable:
+# es lo que impide que su reserva viva en la pila y lo que obliga a mantener la
+# region despues de volver.  Callarlo dejaba "no se pudo demostrar que no
+# escapa" indistinguible de "no se ha mirado".
+["param.escapes"]
+en = "parameter {2} escapes: the pointer outlives the call, so its region has to stay alive after returning and its allocation cannot live on the stack"
+es = "el parametro {2} se escapa: el puntero sobrevive a la llamada, asi que su region tiene que seguir viva despues de volver y su reserva no puede vivir en la pila"

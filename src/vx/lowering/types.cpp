@@ -656,7 +656,7 @@ void Lowering::check_by_ref_params_written(const std::vector<ByRefParam> &ps,
     const analysis::DefiniteStoreMap &m =
         analyses_.get_or_compute_v<analysis::DefiniteStoreAnalysis,
                                    analysis::DefiniteStoreMap>(
-            fn.name, fn.values.size(),
+            fn.name_key(), fn.values.size(),
             [&fn] { return analysis::compute_definite_stores(fn); });
     for (const ByRefParam &p : ps) {
         if (p.dir != ParamDir::Out) continue;

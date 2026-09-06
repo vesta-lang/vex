@@ -1044,6 +1044,7 @@ void register_builtin_producers() {
      * cuenta es escribirla en un campo de cuatro bytes, los bits de arriba no
      * los mira nadie. */
     register_demanded_bits_producer();
+    register_param_contracts_producer();
     /* Y el que dice que NO cabe en cada modo de ejecucion.  El analisis existia
      * desde hace tiempo y lo consumia un solo sitio, el editor: la misma
      * pregunta tenia dos respuestas segun quien la hiciera. */
@@ -1085,6 +1086,21 @@ void support_with_structure(Production &p, const ir::IrFunction &fn, Fact &f,
 // ===========================================================================
 // Motor
 // ===========================================================================
+
+ModuleWalk ModuleWalk::of(const ir::IrModule &mod) {
+    ModuleWalk w;
+    /* Solo se guarda lo que ALGUIEN lee.  Una travesia que materialice todo lo
+     * que se podria querer no ahorra una pasada: la cambia por memoria, y de la
+     * que se toca entera. */
+    for (const ir::IrFunction &fn : mod.functions) {
+        if (fn.is_native) continue;
+        for (const ir::IrBlock &bb : fn.blocks)
+            for (const ir::IrInstr &in : bb.instrs)
+                if (in.op == ir::IrOp::CALL && !in.func_name.empty())
+                    w.calls[in.func_name].push_back(Site{&fn, &in});
+    }
+    return w;
+}
 
 void register_producer(const char *domain, Producer p) {
     register_producer(domain, p, nullptr);
@@ -1146,6 +1162,12 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
         if (!fn.is_native) values += fn.values.size();
     store.reserve(values * 2u + 64u);
 
+    /* El modulo, recorrido UNA vez.  Antes lo recorria cada productor por su
+     * cuenta y cada huella otra vez -- trece pasadas donde hace falta una --,
+     * y no solo por el tiempo: cada pasada se trae el modulo a la cache y lo
+     * tira, asi que se pisan entre ellas. */
+    const ModuleWalk walk = ModuleWalk::of(mod);
+
     /* Se reserva de golpe: los resumenes se referencian desde el contexto de
      * cada productor y un realloc a mitad dejaria la referencia colgando. */
     summaries.reserve(registry().size());
@@ -1174,7 +1196,7 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
          * sus hechos para que la proxima compilacion pueda validarlos sin
          * volver a producirlos. */
         if (d.fingerprint != nullptr) r.fingerprint = d.fingerprint(mod);
-        Production p{mod, base, store, r, structure_of, stage};
+        Production p{mod, walk, base, store, r, structure_of, stage};
         d.producer(p);
         r.micros = static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(

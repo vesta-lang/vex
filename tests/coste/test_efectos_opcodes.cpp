@@ -652,7 +652,7 @@ int main(int argc, char **argv) {
 
     /* --- La DB generada sigue coincidiendo con el codigo? ---
      *
-     * `src/runtime/instr_db_vm_gen.cpp` es una tabla APARTE, y una tabla aparte
+     * `src/runtime/isa/instr_db_vm_gen.cpp` es una tabla APARTE, y una tabla aparte
      * envejece: el dia que alguien toque un manejador y no la regenere, la VM
      * reordenaria con efectos que ya no son ciertos.  Eso no da un error, da
      * OTRO RESULTADO.

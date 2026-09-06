@@ -50,6 +50,8 @@
 #include "analysis/facts/demanded_bits.h"
 #include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
+#include "analysis/effects/effect_analysis.h" // el motor de efectos, compartido
+#include "analysis/escape/escape.h"          // que sobrevive a la funcion
 #include "analysis/memory/points_to.h"
 
 #include <cstddef>
@@ -78,6 +80,18 @@ namespace asa {
 extern const char *const kProducerStructure;
 extern const char *const kProducerRanges;
 extern const char *const kProducerMemory;
+
+/// Que efectos tiene cada funcion del modulo -- que memoria toca, si puede
+/// fallar, si puede lanzar --, cerrado sobre el grafo de llamadas.  Lo pedian
+/// el optimizador y el comprobador de regiones, y cada uno se lo calculaba
+/// ENTERO por su cuenta: casi un siete por ciento del tiempo de compilar
+/// gastado dos veces en lo mismo.
+extern const char *const kProducerEffects;
+
+/// Que se ESCAPA de cada funcion: reservas locales que sobreviven y parametros
+/// que la funcion deja sueltos.  Lo calculaba el motor de efectos y lo TIRABA
+/// en una variable local; cuesta un punto fijo sobre el modulo entero.
+extern const char *const kProducerEscape;
 extern const char *const kProducerBoundary;
 extern const char *const kProducerLoops;
 /// Como se COLOCA la memoria del programa: lo unico que un compilador con
@@ -112,6 +126,19 @@ extern const char *const kProducerOverlays;
 /// mano dentro de un pase del optimizador, con su propia lista de consumidores
 /// tolerados, y por eso se quedaba corto sin que nadie lo notara.
 extern const char *const kProducerDemandedBits;
+
+/// Lo que cada PARAMETRO promete de la region a la que apunta: si se lee, si se
+/// escribe, si esa region no la alcanza nadie mas, cuanto mide, como esta
+/// alineada.  Varias formas del lenguaje escriben ahi -- `in`/`out`/`inout`,
+/// `borrow`/`borrow_mut`, `unique<T>`, `nonnull` -- y son formas de decir lo
+/// mismo, no mecanismos distintos.
+///
+/// Se publica porque su AUSENCIA es lo que mas dice: sin la marca, dos
+/// parametros no se pueden dar por regiones distintas, y de eso depende que una
+/// lectura pueda adelantar a una escritura o que una copia campo a campo se
+/// reduzca a una operacion de bloque.  Callarlo dejaba al programador sin saber
+/// que una palabra suya cambia el codigo que sale.
+extern const char *const kProducerParamContracts;
 
 /// Clave con la que se guarda lo que es del MODULO entero y no de una funcion.
 extern const char *const kModuleUnit;
@@ -235,6 +262,68 @@ class FactBase {
     const RangeSummaries &boundary(const ir::IrModule &mod);
 
     /**
+     * @brief Que EFECTOS tiene cada funcion del modulo: que memoria toca, si
+     *        puede fallar, si puede lanzar.
+     *
+     * Conocimiento DEL MoDULO, como el de arriba y por lo mismo: el efecto de
+     * una funcion incluye el de todo lo que llama, asi que no se puede resolver
+     * mirandola sola.
+     *
+     * Vive aqui porque lo piden VARIOS y cada uno se lo calculaba entero: el
+     * optimizador -- para saber que llamadas son puras y no hacen de barrera --
+     * y el comprobador de regiones -- para saber que puede escribir cada una --.
+     * Cada uno construia su propio motor desde cero, y medido con VTune sobre
+     * un programa de veintiocho mil lineas eso eran 3,4 % y 3,1 % del tiempo de
+     * compilar: casi el siete por ciento gastado DOS veces en lo mismo.
+     *
+     * Es exactamente lo que el primer invariante prohibe -- un hecho, un
+     * productor -- aplicado a algo que no estaba aqui.
+     *
+     * Se entrega el MOTOR y no solo el resumen porque hay quien necesita sus
+     * tablas -- el comprobador de regiones pregunta despues por cada acceso --,
+     * y devolver el resumen suelto obligaria a construir el motor otra vez para
+     * eso.  El resumen ya viene calculado: pedirselo al motor no lo recalcula.
+     *
+     * **Va por MOMENTO, y eso no es un detalle de la cache**: el efecto de una
+     * funcion CAMBIA al optimizarla.  Lo que el optimizador mira al empezar y
+     * lo que el comprobador de regiones mira al acabar no son el mismo hecho
+     * repetido, son dos hechos distintos, cada uno cierto en su momento.
+     * Compartirlos entre momentos le daria a uno de los dos un resumen del
+     * codigo que ya no existe -- y eso no falla: avisa de accesos que ya no
+     * estan, o deja de avisar de uno real --.
+     *
+     * Lo que SI sobra es que dos consumidores del MISMO momento lo calculen
+     * cada uno, que es lo que pasaba: medido con VTune sobre veintiocho mil
+     * lineas, 3,4 % desde el optimizador y 3,1 % desde el comprobador.
+     *
+     * @param mod   Modulo completo.
+     * @param stage En que momento se pregunta.  @see kStage*.
+     * @return El motor con su resumen ya hecho, mientras viva la base.
+     */
+    effects::EffectAnalysis &effects(const ir::IrModule &mod,
+                                     const char *stage);
+
+    /**
+     * @brief Que SE ESCAPA de cada funcion: que reservas locales sobreviven y
+     *        que parametros deja sueltos.
+     *
+     * Conocimiento del MoDULO -- si un parametro escapa depende de a quien se
+     * lo pase la funcion, y eso exige el punto fijo del grafo de llamadas --,
+     * asi que se cachea una vez por base.
+     *
+     * Estaba: el motor de efectos lo calculaba para saber que puede observarse
+     * desde fuera, lo usaba una vez y lo TIRABA en una variable local.  Cuesta
+     * un punto fijo sobre el modulo entero y responde a mas de una pregunta --
+     * si un puntero sobrevive a la llamada, si una reserva puede vivir en la
+     * pila --, asi que dejarlo morir era pagarlo y no cobrarlo.
+     *
+     * @param mod Modulo completo.
+     * @return Por nombre de funcion, lo que se le escapa.  Cacheado.
+     */
+    const std::unordered_map<std::string, EscapeInfo> &
+    escape(const ir::IrModule &mod);
+
+    /**
      * @brief Los hechos de @p fn han caducado porque su IR cambio.
      * @param fn Funcion IR cuyo conocimiento se descarta (en cascada).
      */
@@ -282,7 +371,10 @@ class FactBase {
     /// Identidad de @p fn dentro del modulo.  Sin nombre no hay identidad
     /// estable, y entonces vale su direccion: es unica mientras la funcion
     /// viva, que es lo que dura la base.
-    static std::string key_of(const ir::IrFunction &fn);
+    /// La clave de @p fn: el nombre INTERNADO, no una copia.  Se llama al
+    /// principio de cada accesor, asi que devolverlo por valor era una reserva
+    /// por consulta.
+    static const std::string *key_of(const ir::IrFunction &fn);
 
     /// Anota el sello de un hecho recien producido.
     void mark(const char *producer, const std::string &key, Certainty c,

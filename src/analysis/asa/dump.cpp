@@ -29,7 +29,16 @@ namespace {
 
 /// Nombre corto: `asa.rangos` se ensena como `rangos`.
 const char *short_name(const char *s) {
-    const char *dot = std::strrchr(s, '.');
+    /* Se quita el PRIMER tramo, que es el que sobra: en `asa.param_contracts`
+     * y en `param.may_write` el prefijo repite el dominio, y esta columna ya
+     * lleva el dominio al lado.
+     *
+     * Por el primero y no por el ultimo.  Cortando por el ultimo, un codigo de
+     * tres tramos pierde el de en medio, y `param.ptr.not_may_write` y
+     * `param.not_may_write` -- que dicen cosas distintas, una del puntero y
+     * otra de lo que apunta -- se veian IGUAL justo en la columna que existe
+     * para distinguirlos. */
+    const char *dot = std::strchr(s, '.');
     return dot != nullptr ? dot + 1 : s;
 }
 
