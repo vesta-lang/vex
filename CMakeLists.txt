@@ -1141,6 +1141,34 @@ endif ()
 # sobre el `.velb`: no ejecuta la VM y no la toca.  Contesta si el coste de
 # redescodificar se paga una vez o en cada vuelta, que es lo que decide si
 # merece la pena cambiar el indice de la icache.
+# Estres de la memoria virtual: la capa que el interprete usa DE VERDAD, con la
+# cache de pagina delante.  Es la que dice si un cambio en la TLB le llega.
+add_executable(test_vmem_stress tests/arena/test_vmem_stress.cpp)
+target_include_directories(test_vmem_stress PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_vmem_stress PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_vmem_stress PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_vmem_stress PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_vmem_stress PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Banco de la TLB: coste de consulta, memoria, construccion y CARRERA.  Existe
+# para poder juzgar el rediseno de la TLB con numeros y no de memoria.
+add_executable(test_tlb_bench tests/arena/test_tlb_bench.cpp)
+target_include_directories(test_tlb_bench PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_tlb_bench PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_tlb_bench PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_tlb_bench PRIVATE vesta_openssl ws2_32 synchronization psapi)
+else ()
+    target_link_libraries(test_tlb_bench PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 add_executable(test_icache_conflictos tests/coste/test_icache_conflictos.cpp)
 target_include_directories(test_icache_conflictos PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_icache_conflictos PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
