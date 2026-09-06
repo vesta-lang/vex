@@ -241,6 +241,10 @@ bool decode(const StoredNode &s, InlineSite &out) {
 
 StoredNode encode(const ArtifactMap &n) {
     ByteWriter w;
+    /* El fichero se guarda ORDENADO: quien lo lee busca en binario sobre lo
+     * almacenado, sin construir ningun indice.  El mapa se llena sin orden
+     * -- ver `ArtifactMap::add` --, asi que se pone aqui, una vez. */
+    n.normalize();
     w.u32(static_cast<uint32_t>(n.symbols.size()));
     for (const auto &kv : n.symbols) {
         w.str(kv.first);

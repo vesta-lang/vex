@@ -24,6 +24,8 @@
 
 #include "vx/generics/generic_clone.h"
 
+#include "util/thread_slot.h" // el mapa activo, sin `thread_local`
+
 namespace vx {
 namespace vxgen {
 
@@ -642,9 +644,25 @@ std::unique_ptr<ast::Stmt> clone_stmt(const ast::Stmt *s, const GenSubst &g) {
 // ---------------------------------------------------------------------------
 namespace {
 
-/// Estado del renombrado: el mapa activo durante el recorrido.
-thread_local const std::unordered_map<std::string, std::string> *g_renames =
-    nullptr;
+/* Estado del renombrado: el mapa activo durante el recorrido.
+ *
+ * En una RANURA y no en `thread_local`: en MinGW la TLS es emulada y cada
+ * acceso es una llamada -- y esto se mira una vez por identificador del arbol
+ * clonado --.  Lo que se guarda es un puntero, asi que cabe tal cual. */
+util::ThreadSlot g_renames_slot;
+
+/// El mapa de renombrado activo en ESTE hilo, o nulo si no hay recorrido.
+inline const std::unordered_map<std::string, std::string> *g_renames() {
+    return static_cast<const std::unordered_map<std::string, std::string> *>(
+        g_renames_slot.get());
+}
+
+/// Fija el mapa activo de ESTE hilo.
+inline void
+set_g_renames(const std::unordered_map<std::string, std::string> *m) {
+    g_renames_slot.ensure();
+    g_renames_slot.set(const_cast<void *>(static_cast<const void *>(m)));
+}
 
 void rename_in_expr(ast::Expr *e);
 
@@ -652,9 +670,10 @@ void rename_in_stmt(ast::Stmt *s);
 
 /// Aplica el mapa a un identificador suelto.
 void rename_name(std::string &nm) {
-    if (!g_renames) return;
-    auto it = g_renames->find(nm);
-    if (it != g_renames->end()) nm = it->second;
+    const auto *const m = g_renames();
+    if (!m) return;
+    auto it = m->find(nm);
+    if (it != m->end()) nm = it->second;
 }
 
 void rename_in_expr(ast::Expr *e) {
@@ -813,7 +832,7 @@ void rename_in_stmt(ast::Stmt *s) {
 void rename_idents(
     ast::Node *n, const std::unordered_map<std::string, std::string> &renames) {
     if (!n || renames.empty()) return;
-    g_renames = &renames;
+    set_g_renames(&renames);
     switch (n->kind) {
     case ast::NodeKind::FunctionDecl: {
         auto *f = static_cast<ast::FunctionDecl *>(n);
@@ -834,7 +853,7 @@ void rename_idents(
     }
     default: break;
     }
-    g_renames = nullptr;
+    set_g_renames(nullptr);
 }
 
 } // namespace vxgen

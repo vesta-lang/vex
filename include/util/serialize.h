@@ -48,6 +48,8 @@ namespace util {
 class ByteWriter {
   public:
     void u8(uint8_t v);
+    /// Un entero sin signo, bytes bajos primero, escrito de una vez.
+    template <class T> void put_le(T v);
     void u16(uint16_t v);
     void u32(uint32_t v);
     void u64(uint64_t v);

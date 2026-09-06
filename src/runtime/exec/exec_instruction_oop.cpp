@@ -43,6 +43,7 @@
 /* Sprint D.6 (2026-06-03): profile counters runtime. */
 #include "runtime/profile.h"
 #include "util/reloj.h"
+#include "util/thread_owned.h" // el cache por hilo, sin `thread_local`
 #include "vesta_rt/public.h"
 
 #include <time.h>
@@ -895,15 +896,26 @@ static_assert(sizeof(ItfCallParamsLayout) == 32, "ItfCallParams ABI");
  * El @c iface_name_addr es estable por call site (es @c @Absolute de un
  * literal interned), asi que cachear por esa direccion evita el
  * @c find_class (lectura de vm_mem + hash) en cada dispatch.  8 entradas
- * round-robin, sin locks (thread_local).  Mismo patron que el cache de
+ * round-robin, sin cerrojos (uno por hilo).  Mismo patron que el cache de
  * @c vrt_findmethod (CALLM 1a fase).
  */
 struct ItfIfaceCacheEntry {
     uint64_t name_addr;
     loader::ClassInfo *iface;
 };
-static thread_local ItfIfaceCacheEntry g_itf_iface_cache[8] = {};
-static thread_local uint32_t g_itf_iface_cache_rr = 0;
+
+/* Las ocho entradas y el turno, en UNA ranura por hilo.
+ *
+ * Nada de `thread_local`: en MinGW la TLS es emulada y cada acceso es una
+ * LLAMADA, y esto esta en el despacho por interfaz del interprete -- de lo mas
+ * caliente que hay --.  Con la ranura es una lectura del TEB, y ademas el turno
+ * viaja junto al cache en vez de costar un segundo acceso.  Ver
+ * `util/thread_owned.h`. */
+struct ItfIfaceCache {
+    ItfIfaceCacheEntry e[8] = {};
+    uint32_t rr = 0; ///< a quien le toca ser reemplazado
+};
+static util::ThreadOwned<ItfIfaceCache> g_itf_cache_owner;
 
 void exec_instr_callitf(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_obj = instr.data_instruction.reg_data.reg1;
@@ -935,10 +947,11 @@ void exec_instr_callitf(ProcessVM *vm, const DecodedInstr &instr) {
         return;
     }
 
-    // Resolver la interfaz (cache thread_local por name_addr; cold ->
+    // Resolver la interfaz (cache por hilo indexado por name_addr; cold ->
     // find_class leyendo el nombre de vm_mem).
+    ItfIfaceCache &cache = g_itf_cache_owner.get();
     loader::ClassInfo *iface = nullptr;
-    for (auto &e : g_itf_iface_cache) {
+    for (auto &e : cache.e) {
         if (e.name_addr == p.iface_name_addr && e.iface != nullptr) {
             iface = e.iface;
             break;
@@ -954,10 +967,10 @@ void exec_instr_callitf(ProcessVM *vm, const DecodedInstr &instr) {
         }
         iface = registry.find_class(iname);
         if (iface != nullptr) {
-            auto &slot = g_itf_iface_cache[g_itf_iface_cache_rr & 7];
+            auto &slot = cache.e[cache.rr & 7];
             slot.name_addr = p.iface_name_addr;
             slot.iface = iface;
-            ++g_itf_iface_cache_rr;
+            ++cache.rr;
         }
     }
     if (__builtin_expect(iface == nullptr, 0)) {

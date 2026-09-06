@@ -2555,7 +2555,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
              * morir detras de una variable de entorno, asi que esto
              * obligaba a recompilar con la traza puesta y a adivinar de
              * que funcion se hablaba. */
-            const std::string &porque = jit::vreg_ultimo_motivo();
+            const std::string &porque = jit::vreg_last_reason();
             std::cerr << "[aot] el selector vreg no soporta la funcion '" << nm
                       << "' todavia: "
                       << (porque.empty() ? std::string("no consta que op")

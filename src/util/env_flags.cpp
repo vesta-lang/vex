@@ -14,6 +14,7 @@
 #include "util/env_flags.h"
 
 #include "util/fnv.h"
+#include "util/thread_owned.h" // el buffer por hilo, sin `thread_local`
 
 #include <array>
 #include <cstdlib>
@@ -129,24 +130,26 @@ int64_t flag_int(FlagId id, int64_t si_falta) {
     return fv.present ? fv.number : si_falta;
 }
 
+/* El buffer relido, uno POR HILO.  No en la tabla compartida: los modulos se
+ * compilan en paralelo y escribirla en una consulta seria una carrera.
+ *
+ * Y por RANURA, no con `thread_local std::string`.  Este ultimo tiene
+ * inicializador dinamico, que genera una variable de GUARDA, y en MinGW esa
+ * guarda cuelga: el proceso se queda bloqueado antes incluso de entrar en
+ * `main`.  Paso aqui y ya habia pasado antes en el acumulador de tramos -- ver
+ * el comentario de `util/crono_tramo.cpp`, que cuenta el mismo caso.
+ *
+ * A nivel de FICHERO y no como estatico dentro de la funcion: un estatico local
+ * con constructor no trivial genera esa misma guarda.  Ver
+ * `util/thread_owned.h`. */
+static ThreadOwned<std::string> g_live_text;
+
 const std::string &flag_text(FlagId id) {
     if (kFlags[idx(id)].kind == FlagKind::TextLive) {
-        /* Se relee.  En un buffer POR HILO, no en la tabla: los modulos se
-         * compilan en paralelo y escribir la tabla compartida en una consulta
-         * seria una carrera.
-         *
-         * Y un PUNTERO a nulo, no un `thread_local std::string`.  Este ultimo
-         * tiene inicializador dinamico, que genera una variable de GUARDA, y en
-         * MinGW esa guarda cuelga: el proceso se queda bloqueado antes incluso
-         * de entrar en `main`.  Paso aqui y ya habia pasado antes en el
-         * acumulador de tramos -- ver el comentario de `util/crono_tramo.cpp`,
-         * que cuenta el mismo caso.  Un puntero a `nullptr` es de
-         * inicializacion CONSTANTE: no hay guarda, y el alta se hace a mano. */
-        static thread_local std::string *vivo = nullptr;
-        if (vivo == nullptr) vivo = new std::string();
+        std::string &s = g_live_text.get();
         const char *raw = std::getenv(kFlags[idx(id)].name);
-        vivo->assign(raw ? raw : "");
-        return *vivo;
+        s.assign(raw ? raw : "");
+        return s;
     }
     const FlagValue &fv = table().v[idx(id)];
     return fv.present ? fv.text : empty_text();

@@ -31,7 +31,9 @@
 
 #include "util/fnv.h"
 #include "util/reloj.h"
-#include "util/small_vector.h" // el estado casi siempre es diminuto
+#include "util/small_vector.h"  // el estado casi siempre es diminuto
+#include "util/thread_owned.h"  // por hilo, sin `thread_local`
+#include "util/thread_slot.h"   // lo que cabe en un puntero, sin reservar
 
 #include <cstring> // memcmp: comparar dos estados de una vez
 
@@ -182,10 +184,15 @@ struct CostCounters {
     uint64_t redundant_floor = 0; ///< entradas que repiten el suelo
     uint64_t floor_seen = 0;      ///< entradas miradas
 };
-thread_local CostCounters g_cost;
+/* En una RANURA propia, no en `thread_local`: en MinGW la TLS es emulada y
+ * cada acceso es una llamada, y esto vive en lo mas caliente del motor.  Ver
+ * `util/thread_owned.h`. */
+util::ThreadOwned<CostCounters> g_cost_owner;
+/// Los contadores de ESTE hilo.
+inline CostCounters &g_cost() { return g_cost_owner.get(); }
 
 /**
- * @brief Si se estan contando los costes.  Se mira ANTES de tocar @c g_cost.
+ * @brief Si se estan contando los costes.  Se mira ANTES de tocar @c g_cost().
  *
  * En MinGW cada acceso a una variable de hilo es una LLAMADA
  * (`__emutls_get_address`), y los contadores estan en lo mas caliente del
@@ -244,13 +251,13 @@ struct Estado {
     /// Copiar un estado es el otro coste de la representacion dispersa: hay que
     /// contarlo aqui porque es donde ocurre (una copia por bloque y vuelta).
     Estado(const Estado &o) : reachable(o.reachable), ref(o.ref) {
-        if (g_measure_cost) ++g_cost.copias;
+        if (g_measure_cost) ++g_cost().copias;
     }
     Estado &operator=(const Estado &o) {
         if (this != &o) {
             reachable = o.reachable;
             ref = o.ref;
-            if (g_measure_cost) ++g_cost.copias;
+            if (g_measure_cost) ++g_cost().copias;
         }
         return *this;
     }
@@ -268,7 +275,7 @@ struct Estado {
     /// La ENTRADA, no el rango: aplanada ya no hay ningun `ValueRange` dentro
     /// al que apuntar.  Quien quiera el rango pide @c range().
     const RangeEntry *buscar(ir::IrValueId v) const {
-        if (g_measure_cost) ++g_cost.busquedas;
+        if (g_measure_cost) ++g_cost().busquedas;
         auto it = std::lower_bound(
             ref.begin(), ref.end(), v,
             [](const RangeEntry &p, ir::IrValueId x) { return p.id < x; });
@@ -280,13 +287,13 @@ struct Estado {
             [](const RangeEntry &p, ir::IrValueId x) { return p.id < x; });
         if (it != ref.end() && it->id == v) {
             it->set_range(r);
-            if (g_measure_cost) ++g_cost.reescrituras;
+            if (g_measure_cost) ++g_cost().reescrituras;
         } else {
             /* Por INDICE: el bufer puede moverse al crecer, y un iterador
              * calculado antes apuntaria al viejo. */
             ref.insert_at(static_cast<size_t>(it - ref.begin()),
                           RangeEntry::make(v, r)); // desplaza lo de detras
-            if (g_measure_cost) ++g_cost.inserciones;
+            if (g_measure_cost) ++g_cost().inserciones;
         }
     }
     void set_unreachable() {
@@ -722,7 +729,7 @@ struct Motor : Contexto {
 
     /// El cuerpo de la fusion, con @p out ya vacio y distinto de las fuentes.
     void unir_cuerpo(const Estado &a, const Estado &b, Estado &out) const {
-        if (g_measure_cost) ++g_cost.uniones;
+        if (g_measure_cost) ++g_cost().uniones;
         out.reachable = true;
         /* Se reserva la cota superior: el resultado nunca es mayor que el
          * origen, porque se recorre y se filtra.
@@ -747,12 +754,12 @@ struct Motor : Contexto {
                 ++j;
             const bool hay = (j < b.ref.size() && b.ref[j].id == p.id);
             if (g_measure_cost)
-                ++g_cost.busquedas; // comparable con la version vieja
+                ++g_cost().busquedas; // comparable con la version vieja
             const ValueRange u =
                 p.range().unir(hay ? b.ref[j].range() : suelo[p.id]);
             if (!u.es_top()) {
                 out.ref.push_back(RangeEntry::make(p.id, u));
-                if (g_measure_cost) ++g_cost.unidos;
+                if (g_measure_cost) ++g_cost().unidos;
             }
         }
     }
@@ -767,7 +774,7 @@ struct Motor : Contexto {
             return;
         }
         out.ref.clear();
-        if (g_measure_cost) ++g_cost.uniones;
+        if (g_measure_cost) ++g_cost().uniones;
         out.reachable = true;
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
         // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
@@ -776,7 +783,7 @@ struct Motor : Contexto {
             while (j < viejo.ref.size() && viejo.ref[j].id < p.id)
                 ++j;
             const bool hay = (j < viejo.ref.size() && viejo.ref[j].id == p.id);
-            if (g_measure_cost) ++g_cost.busquedas;
+            if (g_measure_cost) ++g_cost().busquedas;
             const ValueRange base = hay ? viejo.ref[j].range() : suelo[p.id];
             /* Ensanchar SIN pasarse del suelo.
              *
@@ -798,7 +805,7 @@ struct Motor : Contexto {
             if (p.id < suelo.size()) w = encajar_en(w, suelo[p.id]);
             if (!w.es_top()) {
                 out.ref.push_back(RangeEntry::make(p.id, w));
-                if (g_measure_cost) ++g_cost.unidos;
+                if (g_measure_cost) ++g_cost().unidos;
             }
         }
     }
@@ -822,7 +829,7 @@ struct Motor : Contexto {
             return;
         }
         out.ref.clear();
-        if (g_measure_cost) ++g_cost.uniones;
+        if (g_measure_cost) ++g_cost().uniones;
         out.reachable = true;
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
         // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
@@ -831,7 +838,7 @@ struct Motor : Contexto {
             while (j < viejo.ref.size() && viejo.ref[j].id < p.id)
                 ++j;
             const bool hay = (j < viejo.ref.size() && viejo.ref[j].id == p.id);
-            if (g_measure_cost) ++g_cost.busquedas;
+            if (g_measure_cost) ++g_cost().busquedas;
             ValueRange r = p.range();
             if (hay) {
                 const ValueRange c = r.cortar(viejo.ref[j].range());
@@ -839,7 +846,7 @@ struct Motor : Contexto {
             }
             if (!r.es_top()) {
                 out.ref.push_back(RangeEntry::make(p.id, r));
-                if (g_measure_cost) ++g_cost.unidos;
+                if (g_measure_cost) ++g_cost().unidos;
             }
         }
     }
@@ -1154,7 +1161,7 @@ struct Motor : Contexto {
     /// Copia @p in en @p dst quedandose solo con lo que sigue vivo en @p bi.
     /// Conserva la capacidad de @p dst, que es lo que evita pedir memoria.
     void copy_live(const Estado &in, Estado &dst, ir::IrBlockId bi) const {
-        if (g_measure_cost) ++g_cost.copias;
+        if (g_measure_cost) ++g_cost().copias;
         auto is_live = [&](ir::IrValueId v) {
             return v >= ultimo_uso.size() || ultimo_uso[v] >= bi;
         };
@@ -1226,21 +1233,21 @@ struct Motor : Contexto {
                 if (g_measure_cost) {
                     // Anchura de lo que SOBREVIVE, que es lo que se guarda,
                     // se copia y se compara.
-                    ++g_cost.width_seen;
-                    if (e.ref[r].t.bits <= 32) ++g_cost.narrow_width_count;
+                    ++g_cost().width_seen;
+                    if (e.ref[r].t.bits <= 32) ++g_cost().narrow_width_count;
                 }
                 if (w != r) e.ref[w] = e.ref[r];
                 ++w;
             }
         }
         if (g_measure_cost) {
-            g_cost.prune_seen += e.ref.size();
-            g_cost.pruned_count += e.ref.size() - w;
+            g_cost().prune_seen += e.ref.size();
+            g_cost().pruned_count += e.ref.size() - w;
             for (size_t k = 0; k < w; ++k) {
-                ++g_cost.floor_seen;
+                ++g_cost().floor_seen;
                 const ir::IrValueId id = e.ref[k].id;
                 if (id < suelo.size() && e.ref[k].range() == suelo[id])
-                    ++g_cost.redundant_floor;
+                    ++g_cost().redundant_floor;
             }
         }
         e.ref.resize(w); // conserva el orden y la capacidad
@@ -1266,14 +1273,14 @@ struct Motor : Contexto {
         calcular_out(bi, in_bloque[bi], out_scratch_);
         const Estado &out = out_scratch_;
         if (g_measure_cost) {
-            ++g_cost.out_computed;
-            if (out == in_bloque[bi]) ++g_cost.out_equals_in;
+            ++g_cost().out_computed;
+            if (out == in_bloque[bi]) ++g_cost().out_equals_in;
         }
         if (g_measure_cost && !ultimo_uso.empty()) {
-            g_cost.elems_vivos_total += out.ref.size();
+            g_cost().elems_vivos_total += out.ref.size();
             for (const RangeEntry &p : out.ref)
                 if (p.id < ultimo_uso.size() && ultimo_uso[p.id] < bi)
-                    ++g_cost.elems_muertos;
+                    ++g_cost().elems_muertos;
         }
         for (uint32_t ai : salientes[bi]) {
             /* Una arista sin guarda ni caso no estrecha nada, asi que lo que
@@ -1361,8 +1368,8 @@ struct Motor : Contexto {
                         }
                     }
                     d += (na.size() - i) + (vi.size() - j);
-                    g_cost.changed_entries += d;
-                    g_cost.changed_state_size +=
+                    g_cost().changed_entries += d;
+                    g_cost().changed_state_size +=
                         vi.size() > na.size() ? vi.size() : na.size();
                 }
                 // Intercambiar, no mover: el bufer se queda con la capacidad
@@ -1743,7 +1750,21 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
  * Un enumerado y un array plano, no cadenas ni un mapa: esto se toca en CADA
  * analisis, y construir y hashear una cadena para llevar una cuenta seria
  * pagar mas por medir que por lo medido. */
-thread_local RangeAsker g_asker = RangeAsker::Unknown;
+/* En una RANURA y no en `thread_local`: el valor CABE en el propio puntero
+ * -- es un `uint8_t` --, asi que no hay nada que reservar, y `Unknown` es el
+ * cero, que es justo lo que vale una ranura que nadie ha tocado. */
+util::ThreadSlot g_asker_slot;
+/// Quien pidio el analisis en ESTE hilo.
+inline RangeAsker g_asker() {
+    return static_cast<RangeAsker>(
+        reinterpret_cast<uintptr_t>(g_asker_slot.get()));
+}
+/// Fija el peticionario de ESTE hilo.
+inline void set_g_asker(RangeAsker who) {
+    g_asker_slot.ensure();
+    g_asker_slot.set(
+        reinterpret_cast<void *>(static_cast<uintptr_t>(who)));
+}
 static std::atomic<long long> g_by_asker[static_cast<size_t>(RangeAsker::Count)];
 
 /* Con la bandera apagada NO se toca la variable de hilo.  En MinGW cada acceso
@@ -1753,12 +1774,12 @@ static std::atomic<long long> g_by_asker[static_cast<size_t>(RangeAsker::Count)]
 RangeRequester::RangeRequester(RangeAsker who) noexcept
     : previous_(RangeAsker::Unknown) {
     if (!g_measure_cost) return;
-    previous_ = g_asker;
-    g_asker = who;
+    previous_ = g_asker();
+    set_g_asker(who);
 }
 RangeRequester::~RangeRequester() {
     if (!g_measure_cost) return;
-    g_asker = previous_;
+    set_g_asker(previous_);
 }
 
 const char *range_asker_name(RangeAsker a) {
@@ -1779,7 +1800,7 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
                                   const RangeSummaries *sum,
                                   const LoopIvBounds *ivb) {
     if (g_measure_cost)
-        g_by_asker[static_cast<size_t>(g_asker)].fetch_add(
+        g_by_asker[static_cast<size_t>(g_asker())].fetch_add(
             1, std::memory_order_relaxed);
     /* Si quien pregunta no trae las cotas de induccion, se sacan AQUI.
      *
@@ -1881,7 +1902,7 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
      * Es una cache, no un buffer reaprovechado: se indexa por la entrada, no se
      * pisa mientras vale, y varios hilos pueden leer la misma. */
     RangeFacts out;
-    g_cost = CostCounters{}; // el coste que se mide es el de ESTA funcion
+    g_cost() = CostCounters{}; // el coste que se mide es el de ESTA funcion
     Motor m(fn, facts, op, sum);
     /* Las cotas de induccion entran como SUELO, igual que lo que dicen los
      * resumenes de un parametro: no son una fase mas del motor, son lo que ya
@@ -1994,12 +2015,12 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
         out.stats.ref_suma += n;
         ++out.stats.ref_muestras;
     }
-    out.stats.inserciones = g_cost.inserciones;
-    out.stats.reescrituras = g_cost.reescrituras;
-    out.stats.copias = g_cost.copias;
-    out.stats.busquedas = g_cost.busquedas;
-    out.stats.uniones = g_cost.uniones;
-    out.stats.unidos = g_cost.unidos;
+    out.stats.inserciones = g_cost().inserciones;
+    out.stats.reescrituras = g_cost().reescrituras;
+    out.stats.copias = g_cost().copias;
+    out.stats.busquedas = g_cost().busquedas;
+    out.stats.uniones = g_cost().uniones;
+    out.stats.unidos = g_cost().unidos;
 
     if (g_measure_cost) {
         if (g_stats_verbose) {
@@ -2066,26 +2087,26 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                 (unsigned long long)out.stats.uniones,
                 (unsigned long long)out.stats.unidos, out.stats.pasos,
                 out.stats.cambios, out.stats.ensanches, out.stats.estrechados,
-                (unsigned long long)g_cost.elems_muertos,
-                (unsigned long long)g_cost.elems_vivos_total);
+                (unsigned long long)g_cost().elems_muertos,
+                (unsigned long long)g_cost().elems_vivos_total);
             std::fprintf(
                 stderr,
                 "[anchura] estrechas=%llu de %llu | pruned_count=%llu de "
                 "%llu\n",
-                (unsigned long long)g_cost.narrow_width_count,
-                (unsigned long long)g_cost.width_seen,
-                (unsigned long long)g_cost.pruned_count,
-                (unsigned long long)g_cost.prune_seen);
+                (unsigned long long)g_cost().narrow_width_count,
+                (unsigned long long)g_cost().width_seen,
+                (unsigned long long)g_cost().pruned_count,
+                (unsigned long long)g_cost().prune_seen);
             std::fprintf(stderr,
                          "[delta] difieren=%llu de %llu | salida=entrada %llu "
                          "de %llu\n",
-                         (unsigned long long)g_cost.changed_entries,
-                         (unsigned long long)g_cost.changed_state_size,
-                         (unsigned long long)g_cost.out_equals_in,
-                         (unsigned long long)g_cost.out_computed);
+                         (unsigned long long)g_cost().changed_entries,
+                         (unsigned long long)g_cost().changed_state_size,
+                         (unsigned long long)g_cost().out_equals_in,
+                         (unsigned long long)g_cost().out_computed);
             std::fprintf(stderr, "[suelo] redundantes=%llu de %llu\n",
-                         (unsigned long long)g_cost.redundant_floor,
-                         (unsigned long long)g_cost.floor_seen);
+                         (unsigned long long)g_cost().redundant_floor,
+                         (unsigned long long)g_cost().floor_seen);
         }
     }
     return out;

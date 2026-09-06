@@ -77,8 +77,19 @@ class ThreadSlot {
     /**
      * @brief Reserva la ranura la primera vez.  Idempotente y entre hilos.
      * @return false si el sistema no pudo dar una ranura.
+     *
+     * La comprobacion va EN LINEA y solo la reserva de verdad vive en el
+     * `.cpp`.  No es un adorno: el cache por hilo del asignador llama aqui en
+     * CADA reserva, y con la funcion entera fuera eso era una llamada por
+     * `malloc`.  Medido con VTune sobre 144k lineas, `ensure` retiraba 1.466
+     * millones de instrucciones -- el cuarto puesto de todo el compilador --
+     * para no hacer nada mas que mirar un entero.
      */
-    bool ensure() noexcept;
+    bool ensure() noexcept {
+        // Ya reservada, que es el caso de siempre menos la primera vez.
+        if (slot_.load(std::memory_order_acquire) != kNoThreadSlot) return true;
+        return reserve_slot();
+    }
 
     /// El valor de ESTE hilo, o nullptr si nunca se puso.
     void *get() const noexcept {
@@ -122,6 +133,10 @@ class ThreadSlot {
     }
 
   private:
+    /// La reserva de verdad, una vez en la vida del objeto.  Fuera de linea
+    /// para que el camino normal de @c ensure sea una carga y una rama.
+    bool reserve_slot() noexcept;
+
     std::atomic<uint32_t> slot_{kNoThreadSlot};
 };
 

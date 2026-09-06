@@ -57,6 +57,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
+#include "ir/parallel_for.h"
 #include "util/env_flags.h"
 #include <climits>
 #include "util/crono_tramo.h"
@@ -3457,17 +3458,33 @@ CompileResult compile_vx_project(
         const long n = util::flag_int(util::FlagId::ParallelCompile, 0);
         parallel_threads = (n < 0 || n > INT_MAX) ? 0 : static_cast<int>(n);
     }
-    //  M8 AUTO (2026-06-05): sin env var (o =0) el compile usa
-    // hardware_concurrency() limitado a max 8 threads (cap para evitar
-    // oversubscription: >8 da diminishing returns por contention en cache
-    // writes + mutex verbose).  VX_PARALLEL_COMPILE=1 fuerza SECUENCIAL
-    // (diagnostico / output determinista); >=2 fija N exacto.  Proyectos
-    // triviales (1 modulo por nivel) NO pagan overhead: el dispatch
-    // paralelo solo crea threads cuando un nivel tiene >=2 modulos.
+    /* Cuantos modulos a la vez, DINAMICO con la maquina.
+     *
+     * `VX_PARALLEL_COMPILE=1` fuerza secuencial (diagnostico o salida
+     * determinista) y `>=2` fija N exacto.  Sin la variable, sale de los
+     * nucleos que haya.
+     *
+     * Habia un tope FIJO de 8, puesto en 2026-06-05 porque ">8 daba
+     * rendimientos decrecientes por contencion en las escrituras de cache y en
+     * el mutex de verbose".  Un tope fijo envejece con la maquina: en una de
+     * veinticuatro nucleos dejaba dieciseis sin usar, y la contencion que lo
+     * motivo no es la misma de entonces.
+     *
+     * Ahora el suelo es LA MITAD de los nucleos -- nunca menos, aunque la
+     * contencion aparezca -- y el techo son todos.  Se queda en el numero de
+     * modulos del nivel: mas hilos que trabajo no aceleran nada y pagan su
+     * creacion.
+     *
+     * Los proyectos triviales (un modulo por nivel) no pagan overhead: el
+     * reparto solo crea hilos cuando un nivel tiene dos o mas. */
     if (!env_present || parallel_threads == 0) {
-        unsigned hc = std::thread::hardware_concurrency();
-        if (hc < 1) hc = 1;
-        parallel_threads = (hc > 8u) ? 8 : static_cast<int>(hc);
+        unsigned cores = std::thread::hardware_concurrency();
+        if (cores < 1) cores = 1;
+        /* Todos los nucleos, y nunca menos de la mitad.  El minimo se escribe
+         * aunque hoy la primera parte ya lo cumpla: es la garantia que se
+         * quiere sostener si manana se vuelve a poner un tope. */
+        const unsigned half = (cores + 1u) / 2u;
+        parallel_threads = static_cast<int>(cores < half ? half : cores);
     }
     if (parallel_threads <= 1) {
         // Path secuencial: identico al comportamiento pre-M8.
@@ -3499,6 +3516,18 @@ CompileResult compile_vx_project(
             const size_t chunk = static_cast<size_t>(parallel_threads);
             for (size_t base = 0; base < mods.size(); base += chunk) {
                 const size_t end_idx = std::min(base + chunk, mods.size());
+                /* Reservar los hilos de ESTE lote en el presupuesto comun.
+                 *
+                 * Sin esto, cada modulo vuelve a repartir sus funciones en el
+                 * pool -- que es UNO para todo el proceso -- y N modulos por N
+                 * workers dejan N*N hilos listos sobre los nucleos que haya;
+                 * los que esperan giran con `yield()` quitandole el nucleo al
+                 * que trabaja.  Reservando, el reparto de dentro ve la maquina
+                 * ya ocupada y se ajusta a lo que sobre en vez de apagarse: la
+                 * fase mas cara trabaja sobre UN modulo, y prohibirlo del todo
+                 * dejaba la maquina al 2 %. */
+                const ir::OuterParallelScope batch_reservation(
+                    static_cast<unsigned>(end_idx - base));
                 std::vector<std::thread> threads;
                 threads.reserve(end_idx - base);
                 for (size_t k = base; k < end_idx; ++k) {

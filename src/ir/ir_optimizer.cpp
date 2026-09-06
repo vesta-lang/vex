@@ -19,7 +19,8 @@
 #include "util/env_flags.h"
 #include "util/crono_tramo.h"
 #include "util/fnv.h"         // dispersion de las claves de la CSE
-#include "util/thread_slot.h" // los vectores de trabajo, uno por hilo
+#include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
+#include "util/thread_slot.h"  // los vectores de trabajo, uno por hilo
 
 #include "util/reloj.h"
 
@@ -8183,7 +8184,7 @@ static bool model_removable(const IrFunction &fn,
 
 bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
                  const analysis::AsmBindingFacts *asm_bindings,
-                 CacheEfectosDce *cache, const analysis::IrFacts *facts,
+                 DceEffectsCache *cache, const analysis::IrFacts *facts,
                  const analysis::PointsTo *pt) {
     // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
     // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
@@ -14194,58 +14195,36 @@ struct AcumuladorPases {
     std::unordered_map<std::string, EntradaFn> por_fn;
 };
 
-/// Todos los acumuladores vivos, uno por hilo que haya corrido algun pase.
-struct PassTimeRegistry {
-    std::mutex m;
-    std::vector<std::unique_ptr<AcumuladorPases>> todos;
-};
-
-PassTimeRegistry &pass_time_registry() {
-    static PassTimeRegistry r;
-    return r;
-}
+/* Todos los acumuladores vivos, uno por hilo que haya corrido algun pase.
+ *
+ * NADA de `thread_local`: en MinGW la TLS es emulada y ademas una variable de
+ * hilo con inicializador dinamico genera una guarda que CUELGA cuando hay hilos
+ * que nacen y mueren -- justo lo que hace el reparto del compilador --.  Ya se
+ * vio en una pila, bloqueado dentro de esta misma funcion.  `ThreadOwned` da la
+ * ranura y ademas se queda con lo creado, que es lo que permite sumarlo todo
+ * despues. */
+util::ThreadOwned<AcumuladorPases> g_pass_accumulators;
 
 /// El acumulador de ESTE hilo.  Se da de alta la primera vez y ya no vuelve a
 /// tocar el cerrojo.
-AcumuladorPases &acumulador_pases() {
-    /* Puntero a nulo y alta perezosa, y NO un `thread_local` con inicializador
-     * dinamico.  Este ultimo genera una variable de GUARDA, y en MinGW esa
-     * guarda cuelga: con hilos que nacen y mueren -- justo lo que hace el
-     * reparto del compilador -- el hilo principal se queda esperandola para
-     * siempre.  Visto en una pila: bloqueado en `pthread_mutex_lock` dentro de
-     * esta misma funcion.
-     *
-     * Un puntero inicializado a `nullptr` es de inicializacion CONSTANTE: no
-     * hay guarda que generar, y el alta se hace a mano la primera vez. */
-    thread_local AcumuladorPases *mio = nullptr;
-    if (mio == nullptr) {
-        auto nuevo = std::make_unique<AcumuladorPases>();
-        mio = nuevo.get();
-        PassTimeRegistry &r = pass_time_registry();
-        std::lock_guard<std::mutex> lk(r.m);
-        r.todos.push_back(std::move(nuevo));
-    }
-    return *mio;
-}
+AcumuladorPases &acumulador_pases() { return g_pass_accumulators.get(); }
 
 /// Suma de todos los hilos, para quien pregunte por el total.
 AcumuladorPases merge_pass_times() {
     AcumuladorPases total;
-    PassTimeRegistry &r = pass_time_registry();
-    std::lock_guard<std::mutex> lk(r.m);
-    for (const auto &a : r.todos) {
-        for (const auto &kv : a->t) {
+    g_pass_accumulators.for_each([&total](const AcumuladorPases &a) {
+        for (const auto &kv : a.t) {
             auto &d = total.t[kv.first];
             d.first += kv.second.first;
             d.second += kv.second.second;
         }
-        for (const auto &kv : a->por_fn) {
+        for (const auto &kv : a.por_fn) {
             EntradaFn &d = total.por_fn[kv.first];
             d.us += kv.second.us;
             d.veces += kv.second.veces;
             d.instrs += kv.second.instrs;
         }
-    }
+    });
     return total;
 }
 
@@ -14319,8 +14298,8 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     do {                                                                       \
         const bool cambio__ = PASE(llamada);                                   \
         if (cambio__) any.store(true, std::memory_order_relaxed);              \
-        sucia = sucia || cambio__;                                             \
-        efectos_sucios = efectos_sucios || cambio__;                           \
+        dirty = dirty || cambio__;                                             \
+        effects_dirty = effects_dirty || cambio__;                           \
         if (cambio__) ++fn.version;                                            \
     } while (0)
 
@@ -14341,7 +14320,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     do {                                                                       \
         const bool cambio__ = PASE(llamada);                                   \
         if (cambio__) any.store(true, std::memory_order_relaxed);              \
-        sucia = sucia || cambio__;                                             \
+        dirty = dirty || cambio__;                                             \
         if (cambio__) ++fn.version;                                            \
     } while (0)
 
@@ -14351,8 +14330,8 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     do {                                                                       \
         const bool cambio__ = (PASE(llamada) > 0);                             \
         if (cambio__) any.store(true, std::memory_order_relaxed);              \
-        sucia = sucia || cambio__;                                             \
-        efectos_sucios = efectos_sucios || cambio__;                           \
+        dirty = dirty || cambio__;                                             \
+        effects_dirty = effects_dirty || cambio__;                           \
         if (cambio__) ++fn.version;                                            \
     } while (0)
 
@@ -14361,18 +14340,24 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
  * midiendo un pase bajo la etiqueta de otro al mover una linea. */
 #define PASE(llamada) cronometrar_pase(#llamada, fn, [&] { return (llamada); })
 
-long long &vueltas_punto_fijo() {
-    static long long v = 0;
+/* ATOMICOS, y no `long long` a secas: los modulos se compilan en paralelo, asi
+ * que dos hilos suman aqui a la vez.  Lo dijo ThreadSanitizer, no una
+ * sospecha.  Es telemetria, asi que perder una cuenta no cambiaria el binario
+ * -- pero un contador que no cuadra con lo que mide es peor que no tenerlo, que
+ * es justo por lo que se arreglo la ultima vez.  `relaxed` basta: solo importa
+ * la suma final, no en que orden se vio crecer. */
+std::atomic<long long> &vueltas_punto_fijo() {
+    static std::atomic<long long> v{0};
     return v;
 }
 
-long long &visitas_a_funcion() {
-    static long long n = 0;
+std::atomic<long long> &visitas_a_funcion() {
+    static std::atomic<long long> n{0};
     return n;
 }
 
-long long &fixpoint_truncations() {
-    static long long n = 0;
+std::atomic<long long> &fixpoint_truncations() {
+    static std::atomic<long long> n{0};
     return n;
 }
 
@@ -14490,12 +14475,10 @@ std::vector<TiempoPaseFuncion> tiempos_por_funcion() {
 void reiniciar_tiempos_de_pases() {
     // Se vacian TODOS, no solo el del hilo que llama: quien reinicia quiere
     // empezar de cero, no dejar dentro lo que acumularon los demas.
-    PassTimeRegistry &r = pass_time_registry();
-    std::lock_guard<std::mutex> lk(r.m);
-    for (const auto &a : r.todos) {
-        a->t.clear();
-        a->por_fn.clear();
-    }
+    g_pass_accumulators.for_each([](AcumuladorPases &a) {
+        a.t.clear();
+        a.por_fn.clear();
+    });
 }
 
 namespace {
@@ -14505,6 +14488,13 @@ struct AsmBindingsAnalysis {
 };
 
 char AsmBindingsAnalysis::ID = 0;
+
+/* Las ligaduras de una funcion SIN asm, que son ninguna.
+ *
+ * A nivel de fichero y no como estatico dentro de la funcion: un estatico local
+ * con constructor no trivial genera variable de guarda, y en MinGW esa guarda
+ * cuelga con hilos que nacen y mueren.  Ver `util/thread_owned.h`. */
+const analysis::AsmBindingFacts g_no_asm_bindings;
 
 const bool g_no_promote_local_allocas =
     util::flag_on(util::FlagId::NoPromoteLocalAllocas);
@@ -14670,11 +14660,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     auto pt_of = [&](IrFunction &fn) -> const analysis::PointsTo & {
         return am
             .get_or_compute_v<analysis::PointsToAnalysis, analysis::PointsTo>(
-                fn.name, fn.version, [&]() {
+                fn.name_key(), fn.version, [&]() {
                     const analysis::IrFacts &f =
                         am.get_or_compute_v<analysis::IRFactsAnalysis,
                                             analysis::IrFacts>(
-                            fn.name, fn.version,
+                            fn.name_key(), fn.version,
                             [&]() { return analysis::build_ir_facts(fn); });
                     return analysis::compute_points_to(fn, f);
                 });
@@ -14683,19 +14673,45 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * del punto fijo a proposito: lo que importa no es si cambio en esta vuelta
      * sino si cambio desde el ultimo calculo.  Arranca en true porque la
      * primera vez no hay nada cacheado. */
-    std::unordered_map<std::string, bool> sucias;
+    /* Por INDICE de funcion, no por nombre.
+     *
+     * Esto se toca DENTRO del bucle repartido, una vez por funcion y por
+     * vuelta: con un mapa por cadena eran cientos de miles de hasheos de un
+     * nombre manglado sobre una estructura COMPARTIDA entre hilos, para tareas
+     * de cinco microsegundos.  Medido, el reparto salia mas LENTO que la serie
+     * (4.498 ms contra 4.222) aunque la espera fuera solo el 1,1 %: no era
+     * falta de trabajo, era el precio de tocar lo comun.
+     *
+     * Con un vector por indice no hay hash ni busqueda, y cada hilo escribe en
+     * su propia posicion.  Las funciones viven en un `std::vector`, asi que el
+     * indice sale de la direccion. */
+    std::vector<uint8_t> dirty_of;
     /* Las ligaduras del asm, cacheadas como todo lo demas.  Marcador propio
      * para que el gestor no las mezcle con otro analisis de la misma unidad. */
     auto asm_of = [&](IrFunction &fn) -> const analysis::AsmBindingFacts & {
+        /* SIN LIGADURAS NO SE PREGUNTA.
+         *
+         * `compute_asm_bindings` sale en su primera linea cuando la funcion no
+         * tiene ninguna, asi que el hecho es vacio y calcularlo es gratis --
+         * pero PEDIRLO no: cerrojo del gestor, busqueda, una reserva para el
+         * modelo, el respaldo y el indice, una vez por funcion y por vuelta del
+         * punto fijo.  Y esto se pide sin condicion desde los dos sitios de
+         * DCE, que es todas las funciones.
+         *
+         * Medido con VTune sobre 144k lineas: 10,35 s de CPU dentro de
+         * `get_or_compute_v<AsmBindingsAnalysis>` para no devolver nada.  Es el
+         * mismo criterio que ya aplicaba `hechos_asm_de`, que no pregunta si la
+         * funcion no tiene un solo bloque de asm. */
+        if (fn.asm_reg_bindings.empty()) return g_no_asm_bindings;
         return am
             .get_or_compute_v<AsmBindingsAnalysis, analysis::AsmBindingFacts>(
-                fn.name, fn.version,
+                fn.name_key(), fn.version,
                 [&]() { return analysis::compute_asm_bindings(fn); });
     };
     auto facts_of = [&](IrFunction &fn) -> const analysis::IrFacts & {
         return am
             .get_or_compute_v<analysis::IRFactsAnalysis, analysis::IrFacts>(
-                fn.name, fn.version,
+                fn.name_key(), fn.version,
                 [&]() { return analysis::build_ir_facts(fn); });
     };
     /* El gestor guarda el PUNTERO, no una copia.
@@ -14713,7 +14729,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         return *am.get_or_compute_v<
             analysis::RangeAnalysis,
             std::shared_ptr<const analysis::RangeFacts>>(
-            fn.name, fn.version,
+            fn.name_key(), fn.version,
             [&]() {
                 const analysis::RangeRequester mark(
                     analysis::RangeAsker::Optimizer);
@@ -14745,18 +14761,25 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     /* Lo que el modelo de efectos contesto de cada funcion, guardado entre
      * pasadas.  Vive aqui porque aqui se sabe cuando una funcion cambia, que es
      * lo unico que puede invalidarlo. */
-    std::unordered_map<std::string, CacheEfectosDce> cache_efectos;
+    /* Por INDICE, igual que las dos marcas: esto se consulta CUATRO veces por
+     * funcion dentro del bucle repartido, y `operator[]` sobre un mapa por
+     * nombre hashea la cadena cada vez -- ademas de ser una insercion, o sea
+     * una mutacion de estructura compartida entre hilos. */
+    std::vector<DceEffectsCache> effects_cache;
     /* Por funcion: ¿cambio algo que afecte a los EFECTOS desde el ultimo
      * calculo?  Va aparte de la marca general porque hay un pase que cambia la
      * funcion sin tocarlos, y con una sola bandera cada consumidor acaba
      * tirando lo suyo por lo que le hizo otro. */
-    std::unordered_map<std::string, bool> efectos_sucios_de;
+    /// Por INDICE, por lo mismo que @c dirty_of: se toca dentro del reparto.
+    std::vector<uint8_t> effects_dirty_of;
     auto pt_invalidate = [&](IrFunction &fn) {
         /* Lo que el modelo dijo de sus instrucciones se apoya en estos mismos
          * hechos, asi que cae con ellos.  Una sola senal de invalidacion para
          * todo lo que depende de la funcion, no una por consumidor. */
-        cache_efectos[fn.name].invalidar();
-        am.invalidate<analysis::IRFactsAnalysis>(fn.name); // cascada a PointsTo
+        effects_cache[static_cast<size_t>(&fn - mod.functions.data())]
+            .invalidar();
+        // cascada a PointsTo
+        am.invalidate<analysis::IRFactsAnalysis>(fn.name_key());
     };
 
     // Iterar hasta punto fijo o maximo 8 pasadas
@@ -14771,12 +14794,12 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      *
      * `true` de arranque porque la primera vez no hay nada calculado, que es lo
      * mismo que hacia el `emplace(fn.name, true)` de dentro. */
-    for (auto &fn : mod.functions) {
-        if (fn.is_native) continue;
-        sucias.emplace(fn.name, true);
-        efectos_sucios_de.emplace(fn.name, true);
-        cache_efectos[fn.name];
-    }
+    /* Las dos marcas arrancan a UNO -- la primera vuelta no tiene nada
+     * calculado -- y se dimensionan de una vez.  Antes se insertaban por
+     * nombre; ahora la posicion ES el nombre. */
+    dirty_of.assign(mod.functions.size(), 1);
+    effects_dirty_of.assign(mod.functions.size(), 1);
+    effects_cache.resize(mod.functions.size());
 
     /* Tope ANTI-CUELGUE, no un mando de cuanto optimizar.
      *
@@ -14817,16 +14840,18 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             for_each_function(mod, [&](IrFunction &fn) {
                 if (fn.is_native) return; // no optimizar stubs nativos
 
-                /* Referencia, no copia: la marca tiene que sobrevivir a la
-                 * vuelta. La primera vez se inserta en true (no hay nada
-                 * calculado aun). */
-                auto it_sucia = sucias.emplace(fn.name, true).first;
-                bool &sucia = it_sucia->second;
-                /* Referencia, no busqueda por vuelta: esto esta en el bucle por
-                 * funcion y se consulta en cada pase.  Empieza en true porque
-                 * al principio no hay nada guardado. */
-                auto it_ef = efectos_sucios_de.emplace(fn.name, true).first;
-                bool &efectos_sucios = it_ef->second;
+                /* La posicion de la funcion en el modulo ES su marca: viven en
+                 * un `std::vector`, asi que el indice sale de la direccion.
+                 *
+                 * Antes esto eran dos busquedas en mapas por NOMBRE, y aqui
+                 * dentro se reparte entre hilos: cada tarea hasheaba un nombre
+                 * manglado dos veces sobre estructuras compartidas para hacer
+                 * cinco microsegundos de trabajo.  Con el indice no hay hash,
+                 * no hay busqueda, y cada hilo escribe en su propia posicion. */
+                const size_t fi =
+                    static_cast<size_t>(&fn - mod.functions.data());
+                uint8_t &dirty = dirty_of[fi];
+                uint8_t &effects_dirty = effects_dirty_of[fi];
 
                 // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
                 APLICA(ir_pass_copy_prop(fn));
@@ -14858,9 +14883,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                 // (coste 0 en el default: el manager no computa nada).
                 if (g_licm_alias) {
                     /* Solo si algo la ha tocado desde el ultimo calculo. */
-                    if (sucia) {
+                    if (dirty) {
                         pt_invalidate(fn);
-                        sucia = false;
+                        dirty = false;
                     }
                     APLICA(ir_pass_licm(fn, &pt_of(fn), &pure_callees));
                 } else {
@@ -14880,16 +14905,16 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                  * antes de LICM y del DSE, y entre ella y este punto corren mas
                  * pases que pueden cambiar una instruccion SIN cambiar cuantas
                  * hay -- con lo que ni la comprobacion de tamano lo veria. */
-                if (efectos_sucios) {
-                    cache_efectos[fn.name].invalidar();
-                    efectos_sucios = false; // queda refrescada en esta ronda
+                if (effects_dirty) {
+                    effects_cache[fi].invalidar();
+                    effects_dirty = false; // queda refrescada en esta ronda
                 }
                 /* Con los hechos del gestor, no con unos suyos: son la MISMA
                  * funcion y la misma version, asi que reconstruirlos aqui era
                  * calcular dos veces lo mismo -- una vez por funcion y por
                  * vuelta del punto fijo. */
                 APLICA_PRESERVA_EFECTOS(ir_pass_dce(
-                    fn, &decls_nativas, &asm_of(fn), &cache_efectos[fn.name],
+                    fn, &decls_nativas, &asm_of(fn), &effects_cache[fi],
                     &facts_of(fn), &pt_of(fn)));
                 /* Punto seguro: terminado con esta funcion, ya no se va a usar
                  * ninguna referencia que diera el gestor.  Sin soltarlas, el
@@ -14923,9 +14948,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                     // manager (no la construye).
                     if (g_dse_unified) {
                         /* Solo si algo la ha tocado desde el ultimo calculo. */
-                        if (sucia) {
+                        if (dirty) {
                             pt_invalidate(fn);
-                            sucia = false;
+                            dirty = false;
                         }
                         {
                             const HechosDeAsmParaDse h__ = hechos_asm_de(fn);
@@ -14983,13 +15008,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                     /* Misma razon que arriba: entre medias han corrido pases
                      * que pueden haber cambiado instrucciones sin cambiar su
                      * numero. */
-                    if (efectos_sucios) {
-                        cache_efectos[fn.name].invalidar();
-                        efectos_sucios = false;
+                    if (effects_dirty) {
+                        effects_cache[fi].invalidar();
+                        effects_dirty = false;
                     }
                     APLICA_PRESERVA_EFECTOS(ir_pass_dce(
                         fn, &decls_nativas, &asm_of(fn),
-                        &cache_efectos[fn.name], &facts_of(fn), &pt_of(fn)));
+                        &effects_cache[fi], &facts_of(fn), &pt_of(fn)));
                 }
 
                 if (level >= OptLevel::O3) {

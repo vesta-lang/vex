@@ -27,6 +27,7 @@
  */
 
 #include "util/env_flags.h"
+#include "util/thread_owned.h" // el objetivo por hilo, sin `thread_local`
 #include "vx/parser.h"
 
 #include "vx/hook_points.h"
@@ -246,56 +247,76 @@ static constexpr double VX_TARGET_VM_VERSION = 1.0;
 // runtime seleccionan la correcta para lo que se esta generando.  Vacio =
 // usar el host de build (ruta normal --vx/--run).  thread_local por el
 // compile paralelo (M8).
-static thread_local std::string g_cc_target_os;   // "windows"/"linux"/"macos"
-static thread_local std::string g_cc_target_arch; // "x86_64"/"x86"/"arm64"
-/// Camino de compilacion activo: "aot" cuando se genera codigo nativo, vacio
-/// en la ruta de bytecode.  Es lo que hace utilizable `@Target("mode:aot")`.
-///
-/// OJO con lo que este eje PUEDE y NO PUEDE decir: separa AOT de bytecode,
-/// porque son compilaciones distintas.  NO separa interprete de JIT: los dos
-/// ejecutan el MISMO .velb y quien decide es un flag de ejecucion, asi que
-/// eso no es una propiedad del codigo emitido y no se puede resolver aqui.
-static thread_local std::string g_cc_target_mode;
-/// Tier del binario nativo (`full`/`embed`/`bare`) y si va SIN libc.  Es lo que
-/// contesta a `@Target("tier:...")`.  Vacio = ruta de bytecode: no hay binario,
-/// asi que ningun tier vale.
-static thread_local std::string g_cc_target_tier;
-static thread_local bool g_cc_target_sin_libc = false;
+//
+// Los cinco ejes viven en UN struct y UNA ranura por hilo, no en cinco
+// `thread_local`.  Dos razones: en MinGW la TLS es emulada y cada acceso es una
+// llamada -- evaluar un `@Target` tocaba hasta cinco --, y una variable de hilo
+// con inicializador dinamico (que es lo que es una `std::string`) genera una
+// guarda que se bloquea con hilos que nacen y mueren, justo lo que hace el
+// compilado por modulos.  Ver `util/thread_owned.h`.
+struct CondCompTarget {
+    std::string os;   ///< "windows"/"linux"/"macos"
+    std::string arch; ///< "x86_64"/"x86"/"arm64"
+    /// Camino de compilacion activo: "aot" cuando se genera codigo nativo,
+    /// vacio en la ruta de bytecode.  Es lo que hace utilizable
+    /// `@Target("mode:aot")`.
+    ///
+    /// OJO con lo que este eje PUEDE y NO PUEDE decir: separa AOT de bytecode,
+    /// porque son compilaciones distintas.  NO separa interprete de JIT: los
+    /// dos ejecutan el MISMO .velb y quien decide es un flag de ejecucion, asi
+    /// que eso no es una propiedad del codigo emitido y no se puede resolver
+    /// aqui.
+    std::string mode;
+    /// Tier del binario nativo (`full`/`embed`/`bare`).  Es lo que contesta a
+    /// `@Target("tier:...")`.  Vacio = ruta de bytecode: no hay binario, asi
+    /// que ningun tier vale.
+    std::string tier;
+    bool sin_libc = false; ///< si el binario va SIN libc
+};
+
+static util::ThreadOwned<CondCompTarget> g_cc_owner;
+
+/// El objetivo de compilacion condicional de ESTE hilo.
+static CondCompTarget &cc_target() { return g_cc_owner.get(); }
 
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept {
-    g_cc_target_os = os;
-    g_cc_target_arch = arch;
+    CondCompTarget &t = cc_target();
+    t.os = os;
+    t.arch = arch;
 }
 
 void set_aot_condcomp_mode(const std::string &mode) noexcept {
-    g_cc_target_mode = mode;
+    cc_target().mode = mode;
 }
 
 void get_aot_condcomp_mode(std::string &mode) noexcept {
-    mode = g_cc_target_mode;
+    mode = cc_target().mode;
 }
 
 void set_aot_condcomp_tier(const std::string &tier, bool sin_libc) noexcept {
-    g_cc_target_tier = tier;
-    g_cc_target_sin_libc = sin_libc;
+    CondCompTarget &t = cc_target();
+    t.tier = tier;
+    t.sin_libc = sin_libc;
 }
 
 void get_aot_condcomp_tier(std::string &tier, bool &sin_libc) noexcept {
-    tier = g_cc_target_tier;
-    sin_libc = g_cc_target_sin_libc;
+    const CondCompTarget &t = cc_target();
+    tier = t.tier;
+    sin_libc = t.sin_libc;
 }
 
 // Lee el override actual del target de @Target.  Necesario para propagar el
-// thread_local a los workers del compile paralelo (M8): estos parsean los
-// modulos en threads distintos, donde @c g_cc_target_os arranca vacio y las
+// estado por hilo a los workers del compile paralelo (M8): estos parsean los
+// modulos en threads distintos, donde el objetivo arranca vacio y las
 // variantes @Target("os:...") caerian al HOST -> HALLAZGO-2 (cross-compile
 // modular seleccionaba la rama del host, p.ej. kernel32 al emitir ELF desde
 // Windows).  El dispatcher captura estos valores en el main thread y los
 // re-aplica en cada worker antes de parsear.
 void get_aot_condcomp_target(std::string &os, std::string &arch) noexcept {
-    os = g_cc_target_os;
-    arch = g_cc_target_arch;
+    const CondCompTarget &t = cc_target();
+    os = t.os;
+    arch = t.arch;
 }
 
 // Deteccion de features de CPU.  En x86 usa cpuid; en arm64 NEON es
@@ -406,12 +427,13 @@ static bool target_atom_eval_(const std::string &atom,
     }
     std::string key = atom.substr(0, colon);
     std::string val = atom.substr(colon + 1);
+    const CondCompTarget &tgt = cc_target();
     if (key == "os") {
         // AOT cross-target: evaluar contra el OS del binario generado.
-        if (!g_cc_target_os.empty()) {
-            if (val == g_cc_target_os) return true;
+        if (!tgt.os.empty()) {
+            if (val == tgt.os) return true;
             if (val == "posix")
-                return g_cc_target_os == "linux" || g_cc_target_os == "macos";
+                return tgt.os == "linux" || tgt.os == "macos";
             return false;
         }
 #if defined(_WIN32)
@@ -426,7 +448,7 @@ static bool target_atom_eval_(const std::string &atom,
     }
     if (key == "arch") {
         // AOT cross-target: evaluar contra la arch del binario generado.
-        if (!g_cc_target_arch.empty()) return val == g_cc_target_arch;
+        if (!tgt.arch.empty()) return val == tgt.arch;
 #if defined(__x86_64__) || defined(_M_X64)
         return val == "x86_64";
 #elif defined(__aarch64__) || defined(_M_ARM64)
@@ -445,8 +467,8 @@ static bool target_atom_eval_(const std::string &atom,
         // compilacion distintos.  Antes `mode:aot` caia al `false` de abajo y
         // la declaracion se borraba EN SILENCIO -- el mismo fallo que ya se
         // habia arreglado para `jit`/`vm` con un error explicito.
-        if (val == "aot") return g_cc_target_mode == "aot";
-        if (val == "bytecode") return g_cc_target_mode != "aot";
+        if (val == "aot") return tgt.mode == "aot";
+        if (val == "bytecode") return tgt.mode != "aot";
         // `jit`/`vm` no llegan aqui (el parser los rechaza antes): el mismo
         // .velb corre en los dos y el modo no es propiedad del codigo emitido.
         // `jit-required` exige JIT, que en compile time no se garantiza.
@@ -459,13 +481,13 @@ static bool target_atom_eval_(const std::string &atom,
          * En la ruta de BYTECODE no hay binario nativo del que hablar, asi que
          * ningun `tier:` vale -- y eso es lo correcto: una variante marcada
          * para un tier no debe colarse donde ese tier no existe. */
-        if (g_cc_target_tier.empty()) return false;
+        if (tgt.tier.empty()) return false;
         /* `sin_libc` es un eje APARTE del tier, aunque se pregunte por la misma
          * clave: es `--freestanding`, y lo que dice es que reservar memoria y
          * el panico pasan a exigir ganchos del usuario en vez de resolverse
          * solos. */
-        if (val == "sin_libc") return g_cc_target_sin_libc;
-        return val == g_cc_target_tier;
+        if (val == "sin_libc") return tgt.sin_libc;
+        return val == tgt.tier;
     }
     /* Clave que no existe.  Se separa de "no se cumple" a proposito: son dos
      * respuestas distintas y aqui compartian el mismo `false`.

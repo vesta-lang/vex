@@ -13,6 +13,7 @@
 #include "util/crono_tramo.h"
 
 #include "util/reloj.h"
+#include "util/thread_owned.h" // un acumulador por hilo, sin `thread_local`
 
 #include <algorithm>
 #include <mutex>
@@ -36,38 +37,18 @@ struct Acumulador {
     std::unordered_map<const char *, std::pair<long long, long long>> t;
 };
 
-/// Los de todos los hilos, para poder sumarlos.  El cerrojo se toma SOLO al
-/// darse de alta un hilo (una vez por hilo) y al consultar.
-std::mutex &registro_mutex() {
-    static std::mutex m;
-    return m;
-}
-std::vector<Acumulador *> &registro() {
-    static std::vector<Acumulador *> v;
-    return v;
-}
+/* Los de todos los hilos, para poder sumarlos.  El cerrojo se toma SOLO al
+ * darse de alta un hilo (una vez por hilo) y al consultar.
+ *
+ * NADA de `thread_local`: en MinGW la TLS es emulada y ademas una variable de
+ * hilo con inicializador dinamico genera una guarda que CUELGA cuando hay hilos
+ * que nacen y mueren -- justo lo que hace el reparto del compilador --.  Ya se
+ * vio en una pila, bloqueado dentro de esta misma funcion.  `ThreadOwned` da la
+ * ranura y se queda con lo creado, que es lo que permite sumarlo todo. */
+util::ThreadOwned<Acumulador> g_accumulators;
 
-Acumulador &mio() {
-    /* Se reserva y NO se libera a proposito: vive lo que el proceso, y
-     * liberarlo al morir el hilo dejaria al registro con un puntero colgando
-     * justo cuando alguien podria estar sumando. */
-    /* Puntero a nulo y alta perezosa, y NO un `thread_local` con inicializador
-     * dinamico.  Este ultimo genera una variable de GUARDA, y en MinGW esa
-     * guarda cuelga: con hilos que nacen y mueren -- justo lo que hace el
-     * reparto del compilador -- el hilo principal se queda esperandola para
-     * siempre.  Visto en una pila: bloqueado en `pthread_mutex_lock` dentro de
-     * esta misma funcion.
-     *
-     * Un puntero inicializado a `nullptr` es de inicializacion CONSTANTE: no
-     * hay guarda que generar, y el alta se hace a mano la primera vez. */
-    static thread_local Acumulador *a = nullptr;
-    if (a == nullptr) {
-        a = new Acumulador();
-        std::lock_guard<std::mutex> lk(registro_mutex());
-        registro().push_back(a);
-    }
-    return *a;
-}
+/// El acumulador de ESTE hilo.
+Acumulador &mio() { return g_accumulators.get(); }
 } // namespace
 
 void acumular_tramo_ns(const char *etiqueta, long long ns) {
@@ -157,14 +138,14 @@ std::vector<Tramo> tramos_medidos() {
      * quien anota son los workers y el principal llega virgen al informe. */
     const long long coste = calibracion().coste_ns;
 
-    std::lock_guard<std::mutex> lk(registro_mutex());
     std::unordered_map<const char *, std::pair<long long, long long>> total;
-    for (const Acumulador *a : registro())
-        for (const auto &kv : a->t) {
+    g_accumulators.for_each([&total](const Acumulador &a) {
+        for (const auto &kv : a.t) {
             auto &e = total[kv.first];
             e.first += kv.second.first;
             e.second += kv.second.second;
         }
+    });
     std::vector<Tramo> v;
     v.reserve(total.size());
     for (const auto &kv : total) {
@@ -187,9 +168,7 @@ std::vector<Tramo> tramos_medidos() {
 }
 
 void reiniciar_tramos() {
-    std::lock_guard<std::mutex> lk(registro_mutex());
-    for (Acumulador *a : registro())
-        a->t.clear();
+    g_accumulators.for_each([](Acumulador &a) { a.t.clear(); });
 }
 
 } // namespace util

@@ -604,15 +604,17 @@ int main() {
             ++builds;
             return analysis::build_ir_facts(fn);
         };
+        /* La unidad se nombra con el puntero internado, no con la cadena: es
+         * lo que hace el optimizador de verdad. */
         const analysis::IrFacts &f1 =
             am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
-                fn.name, factory);
+                fn.name_key(), factory);
         am.get_or_compute<analysis::IRFactsAnalysis, analysis::IrFacts>(
-            fn.name, factory);
+            fn.name_key(), factory);
         check(builds == 1 && f1.block_count == 1,
               "IRFacts: manager computa una vez (lazy + cache)");
-        am.invalidate<analysis::IRFactsAnalysis>(fn.name);
-        check(!am.cached<analysis::IRFactsAnalysis>(fn.name),
+        am.invalidate<analysis::IRFactsAnalysis>(fn.name_key());
+        check(!am.cached<analysis::IRFactsAnalysis>(fn.name_key()),
               "IRFacts: invalidado del manager");
     }
 

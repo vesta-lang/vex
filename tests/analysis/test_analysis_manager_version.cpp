@@ -22,6 +22,8 @@
  */
 #include "analysis/manager/analysis_manager.h"
 
+#include "util/name_pool.h"
+
 #include <cstdio>
 #include <string>
 
@@ -55,12 +57,16 @@ int main() {
     std::printf("[gestor de analisis] la caducidad tiene que ser imposible\n");
 
     analysis::AnalysisManager am;
+    /* La unidad se nombra con el puntero internado; quien lo llama de verdad
+     * usa `IrFunction::name_key()`. */
+    const std::string *const u_fn = util::intern_name(std::string("fn"));
+    const std::string *const u_otra = util::intern_name(std::string("otra"));
     long calculos = 0;
     uint64_t version = 1; // el "estado" de la unidad
 
     auto pedir = [&]() -> const ResultadoFalso & {
         return am.get_or_compute_v<AnalisisFalso, ResultadoFalso>(
-            "fn", version, [&] {
+            u_fn, version, [&] {
                 ++calculos;
                 return ResultadoFalso{version};
             });
@@ -103,7 +109,7 @@ int main() {
     long calculos_sv = 0;
     analysis::AnalysisManager am2;
     for (int i = 0; i < 3; ++i)
-        am2.get_or_compute_v<AnalisisFalso, ResultadoFalso>("otra", 0, [&] {
+        am2.get_or_compute_v<AnalisisFalso, ResultadoFalso>(u_otra, 0, [&] {
             ++calculos_sv;
             return ResultadoFalso{0};
         });

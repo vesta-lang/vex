@@ -61,6 +61,47 @@ unsigned compile_threads();
 void for_each_function(IrModule &mod,
                        const std::function<void(IrFunction &)> &f);
 
+/**
+ * @brief Cuantos hilos quedan libres AHORA para repartir.
+ *
+ * Los dos niveles de reparto -- por modulo y por funcion -- comparten la misma
+ * maquina, asi que comparten un PRESUPUESTO: quien reparte se queda con los
+ * suyos y los siguientes ven lo que sobra.  Nunca menos de uno, que significa
+ * "hazlo en fila de uno".
+ */
+unsigned available_threads();
+
+/**
+ * @brief Reserva @p threads del presupuesto mientras vive.
+ *
+ * Lo declara quien reparte por MODULO, que lanza sus propios hilos y por eso no
+ * pasa por @c for_each_function.  Sin el presupuesto, cada uno de esos hilos
+ * volvia a repartir en el pool -- que es UNO para todo el proceso --, asi que N
+ * modulos por N workers dejaban N*N hilos listos sobre los nucleos que hubiera,
+ * y el que espera gira con @c yield() robandole el nucleo al que trabaja.  Con
+ * 24 modulos medidos, la maquina se arrastraba.
+ *
+ * Lo contrario tambien se midio y tambien es malo: prohibir del todo el reparto
+ * de dentro dejaba la maquina al 2 % -- 0,5 nucleos de 24 --, porque la fase
+ * mas cara trabaja sobre UN modulo y ahi no hay nada que repartir por arriba.
+ * El presupuesto da las dos cosas: se llena la maquina y no se pasa.
+ *
+ * @param threads Cuantos se reservan.  Se recorta a lo que quede libre.
+ */
+class OuterParallelScope {
+  public:
+    explicit OuterParallelScope(unsigned threads) noexcept;
+    ~OuterParallelScope() noexcept;
+    OuterParallelScope(const OuterParallelScope &) = delete;
+    OuterParallelScope &operator=(const OuterParallelScope &) = delete;
+
+    /// Lo que realmente se pudo reservar.
+    unsigned granted() const noexcept { return taken_; }
+
+  private:
+    unsigned taken_; ///< Lo reservado, para devolverlo exacto al salir.
+};
+
 } // namespace ir
 
 #endif // IR_PARALELO_H

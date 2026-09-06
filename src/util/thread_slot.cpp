@@ -121,7 +121,9 @@ uint32_t thread_slot_alloc_api() noexcept {
 
 #endif // _WIN32
 
-bool ThreadSlot::ensure() noexcept {
+bool ThreadSlot::reserve_slot() noexcept {
+    /* La comprobacion de "ya esta" la hace @c ensure en linea; aqui se vuelve a
+     * mirar porque dos hilos pueden haber pasado esa comprobacion a la vez. */
     if (slot_.load(std::memory_order_acquire) != kNoThreadSlot) return true;
 
     /* Dos hilos pueden llegar aqui a la vez.  Cada uno pide la suya y solo una

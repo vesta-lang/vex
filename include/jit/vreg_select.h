@@ -257,7 +257,7 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out,
  * vez de un "no pude" a secas: sin ese dato hay que recompilar con una variable
  * de entorno puesta y adivinar de que funcion se hablaba.
  */
-std::string &vreg_ultimo_motivo();
+std::string &vreg_last_reason();
 
 } // namespace jit
 

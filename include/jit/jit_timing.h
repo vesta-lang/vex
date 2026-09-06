@@ -38,6 +38,8 @@
 #define VESTA_JIT_JIT_TIMING_H
 
 #include "util/env_flags.h"
+#include "util/thread_slot.h" // la profundidad por hilo, sin `thread_local`
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -178,13 +180,15 @@ class ScopedJitTimer {
   public:
     explicit ScopedJitTimer(const char *name) noexcept
         : name_(name), t0_(std::chrono::steady_clock::now()),
-          depth_(depth()++) {}
+          depth_(depth()) {
+        set_depth(static_cast<uint16_t>(depth_ + 1));
+    }
 
     /// El tamano se conoce al final; se informa antes de que el objeto muera.
     void set_code_bytes(uint32_t n) noexcept { code_bytes_ = n; }
 
     ~ScopedJitTimer() {
-        --depth();
+        set_depth(static_cast<uint16_t>(depth() - 1));
         const auto dt = std::chrono::steady_clock::now() - t0_;
         JitTiming::instance().record(
             name_,
@@ -195,10 +199,24 @@ class ScopedJitTimer {
     }
 
   private:
-    /// Profundidad de anidamiento POR HILO (el JIT puede compilar en varios).
-    static uint16_t &depth() noexcept {
-        static thread_local uint16_t d = 0;
-        return d;
+    /* Profundidad de anidamiento POR HILO (el JIT puede compilar en varios).
+     *
+     * En una RANURA y no en `thread_local`: en MinGW la TLS es emulada y cada
+     * acceso es una llamada.  El contador cabe en el propio puntero, asi que
+     * no hay nada que reservar.  Ver `util/thread_slot.h`. */
+    static util::ThreadSlot &depth_slot() noexcept {
+        static util::ThreadSlot s;
+        return s;
+    }
+    /// La profundidad de ESTE hilo.
+    static uint16_t depth() noexcept {
+        return static_cast<uint16_t>(
+            reinterpret_cast<uintptr_t>(depth_slot().get()));
+    }
+    /// Fija la profundidad de ESTE hilo.
+    static void set_depth(uint16_t d) noexcept {
+        depth_slot().ensure();
+        depth_slot().set(reinterpret_cast<void *>(static_cast<uintptr_t>(d)));
     }
 
     const char *name_ = nullptr;

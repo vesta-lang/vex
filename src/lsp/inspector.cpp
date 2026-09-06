@@ -51,7 +51,7 @@
 #include "aot/aot_analyze.h"
 #include "analyze/bigo.h"
 #include "lsp/symbol_index.h"            // uri_to_fs_path
-#include "jit/vreg_select.h"             // vreg_ultimo_motivo
+#include "jit/vreg_select.h"             // vreg_last_reason
 #include "vx/asm/instr_db.h"             // microarquitecturas y CPU conocidas
 #include "vx/asm/asm_effects.h"          // isa_of_arch(): arquitectura -> ISA
 #include "vx/asm/asm_cfg.h"              // el flujo de un bloque escrito a mano
@@ -2531,7 +2531,7 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         // El selector deja escrito QUE operacion le hizo renunciar.  Decirlo
         // es la diferencia entre un aviso que se puede investigar y uno que
         // solo dice que no.
-        const std::string motivo = jit::vreg_ultimo_motivo();
+        const std::string motivo = jit::vreg_last_reason();
         return {
             {"incompatible", true},
             {"reason", "la funcion '" + fn->name +

@@ -146,9 +146,14 @@
 #ifndef VESTA_ANALYSIS_MANAGER_H
 #define VESTA_ANALYSIS_MANAGER_H
 
+#include "util/shared_mutex.h" // lector/escritor SIN la emulacion de pthreads
+#include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
+
 #include <cstdint>
 #include <memory>
+#include <atomic> // los aciertos se cuentan desde el camino compartido
 #include <mutex>
+#include <shared_mutex> // `std::shared_lock`, el RAII de lectura
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -267,17 +272,36 @@ template <class T> struct AnalysisResultModel final : AnalysisResultConcept {
 // ===========================================================================
 class AnalysisManager {
   public:
+    /**
+     * @brief Que analisis, de que unidad.
+     *
+     * La unidad es un PUNTERO al nombre internado, no una copia del nombre.
+     * Antes era una `std::string`, y construir la clave -- que se hace en cada
+     * consulta, aunque solo sea para buscar -- copiaba el nombre: los nombres
+     * calificados pasan de los quince caracteres que caben en la propia
+     * cadena, asi que cada consulta reservaba.  Se veia entero en el perfil
+     * del asignador:
+     *
+     *     AnalysisManager::Key::Key -> basic_string -> operator new -> malloc
+     *
+     * Con el puntero, comparar y hashear son aritmetica.  Y NO se pierde
+     * seguridad: el internado garantiza que dos nombres iguales dan el MISMO
+     * puntero y dos distintos punteros distintos, asi que la comparacion sigue
+     * siendo por nombre -- no es un hash con riesgo de colision.
+     */
     struct Key {
         AnalysisID id;
-        std::string unit;
+        const std::string *unit;
         bool operator==(const Key &o) const {
             return id == o.id && unit == o.unit;
         }
     };
     struct KeyHash {
         size_t operator()(const Key &k) const {
+            /* Mezcla de dos punteros.  El desplazamiento evita que dos claves
+             * con los papeles cambiados den el mismo valor. */
             return std::hash<const void *>()(k.id) ^
-                   (std::hash<std::string>()(k.unit) << 1);
+                   (std::hash<const void *>()(k.unit) << 1);
         }
     };
 
@@ -300,7 +324,7 @@ class AnalysisManager {
      * borradas.
      */
     template <class A, class T, class Factory>
-    const T &get_or_compute_v(const std::string &unit, uint64_t version,
+    const T &get_or_compute_v(const std::string *unit, uint64_t version,
                               Factory &&factory) {
         const Key k{analysis_id<A>(), unit};
         /* El cerrojo protege las TABLAS, y solo eso.  La fabrica corre FUERA
@@ -311,12 +335,74 @@ class AnalysisManager {
          * un fallo: se guarda el ultimo y el otro conserva el suyo vivo por el
          * respaldo.  Se paga trabajo repetido en un caso raro a cambio de no
          * pagar serializacion en el caso normal. */
-        std::unique_lock<std::mutex> lk(m_);
+        /* ACIERTO DE NIVEL SUPERIOR sin cerrojo exclusivo, igual que en la
+         * variante sin version: si la pila esta vacia nadie depende de esto y
+         * la consulta solo LEE.  Es el caso normal dentro del bucle repartido,
+         * y con cerrojo exclusivo era donde los hilos hacian cola. */
+        if (stack().empty()) {
+            bool was_absent = false;
+            {
+                std::shared_lock<util::SharedMutex> rl(m_);
+                auto hit = results_.find(k);
+                if (hit != results_.end() && hit->second->version == version) {
+                    aciertos_.fetch_add(1, std::memory_order_relaxed);
+                    // Respaldar antes de entregar: ver la nota de abajo.
+                    retained().push_back(hit->second);
+                    return static_cast<AnalysisResultModel<T> *>(
+                               hit->second.get())
+                        ->result;
+                }
+                was_absent = (hit == results_.end());
+            }
+            /* NO ESTABA: se calcula y se guarda con UNA sola toma del
+             * exclusivo, en vez de dos.
+             *
+             * Es el unico caso en que la primera toma no hace falta para nada:
+             * de nivel superior no hay dependencia que anotar -- la pila esta
+             * vacia --, y sin entrada previa no hay nada que invalidar.  Lo
+             * unico que hacia era volver a mirar.
+             *
+             * Medido con VTune sobre 144k lineas: de la espera del gestor, el
+             * 70 % es del cerrojo EXCLUSIVO, y el 57 % de las consultas fallan
+             * y lo toman DOS veces.  Esto se lleva por delante una de las dos
+             * en el 28 % de las consultas que son entradas nuevas.
+             *
+             * Que dos hilos calculen a la vez lo mismo ya estaba admitido y
+             * sigue igual: gana el ultimo en guardar y el otro conserva el suyo
+             * vivo por el respaldo. */
+            if (was_absent) {
+                stack().push_back(k);
+                T value = factory();
+                stack().pop_back();
+                std::unique_lock<util::SharedMutex> lk(m_);
+                /* Pudo aparecer mientras se calculaba -- otro hilo, o una
+                 * consulta anidada de la propia fabrica --.  Si lo que hay es
+                 * de OTRA version, hay que sacarlo con lo que dependia de el,
+                 * igual que hace el camino de abajo. */
+                auto existing = results_.find(k);
+                if (existing != results_.end() &&
+                    existing->second->version != version) {
+                    ++caducados_;
+                    invalidate_key(k);
+                } else if (existing == results_.end()) {
+                    ++nuevos_;
+                }
+                auto model =
+                    std::make_shared<AnalysisResultModel<T>>(std::move(value));
+                model->version = version;
+                T &ref = model->result;
+                retained().push_back(model); // ver el caso de acierto
+                results_[k] = std::move(model);
+                index_add(k);
+                return ref;
+            }
+        }
+        std::unique_lock<util::SharedMutex> lk(m_);
         if (!stack().empty()) rev_deps_[k].insert(stack().back());
         auto it = results_.find(k);
         if (it != results_.end()) {
             if (it->second->version == version) {
-                ++aciertos_;
+                aciertos_.fetch_add(1, std::memory_order_relaxed);
                 // Respaldar antes de entregar: si otro hilo invalida esta
                 // unidad -- o una de la que depende --, el mapa suelta su
                 // referencia pero el objeto sigue vivo mientras el llamante lo
@@ -345,15 +431,44 @@ class AnalysisManager {
     }
 
     template <class A, class T, class Factory>
-    const T &get_or_compute(const std::string &unit, Factory &&factory) {
+    const T &get_or_compute(const std::string *unit, Factory &&factory) {
         const Key k{analysis_id<A>(), unit};
+        /* ACIERTO DE NIVEL SUPERIOR: se lee y ya, sin cerrojo exclusivo.
+         *
+         * El cerrojo hace falta para anotar la dependencia, y eso SOLO ocurre
+         * cuando la consulta esta anidada dentro de otro computo -- la pila es
+         * por hilo, asi que vacia significa "nadie depende de esto".  En el
+         * bucle repartido del optimizador la inmensa mayoria de las consultas
+         * son de nivel superior y ya estan calculadas: con el cerrojo
+         * exclusivo, cientos de miles de tareas de cinco microsegundos hacian
+         * cola en el MISMO mutex, y por eso repartir salia mas lento que no
+         * repartir.
+         *
+         * Con cerrojo compartido los lectores no se estorban.  El calculo y la
+         * invalidacion siguen siendo exclusivos, que es lo unico que muta. */
+        if (stack().empty()) {
+            std::shared_lock<util::SharedMutex> rl(m_);
+            auto hit = results_.find(k);
+            if (hit != results_.end()) {
+                // Respaldar antes de entregar, igual que la variante con
+                // version: el cerrojo compartido protege la TABLA mientras se
+                // busca, no el objeto despues de soltarlo.  Sin esto, otro
+                // hilo que invalide esta clave -- o una de la que dependa --
+                // deja al llamante con una referencia colgando.
+                retained().push_back(hit->second);
+                return static_cast<AnalysisResultModel<T> *>(hit->second.get())
+                    ->result;
+            }
+        }
         // Dependencia: el computo en curso (tope de la pila) depende de k.
-        std::unique_lock<std::mutex> lk(m_);
+        std::unique_lock<util::SharedMutex> lk(m_);
         if (!stack().empty()) rev_deps_[k].insert(stack().back());
         auto it = results_.find(k);
-        if (it != results_.end())
+        if (it != results_.end()) {
+            retained().push_back(it->second); // ver el caso de arriba
             return static_cast<AnalysisResultModel<T> *>(it->second.get())
                 ->result;
+        }
         stack().push_back(k);
         /* Soltar el cerrojo ANTES de la fabrica es obligatorio, no una mejora:
          * la fabrica pide otros `get_or_compute` -- eso es lo que crea las
@@ -373,21 +488,22 @@ class AnalysisManager {
     }
 
     /// ¿Hay resultado cacheado de @c A para @p unit?
-    template <class A> bool cached(const std::string &unit) const {
-        std::lock_guard<std::mutex> lk(m_);
+    template <class A> bool cached(const std::string *unit) const {
+        // Solo LEE: cerrojo compartido.
+        std::shared_lock<util::SharedMutex> lk(m_);
         return results_.count(Key{analysis_id<A>(), unit}) != 0;
     }
 
     /// Invalida el resultado @c A de @p unit y, transitivamente, todo lo que
     /// dependia de el (ambos ejes).
-    template <class A> void invalidate(const std::string &unit) {
-        std::lock_guard<std::mutex> lk(m_);
+    template <class A> void invalidate(const std::string *unit) {
+        std::lock_guard<util::SharedMutex> lk(m_);
         invalidate_key(Key{analysis_id<A>(), unit});
     }
 
     /// Invalida los resultados de @p unit que NO sobreviven a @p preserved
     /// (mecanismo PreservedAnalyses tras un pase).  Cascada por dependencias.
-    void invalidate(const std::string &unit,
+    void invalidate(const std::string *unit,
                     const PreservedAnalyses &preserved) {
         /* Por el indice, no barriendo `results_` entero.
          *
@@ -397,7 +513,7 @@ class AnalysisManager {
          * se nota (0,06 s en el perfil), pero el coste crece con el producto de
          * unidades por invalidaciones: es de orden equivocado, y eso se
          * descubre tarde y caro cuando alguien compila un modulo grande. */
-        std::lock_guard<std::mutex> lk(m_);
+        std::lock_guard<util::SharedMutex> lk(m_);
         auto u = keys_by_unit_.find(unit);
         if (u == keys_by_unit_.end()) return;
         std::vector<Key> dead;
@@ -425,7 +541,7 @@ class AnalysisManager {
 
     /// Borra TODO (reconstruccion completa).
     void clear() {
-        std::lock_guard<std::mutex> lk(m_);
+        std::lock_guard<util::SharedMutex> lk(m_);
         results_.clear();
         rev_deps_.clear();
         keys_by_unit_.clear();
@@ -448,10 +564,18 @@ class AnalysisManager {
         long long caducados = 0;
         long long nuevos = 0;
     };
-    Cuentas cuentas() const { return Cuentas{aciertos_, caducados_, nuevos_}; }
+    Cuentas cuentas() const {
+        return Cuentas{aciertos_.load(std::memory_order_relaxed), caducados_,
+                       nuevos_};
+    }
 
   private:
-    long long aciertos_ = 0, caducados_ = 0, nuevos_ = 0;
+    /* ATOMICOS: los aciertos se cuentan ahora desde el camino rapido, que
+     * corre bajo cerrojo COMPARTIDO -- varios hilos a la vez --.  Un contador
+     * normal ahi seria una carrera, y ademas una que no falla: da un numero
+     * ligeramente bajo y nadie se entera. */
+    mutable std::atomic<long long> aciertos_{0};
+    long long caducados_ = 0, nuevos_ = 0;
 
     /// OJO: NO bloquea.  Se la llama desde dentro del cerrojo -- tanto desde
     /// `get_or_compute_v` cuando encuentra un resultado caduco como desde los
@@ -475,12 +599,27 @@ class AnalysisManager {
     /// `mutable` porque hay consultas de solo lectura declaradas `const` que
     /// tambien tienen que tomarlo: mirar una tabla mientras otro hilo la muta
     /// no es seguro aunque no se escriba nada.
-    mutable std::mutex m_;
+    /* COMPARTIDO para leer, exclusivo para escribir.  Los aciertos -- que son
+     * la inmensa mayoria dentro del bucle repartido -- solo leen, y con un
+     * mutex normal hacian cola todos en el mismo sitio.
+     *
+     * Y es el NUESTRO, no `std::shared_mutex`: en MinGW ese se apoya en la
+     * emulacion de pthreads, que SE ROMPE con hilos que nacen y mueren -- el
+     * lote de hilos por nivel de modulos --.  Se vio aqui, con los 23 hilos
+     * parados y la seccion critica VACIA, y se reprodujo fuera del compilador
+     * en una sonda de sesenta lineas: cambiando solo el tipo del cerrojo,
+     * `std::shared_mutex` moria 5 de 5 y `std::mutex` pasaba 5 de 5.  Un mutex
+     * normal seria el apano -- correcto, pero serializando justo lo que se
+     * quiere repartir --; `util::SharedMutex` usa el `SRWLOCK` del sistema y da
+     * las dos cosas.  Ver `util/shared_mutex.h`. */
+    mutable util::SharedMutex m_;
 
     /// Que claves tiene cada unidad.  Existe para que invalidar una unidad no
     /// obligue a recorrer el gestor entero: sin esto, invalidar es O(todo) y se
     /// hace muchas veces por vuelta del punto fijo.
-    std::unordered_map<std::string, std::vector<Key>> keys_by_unit_;
+    /// Por unidad, que analisis tiene.  Indexado por el nombre INTERNADO, como
+    /// la clave: asi ni este indice copia cadenas.
+    std::unordered_map<const std::string *, std::vector<Key>> keys_by_unit_;
 
     /// Apunta @p k en el indice de su unidad, si no estaba.
     void index_add(const Key &k) {
@@ -521,24 +660,27 @@ class AnalysisManager {
     /* Lo que ESTE hilo tiene cogido.  Cada referencia entregada se respalda
      * aqui para que una cascada de otro hilo no pueda destruirla debajo.  Se
      * suelta en un punto seguro -- cuando el llamante termina con la unidad --
-     * via `release_retained()`. */
-    static std::vector<std::shared_ptr<AnalysisResultConcept>> &retained() {
-        // Estatico LOCAL de funcion, no miembro `static inline thread_local`:
-        // con MinGW, este ultimo duplica la funcion de inicializacion del TLS
-        // en cada unidad de traduccion y el enlace falla.
-        static thread_local std::vector<std::shared_ptr<AnalysisResultConcept>>
-            v;
-        return v;
+     * via `release_retained()`.
+     *
+     * Por RANURA y no por `thread_local`: en MinGW la TLS es emulada y cada
+     * acceso es una llamada -- aqui hay cuatro por funcion y pasada --, y ese
+     * `vector` tiene inicializador dinamico, que genera una guarda que se
+     * bloquea con hilos que nacen y mueren.  Ademas @c util::ThreadOwned se
+     * queda con lo creado y lo libera: si no, lo que dejara en su ranura un
+     * hilo muerto no seria un vector perdido, seria mantener VIVOS los
+     * resultados que ese vector respalda. */
+    std::vector<std::shared_ptr<AnalysisResultConcept>> &retained() {
+        return retained_.get();
     }
+    util::ThreadOwned<std::vector<std::shared_ptr<AnalysisResultConcept>>>
+        retained_;
     std::unordered_map<Key, std::unordered_set<Key, KeyHash>, KeyHash>
         rev_deps_;
     /* Por hilo: una pila de computos en curso describe lo que ESTE hilo esta
      * calculando.  Compartida, dos hilos registrarian sus dependencias contra
      * el computo del otro. */
-    static std::vector<Key> &stack() {
-        static thread_local std::vector<Key> v; // ver retained()
-        return v;
-    }
+    std::vector<Key> &stack() { return stack_.get(); } // ver retained()
+    util::ThreadOwned<std::vector<Key>> stack_;
 };
 
 } // namespace analysis

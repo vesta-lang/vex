@@ -22,6 +22,7 @@
  */
 
 #include "util/env_flags.h"
+#include "util/thread_slot.h" // el estado de simbolos, sin `thread_local`
 #include "jit/keystone_asm_backend.h"
 #include "vx/asm/asm_backend.h"
 
@@ -72,17 +73,30 @@ struct SymState {
         return nullptr;
     }
 };
-thread_local SymState *g_sym_state = nullptr;
+/* En una RANURA propia, no en `thread_local`: en MinGW la TLS es emulada y cada
+ * acceso es una llamada.  Lo que se guarda es un puntero, asi que cabe tal cual
+ * y no hay nada que reservar.  Ver `util/thread_slot.h`. */
+util::ThreadSlot g_sym_state_slot;
+/// El estado de simbolos de ESTE hilo, o nulo si no hay ensamblado en curso.
+inline SymState *g_sym_state() {
+    return static_cast<SymState *>(g_sym_state_slot.get());
+}
+/// Fija el estado de ESTE hilo.
+inline void set_g_sym_state(SymState *s) {
+    g_sym_state_slot.ensure();
+    g_sym_state_slot.set(s);
+}
 
 bool vx_sym_resolver(const char *symbol, uint64_t *value) {
-    if (g_sym_state == nullptr || symbol == nullptr) return false;
+    SymState *const st = g_sym_state();
+    if (st == nullptr || symbol == nullptr) return false;
     // Un SIMBOLO de asm es un identificador (empieza por letra, '_' o '.').  Un
     // LITERAL numerico empieza por digito -> NO es simbolo: devolver false para
     // que Keystone lo parsee el mismo.  Sin esto, en AArch64 (donde Keystone
     // consulta el resolver para los inmediatos `#N`) un `#42` se interceptaria
     // y corromperia el valor.  Cubre decimal, 0x..., 0b..., etc.
     if (symbol[0] >= '0' && symbol[0] <= '9') return false;
-    *value = g_sym_state->intern(symbol);
+    *value = st->intern(symbol);
     return true;
 }
 
@@ -271,7 +285,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
              arch == vx::AsmArch::X86_16);
         SymState sym_state;
         if (ks_is_x86) {
-            g_sym_state = &sym_state;
+            set_g_sym_state(&sym_state);
             ks_option(ks, KS_OPT_SYM_RESOLVER,
                       reinterpret_cast<size_t>(&vx_sym_resolver));
         }
@@ -297,7 +311,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
         size_t enc_size = 0, stat_count = 0;
         const int rc =
             ks_asm(ks, asm_text, kAsmBase, &enc, &enc_size, &stat_count);
-        g_sym_state = nullptr;
+        set_g_sym_state(nullptr);
         if (rc != 0) {
             const ks_err e = ks_errno(ks);
             r.ok = false;

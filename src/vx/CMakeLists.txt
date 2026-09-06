@@ -56,10 +56,11 @@ file(GLOB_RECURSE VX_CODEGEN_SRCS
     ${CMAKE_SOURCE_DIR}/src/linker/*.cpp  ${CMAKE_SOURCE_DIR}/include/linker/*.h
     ${CMAKE_SOURCE_DIR}/src/util/assembler_multiprocess.cpp
     ${CMAKE_SOURCE_DIR}/include/util/assembler_multiprocess.h
-    # El pozo de nombres: de el sale la ruta que lleva cada posicion de fuente,
-    # asi que lo necesita cualquiera que construya un `SourceLoc`.
-    ${CMAKE_SOURCE_DIR}/src/util/name_pool.cpp
-    ${CMAKE_SOURCE_DIR}/include/util/name_pool.h
+    # El pozo de nombres NO se lista aqui: vive en `vmcore` (lo recoge su
+    # comodin de `src/`).  Estaba aqui cuando solo lo usaba el frontend para la
+    # ruta de un `SourceLoc`, pero ahora lo usa tambien el IR --
+    # `IrFunction::name_key()` --, y todo lo listado en este target se DESCUENTA
+    # de `vmcore`: un test que enlaza solo el nucleo se quedaba sin el simbolo.
     # --- preprocesador: corre como primera etapa sobre cada .vx ---
     ${CMAKE_SOURCE_DIR}/preprocessor/src/*.c
     ${CMAKE_SOURCE_DIR}/preprocessor/src/*.cpp

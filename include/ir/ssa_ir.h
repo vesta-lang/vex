@@ -50,6 +50,7 @@
 #include <cstddef>
 
 #include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
+#include "util/name_pool.h"    // nombres internados: la clave sin copiar
 #include "util/small_vector.h" // los operandos casi siempre son uno o dos
 #include <cstring>
 #include <string>
@@ -1654,6 +1655,35 @@ struct IrParamContract {
  */
 struct IrFunction {
     std::string name; ///< nombre calificado ("com.pkg.Foo.add")
+
+    /**
+     * @brief El nombre INTERNADO, para usarlo como clave sin copiarlo.
+     *
+     * Los analisis se cachean por funcion, y la clave llevaba una
+     * `std::string` COPIADA en cada consulta.  Un nombre calificado pasa de
+     * los quince caracteres que caben en la propia cadena, asi que cada
+     * consulta era una reserva -- y las consultas son cientos de miles.  Con
+     * el perfil del asignador se ve entero:
+     *
+     *     AnalysisManager::Key::Key -> basic_string::basic_string
+     *       -> operator new -> host_alloc -> malloc
+     *
+     * Internado, la clave es un PUNTERO estable: comparar y hashear pasan a
+     * ser aritmetica y no se reserva nada.  Y sigue siendo el nombre, asi que
+     * un volcado o un diagnostico lo leen igual.
+     *
+     * Perezoso: se calcula la primera vez que alguien lo pide, no al construir
+     * la funcion.  Una funcion que nadie consulta no lo paga.
+     */
+    const std::string *name_key() const {
+        if (name_key_ == nullptr) name_key_ = util::intern_name(name);
+        return name_key_;
+    }
+    /// Al cambiar el nombre hay que soltarlo, o la clave apuntaria al viejo.
+    void set_name(std::string n) {
+        name = std::move(n);
+        name_key_ = nullptr;
+    }
     /**
      * @brief Cuantas veces se ha MODIFICADO esta funcion.
      *
@@ -2026,6 +2056,11 @@ struct IrFunction {
      * @param instr    Instruccion a anadir.
      */
     void append(IrBlockId block_id, IrInstr instr);
+
+  private:
+    /// Cache de @c name_key.  `mutable` porque calcularla no cambia lo que la
+    /// funcion ES: es la misma respuesta, solo que ya calculada.
+    mutable const std::string *name_key_ = nullptr;
 };
 
 // =========================================================================

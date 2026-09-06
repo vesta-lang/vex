@@ -28,6 +28,8 @@
 
 #include "vx/generics/generic_clone.h"
 
+#include "util/thread_slot.h" // el contador de recursion, sin `thread_local`
+
 namespace vx {
 
 // ------------------------------------------------------------------
@@ -128,9 +130,20 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
                                   const std::string &name, const Type &t) {
     ConceptEval r;
 
-    // Cota dura contra conceptos ciclicos (A definido via B definido via A).
-    static thread_local int depth = 0;
-    if (depth > 64) {
+    /* Cota dura contra conceptos ciclicos (A definido via B definido via A).
+     *
+     * En una RANURA y no en `thread_local`: en MinGW la TLS es emulada y cada
+     * acceso es una llamada.  Un contador cabe en el propio puntero, asi que
+     * no hay nada que reservar.  Ver `util/thread_slot.h`. */
+    static util::ThreadSlot depth_slot;
+    depth_slot.ensure();
+    const auto read_depth = [&]() -> uintptr_t {
+        return reinterpret_cast<uintptr_t>(depth_slot.get());
+    };
+    const auto write_depth = [&](uintptr_t d) {
+        depth_slot.set(reinterpret_cast<void *>(d));
+    };
+    if (read_depth() > 64) {
         r.found = true;
         r.satisfied = false;
         return r;
@@ -169,11 +182,14 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
     g.params = &params;
     g.args = &args;
 
-    ++depth;
+    write_depth(read_depth() + 1);
     struct DepthGuard {
-        int &d;
-        ~DepthGuard() { --d; }
-    } guard{depth};
+        util::ThreadSlot &s;
+        ~DepthGuard() {
+            s.set(reinterpret_cast<void *>(
+                reinterpret_cast<uintptr_t>(s.get()) - 1));
+        }
+    } guard{depth_slot};
 
     switch (cd->ckind) {
     case ast::ConceptKind::Predicate: {

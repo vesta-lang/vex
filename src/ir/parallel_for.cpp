@@ -17,6 +17,7 @@
 #include "ir/parallel_for.h"
 
 #include "util/ThreadPool.h"
+#include "util/thread_slot.h"
 
 #include <atomic>
 #include <chrono>
@@ -27,6 +28,49 @@
 #include <thread>
 
 namespace ir {
+
+/**
+ * @brief Hilos ya reservados por algun reparto en curso.
+ *
+ * GLOBAL y no por hilo: lo que hay que respetar es cuantos nucleos tiene la
+ * maquina, y eso no lo sabe un hilo mirandose a si mismo.  Los dos niveles de
+ * reparto -- por modulo y por funcion -- se sirven de aqui.
+ */
+static std::atomic<unsigned> g_claimed{0};
+
+/**
+ * @brief ¿Este hilo esta DENTRO de una tarea del pool?
+ *
+ * Aparte del presupuesto, y por una razon distinta: encolar en el pool desde
+ * dentro de una de sus tareas es un bloqueo clasico -- los workers estan todos
+ * ocupados con las tareas de fuera, las de dentro no arrancan nunca, y las de
+ * fuera no terminan porque esperan a las de dentro --.  El presupuesto acota
+ * CUaNTOS hilos hay; esto impide una forma concreta de cuelgue.
+ *
+ * En una ranura propia y NO en `thread_local`: en MinGW la TLS es emulada, y
+ * una variable de hilo con inicializador dinamico genera una guarda que se
+ * bloquea cuando hay hilos que nacen y mueren -- que es exactamente lo que hace
+ * el reparto por modulo, un lote de hilos por nivel.  Ver `util/thread_slot.h`.
+ * El valor cabe en el propio puntero, asi que no hay nada que reservar.
+ */
+static util::ThreadSlot g_in_pool_task;
+
+/// El puntero ES el valor: nulo = no, cualquier otra cosa = si.
+inline bool in_pool_task() noexcept { return g_in_pool_task.get() != nullptr; }
+
+inline void set_in_pool_task(bool v) noexcept {
+    g_in_pool_task.ensure();
+    g_in_pool_task.set(v ? reinterpret_cast<void *>(1) : nullptr);
+}
+
+/// Pone la marca mientras vive.  Se usa dentro de cada tarea del pool.
+struct InPoolTaskScope {
+    const bool previous;
+    InPoolTaskScope() noexcept : previous(in_pool_task()) {
+        set_in_pool_task(true);
+    }
+    ~InPoolTaskScope() { set_in_pool_task(previous); }
+};
 
 namespace {
 
@@ -100,17 +144,37 @@ unsigned compile_threads() {
     return n;
 }
 
+unsigned available_threads() {
+    const unsigned total = compile_threads();
+    const unsigned claimed = g_claimed.load(std::memory_order_relaxed);
+    return (claimed >= total) ? 1u : (total - claimed);
+}
+
+OuterParallelScope::OuterParallelScope(unsigned threads) noexcept : taken_(0) {
+    const unsigned free_now = available_threads();
+    /* Nunca mas de lo que queda.  Se recorta en vez de fallar: quien reparte
+     * pide lo que le gustaria tener, y el presupuesto decide -- no al reves. */
+    taken_ = (threads > free_now) ? free_now : threads;
+    if (taken_ > 0) g_claimed.fetch_add(taken_, std::memory_order_relaxed);
+}
+
+OuterParallelScope::~OuterParallelScope() noexcept {
+    if (taken_ > 0) g_claimed.fetch_sub(taken_, std::memory_order_relaxed);
+}
+
 void for_each_function(IrModule &mod,
                        const std::function<void(IrFunction &)> &f) {
     const size_t n = mod.functions.size();
-    const unsigned hilos = compile_threads();
-    /* Reentrada: si esto ya esta repartiendo mas arriba en la pila, aqui se
-     * trabaja en fila de uno.  Encolar en el mismo pool desde dentro de una de
-     * sus tareas es un bloqueo clasico: los workers estan todos ocupados con
-     * las tareas de fuera, las de dentro no arrancan nunca, y las de fuera no
-     * terminan porque esperan a las de dentro. */
-    static thread_local bool dispatching = false;
-    if (hilos <= 1 || n < 8 || dispatching) {
+    /* Lo que quede del presupuesto, no la maquina entera: puede haber un
+     * reparto por MODULO en marcha que ya se quedo con casi todo.  Ver
+     * @c available_threads. */
+    const unsigned hilos = available_threads();
+    /* Reentrada: dentro de una tarea del pool se trabaja en fila de uno.
+     * Encolar en el mismo pool desde dentro de una de sus tareas es un bloqueo
+     * clasico: los workers estan todos ocupados con las tareas de fuera, las de
+     * dentro no arrancan nunca, y las de fuera no terminan porque esperan a las
+     * de dentro. */
+    if (hilos <= 1 || n < 8 || in_pool_task()) {
         g_stats.serial_walks.fetch_add(1, std::memory_order_relaxed);
         for (auto &fn : mod.functions)
             f(fn);
@@ -128,7 +192,11 @@ void for_each_function(IrModule &mod,
      * de CTPE.  Para un modulo grande se diluye -- de ahi el -24% medido --,
      * pero un programa de 50 lineas pasaba de 187 ms a 49 SEGUNDOS: montar el
      * pool costaba muchisimo mas que el trabajo que repartia. */
-    static ThreadPool pool(hilos);
+    /* Se dimensiona con la MAQUINA, no con lo que quede libre ahora: es
+     * estatico, asi que el primer reparto que pase por aqui fija su tamano para
+     * todo el proceso.  Cuantos se usan de verdad lo decide el presupuesto en
+     * cada reparto, no el tamano del pool. */
+    static ThreadPool pool(compile_threads());
 
     std::atomic<size_t> next{0};
     std::atomic<size_t> done{0};
@@ -160,6 +228,9 @@ void for_each_function(IrModule &mod,
             std::atomic<unsigned> &v;
             ~OnExit() { v.fetch_sub(1); }
         } on_exit{alive};
+        /* Dentro de una tarea: lo que corra aqui no puede volver a encolar en
+         * este mismo pool.  Ver @c InPoolTaskScope. */
+        const InPoolTaskScope dentro;
         for (;;) {
             const size_t i = next.fetch_add(1);
             if (i >= n) return;
@@ -185,13 +256,15 @@ void for_each_function(IrModule &mod,
      * trabajaban, asi que con `nucleos-1` workers mas el principal girando se
      * sobresuscribia la maquina: el que espera le roba el nucleo al que
      * trabaja. */
-    alive.store(hilos);
-    dispatching = true;
-    struct OnDone {
-        bool &r;
-        ~OnDone() { r = false; }
-    } on_done{dispatching};
-    for (unsigned h = 0; h + 1 < hilos; ++h)
+    /* Se reserva lo que se va a usar, para que un reparto de mas adentro -- o
+     * de otro modulo a la vez -- vea la maquina ya ocupada y no la
+     * sobresuscriba.  Puede conceder MENOS de lo pedido, y entonces se reparte
+     * entre menos: el presupuesto manda. */
+    const OuterParallelScope reservation(hilos);
+    const unsigned used =
+        reservation.granted() > 0 ? reservation.granted() : 1u;
+    alive.store(used);
+    for (unsigned h = 0; h + 1 < used; ++h)
         pool.enqueue(trabajar);
     trabajar();
 

@@ -73,6 +73,7 @@
 #include "analysis/facts/value_range.h"
 #include "ir/ssa_ir.h"
 
+#include <atomic> // los contadores los suman varios modulos a la vez
 #include <string>
 #include <unordered_set>
 
@@ -152,7 +153,10 @@ struct TiempoPase {
 /// solo cuando ninguna funcion cambia, asi que este numero es lo que el codigo
 /// PIDIO, no una constante: hay programas que convergen en dos vueltas y otros
 /// que necesitan diez.
-long long &vueltas_punto_fijo();
+///
+/// ATOMICO porque "sumadas sobre todos los modulos" significa literalmente eso:
+/// los modulos se compilan en paralelo y suman aqui a la vez.
+std::atomic<long long> &vueltas_punto_fijo();
 
 /**
  * @brief Veces que el punto fijo se quedo SIN converger, agotando el tope.
@@ -167,12 +171,12 @@ long long &vueltas_punto_fijo();
  * Distinto de cero significa que hay que mirarlo, no que haya que subir el
  * tope.
  */
-long long &fixpoint_truncations();
+std::atomic<long long> &fixpoint_truncations();
 
 /// Visitas a una funcion (vueltas x funciones, sumado sobre los modulos).  Es
 /// el numero con el que TIENE que cuadrar la cuenta de llamadas de un pase que
 /// corra una vez por funcion; si no cuadra, el contador esta mal.
-long long &visitas_a_funcion();
+std::atomic<long long> &visitas_a_funcion();
 
 /**
  * @brief Lo que costo un pase EN UNA FUNCION concreta.
@@ -250,7 +254,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline = true,
  * Y NO sustituye al modelo: lo que guarda es lo que el modelo contesto.  Si el
  * modelo se afina manana, esto contesta lo afinado.
  */
-struct CacheEfectosDce {
+struct DceEffectsCache {
     /// Instrucciones que tenia la funcion al llenarse.  Si cambia, no vale.
     size_t n = 0;
     /**
@@ -289,7 +293,7 @@ struct CacheEfectosDce {
 bool ir_pass_dce(IrFunction &fn,
                  const analysis::effects::NativeDecls *decls = nullptr,
                  const analysis::AsmBindingFacts *asm_bindings = nullptr,
-                 CacheEfectosDce *cache = nullptr,
+                 DceEffectsCache *cache = nullptr,
                  const analysis::IrFacts *facts = nullptr,
                  const analysis::PointsTo *pt = nullptr);
 

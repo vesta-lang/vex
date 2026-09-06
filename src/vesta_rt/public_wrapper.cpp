@@ -31,6 +31,8 @@
 #include "vesta_rt/public.h"
 #include "vesta_rt/abi.h"
 
+#include "util/thread_owned.h" // el cache por hilo, sin `thread_local`
+
 #include <cstdio>
 #include <cstring>
 #include <new> // placement-new (vrt_newobjs)
@@ -1612,6 +1614,26 @@ static inline void read_params_unified(runtime::ProcessVM *p, uint64_t ptr,
     }
 }
 
+/// Una entrada del cache de @c vrt_findmethod.
+struct FmEntry {
+    uint64_t cls;
+    uint64_t name_addr;
+    void *method;
+};
+
+/* Las ocho entradas y el turno, en UNA ranura por hilo.  Nada de
+ * `thread_local`: en MinGW la TLS es emulada y cada acceso es una llamada, y
+ * esto es el cache del despacho dinamico.
+ *
+ * A nivel de FICHERO y no como estatico dentro de la funcion: un estatico local
+ * con constructor no trivial genera una variable de guarda, que es lo que se
+ * queria quitar.  Ver `util/thread_owned.h`. */
+struct FmCache {
+    FmEntry e[8] = {};
+    unsigned next = 0; ///< a quien le toca ser reemplazado
+};
+static util::ThreadOwned<FmCache> g_fm_owner;
+
 void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr) {
     if (!proc) return nullptr;
     runtime::ProcessVM *p = as_proc(proc);
@@ -1640,14 +1662,8 @@ void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr) {
      * defmethod en runtime (raro, solo en __module_init que corre antes del hot
      * path) podria stalear una entrada -> aceptable (el cache se llena tras
      * __module_init). */
-    struct FmEntry {
-        uint64_t cls;
-        uint64_t name_addr;
-        void *method;
-    };
-    static thread_local FmEntry g_fm_cache[8] = {};
-    static thread_local unsigned g_fm_next = 0;
-    for (const FmEntry &e : g_fm_cache) {
+    FmCache &fm = g_fm_owner.get();
+    for (const FmEntry &e : fm.e) {
         if (e.cls == pr.class_ptr && e.name_addr == pr.name_addr && e.method)
             return e.method;
     }
@@ -1660,8 +1676,8 @@ void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr) {
     auto *ci = reinterpret_cast<loader::ClassInfo *>(pr.class_ptr);
     void *m = reg.find_method(ci, buf);
     if (m) { /* cachear (reemplazo round-robin del slot mas viejo). */
-        g_fm_cache[g_fm_next & 7u] = FmEntry{pr.class_ptr, pr.name_addr, m};
-        ++g_fm_next;
+        fm.e[fm.next & 7u] = FmEntry{pr.class_ptr, pr.name_addr, m};
+        ++fm.next;
     }
     return m;
 }

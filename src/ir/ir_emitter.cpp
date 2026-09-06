@@ -36,6 +36,7 @@
  */
 
 #include "util/env_flags.h"
+#include "util/thread_slot.h" // un contador por hilo, sin `thread_local`
 #include "ir/ir_emitter.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/vel_sink.h" // a donde sale lo emitido (una emision, N destinos)
@@ -5868,8 +5869,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         std::vector<int> sp_save =
             live_regs_through_call(ctx, sp_call_pos, IR_NO_VALUE);
         emit_save_live_regs(ctx, sp_call_pos, sp_save);
-        static thread_local uint64_t sp_label_seq = 0;
-        const uint64_t lbl = ++sp_label_seq;
+        /* En una ranura propia y no en `thread_local`: en MinGW la TLS es
+         * emulada y cada acceso es una llamada.  Sigue siendo POR HILO, igual
+         * que antes -- no se cambia el alcance, solo como se guarda --, y el
+         * contador cabe en el propio puntero, asi que no reserva nada. */
+        static util::ThreadSlot sp_label_seq;
+        sp_label_seq.ensure();
+        const uint64_t lbl =
+            reinterpret_cast<uintptr_t>(sp_label_seq.get()) + 1;
+        sp_label_seq.set(reinterpret_cast<void *>(lbl));
         // Indices invertidos a proposito: mas abajo se emite
         // `mov r14, r_del`, asi que r_ptr NO puede vivir en r14.
         Reg r_ptr = ctx.load_src(ins.operands[0], 1);

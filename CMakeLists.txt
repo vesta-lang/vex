@@ -1107,7 +1107,18 @@ else ()
 endif ()
 
 # Infra de analisis: AnalysisManager (type-erasure + dependencias + invalidacion).
-add_executable(test_analysis_manager tests/analysis/test_manager.cpp)
+#
+# No enlaza el nucleo a proposito -- es un componente de solo cabecera y asi el
+# test compila en segundos.  Del pozo de nombres si necesita el `.cpp`: la
+# unidad de un analisis se nombra con el puntero INTERNADO, no con la cadena.
+add_executable(test_analysis_manager tests/analysis/test_manager.cpp
+                                     src/util/name_pool.cpp
+                                     # Lo que ESTE hilo tiene cogido vive en
+                                     # una ranura, no en un `thread_local`.
+                                     src/util/thread_slot.cpp
+                                     # Y el cerrojo del gestor es el nuestro,
+                                     # no el de la emulacion de pthreads.
+                                     src/util/shared_mutex.cpp)
 target_include_directories(test_analysis_manager PRIVATE ${VM_INCLUDES})
 
 # Coste por opcode derivado del codigo maquina de los handlers.  ENLAZA la VM
@@ -1487,6 +1498,9 @@ add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/util/serialize.cpp
                                 src/util/file_read.cpp
                                 src/util/env_flags.cpp
+                                # `env_flags` guarda su buffer relido en una
+                                # ranura por hilo (nada de `thread_local`).
+                                src/util/thread_slot.cpp
                                 src/vxdbg/store.cpp
                                 src/vxdbg/pack_store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
@@ -1539,6 +1553,9 @@ add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
                                   src/vxdbg/codec_source.cpp
                                   src/vxdbg/codec_backend.cpp
                                   src/vxdbg/store_source.cpp
+                                  # El codificador deja el mapa ordenado antes
+                                  # de guardarlo, y eso vive en `roots.cpp`.
+                                  src/vxdbg/roots.cpp
                                   src/vxdbg/resolver.cpp)
 target_include_directories(test_vxdbg_resolve PRIVATE ${VM_INCLUDES} src/vxdbg)
 
@@ -1900,6 +1917,9 @@ endif ()
 # poder probarlo aparte es parte de que sea reutilizable.
 add_executable(test_crono_precision tests/util/test_crono_precision.cpp
                                     src/util/crono_tramo.cpp
+                                    # El acumulador de cada hilo vive en una
+                                    # ranura, no en un `thread_local`.
+                                    src/util/thread_slot.cpp
                                     src/util/reloj.cpp)
 target_include_directories(test_crono_precision PRIVATE ${VM_INCLUDES})
 if (NOT WIN32)
@@ -1916,6 +1936,9 @@ add_executable(test_asa_fact_file_lnx tests/analysis/test_asa_fact_file_lnx.cpp
                                       src/analysis/asa/fact_file.cpp
                                       src/analysis/asa/fact_store.cpp
                                       src/util/env_flags.cpp
+                                      # `env_flags` guarda su buffer relido en
+                                      # una ranura por hilo.
+                                      src/util/thread_slot.cpp
                                       src/util/serialize.cpp)
 target_include_directories(test_asa_fact_file_lnx PRIVATE ${VM_INCLUDES})
 

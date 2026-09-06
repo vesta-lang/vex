@@ -76,7 +76,19 @@ namespace vx {
  * macro llama @c static_assert (o futuros @c comptime_compile, etc.),
  * el virtual fn accede al TypeChecker del compile en curso via este
  * puntero.  Single-thread compile -> sin contencion. */
-thread_local TypeChecker *g_active_typechecker = nullptr;
+/* En una RANURA propia, no en `thread_local`: en MinGW la TLS es emulada y cada
+ * acceso es una llamada.  Lo que se guarda es un puntero, asi que cabe en la
+ * ranura tal cual y no hay nada que reservar.  Ver `util/thread_slot.h`. */
+util::ThreadSlot g_typechecker_slot;
+/// El comprobador activo en ESTE hilo, o nulo si no hay ninguno.
+inline TypeChecker *active_typechecker() {
+    return static_cast<TypeChecker *>(g_typechecker_slot.get());
+}
+/// Fija el comprobador activo de ESTE hilo.
+inline void set_active_typechecker(TypeChecker *tc) {
+    g_typechecker_slot.ensure();
+    g_typechecker_slot.set(tc);
+}
 
 /**
  * @brief implementacion del virtual fn `static_assert`
@@ -85,7 +97,7 @@ thread_local TypeChecker *g_active_typechecker = nullptr;
  * @c cond evaluado y un @c msg como C-string (host_ptr a bytes).
  *
  * Si @c cond es 0/falso, emite un diagnostic error en el TypeChecker
- * activo (g_active_typechecker) y returns 1 (status fail).  El AST
+ * activo (ver @c active_typechecker) y returns 1 (status fail).  El AST
  * eval del macro recibe el u64 returned y puede propagar; pero el
  * mecanismo standar es: el diagnostic emite el error -> el macro
  * sigue ejecutando pero el compile final fallara con ese error.
@@ -179,20 +191,21 @@ static Type type_from_name_str(const char *name) {
     if (nm == "ptr") return Type{PrimitiveKind::PTR};
     /* Clase/struct/enum por nombre.  Buscamos en los layouts del
      * TypeChecker activo. */
-    if (!g_active_typechecker) return Type{};
-    const auto &cls = g_active_typechecker->class_layouts();
+    TypeChecker *const tc = active_typechecker();
+    if (!tc) return Type{};
+    const auto &cls = tc->class_layouts();
     if (cls.find(nm) != cls.end()) {
         Type t{PrimitiveKind::CLASS};
         t.struct_name = nm;
         return t;
     }
-    const auto &str = g_active_typechecker->struct_layouts();
+    const auto &str = tc->struct_layouts();
     if (str.find(nm) != str.end()) {
         Type t{PrimitiveKind::STRUCT};
         t.struct_name = nm;
         return t;
     }
-    const auto &enm = g_active_typechecker->enum_layouts();
+    const auto &enm = tc->enum_layouts();
     if (enm.find(nm) != enm.end()) {
         Type t{PrimitiveKind::STRUCT}; // enum representado como STRUCT en Type
         t.struct_name = nm;
@@ -202,21 +215,23 @@ static Type type_from_name_str(const char *name) {
 }
 
 extern "C" uint64_t vx_comptime_type_sizeof(const char *name) {
-    if (!g_active_typechecker) return 0;
+    TypeChecker *const tc = active_typechecker();
+    if (!tc) return 0;
     const Type t = type_from_name_str(name);
     if (t.kind == PrimitiveKind::VOID) return 0;
-    return comptime_type_size(*g_active_typechecker, t);
+    return comptime_type_size(*tc, t);
 }
 
 extern "C" uint64_t vx_comptime_type_alignof(const char *name) {
-    if (!g_active_typechecker) return 0;
+    TypeChecker *const tc = active_typechecker();
+    if (!tc) return 0;
     const Type t = type_from_name_str(name);
     if (t.kind == PrimitiveKind::VOID) return 0;
-    return comptime_type_align(*g_active_typechecker, t);
+    return comptime_type_align(*tc, t);
 }
 
 extern "C" uint64_t vx_comptime_type_kind(const char *name) {
-    if (!g_active_typechecker) return 0;
+    if (!active_typechecker()) return 0;
     const Type t = type_from_name_str(name);
     return static_cast<uint64_t>(comptime_type_kind(t));
 }
@@ -231,10 +246,10 @@ extern "C" uint64_t vx_comptime_type_kind(const char *name) {
  * @param msg Mensaje del fallo, ya formado.
  */
 void report_comptime_fatal(const std::string &msg) {
-    if (g_active_typechecker) {
+    if (TypeChecker *const tc = active_typechecker()) {
         SourceLoc loc;
         loc.set_file("<comptime>");
-        g_active_typechecker->diagnostics().error(loc, msg);
+        tc->diagnostics().error(loc, msg);
     } else {
         std::fprintf(stderr, "[vx] %s (sin TypeChecker activo)\n", msg.c_str());
     }
@@ -323,19 +338,18 @@ TypeChecker::TypeChecker(ast::ModuleNode &mod, Diagnostics &diags)
     function_sigs_.reserve(16);
     /* marcar este TypeChecker como el activo + registrar
      * los virtual fns una vez por proceso (registration idempotent).
-     * NOTA: g_active_typechecker se mantiene apuntando aqui hasta el
-     * destructor.  Multi-instancia en paralelo no soportado todavia
-     * (single-thread compile por diseno). */
-    g_active_typechecker = this;
+     * NOTA: la ranura se mantiene apuntando aqui hasta el destructor.
+     * Multi-instancia en paralelo no soportado todavia (single-thread compile
+     * por diseno). */
+    set_active_typechecker(this);
     register_comptime_virtual_fns();
 }
 
 TypeChecker::~TypeChecker() {
-    /*  MC.20: limpiar el pointer thread_local SOLO si es esta
-     * instancia (defensive: otro TypeChecker pudo haberse construido
-     * y sobreescrito el slot). */
-    if (g_active_typechecker == this) {
-        g_active_typechecker = nullptr;
+    /*  MC.20: limpiar la ranura SOLO si es esta instancia (defensive: otro
+     * TypeChecker pudo haberse construido y sobreescrito la ranura). */
+    if (active_typechecker() == this) {
+        set_active_typechecker(nullptr);
     }
 }
 

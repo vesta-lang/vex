@@ -202,7 +202,7 @@ static void asking_twice_costs_once() {
     const auto pedir = [&]() -> const analysis::DefiniteStoreMap & {
         return am.get_or_compute_v<analysis::DefiniteStoreAnalysis,
                                    analysis::DefiniteStoreMap>(
-            fn.name, fn.version, [&]() {
+            fn.name_key(), fn.version, [&]() {
                 ++computed;
                 return analysis::compute_definite_stores(fn);
             });

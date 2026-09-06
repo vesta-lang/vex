@@ -23,6 +23,8 @@
  */
 
 #include "util/env_flags.h"
+#include "util/thread_owned.h" // estado por hilo, sin `thread_local`
+#include "util/thread_slot.h"  // lo que cabe en un puntero, sin reservar
 #include "jit/vreg_select.h"
 #include "jit/jit_branch_prof.h" // auto-PGO: contadores de branch por linea
 
@@ -85,15 +87,22 @@ static bool vreg_fma_ok() {
  *
  * Por hilo, porque cada uno compila la suya.
  */
-std::string &vreg_ultimo_motivo() {
-    static thread_local std::string motivo;
-    return motivo;
-}
+/* Por RANURA y no con `thread_local`: en MinGW la TLS es emulada, y una
+ * `std::string` de hilo tiene inicializador dinamico, que genera una guarda que
+ * se bloquea con hilos que nacen y mueren.  Ver `util/thread_owned.h`.
+ *
+ * Y a nivel de FICHERO, no como estatico dentro de la funcion: un estatico
+ * local con constructor no trivial vuelve a generar esa misma guarda, que es lo
+ * que se queria quitar.  Un global se inicializa antes de `main`, cuando aun no
+ * hay mas hilos. */
+static util::ThreadOwned<std::string> g_last_reason;
+
+std::string &vreg_last_reason() { return g_last_reason.get(); }
 
 /** @brief Diagnostico opt-in (VESTA_JIT_VREGS_DEBUG=1) de por que una
  *  funcion no es seleccionable por el path vreg. */
 static void vreg_dbg(const char *fn, const char *op) {
-    vreg_ultimo_motivo() = (op != nullptr) ? op : "";
+    vreg_last_reason() = (op != nullptr) ? op : "";
     static const bool on = util::flag_on(util::FlagId::VregsDebug);
     if (on)
         std::fprintf(stderr, "[vreg-sel] '%s' no soportada: op %s\n", fn, op);
@@ -882,25 +891,43 @@ bool emit_short_fill(std::vector<MInstr> &O, const MOperand &addr, int64_t len,
 } // namespace
 
 // Watchdog CTPE: direccion del handler de safepoint (0 = desactivado).  Es
-// thread_local porque cada hilo compila de forma aislada; lo setea
-// try_invoke_ctpe alrededor del eager-compile del programa a precomputar.  Con
-// != 0, vreg_select emite un poll de safepoint en cada back-edge (loop) para
-// que el temporizador pueda abortar el precomputo si excede el presupuesto.
-static thread_local uint64_t g_ctpe_sp_handler = 0;
+// Por HILO porque cada uno compila de forma aislada; lo setea try_invoke_ctpe
+// alrededor del eager-compile del programa a precomputar.  Con != 0,
+// vreg_select emite un poll de safepoint en cada back-edge (loop) para que el
+// temporizador pueda abortar el precomputo si excede el presupuesto.
+//
+// En una RANURA y no en `thread_local`: en MinGW la TLS es emulada y cada
+// acceso es una llamada.  La direccion cabe en el propio puntero.
+static util::ThreadSlot g_ctpe_sp_slot;
+
+/// El manejador de safepoint de CTPE de ESTE hilo, o 0 si no hay CTPE.
+static uint64_t g_ctpe_sp_handler() noexcept {
+    return static_cast<uint64_t>(
+        reinterpret_cast<uintptr_t>(g_ctpe_sp_slot.get()));
+}
 
 void vreg_set_ctpe_safepoint_handler(uint64_t handler_addr) noexcept {
-    g_ctpe_sp_handler = handler_addr;
+    g_ctpe_sp_slot.ensure();
+    g_ctpe_sp_slot.set(
+        reinterpret_cast<void *>(static_cast<uintptr_t>(handler_addr)));
 }
 
 // ABI custom por funcion: resuelve los param_abi_regs de un callee por NOMBRE
 // (para el CALL directo).  Lo setea el driver AOT desde su indice fn_by_name
-// antes de compilar; thread_local porque cada hilo compila aislado.  El CALLIND
-// NO lo usa (lleva su ABI en la instruccion, tomada del tipo del puntero).
+// antes de compilar; por HILO porque cada uno compila aislado.  El CALLIND NO
+// lo usa (lleva su ABI en la instruccion, tomada del tipo del puntero).
 // Devuelve nullptr si no hay ABI custom (caso comun).
-static thread_local AbiResolver g_abi_resolver;
+//
+// Por RANURA y no con `thread_local`: un `std::function` de hilo tiene
+// inicializador dinamico, que en MinGW genera una guarda que se bloquea con
+// hilos que nacen y mueren.  Ver `util/thread_owned.h`.
+static util::ThreadOwned<AbiResolver> g_abi_owner;
+
+/// El resolutor de ABI de ESTE hilo.
+static AbiResolver &g_abi_resolver() { return g_abi_owner.get(); }
 
 void vreg_set_abi_resolver(AbiResolver resolver) noexcept {
-    g_abi_resolver = std::move(resolver);
+    g_abi_resolver() = std::move(resolver);
 }
 
 /**
@@ -1678,15 +1705,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         }
     }
 
-    // Watchdog CTPE: si esta activo (thread_local seteado por try_invoke_ctpe),
-    // internamos la direccion del handler de safepoint una vez para emitir un
-    // poll en cada back-edge (loop) y poder abortar el precomputo por tiempo.
-    // Fuera de CTPE (g_ctpe_sp_handler == 0) no se emite -> cero impacto en el
+    // Watchdog CTPE: si esta activo (lo pone try_invoke_ctpe en la ranura de
+    // este hilo), internamos la direccion del handler de safepoint una vez para
+    // emitir un poll en cada back-edge (loop) y poder abortar el precomputo por
+    // tiempo.  Fuera de CTPE (handler == 0) no se emite -> cero impacto en el
     // JIT de produccion.
     int sp_idx = -1;
-    if (g_ctpe_sp_handler != 0) {
-        sp_idx = static_cast<int>(
-            out.intern_imm64(static_cast<int64_t>(g_ctpe_sp_handler)));
+    const uint64_t sp_handler = g_ctpe_sp_handler();
+    if (sp_handler != 0) {
+        sp_idx =
+            static_cast<int>(out.intern_imm64(static_cast<int64_t>(sp_handler)));
     }
 
     for (size_t b = 0; b < NB; ++b) {
@@ -2133,7 +2161,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * sin la op --, y cada investigacion empezaba por recompilar con
              * una variable de entorno puesta para averiguar lo que el
              * compilador ya sabia. */
-            vreg_ultimo_motivo() =
+            vreg_last_reason() =
                 std::string(ir::ir_op_name(in.op)) + " (sin motivo apuntado)";
             MOp mop;
             MCond cc;
@@ -5989,9 +6017,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      * ya puesto) tiene prioridad. */
                     const std::vector<std::string> *cabi =
                         in.call_abi_regs.empty() ? nullptr : &in.call_abi_regs;
-                    if (!cabi && g_abi_resolver) {
-                        const std::vector<std::string> *r =
-                            g_abi_resolver(in.func_name);
+                    const AbiResolver &abi = g_abi_resolver();
+                    if (!cabi && abi) {
+                        const std::vector<std::string> *r = abi(in.func_name);
                         if (r && !r->empty()) cabi = r;
                     }
                     if (!emit_host_args(in.operands, O, cabi)) {
