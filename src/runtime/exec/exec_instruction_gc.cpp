@@ -25,7 +25,7 @@
 #include <cstdlib>
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
-#include "util/simd_copy.h"
+#include "util/vesta_memcpy.h"
 #include "runtime/profile.h"
 
 namespace runtime {
@@ -155,8 +155,8 @@ void exec_instr_addcur(ProcessVM *vm, const DecodedInstr &instr) {
  *
  * Lee rLen bytes desde VM memory a partir de la direccion virtual almacenada
  * en el registro rSrc y los escribe en la memoria host apuntada por curN.
- * Usa la funcion simd_copy::fast_copy para elegir en tiempo de ejecucion la
- * ruta SIMD mas rapida (AVX-512, AVX2, SSE2 o memcpy escalar).
+ * La copia la hace @c read_bytes, que en su camino rapido usa
+ * @c util::vesta_memcpy: elige AVX2 o SSE2 segun la CPU en tiempo de ejecucion.
  *
  * Tras la copia avanza automaticamente:
  *   - curN  += rLen  (cursor host apunta al byte siguiente al ultimo copiado)
@@ -827,7 +827,7 @@ void exec_instr_gcpromote(ProcessVM *vm, const DecodedInstr &instr) {
         vm->registers.regs[rdst].qword(src);
         return;
     }
-    std::memcpy(new_ptr, reinterpret_cast<void *>(src), total_size);
+    util::vesta_memcpy(new_ptr, reinterpret_cast<void *>(src), total_size);
     // Marcar el nuevo header como shared (bit 31 en hash_code).
     auto *new_hdr = reinterpret_cast<loader::ObjectHeader *>(new_ptr);
     new_hdr->hash_code |= 0x80000000u;
@@ -865,7 +865,7 @@ void exec_instr_gcdemote(ProcessVM *vm, const DecodedInstr &instr) {
         return;
     }
     uint8_t *new_ptr = vm->gc_heap.deref(h);
-    std::memcpy(new_ptr, reinterpret_cast<void *>(src), total_size);
+    util::vesta_memcpy(new_ptr, reinterpret_cast<void *>(src), total_size);
     // Limpiar bit shared.
     auto *new_hdr = reinterpret_cast<loader::ObjectHeader *>(new_ptr);
     new_hdr->hash_code &= 0x7FFFFFFFu;

@@ -26,7 +26,7 @@
 
 #include "arena_manager.h"
 #include "TLB.h"
-#include "util/simd_copy.h" // copia por bloques que SI despacha por CPU
+#include "util/vesta_memcpy.h" // copia por bloques que SI despacha por CPU
 
 namespace vm {
 
@@ -312,15 +312,12 @@ class VirtualMemory {
         const uint64_t off = vaddr & 0xFFFULL;
         if (__builtin_expect(page == cached_page_vaddr && off + size <= 4096,
                              1)) {
-            /* `simd_copy::fast_copy` y no `std::memcpy`: el de la CRT de
-             * Windows no despacha por capacidad de la CPU y se queda en el
-             * camino escalar.  El nuestro elige AVX-512, AVX2 o SSE2 segun lo
-             * que haya, y por debajo de 16 bytes copia en linea con bloques
-             * solapados en vez de llamar a la biblioteca.
-             *
-             * Ya estaba escrito y lo usan los opcodes `memcpy`/`memset` de la
-             * VM; aqui faltaba. */
-            simd_copy::fast_copy(dst, cached_page_host + off, size);
+            /* `util::vesta_memcpy` y no `std::memcpy`: el de la CRT de Windows
+             * no despacha por capacidad de la CPU y se queda en el camino
+             * escalar.  El nuestro elige AVX2 o SSE2 segun lo que haya, y por
+             * debajo de 16 bytes copia en linea con bloques solapados en vez
+             * de llamar a la biblioteca. */
+            util::vesta_memcpy(dst, cached_page_host + off, size);
             return;
         }
         read_bytes_slow(vaddr, dst, size);
@@ -344,7 +341,7 @@ class VirtualMemory {
         const uint64_t off = vaddr & 0xFFFULL;
         if (__builtin_expect(page == cached_page_vaddr && off + size <= 4096,
                              1)) {
-            simd_copy::fast_copy(cached_page_host + off, src, size);
+            util::vesta_memcpy(cached_page_host + off, src, size);
             return;
         }
         write_bytes_slow(vaddr, src, size);
