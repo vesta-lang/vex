@@ -17,10 +17,12 @@
 
 #include "runtime/bundle/predecode.h"
 #include "runtime/decode_instruction.h"
+#include "util/cpu_topology.h"
 
 #if VM_BUNDLES
 
 #if !defined(_WIN32)
+#include <chrono> // el plazo del ayudante cuando se queda sin encargos
 #include <thread> // fuera de Windows no hay capa NT: aqui es la via directa
 #endif
 
@@ -61,6 +63,10 @@ NTSTATUS NTAPI NtCreateThreadEx(PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess,
                                 SIZE_T MaximumStackSize, PVOID AttributeList);
 NTSTATUS NTAPI NtWaitForSingleObject(HANDLE Handle, BOOLEAN Alertable,
                                      PLARGE_INTEGER Timeout);
+/* Dormir un plazo exacto.  `Sleep` de Win32 es esto con la resolucion del
+ * temporizador de por medio y en milisegundos; aqui el plazo son decenas de
+ * microsegundos, asi que hace falta la unidad de 100 ns. */
+NTSTATUS NTAPI NtDelayExecution(BOOLEAN Alertable, PLARGE_INTEGER Interval);
 NTSTATUS NTAPI NtClose(HANDLE Handle);
 }
 
@@ -81,6 +87,53 @@ struct ProcessBasicAffinity {
     ULONG_PTR mask;
 };
 #endif
+
+/**
+ * @brief Vueltas en caliente antes de soltar el nucleo.
+ *
+ * El margen que hay que cubrir es el hueco entre dos entregas seguidas, que
+ * son ~100 ns -- lo que tarda el principal en ejecutar su propio paquete --.
+ * Con 20.000 vueltas de `pause` se cubre de sobra (decenas de microsegundos) y
+ * aun asi un programa que no delega nunca deja de girar enseguida.
+ */
+constexpr uint32_t kOooSpinIdle = 20000;
+
+/**
+ * @brief Se duerme hasta que `head` deje de valer @p seen.
+ *
+ * NO es un plazo.  Dormir un rato corto parece lo simple y no lo es: el plazo
+ * de Windows se redondea a la resolucion del temporizador, asi que pedir 50 us
+ * duerme ~15 ms de verdad.  Con eso, el primer encargo tras un silencio se
+ * quedaba esperando milisegundos, la cola se llenaba entera -- 32.806 rechazos
+ * por "cola llena" en 32.821 despachos -- y no se delegaba NADA: 56 MIPS donde
+ * habia 454.
+ *
+ * Esperar sobre la direccion no tiene ese problema y ademas cierra la carrera
+ * del aviso perdido el mismo: el sistema comprueba que `head` siga valiendo
+ * @p seen ANTES de dormir, asi que un encargo publicado mientras tanto lo
+ * despierta aunque el productor no llegara a ver la marca.
+ *
+ * La marca se publica con orden secuencial -- en x86 es un `xchg`, o sea
+ * barrera completa -- para que el productor no pueda leerla vieja Y ademas
+ * escaparse de la relectura de `head`.  Es el unico lado que necesita barrera;
+ * el productor solo lee.
+ */
+void ooo_idle_wait(uint32_t seen) {
+    g_ooo.parked.store(1, std::memory_order_seq_cst);
+#if defined(_WIN32)
+    /* El plazo es una RED, no el mecanismo: si algun dia se colara un aviso
+     * perdido, esto lo convierte en un retraso y no en un bloqueo. */
+    DWORD ms = 20;
+    WaitOnAddress(&g_ooo.head, &seen, sizeof(seen), ms);
+#else
+    /* Fuera de Windows el plazo corto SI es corto -- `nanosleep` tiene
+     * resolucion de microsegundos --, asi que aqui basta con dormir poco y
+     * volver a mirar; no hace falta ningun aviso. */
+    (void)seen;
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
+#endif
+    g_ooo.parked.store(0, std::memory_order_relaxed);
+}
 
 /**
  * @brief Girar sobre la cola: coger un encargo, ejecutarlo, avanzar.
@@ -105,16 +158,67 @@ void worker_loop() {
      * esperaba 19.  Vive fuera del bucle para que los encargos seguidos
      * aprovechen la pagina del anterior. */
     vm::VirtualMemory::PageView page_view;
+    /* La epoca que corresponde a lo que hay cacheado arriba.  Cuando un proceso
+     * muere, sus paginas se liberan y el puntero de anfitrion que guarda la
+     * cache pasa a ser de otro; ver `ooo_new_epoch`. */
+    uint32_t epoch_seen = g_ooo_epoch.load(std::memory_order_acquire);
+    /* Vueltas seguidas sin encargo.  Es lo que decide cuando dejar de girar en
+     * caliente y CEDER el nucleo -- ver el bloque de abajo. */
+    uint32_t idle = 0;
     for (;;) {
         const uint32_t t = g_ooo.tail.load(std::memory_order_relaxed);
         /* `acquire` sobre `head`: si hay encargo nuevo, su ranura tiene que
          * verse ya escrita.  Es el otro lado del `release` de `ooo_push`. */
-        if (t == g_ooo.head.load(std::memory_order_acquire)) {
+        const uint32_t h = g_ooo.head.load(std::memory_order_acquire);
+        if (t == h) {
             if (__builtin_expect(g_ooo.stop.load(std::memory_order_relaxed) != 0,
                                  0))
                 return;
-            ooo_pause();
+            /* GIRAR EN CALIENTE UN RATO, Y DESPUES SOLTAR EL NUCLEO.
+             *
+             * Girar sin fin le cuesta al principal aunque no se delegue NADA, y
+             * no poco: medido en la mezcla `independiente` con el motor
+             * escalar -- que no forma paquetes, o sea que no hay un solo
+             * encargo que dar --, 280 MIPS sin ayudante contra 252-263 con el.
+             * Entre un 6% y un 10% por un hilo que no hace nada.  El `pause`
+             * cede el hermano SMT dentro del nucleo, pero no cede el NUCLEO: el
+             * planificador del sistema sigue viendo un hilo listo y le da
+             * turno, y donde caiga se lo quita a alguien.
+             *
+             * Asi que se gira en caliente lo justo para no perder la tuberia
+             * -- entre dos entregas seguidas pasan ~100 ns, unas pocas
+             * decenas de vueltas -- y pasado ese margen se duerme de verdad.
+             *
+             * Y se duerme SOBRE `head`, no un plazo: ver `ooo_idle_wait`. */
+            /* SIN espaciar las miradas, y se probo.
+             *
+             * El perfil dice que este bucle se va en un 60% a esperar lineas
+             * del otro nucleo: cada lectura de `head` se la trae en compartido
+             * y la escritura siguiente del productor tiene que quitarsela.
+             * Mirar cada vez menos parecia lo obvio, y medido no compensa:
+             * baja la varianza pero se come el mejor caso -- sin espaciar
+             * aparecen corridas de 450 y 385 MIPS cuando el sistema separa
+             * bien los dos hilos, y con espaciado no pasa de 311, porque
+             * recoger el encargo tarde alarga la juntada --. */
+            if (++idle < kOooSpinIdle) {
+                ooo_pause();
+                continue;
+            }
+            ooo_idle_wait(h);
             continue;
+        }
+        idle = 0;
+
+        /* SOLTAR la pagina cacheada si de por medio murio un proceso.
+         *
+         * Una carga relajada por encargo -- no por byte -- de una linea que
+         * casi nunca cambia.  Sin esto la cache acierta con un puntero a
+         * memoria ya liberada y se descodifica lo que otro haya puesto ahi:
+         * ver `ooo_new_epoch`, que cuenta el caso que lo destapo. */
+        const uint32_t epoch_now = g_ooo_epoch.load(std::memory_order_acquire);
+        if (__builtin_expect(epoch_now != epoch_seen, 0)) {
+            epoch_seen = epoch_now;
+            page_view = vm::VirtualMemory::PageView{};
         }
 
         const OooJob &job = g_ooo.job[t & (kOooSlots - 1)];
@@ -128,10 +232,12 @@ void worker_loop() {
             const DecodedInstr *p = job.instr;
             const uint32_t n = job.n;
             for (uint32_t i = 0; i < n; ++i) p[i].exec_cached(proc, p[i]);
-            /* `release`: los registros que se acaban de escribir tienen que
-             * verse ANTES de que el principal vea el contador a cero, que es
-             * lo que le dice que puede seguir. */
-            g_ooo_exec_pending.fetch_sub(1, std::memory_order_release);
+            /* Nada mas que hacer: el avance de `tail` que hay al final del
+             * bucle lo publica con `release`, y ESO es lo que le dice al
+             * principal que los registros que se acaban de escribir ya se ven.
+             * Antes habia aqui un contador atomico aparte -- una segunda linea
+             * disputada y un RMW por entrega -- que decia lo mismo dos veces.
+             * Ver `g_ooo_exec_mark`. */
         } else if (job.kind == OooKind::Decode) {
             /* DESCODIFICAR POR ADELANTADO el tramo que viene.
              *
@@ -204,6 +310,7 @@ DWORD WINAPI worker_entry(LPVOID) {
  * Si algo falla se sigue igual: quedarse sin afinidad empeora la medida, no la
  * rompe, y abortar por esto seria peor.
  */
+
 void pin_worker_high(HANDLE h) {
     ProcessBasicAffinity info{};
     if (NtQueryInformationProcess(GetCurrentProcess(),
@@ -212,9 +319,26 @@ void pin_worker_high(HANDLE h) {
         return;
     if (info.mask == 0) return;
 
-    // El bit permitido mas alto: 63 - ceros a la izquierda.
-    ULONG_PTR bit = (ULONG_PTR)1
-                    << (63 - (unsigned)__builtin_clzll((uint64_t)info.mask));
+    /* Los rapidos si se puede saber cuales, y solo los que el proceso tenga
+     * permitidos.  Si no se sabe, el bit permitido mas alto, que es lo que
+     * habia: en una maquina homogenea sigue siendo la eleccion correcta.
+     *
+     * La clase ENTERA, no uno: clavarlo en un procesador lo pone a pelearse con
+     * el hilo principal, que va suelto, y eso se midio -- 265 MIPS de 500 casi
+     * siempre, y 457 las veces que el sistema los separaba por suerte --.  Con
+     * la clase entera se consigue lo unico que hace falta, que no acabe en un
+     * nucleo lento, sin quitarle al sistema lo que sabe hacer: apartarlo de
+     * donde ya hay alguien trabajando.
+     *
+     * Que la topologia la conteste `util::cpu_class_mask` y no este fichero es
+     * a proposito: el banco de MIPS necesita el mismo dato para atar sus
+     * medidas, y un hecho tiene un solo productor. */
+    ULONG_PTR bit =
+        (ULONG_PTR)::util::cpu_class_mask(::util::CoreClass::Fast) &
+        (ULONG_PTR)info.mask;
+    if (bit == 0)
+        bit = (ULONG_PTR)1
+              << (63 - (unsigned)__builtin_clzll((uint64_t)info.mask));
     NtSetInformationThread(h, kThreadAffinityMask, &bit, sizeof(bit));
 }
 
@@ -254,12 +378,23 @@ void ooo_start() {
 #endif
 }
 
+void ooo_wake() {
+#if defined(_WIN32)
+    WakeByAddressSingle(&g_ooo.head);
+#endif
+}
+
 void ooo_shutdown() {
     if (!g_ooo_started.load(std::memory_order_acquire)) return;
     // Primero que acabe lo encolado, y solo despues la senyal de parar: al
     // reves se perderia trabajo ya publicado.
     ooo_drain_all();
     g_ooo.stop.store(1, std::memory_order_release);
+    /* Y despertarlo: la senyal de parar se mira al ver la cola vacia, y si esta
+     * dormido no la ve.  Sin esto, parar se quedaba esperando al plazo de la
+     * red -- que existe justo para que un descuido asi no bloquee, pero
+     * depender de el seria dejarlo a proposito. */
+    ooo_wake();
 #if defined(_WIN32)
     if (g_worker != nullptr) {
         NtWaitForSingleObject(g_worker, FALSE, nullptr);

@@ -66,6 +66,30 @@ class Scheduler;    ///< Gestor de procesos que ejecuta el run_loop
  * Contiene flags de control, los operandos descodificados y un puntero al
  * descriptor de la instruccion (InstrFormat).
  */
+/* SIN `alignas(64)`, y es una decision medida, no un descuido.
+ *
+ * Mide 64 bytes exactos, asi que subirle la alineacion parecia gratis y ademas
+ * util: cualquier copia que reciba `alignof(DecodedInstr)` como pista tiene que
+ * suponer 8 y emitir el prologo que alinea el destino en EJECUCION, que es lo
+ * que convierte un tamano constante en variable e impide desenrollar.
+ *
+ * Se probo, y durante un rato REVENTABA -- violacion de segmento nada mas
+ * arrancar --.  La causa no estaba aqui: el asignador del proyecto sustituia
+ * `operator new`/`delete` pero no las sobrecargas SOBRE-ALINEADAS de C++17, asi
+ * que un tipo con `alignas` mayor que la natural se reservaba con el asignador
+ * del sistema y se soltaba por el camino sustituido.  Ya esta arreglado (ver
+ * `util::host_alloc_aligned`), asi que hoy se puede alinear sin que pase nada.
+ *
+ * No se hace porque MIDE PEOR.  Intercalado y en los dos ordenes:
+ *
+ *     mixta:8192:paquetes      284,5 -> 291,5   (+2,5%)
+ *     alu:8192:paquetes        298   -> 299     (igual)
+ *     independ:256:paquetes    499   -> 440     (-12%)
+ *
+ * Y no hace falta para nada: lo unico que necesita estar alineado de verdad es
+ * el array de instrucciones de un paquete, y eso lo garantiza el `alignas` de
+ * `Bundle::instr` con su `static_assert`.  Alinear el TIPO ademas obliga a
+ * todas las demas instrucciones sueltas del programa sin ganar nada. */
 typedef struct DecodedInstr {
     /**
      * @brief Campos de control descodificados del prefijo de la instruccion.
@@ -990,6 +1014,28 @@ class ProcessVM {
      * si lo hay, entonces si toca mirar la atomica.
      */
     bool ooo_exec_dirty = false;
+
+    /**
+     * @brief Le toca a ESTE hilo el paquete que viene.
+     *
+     * DELEGAR UNO, EJECUTAR UNO.  Con material del todo independiente, dejar
+     * que delegue sin freno hace que el principal delegue TODO y no ejecute
+     * nada: se queda de repartidor, el ayudante hace el trabajo en serie y
+     * encima se paga el traspaso.  Medido en la mezcla `independiente`: 7.808
+     * entregas y 0,62 paradas por entrega -- la tuberia SI se formaba -- y aun
+     * asi 366 MIPS contra 490 sin repartir.
+     *
+     * Repartiendo de uno en uno trabajan los dos nucleos, que es lo unico que
+     * puede ganar tiempo.  Y es el limite natural: con UN ayudante, mas de un
+     * paquete por delante solo alarga la cola.
+     *
+     * Vive en el PROCESO y no en el despacho porque un despacho es un paquete
+     * de largo salvo que encadene: con la alternancia dentro del despacho se
+     * delegaba uno y se ejecutaba lo que quedara de ese mismo, o sea casi nada
+     * -- 5,5% del trabajo repartido, cuando el techo de este reparto es la
+     * mitad --.
+     */
+    bool ooo_owner_turn = false;
 
     /**
      * @brief Se sigue intentando delegar EJECUCION?
