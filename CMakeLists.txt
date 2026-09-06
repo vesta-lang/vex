@@ -481,6 +481,22 @@ set(CAPSTONE_USE_LTO OFF CACHE BOOL "" FORCE)
 # nombra.  A `operator new` no lo nombra nadie -- la llamada la pone el
 # compilador --, asi que de un `.a` no se extraeria y el binario se quedaria con
 # el asignador del sistema SIN dar ningun error.  Con objetos entran siempre.
+#
+# Sus pruebas, ejemplos y bancos se construyen TAMBIEN desde aqui: por defecto
+# solo salen cuando la libreria se construye suelta, y asi no aparecerian en la
+# lista de objetivos del IDE.  Se quiere lo contrario -- que se puedan lanzar
+# sin salirse del proyecto --, sobre todo los bancos: `vesta_alloc_bench_*`
+# compara este asignador con el del sistema y rehace, en la maquina de cada
+# uno, la tabla de costes con la que se eligio el tamano de la region.
+#
+# `CACHE ... FORCE` y no un `set` normal porque son opciones del subproyecto y
+# ya estan en la cache con su valor por defecto.
+set(VESTA_ALLOC_BUILD_TESTS ON CACHE BOOL
+        "Compilar las pruebas del asignador" FORCE)
+set(VESTA_ALLOC_BUILD_EXAMPLES ON CACHE BOOL
+        "Compilar los ejemplos del asignador" FORCE)
+set(VESTA_ALLOC_BUILD_BENCH ON CACHE BOOL
+        "Compilar los bancos del asignador" FORCE)
 add_subdirectory(libs/SourceCode/vesta_alloc)
 
 # Capstone (desensamblador)
