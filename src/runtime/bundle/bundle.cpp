@@ -1170,6 +1170,18 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
              * escribe el ayudante, asi que leerla trae su linea de cache: si se
              * mirara siempre, cada despacho pagaria un rebote entre nucleos
              * aunque no se hubiera delegado nada nunca.  Salia en el perfil. */
+            /* La cola VACIA es la senyal de que nadie mas esta leyendo memoria
+             * de la VM: sin encargos, el ayudante no descodifica ni fusiona.
+             * Es el momento exacto en que las tablas de traduccion anteriores
+             * se pueden soltar -- la tabla crece duplicandose y guarda la
+             * anterior viva por si un lector se quedo dentro --.
+             *
+             * La condicion barata va PRIMERO y casi siempre es falsa: la
+             * cadena solo existe entre que la tabla crece y este momento. */
+            if (__builtin_expect(p->vm_mem.has_stale_translation_tables(), 0) &&
+                ooo_pending() == 0)
+                p->vm_mem.reclaim_translation_tables();
+
             if (__builtin_expect(p->ooo_exec_dirty, 0) &&
                 g_ooo_exec_pending.load(std::memory_order_acquire) != 0) {
                 ooo_drain();

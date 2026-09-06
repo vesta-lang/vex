@@ -118,16 +118,14 @@ uint64_t address_of(Pattern p, uint32_t i) {
     }
 }
 
-/**
- * @brief Bytes que el arbol ha pedido al monton, contados EXACTAMENTE.
+/* La memoria la dice la PROPIA TLB (`memory_bytes`), no un contador de fuera.
  *
- * Se cuentan interceptando `operator new`, no mirando el conjunto residente
- * del proceso: el residente no tiene resolucion para unos pocos KB -- la
- * primera version de este banco daba 0,000 KB en tres de los cuatro casos, que
- * es peor que no medir porque parece una medida --.  Y contando es
- * DETERMINISTA: dos commits se comparan sin margen de ruido.
- */
-std::atomic<size_t> g_alloc_bytes{0};
+ * Se intento interceptando `operator new` y estaba mal por dos motivos.  Uno
+ * practico: ese asignador ya lo sustituye el proyecto -- `util/host_allocator`
+ * --, asi que ni enlazaba.  Y otro de fondo, que es el que importa: `new` es
+ * la memoria del ANFITRION, y la TLB es el mapa de la VM.  Contar una con la
+ * otra mezcla dos capas distintas y ademas se traga las reservas de todo lo
+ * demas que corra en el proceso. */
 
 bool g_csv = false;
 
@@ -184,17 +182,22 @@ void bench_lookup(Pattern p) {
  * punteros por UNA pagina.
  */
 void bench_memory(Pattern p, uint32_t pages) {
-    const size_t before = g_alloc_bytes.load(std::memory_order_relaxed);
-    {
-        tlb::LazyHybridTLB t;
-        for (uint32_t i = 0; i < pages; ++i)
-            t.translate(address_of(p, i), vm::MAPPED_PTR_HOST, host_target(i));
-        /* Se mide DENTRO del bloque, con el arbol todavia vivo: lo que
-         * interesa es el pico, no lo que queda al destruirlo. */
-        const size_t after = g_alloc_bytes.load(std::memory_order_relaxed);
-        report("memoria", pattern_name(p), (double)(after - before) / 1024.0,
-               "KB");
-    }
+    tlb::LazyHybridTLB t;
+    for (uint32_t i = 0; i < pages; ++i)
+        t.translate(address_of(p, i), vm::MAPPED_PTR_HOST, host_target(i));
+    /* Dos cifras, y son distintas a proposito.  La tabla crece duplicandose y
+     * guarda la anterior viva por si algun lector se quedo dentro, asi que el
+     * PICO incluye esa cadena; el runtime la suelta en cuanto sabe que no hay
+     * lectores.  Ensenyar solo una de las dos enganaria en un sentido o en el
+     * otro. */
+    const double peak = (double)t.memory_bytes() / 1024.0;
+    t.reclaim_older();
+    const double kept = (double)t.memory_bytes() / 1024.0;
+    char name[48];
+    std::snprintf(name, sizeof(name), "%s-pico", pattern_name(p));
+    report("memoria", name, peak, "KB");
+    std::snprintf(name, sizeof(name), "%s-tras-soltar", pattern_name(p));
+    report("memoria", name, kept, "KB");
 }
 
 /**
@@ -205,15 +208,10 @@ void bench_memory(Pattern p, uint32_t pages) {
  * con nodos de tamano fijo, una pagina cuesta un nodo por nivel y ya.
  */
 void bench_memory_single_high() {
-    const size_t before = g_alloc_bytes.load(std::memory_order_relaxed);
-    {
-        tlb::LazyHybridTLB t;
-        // Bits 40-63 puestos: el indice PT2 mas alto que existe.
-        t.translate(0xFFFFFF0000000000ull, vm::MAPPED_PTR_HOST, host_target(1));
-        const size_t after = g_alloc_bytes.load(std::memory_order_relaxed);
-        report("memoria", "1-pagina-alta", (double)(after - before) / 1024.0,
-               "KB");
-    }
+    tlb::LazyHybridTLB t;
+    // Los bits altos puestos: la direccion mas alta que el mapa admite.
+    t.translate(0xFFFFFF0000000000ull, vm::MAPPED_PTR_HOST, host_target(1));
+    report("memoria", "1-pagina-alta", (double)t.memory_bytes() / 1024.0, "KB");
 }
 
 // --- 3. CONSTRUIR ---------------------------------------------------------
@@ -326,17 +324,6 @@ bool test_race() {
 
 } // namespace
 
-/* Interceptar el monton para contar EXACTO.  Global y no por asignador porque
- * el arbol reserva por tres vias -- `make_unique`, el buffer del vector y su
- * realojo --, y solo aqui pasan las tres. */
-void *operator new(size_t n) {
-    g_alloc_bytes.fetch_add(n, std::memory_order_relaxed);
-    void *p = std::malloc(n);
-    if (p == nullptr) throw std::bad_alloc();
-    return p;
-}
-void operator delete(void *p) noexcept { std::free(p); }
-void operator delete(void *p, size_t) noexcept { std::free(p); }
 
 // --- Memoria del proceso, por plataforma ----------------------------------
 

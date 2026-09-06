@@ -156,6 +156,26 @@ class VirtualMemory {
     }
 
     /**
+     * @brief Quedan tablas de traduccion anteriores por liberar?
+     *
+     * En linea porque quien lo pregunta lo hace en un punto que se recorre a
+     * menudo y la respuesta es que no casi siempre.
+     */
+    [[nodiscard]] inline bool has_stale_translation_tables() const {
+        return tlb.has_older();
+    }
+
+    /**
+     * @brief Libera las tablas de traduccion anteriores.
+     *
+     * SOLO desde un punto en el que quien llama sepa que ningun otro hilo
+     * esta consultando la traduccion.  La tabla crece duplicandose y guarda la
+     * anterior viva para que un lector rezagado no se quede con memoria
+     * liberada; esto es lo que la recupera cuando ya no hay rezagados.
+     */
+    inline void reclaim_translation_tables() { tlb.reclaim_older(); }
+
+    /**
      * @brief Invalida la cache de pagina (usar tras @c map / lazy alloc).
      */
     inline void invalidate_page_cache() const {

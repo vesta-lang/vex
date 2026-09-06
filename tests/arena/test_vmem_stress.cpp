@@ -69,10 +69,9 @@ constexpr uint64_t kBase = 0x400000;
 /// acceso son unidades de nanosegundo.
 constexpr uint32_t kAccesses = 4000000;
 
-/// Bytes pedidos al monton, contados interceptando `operator new`.  Es
-/// DETERMINISTA, al contrario que el conjunto residente, que no tiene
-/// resolucion para unos pocos KB.
-std::atomic<size_t> g_alloc_bytes{0};
+/* La memoria la dice la PROPIA TLB (`memory_bytes`), no un contador de fuera:
+ * `new` es del ANFITRION y la TLB es el mapa de la VM.  Mezclarlas cuenta dos
+ * capas distintas, y ademas ese asignador ya lo sustituye el proyecto. */
 
 bool g_csv = false;
 
@@ -200,7 +199,6 @@ void bench_first_touch(uint32_t pages, uint64_t stride, const char *name) {
 
 /// Bytes que el mapa pide al monton para @p pages paginas separadas @p stride.
 void bench_memory(uint32_t pages, uint64_t stride, const char *name) {
-    const size_t before = g_alloc_bytes.load(std::memory_order_relaxed);
     {
         Vm v;
         /* El indice arranca en UNO cuando el salto es grande: con `i == 0` la
@@ -210,35 +208,21 @@ void bench_memory(uint32_t pages, uint64_t stride, const char *name) {
         const uint32_t first = (stride > kPage) ? 1u : 0u;
         for (uint32_t i = first; i < pages + first; ++i)
             v.mem[kBase + (uint64_t)i * stride] = 1;
-        const size_t after = g_alloc_bytes.load(std::memory_order_relaxed);
-        report("memoria", name, (double)(after - before) / 1024.0, "KB");
+        report("memoria", name, (double)v.tlb.memory_bytes() / 1024.0, "KB");
     }
 }
 
 /// Lo que reserva el mapa por UNA pagina en la direccion @p addr.
 void bench_memory_at(uint64_t addr, const char *name) {
-    const size_t before = g_alloc_bytes.load(std::memory_order_relaxed);
     {
         Vm v;
         v.mem[addr] = 1;
-        const size_t after = g_alloc_bytes.load(std::memory_order_relaxed);
-        report("memoria", name, (double)(after - before) / 1024.0, "KB");
+        report("memoria", name, (double)v.tlb.memory_bytes() / 1024.0, "KB");
     }
 }
 
 } // namespace
 
-/* El monton, interceptado para contar exacto.  Global porque el mapa reserva
- * por varias vias -- los nodos del arbol, el buffer de cada vector y su
- * realojo -- y solo aqui pasan todas. */
-void *operator new(size_t n) {
-    g_alloc_bytes.fetch_add(n, std::memory_order_relaxed);
-    void *p = std::malloc(n);
-    if (p == nullptr) throw std::bad_alloc();
-    return p;
-}
-void operator delete(void *p) noexcept { std::free(p); }
-void operator delete(void *p, size_t) noexcept { std::free(p); }
 
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i)

@@ -14,13 +14,16 @@
  * @file TLB.h                                                                 \
  * @brief Declaracion del Translation Lookaside Buffer (TLB) de VestaVM.       \
  *                                                                             \
- * Declara @c LazyHybridTLB: cache de traduccion de direcciones virtuales      \
- * a punteros del proceso host, organizado en tres niveles.  Incluye           \
- * operaciones de traduccion, insercion, invalidacion y volcado.               \
+ * Declara @c LazyHybridTLB: la traduccion de direcciones virtuales de la VM   \
+ * a punteros del proceso anfitrion.  Es una TABLA PLANA con direccionamiento  \
+ * abierto -- no un arbol por niveles, como fue hasta ahora --, y el porque    \
+ * esta en la cabecera de la clase.  Incluye traduccion, insercion,            \
+ * invalidacion y volcado.                                                     \
  */                                                                            \
 #ifndef TLB_H
 #define TLB_H
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -37,30 +40,25 @@
 #include "arena/arena.h"
 
 /**
- * @defgroup TLB_macros Macros de descomposicion de direccion virtual
- * @brief Extraen los distintos campos de una direccion virtual de 64 bits.
+ * @defgroup TLB_macros Descomposicion de una direccion virtual
+ * @brief Los dos campos que tiene una direccion: pagina y desplazamiento.
  *
- * La direccion virtual se descompone en cuatro campos:
+ *   Bits [11: 0]  OFFSET  desplazamiento dentro de la pagina
+ *   Bits [63:12]  PAGINA  la pagina, que es lo que la TLB traduce
  *
- *   Bits [11: 0]  OFFSET  12 bits  desplazamiento dentro de la pagina
- *   Bits [23:12]  PT      12 bits  indice en la tabla de paginas nivel 1
- *   Bits [39:24]  PT1     16 bits  indice en la tabla de paginas nivel 2
- *   Bits [63:40]  PT2     24 bits  indice en la tabla de paginas nivel 3 (raiz)
+ * Habia aqui tres macros mas -- `GET_PT`, `GET_PT1`, `GET_PT2` -- que partian
+ * la pagina en tramos de 12, 16 y 24 bits para indexar los tres niveles de un
+ * arbol.  Ese arbol ya no existe y con el se fueron los tramos: la tabla se
+ * indexa con la pagina ENTERA, asi que ningun tramo tiene significado propio.
  * @{
  */
 #define GET_OFFSET(address)                                                    \
     ((address) & 0xFFF) ///< Extrae los 12 bits de offset de pagina
-#define GET_PT(address)                                                        \
-    (((address) >> 12) & 0xFFF) ///< Extrae el indice de tabla de paginas (PT)
-#define GET_PT1(address)                                                       \
-    (((address) >> 24) & 0xFFFF) ///< Extrae el indice PT1 (bits 24-39)
-#define GET_PT2(address)                                                       \
-    (((address) >> 40) & 0xFFFFFF) ///< Extrae el indice PT2 raiz (bits 40-63)
+#define GET_PAGE(address)                                                      \
+    ((address) >> 12) ///< Extrae la pagina (bits 63-12)
 /** @} */
 
 namespace tlb {
-
-struct TLBTable; // declaracion adelantada necesaria en TLBEntry
 
 /**
  * @brief Sobrecarga de operador de salida para vm_map_ptr.
@@ -137,105 +135,73 @@ typedef struct TLBEntryData {
 #endif
 } TLBEntryData;
 
-/**
- * @enum levelEntry
- * @brief Nivel de un nodo dentro del arbol de traduccion de direcciones.
+/* RETIRADO: `levelEntry`, que nombraba los niveles del arbol.  Ya no hay
+ * niveles: la traduccion es una tabla plana indexada por la pagina entera. */
+
+/* RETIRADO: `TLBEntry` y `TLBTable`, el arbol TLB *original*.
  *
- *   DATA -- hoja: contiene un TLBEntryData con la traduccion final.
- *   PT   -- nivel 1: tabla de paginas (bits 23-12).
- *   PT1  -- nivel 2: tabla de paginas de segundo nivel (bits 39-24).
- *   PT2  -- nivel 3 raiz: tabla de paginas de tercer nivel (bits 63-40).
- */
-typedef enum levelEntry { DATA, PT, PT1, PT2 } level;
+ * Estaban marcados como "se mantiene por compatibilidad con codigo legado", y
+ * no habia tal codigo: ni una sola referencia fuera de este fichero y su `.cpp`.
+ * Lo unico que hacian era obligar a mantener vivo el enumerado de niveles y
+ * dar la impresion de que habia dos implementaciones en uso. */
 
-/**
- * @brief Nodo del arbol TLB original (estructura plana con union).
+/* RETIRADO: `TLBNode`, el nodo del arbol de tres niveles.
  *
- * Cada entrada puede ser un nodo intermedio (is_table = true, payload.table)
- * o una hoja (is_table = false, payload.data).
+ * La traduccion ya no es un arbol indexado por tramos de bits sino una tabla
+ * plana, asi que no hay nodos ni niveles.  El cambio no fue por gusto: el
+ * arbol costaba SEIS accesos dependientes por consulta y reservaba hasta
+ * 131.072 KB por una sola pagina en una direccion alta, porque el tramo de
+ * arriba eran 24 bits y su vector crecia hasta el INDICE, no hasta el numero
+ * de paginas.  Ver la cabecera de la clase.
  *
- * @note Esta estructura se mantiene por compatibilidad con codigo legado.
- *       El TLB activo usa TLBNode y LazyHybridTLB.
- */
-typedef struct TLBEntry {
-    levelEntry level; ///< Nivel del nodo en el arbol
-
-    union {
-        TLBEntryData data; ///< Datos de traduccion si es hoja (DATA)
-        TLBTable *table;   ///< Puntero a tabla hija si es nodo intermedio
-    } payload;
-
-    bool is_table =
-        false; ///< true si payload.table es valido; false si payload.data lo es
-
-    /** @brief Construye una entrada hoja vacia. */
-    TLBEntry() : level(DATA), payload({}) {}
-
-    /**
-     * @brief Libera la tabla hija si este nodo es un nodo intermedio.
-     *
-     * El destructor solo actua cuando is_table == true para evitar
-     * liberar memoria union que no fue asignada como tabla.
-     */
-    ~TLBEntry() {
-        if (is_table && payload.table) {
-            delete payload.table; // liberar la tabla hija de forma recursiva
-        }
-    }
-} TLBEntry;
-
-/**
- * @brief Tabla de paginas plana (vector de TLBEntry).
- *
- * Cada nivel del arbol TLB original usa TLBTable como contenedor de
- * entradas hijas.  El constructor reserva una entrada inicial para que
- * el vector nunca este vacio tras la creacion.
- */
-typedef struct TLBTable {
-    std::vector<TLBEntry> entry; ///< Vector de entradas del nivel de pagina
-
-    /** @brief Crea la tabla con una entrada vacia inicial. */
-    TLBTable() : entry(1) {}
-} TLBTable;
-
-/**
- * @brief Nodo del arbol TLB lazy con propiedad unica sobre hijos.
- *
- * Implementacion moderna que usa unique_ptr para gestionar la memoria
- * de los hijos automaticamente.  Un nodo con children vacio o con
- * children[i] == nullptr es un nodo no inicializado (lazy allocation).
- *
- * type == DATA indica un nodo hoja cuya traduccion esta en el campo data.
- * type == PT/PT1/PT2 indica un nodo intermedio cuyos hijos son el siguiente
- * nivel.
- */
-typedef struct TLBNode {
-    levelEntry type = DATA; ///< Nivel de este nodo
-    TLBEntryData data;      ///< Datos de traduccion (valido si type == DATA)
-    std::vector<std::unique_ptr<TLBNode>>
-        children; ///< Hijos de nivel inferior (nullptr = no inicializado)
-
-    TLBNode() = default;  ///< Construye nodo DATA con hijos vacios
-    ~TLBNode() = default; ///< Destruye recursivamente los hijos via unique_ptr
-} TLBNode;
+ * Vive en el historial de git. */
 
 /**
  * @class LazyHybridTLB
- * @brief Translation Lookaside Buffer (TLB) perezoso de tres niveles.
+ * @brief La traduccion de paginas: tabla plana, sondeo lineal, sin candados.
  *
- * Implementa la traduccion de direcciones virtuales de 64 bits a
- * direcciones reales del host mediante un arbol de nodos creados
- * bajo demanda (lazy allocation).
+ * QUE HABIA ANTES, Y POR QUE SE CAMBIO
+ * ------------------------------------
+ * Un arbol de tres niveles indexado por TRAMOS de la direccion: 12 bits para
+ * el nivel de abajo, 16 para el de en medio y 24 para la raiz.  Tenia tres
+ * problemas, y los tres estan medidos en `tests/arena/`:
  *
- * Jerarquia de niveles (de raiz a hoja):
- *   root (vector de TLBNode)
- *     -> PT2 (24 bits, hasta 16 M entradas)
- *       -> PT1 (16 bits, hasta 64 K entradas)
- *         -> PT  (12 bits, hasta 4 K entradas)
- *           -> DATA (TLBEntryData con la traduccion real)
+ *   - SEIS accesos dependientes por consulta.  Tres niveles, y cada uno
+ *     costaba dos: la comprobacion de limite del vector y el salto a traves
+ *     del puntero.  Medido: la consulta pasa de 0,518 ns a 2,339 en cuanto el
+ *     bucle toca DOS paginas, porque la cache de pagina que hay delante solo
+ *     guarda una.  Esos 1,8 ns se pagan en casi todo programa real.
+ *   - La memoria dependia del VALOR de la direccion, no de cuantas paginas
+ *     hubiera.  El vector de la raiz crecia hasta el INDICE, y con 24 bits eso
+ *     son 131.072 KB reservados por UNA sola pagina en una direccion alta.
+ *   - `translate` hacia `resize`, o sea que REALOJABA los vectores que
+ *     `get_entry` estaba recorriendo.  Con un solo hilo daba igual; en cuanto
+ *     un segundo hilo consulta, es una carrera de datos.
  *
- * El arbol crece en amplitud solo cuando se accede a una pagina nueva,
- * manteniendo bajo el coste de memoria en espacios de direcciones dispersos.
+ * COMO ES AHORA
+ * -------------
+ * Una tabla plana de `pagina -> traduccion`, con direccionamiento abierto y
+ * sondeo lineal.  El indice sale de mezclar la pagina ENTERA (@ref mix), asi
+ * que los 64 bits de direccion se cubren sin tramos y sin casos especiales:
+ * una pagina en `0xFFFFFF...` cuesta exactamente lo mismo que una en `0x1000`.
+ *
+ * Una carga en el caso comun, y la memoria es proporcional a las paginas
+ * VIVAS.
+ *
+ * POR QUE ES SEGURA PARA VARIOS LECTORES
+ * --------------------------------------
+ * La etiqueta de cada ranura se publica con `release` DESPUES de escribir la
+ * traduccion, y se lee con `acquire`.  Y al crecer no se modifica la tabla en
+ * curso: se construye una nueva y se publica el puntero; la vieja NO se libera
+ * mientras viva la TLB.
+ *
+ * Un lector que se quedo con la tabla anterior sigue leyendo memoria valida.
+ * Lo peor que le pasa es no encontrar una pagina anadida despues, y eso se
+ * responde "no la tengo" -- lo mismo que una pagina sin mapear --.  Nunca
+ * devuelve OTRA traduccion, que es lo que si seria un fallo.
+ *
+ * Escribir sigue siendo de UNO: `translate` y `clear_tlb_entry` las llama el
+ * hilo duenyo del proceso.
  *
  * Uso tipico:
  *   1. translate()                  -- registrar la traduccion de una pagina.
@@ -246,12 +212,162 @@ typedef struct TLBNode {
  * unmap).
  */
 class LazyHybridTLB {
-    std::vector<std::unique_ptr<TLBNode>> root{
-        1}; ///< Nivel raiz PT2; indice 0 inicializado en ctor
+  public:
+    /**
+     * @brief Una ranura de la tabla: la etiqueta y su traduccion.
+     *
+     * La etiqueta se publica DESPUES de escribir la traduccion y con
+     * `release`; quien lee la coge con `acquire` y para entonces la traduccion
+     * ya esta entera.  Es lo unico que hace falta para que un segundo hilo
+     * pueda consultar sin candados.
+     *
+     * Valores especiales de la etiqueta:
+     *   0                 la ranura esta VACIA, y el sondeo se para ahi;
+     *   kTombstone        estuvo ocupada y se invalido, el sondeo SIGUE.
+     * Cualquier otro valor es `pagina + 1`, para que la pagina cero se pueda
+     * representar sin confundirse con una ranura vacia.
+     */
+    struct Slot {
+        std::atomic<uint64_t> tag{0};
+        TLBEntryData entry;
+    };
+
+  private:
+    /// Etiqueta de una ranura invalidada.  No puede chocar con ninguna pagina
+    /// real: `pagina + 1` como mucho vale 2^52, y esto es 2^64 - 1.
+    static constexpr uint64_t kTombstone = ~0ull;
+
+    /**
+     * @brief Una tabla, con su tamano y la anterior colgando.
+     *
+     * Las tablas viejas NO se liberan mientras vive la TLB, y esa es toda la
+     * seguridad del diseno: un lector que cogio la tabla anterior sigue
+     * leyendo memoria valida.  Lo peor que le puede pasar es no encontrar una
+     * pagina que se anadio despues -- y eso se responde "no la tengo", que es
+     * lo mismo que dice una pagina sin mapear --.  Nunca devuelve OTRA
+     * traduccion, que es lo que si seria un fallo.
+     *
+     * Cuesta memoria: con crecimiento al doble, las tablas viejas suman como
+     * mucho lo que ocupa la actual.  A cambio no hace falta ni un candado ni
+     * saber cuando el ultimo lector termino.
+     */
+    struct Table {
+        uint32_t mask = 0;      ///< tamano - 1, siempre potencia de dos
+        uint32_t shift = 0;     ///< 64 - bits del indice, para @ref mix
+        uint32_t used = 0;      ///< ocupadas, solo lo toca quien escribe
+        Table *older = nullptr; ///< la anterior, viva para los rezagados
+        Slot *slot = nullptr;   ///< `mask + 1` ranuras
+    };
+
+    std::atomic<Table *> table{nullptr};
+
+    /// Ranuras de la primera tabla.  Pequena a proposito: un proceso que toca
+    /// cuatro paginas no debe pagar por mil, y crecer es barato.
+    static constexpr uint32_t kInitialSlots = 64;
+    /// Se crece al pasar de la MITAD.  Con direccionamiento abierto y sondeo
+    /// lineal, por encima de ahi el numero de sondeos se dispara.
+    static constexpr uint32_t kMaxLoadNum = 1, kMaxLoadDen = 2;
+
+    /**
+     * @brief Mezcla la pagina para repartirla por la tabla.
+     *
+     * Hashing de FIBONACCI, que es el multiplicativo de Knuth: se multiplica
+     * por `2^64 / razon_aurea` -- la misma constante que ya usan el recolector
+     * y el perfilador -- y se toman los bits de ARRIBA.
+     *
+     * Por que los de arriba: al multiplicar, cada bit del resultado depende de
+     * mas bits de la entrada cuanto mas alto esta, asi que los altos son los
+     * que llevan la mezcla.  Y por que hace falta mezclar: las paginas
+     * consecutivas solo se diferencian en los bits BAJOS, asi que usarlas tal
+     * cual amontonaria un tramo recto en ranuras seguidas y los sondeos se
+     * alargarian.  Con el paso aureo quedan repartidas.
+     *
+     * El desplazamiento viene DADO y no se calcula: `64 - bits_del_indice`
+     * deja el valor ya en rango, asi que no hace falta enmascarar despues.
+     * Guardarlo en la tabla cuesta cuatro bytes y quita una operacion de la
+     * consulta, que corre en cada acceso a memoria de la VM.
+     */
+    static uint32_t mix(uint64_t page, uint32_t shift) {
+        return (uint32_t)((page * 0x9E3779B97F4A7C15ull) >> shift);
+    }
+
+    /**
+     * @brief Sigue el sondeo cuando la primera ranura no era la buena.
+     *
+     * FUERA DE LINEA a proposito, y no por tamano del codigo fuente sino por
+     * lo que se midio: `get_entry` se inlina en `operator[]`, en `read_bytes`
+     * y en el cursor del descodificador, o sea en el camino mas caliente del
+     * interprete.  Con el bucle de sondeo dentro, esas tres crecieron y la
+     * mezcla `memoria` perdio un 3,4% -- y eso que ahi la cache de pagina
+     * acierta siempre y el sondeo no llega a ejecutarse ni una vez --.
+     *
+     * Asi que en linea se queda solo lo que casi siempre basta: una carga y
+     * dos comparaciones.
+     */
+    [[gnu::noinline]] static TLBEntryData *probe(const Table *t, uint64_t page,
+                                                 uint32_t i);
+
+    /// Reserva una tabla de @p slots ranuras.  Fuera de linea: corre al crecer.
+    static Table *make_table(uint32_t slots, Table *older);
+    /// Duplica el tamano y REHACE las entradas vivas en la tabla nueva.
+    void grow();
+    /// Busca @p page para ESCRIBIR, creciendo si hace falta.  Solo el duenyo.
+    Slot *slot_for_write(uint64_t page);
 
   public:
-    ~LazyHybridTLB() =
-        default; ///< Destructor; unique_ptr libera el arbol automaticamente
+    /// Libera todas las tablas, incluida la cadena de las viejas.
+    ~LazyHybridTLB();
+
+    /**
+     * @brief Bytes que ocupa ESTA estructura, contados por ella misma.
+     *
+     * Lo dice la TLB y no un contador de fuera porque es la unica que lo sabe
+     * exactamente: las tablas que tiene vivas y las viejas que aun no ha
+     * soltado.  Medirlo interceptando `operator new` seria contar OTRA cosa --
+     * la memoria del anfitrion, que es de quien es ese asignador -- y ademas
+     * mezclaria las reservas de todo lo demas que corra en el proceso.
+     *
+     * No incluye las paginas de la VM: eso es memoria del programa, la sirve
+     * la arena, y confundirla con la del mapa es justo lo que hay que evitar.
+     */
+    /**
+     * @brief Queda alguna tabla anterior por liberar?
+     *
+     * En linea y con una carga relajada porque quien lo pregunta lo hace en un
+     * punto que se recorre a menudo, y la respuesta es que NO casi siempre: la
+     * cadena solo existe entre que la tabla crece y el siguiente momento
+     * tranquilo.
+     */
+    [[nodiscard]] bool has_older() const {
+        const Table *t = table.load(std::memory_order_relaxed);
+        return t != nullptr && t->older != nullptr;
+    }
+
+    /**
+     * @brief Libera las tablas anteriores.
+     *
+     * SOLO puede llamarla quien pueda garantizar que ningun otro hilo esta
+     * dentro de una consulta.  La tabla no sabe quien lee ni cuando -- eso es
+     * politica del runtime --, asi que ofrece el mecanismo y la decision la
+     * toma quien conoce a los lectores.
+     *
+     * POR QUE ASI Y NO CON EPOCAS NI CONTADORES.  Las tecnicas habituales para
+     * liberar sin candados -- contar referencias, punteros de peligro, epocas
+     * -- cobran una escritura al entrar y otra al salir de CADA consulta.  Una
+     * consulta aqui es un nanosegundo, asi que costarian mas que lo que
+     * protegen.  Cobrarlo por TRABAJO en vez de por consulta lo hace gratis:
+     * el unico lector ajeno es el hilo ayudante, y tiene principio y final
+     * naturales -- coger un encargo y terminarlo --.
+     */
+    void reclaim_older();
+
+    [[nodiscard]] size_t memory_bytes() const {
+        size_t total = 0;
+        for (const Table *t = table.load(std::memory_order_acquire);
+             t != nullptr; t = t->older)
+            total += sizeof(Table) + (size_t)(t->mask + 1u) * sizeof(Slot);
+        return total;
+    }
 
     /**
      * @brief Registra o actualiza la traduccion de la pagina que contiene @p
@@ -321,32 +437,30 @@ class LazyHybridTLB {
 #else
     [[nodiscard]] TLBEntryData *get_entry(uint64_t ptr_) const {
 #endif
-        const uint32_t pt2 = GET_PT2(ptr_); // indice PT2 de la direccion
+        /* Una tabla plana con sondeo lineal: UNA carga en el caso comun.
+         *
+         * El arbol de tres niveles que habia aqui costaba seis accesos
+         * dependientes -- tres comprobaciones de limite y tres saltos a traves
+         * de vectores de punteros --, y medido eran 1,8 ns que se pagan en
+         * cuanto el bucle toca dos paginas, porque la cache de pagina que hay
+         * delante solo guarda UNA.
+         *
+         * Y ademas indexaba por tramos de bits, con el tramo alto de 24: una
+         * pagina en una direccion alta reservaba 131.072 KB.  Aqui el coste no
+         * depende del VALOR de la direccion sino de cuantas paginas hay vivas,
+         * asi que los 64 bits se cubren enteros sin ningun caso especial. */
+        const Table *t = table.load(std::memory_order_acquire);
+        if (t == nullptr) return nullptr;
 
-        // verificar que el nodo PT2 existe
-        if (pt2 >= root.size() || !root[pt2]) return nullptr;
-        const TLBNode &pt2_node = *root[pt2];
-        if (pt2_node.type != PT2) return nullptr; // corrupto o sin inicializar
-
-        const uint16_t pt1 = GET_PT1(ptr_); // indice PT1 de la direccion
-
-        // verificar que el nodo PT1 existe dentro del nodo PT2
-        if (pt1 >= pt2_node.children.size() || !pt2_node.children[pt1])
-            return nullptr;
-        const TLBNode &pt1_node = *pt2_node.children[pt1];
-        if (pt1_node.type != PT1) return nullptr; // corrupto o sin inicializar
-
-        const uint16_t pt = GET_PT(ptr_); // indice PT de la direccion
-
-        // verificar que el nodo hoja PT existe dentro del nodo PT1
-        if (pt >= pt1_node.children.size() || !pt1_node.children[pt])
-            return nullptr;
-        const TLBNode &pt_node = *pt1_node.children[pt];
-        if (pt_node.type != DATA) return nullptr; // no es hoja de datos
-
-        // puntero mutable al dato de traduccion (const_cast justificado: quien
-        // llama puede necesitar actualizar la entrada)
-        return const_cast<TLBEntryData *>(&pt_node.data);
+        const uint64_t page = ptr_ >> 12;
+        const uint32_t i = mix(page, t->shift);
+        const uint64_t tag = t->slot[i].tag.load(std::memory_order_acquire);
+        /* `const_cast` justificado: quien llama puede necesitar ACTUALIZAR la
+         * entrada, que es como se ha usado siempre. */
+        if (tag == page + 1)
+            return const_cast<TLBEntryData *>(&t->slot[i].entry);
+        if (tag == 0) return nullptr; // hueco: no esta, y no hay que sondear
+        return probe(t, page, i);     // colision: fuera de linea
     }
 
     /**
@@ -381,17 +495,14 @@ class LazyHybridTLB {
     void dump_stats() const;
 
     /**
-     * @brief Constructor: garantiza que el nodo raiz[0] este inicializado.
+     * @brief Constructor: deja la primera tabla puesta.
      *
-     * El vector root se inicializa con tamanyo 1 pero el unique_ptr queda
-     * a nullptr.  El constructor crea el primer TLBNode para evitar
-     * comprobaciones extra en translate().
+     * Se reserva ya y no en el primer `translate` para que la consulta no
+     * tenga que preguntar si existe... salvo la comprobacion de null que si
+     * queda, porque la reserva puede fallar y quedarse callado seria peor que
+     * ir un poco mas lento.
      */
-    LazyHybridTLB() {
-        if (!root[0])
-            root[0] = std::make_unique<TLBNode>(); // nodo raiz PT2[0]
-                                                   // preiniicializado
-    }
+    LazyHybridTLB();
 };
 
 } // namespace tlb
