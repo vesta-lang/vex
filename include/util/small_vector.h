@@ -86,10 +86,9 @@ template <typename T, size_t N> class SmallVector {
     // ------------------------------------------------------------- consulta
     size_t size() const noexcept { return size_; }
     bool empty() const noexcept { return size_ == 0; }
-    T *data() noexcept { return heap_ ? heap_ : reinterpret_cast<T *>(inline_); }
-    const T *data() const noexcept {
-        return heap_ ? heap_ : reinterpret_cast<const T *>(inline_);
-    }
+    // Sin `reinterpret_cast`: `inline_` YA es un `T[N]`.  Ver la nota de abajo.
+    T *data() noexcept { return heap_ ? heap_ : inline_; }
+    const T *data() const noexcept { return heap_ ? heap_ : inline_; }
     T &operator[](size_t i) noexcept { return data()[i]; }
     const T &operator[](size_t i) const noexcept { return data()[i]; }
     T *begin() noexcept { return data(); }
@@ -238,10 +237,29 @@ template <typename T, size_t N> class SmallVector {
         cap_ = next;
     }
 
-    /* Sin inicializar: `T` es trivial y solo se leen las `size_` primeras.
-     * Ponerlas a cero costaria N escrituras por cada estado que se crea, que
-     * es precisamente lo que se venia a evitar. */
-    alignas(T) unsigned char inline_[N * sizeof(T)];
+    /* UNION, y no un array de `unsigned char` con `reinterpret_cast`.
+     *
+     * Las dos formas dejan el hueco SIN INICIALIZAR -- que es el punto: `T` es
+     * trivial y solo se leen las `size_` primeras, asi que ponerlas a cero
+     * costaria N escrituras por cada estado que se crea --, pero solo esta
+     * declara de verdad un `T[N]`.  Con los bytes crudos no existe ningun
+     * objeto de tipo `T` ahi, y leerlos o escribirlos por un `T*` es
+     * comportamiento INDEFINIDO: con `-fstrict-aliasing` el compilador da por
+     * hecho que un acceso por `T*` y otro por `unsigned char*` no se pisan, y
+     * puede quedarse con un puntero de fin rancio en un registro.
+     *
+     * No es teoria.  Costo que el JIT reventara al recorrer las instrucciones
+     * de un bloque -- `movzwl (%rdi)` sobre memoria sin mapear --, y solo en
+     * Release: la bandera esta en los dos perfiles, pero `-fomit-frame-pointer`
+     * cambia la presion de registros lo justo para que se note en uno y no en
+     * el otro.  Es como se comporta lo indefinido: esta siempre, se ve a
+     * veces.
+     *
+     * La union no construye nada -- ningun miembro es el activo al empezar --
+     * asi que no se paga ninguna inicializacion. */
+    union {
+        T inline_[N];
+    };
     T *heap_ = nullptr; ///< nullptr = se esta usando el de dentro.
     size_t size_ = 0;
     size_t cap_ = N;

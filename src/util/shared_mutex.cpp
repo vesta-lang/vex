@@ -47,9 +47,11 @@ static_assert(sizeof(SRWLOCK) == sizeof(void *),
 static_assert(alignof(SRWLOCK) <= alignof(void *),
               "SRWLOCK pide mas alineacion de la que da un puntero");
 
-/// El estado del objeto, visto como lo que es.
-static inline PSRWLOCK as_srwlock(void *&state) noexcept {
-    return reinterpret_cast<PSRWLOCK>(&state);
+/// El estado del objeto, visto como lo que es.  Los bytes son almacenamiento
+/// en bruto -- ver la nota de la cabecera --, asi que aqui no hay dos tipos
+/// pisandose: solo uno, el que el sistema maneja.
+static inline PSRWLOCK as_srwlock(unsigned char *state) noexcept {
+    return reinterpret_cast<PSRWLOCK>(state);
 }
 
 void SharedMutex::lock() noexcept { AcquireSRWLockExclusive(as_srwlock(state_)); }

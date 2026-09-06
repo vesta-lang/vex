@@ -81,10 +81,16 @@ class SharedMutex {
 #if defined(_WIN32)
     /* Es un `SRWLOCK`.  En la cabecera del sistema es una estructura con UN
      * puntero, y su valor inicial -- `SRWLOCK_INIT` -- es ese puntero a nulo,
-     * asi que inicializarlo aqui es exacto.  Se declara como `void *` para no
-     * arrastrar `windows.h`; el `.cpp` comprueba con `static_assert` que los
-     * tamanos coinciden. */
-    void *state_ = nullptr;
+     * asi que inicializarlo a cero aqui es exacto.  Se declara como bytes para
+     * no arrastrar `windows.h`; el `.cpp` comprueba con `static_assert` que el
+     * tamano y la alineacion coinciden.
+     *
+     * BYTES y no un `void *`: si fuera un `void *` habria ahi un objeto de ese
+     * tipo, y leerlo como `SRWLOCK` seria comportamiento indefinido -- con
+     * `-fstrict-aliasing` el compilador puede suponer que los dos accesos no se
+     * pisan --.  Un array de `unsigned char` es almacenamiento en bruto, que es
+     * lo que hace falta para que el sistema construya el suyo encima. */
+    alignas(void *) unsigned char state_[sizeof(void *)] = {};
 #else
     std::shared_mutex impl_;
 #endif
