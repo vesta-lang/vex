@@ -354,32 +354,49 @@ struct Case {
  * Cuando las lineas base cambien de verdad se actualizan AQUI y el commit dice
  * por que: una linea base que se mueve sin explicacion deja de ser una linea
  * base. */
-/* Recalibradas el 2026-09-03 tras meter diez rutas rapidas al interprete --
- * `add`/`sub`/`cmp` con inmediato, `mov` SIB, `enter`, `leave`, `push`, `pop`,
- * `fastpush`, `fastpop` y `ret` -- y componer las banderas en un solo store.
- * El escalar subio en torno a un 10%, y unas lineas base que se quedan por
- * debajo de la realidad dejan de avisar: con margen del 25% sobre una cifra un
- * 10% baja, hace falta una regresion del 32% para que salte.
+/* Recalibradas el 2026-09-06.  Los siete motores, en el orden de `kEngineList`:
+ * escalar, esc+reord, esc+fusion, paquetes, paq+reord, paq+fusion,
+ * paq+fus+reord.
  *
- * Cada valor es el CENTRAL de tres pasadas, no el mejor: una base puesta en el
- * pico da rojos que nadie puede reproducir. */
-/* Calibradas con una tanda LIMPIA de 2.000.000 vueltas, mejor de 3 pasadas, con
- * el testigo dentro del margen (-2,6%).  Los siete motores, en el orden de
- * `kEngineList`: escalar, esc+reord, esc+fusion, paquetes, paq+reord,
- * paq+fusion, paq+fus+reord.
+ * POR QUE TOCABA: entre medias entraron la formacion del paquete DENTRO de la
+ * arena -- que quita una copia entera de 2.176 bytes por formacion --, quitar
+ * la envoltura del bucle caliente y limpiar la coordinacion del reparto.  Con
+ * las bases viejas salian 22 rojos permanentes, y un banco con 22 rojos fijos
+ * deja de servir para ver el rojo de verdad.
  *
- * DOS CELDAS NO SON DE FIAR y quedan dichas para que nadie las lea como buenas:
- * `memoria / cabe en icache / paq+fus+reord` salio 235,9 cuando sus seis
- * hermanas van de 308 a 324, y `float / medio / paq+reord` salio 361,6 frente a
- * 461-467.  Son valores sueltos que se desvian de su propia fila, o sea ruido de
- * esa pasada.  Se dejan tal cual porque son los medidos -- inventar el numero de
- * al lado seria peor --, pero una base DEMASIADO BAJA no falla nunca: hasta que
- * se vuelvan a medir, esas dos no vigilan nada. */
+ * COMO SE MIDIERON, que es lo que hace que la cifra signifique algo:
+ *
+ *   - celda a celda con `--solo`, que ejecuta exactamente el mismo punto que
+ *     corre la matriz;
+ *   - 2.000.000 de vueltas de partida, que el banco reparte entre los casos
+ *     para que todos ejecuten un numero de instrucciones parecido;
+ *   - `--repetir 3` dentro de cada medida, o sea la mejor de tres: una maquina
+ *     compartida solo puede hacer que tarde MAS;
+ *   - CINCO pasadas INTERCALADAS -- las 84 celdas una vez, luego otra vez las
+ *     84 --, no cinco seguidas por celda: si la maquina se frena a mitad de la
+ *     tanda, un bloque contiguo se llevaria todo el frenazo y el resto ni se
+ *     enteraria;
+ *   - y de cada celda la MEDIANA de las cinco, no la mejor.  Una base puesta en
+ *     el pico da rojos que nadie puede reproducir.
+ *
+ * LAS DOS CELDAS QUE ESTABAN MARCADAS COMO NO FIABLES SE ENDEREZARON, lo que
+ * confirma que eran ruido de aquella pasada y no una propiedad del caso:
+ * `memoria / cabe en icache / paq+fus+reord` pasa de 235,9 a 308,7 -- en linea
+ * con sus hermanas, 303-312 -- y `float / medio / paq+reord` de 361,6 a 472,4,
+ * en linea con 467-475.
+ *
+ * LO QUE NO ES DE FIAR AHORA: la maquina tenia otra sesion compilando, y seis
+ * celdas salieron con una dispersion (maximo menos minimo, sobre la mediana)
+ * por encima del 20% -- `anchos/medio` en los tres escalares, `anchos/cabe`,
+ * `memoria/medio/paq+reord` y `mixta/medio/paq+fus+reord` --.  En todas, la
+ * muestra baja es UNA sola y las otras cuatro se agrupan, asi que la mediana
+ * aguanta; pero con el margen del 25% esas celdas vigilan menos que las demas.
+ * Se dice para que nadie lea un verde suyo como garantia. */
 const Case kCases[] = {
     //                              cuerpo   esc  e+reo  e+fus   paq  p+reo  p+fus  p+f+r
-    {Mix::Alu, "apretado", 0,       {317.2, 313.0, 327.6, 311.0, 320.6, 336.3, 336.6}},
-    {Mix::Alu, "medio", 16,         {311.1, 292.0, 308.8, 336.0, 335.3, 341.1, 342.1}},
-    {Mix::Alu, "cabe en icache", 256, {318.3, 324.7, 315.4, 334.3, 332.0, 340.7, 343.2}},
+    {Mix::Alu, "apretado", 0,       {329.7, 324.6, 328.4, 319.1, 327.7, 330.7, 333.3}},
+    {Mix::Alu, "medio", 16,         {317.8, 320.1, 312.4, 346.9, 352.3, 355.7, 353.9}},
+    {Mix::Alu, "cabe en icache", 256, {310.3, 299.8, 305.2, 320.5, 322.2, 336.0, 331.1}},
     /* `no cabe` con paquetes pasa de 3,4 a 71 MIPS al mover la comprobacion de
      * arena llena al PRINCIPIO de `bundle_try_form`: estaba al final, despues
      * de descodificar 32 instrucciones por adelantado, asi que con la arena
@@ -388,17 +405,17 @@ const Case kCases[] = {
      * Hoy los cuatro motores de paquete rondan los 315 MIPS donde el escalar se
      * queda en 85: es el caso donde el paquete mas cunde, porque cada
      * instruccion se volveria a descodificar y el paquete lo evita. */
-    {Mix::Alu, "no cabe", 8188,     { 84.9,  84.9,  82.8, 315.9, 318.2, 316.8, 310.7}},
-    {Mix::Widths, "medio", 16,      {260.7, 284.0, 276.4, 354.3, 344.4, 357.8, 342.7}},
-    {Mix::Widths, "cabe en icache", 256, {239.9, 244.9, 243.5, 332.9, 325.8, 333.7, 330.1}},
-    {Mix::Memory, "medio", 16,      {332.4, 332.1, 330.4, 318.6, 323.3, 324.4, 329.2}},
-    {Mix::Memory, "cabe en icache", 256, {320.8, 320.7, 323.5, 308.8, 310.7, 308.7, 235.9}},
-    {Mix::Mixed, "medio", 16,       {308.2, 302.5, 306.9, 329.8, 337.7, 314.6, 327.0}},
-    {Mix::Mixed, "cabe en icache", 256, {282.3, 287.0, 275.8, 304.6, 306.8, 300.4, 288.8}},
+    {Mix::Alu, "no cabe", 8188,     { 75.9,  77.9,  78.3, 291.6, 301.1, 288.4, 284.4}},
+    {Mix::Widths, "medio", 16,      {251.4, 268.8, 272.6, 335.3, 315.0, 328.7, 338.7}},
+    {Mix::Widths, "cabe en icache", 256, {229.8, 237.0, 241.4, 309.3, 296.5, 303.9, 300.5}},
+    {Mix::Memory, "medio", 16,      {320.0, 324.3, 322.5, 330.4, 347.0, 340.5, 350.1}},
+    {Mix::Memory, "cabe en icache", 256, {314.0, 314.2, 310.7, 312.6, 308.7, 303.6, 308.7}},
+    {Mix::Mixed, "medio", 16,       {295.6, 293.7, 298.6, 340.0, 351.2, 327.5, 325.4}},
+    {Mix::Mixed, "cabe en icache", 256, {268.4, 267.8, 272.3, 304.0, 299.7, 308.5, 307.0}},
     /* Coma flotante.  `vector` sale por debajo de `float` en escalar: son los
      * mismos mnemonicos sobre cuatro carriles en vez de uno, asi que la
      * diferencia ES el coste de operar empaquetado. */
-    {Mix::Float, "medio", 16,       {318.0, 322.4, 301.0, 463.0, 361.6, 461.9, 467.6}},
+    {Mix::Float, "medio", 16,       {309.3, 312.3, 313.1, 467.1, 472.4, 468.4, 475.5}},
     /* Recorrido de `vector`, que es donde mas se ha movido todo:
      *
      *            escalar  paquetes
@@ -416,7 +433,7 @@ const Case kCases[] = {
      * El de `ancho` es el que remata: con el ancho fijo, el bucle SIMD se
      * convierte en una o dos operaciones rectas y -- con `always_inline` --
      * desaparece tambien la llamada.  De 232 a 427 en total, un +85%. */
-    {Mix::Vector, "medio", 16,      {307.2, 300.1, 315.3, 478.2, 492.7, 486.2, 477.6}},
+    {Mix::Vector, "medio", 16,      {304.3, 299.5, 295.1, 424.7, 424.8, 434.4, 430.0}},
 };
 
 /* LA BASE DE `no cabe` CON PAQUETES SON 3,4 MIPS, Y NO ES UNA ERRATA.
@@ -481,13 +498,28 @@ struct SweepBase {
  * todavia se mueve.  Se calibran cuando el reparto deje de cambiar.
  *
  *                          esc  e+reo  e+fus    paq  p+reo  p+fus  p+f+r */
+/* Recalibradas el 2026-09-06 junto con la matriz: MEDIANA de CUATRO barridos
+ * completos, con el testigo dentro del margen en tres de ellos (el cuarto acabo
+ * con el testigo final a cero -- una medida que no llego a ejecutarse -- y su
+ * fila entra igual porque la mediana de cuatro no depende de un extremo).
+ *
+ * Las medias por fila salen mucho mas estables que las celdas sueltas de la
+ * matriz -- alrededor del 2% de dispersion frente a hasta el 23% --, que es
+ * exactamente lo que dice el margen de abajo: promediar doce puntos divide el
+ * ruido.
+ *
+ * LA MAQUINA TENIA OTRA SESION COMPILANDO durante los cuatro barridos, asi que
+ * estas cifras son de una maquina ocupada, no ociosa.  Importa saber en que
+ * direccion: una base BAJA no da falsos rojos, pero tampoco avisa -- hace falta
+ * una regresion mayor para que salte --.  Si alguna vez se recalibra en una
+ * maquina quieta, estas subiran. */
 const SweepBase kSweepBases[] = {
-    {Mix::Alu,     {282.0, 283.0, 285.0, 350.0, 345.0, 350.0, 348.0}},
-    {Mix::Widths,  {224.0, 230.0, 227.0, 335.0, 339.0, 337.0, 337.0}},
-    {Mix::Memory,  {269.0, 271.0, 272.0, 306.0, 305.0, 304.0, 304.0}},
-    {Mix::Mixed,   {213.0, 211.0, 211.0, 313.0, 308.0, 307.0, 315.0}},
-    {Mix::Float,   {255.0, 256.0, 253.0, 465.0, 438.0, 428.0, 435.0}},
-    {Mix::Vector,  {242.0, 241.0, 240.0, 425.0, 407.0, 423.0, 415.0}},
+    {Mix::Alu,     {279.0, 277.0, 279.0, 335.0, 333.0, 331.0, 329.0}},
+    {Mix::Widths,  {229.0, 226.0, 228.0, 314.0, 312.0, 313.0, 310.0}},
+    {Mix::Memory,  {270.0, 272.0, 271.0, 312.0, 307.0, 307.0, 304.0}},
+    {Mix::Mixed,   {209.0, 208.0, 208.0, 311.0, 310.0, 309.0, 308.0}},
+    {Mix::Float,   {254.0, 252.0, 253.0, 427.0, 407.0, 414.0, 399.0}},
+    {Mix::Vector,  {243.0, 244.0, 242.0, 376.0, 360.0, 370.0, 358.0}},
 };
 
 /// Margen de las MEDIAS.  Mas estrecho que @ref kMargin porque promediar doce
@@ -496,7 +528,10 @@ const SweepBase kSweepBases[] = {
 constexpr double kSweepMargin = 0.90;
 
 /// Linea base de la media GLOBAL del barrido.  Cero = sin calibrar.
-constexpr double kGlobalBase = 312.0;
+/// Recalibrada el 2026-09-06: mediana de cuatro barridos (305,8 / 307,4 / 307,8
+/// / 309,8).  Es la cifra mas robusta de las tres -- promedia los 1008 puntos --
+/// y por eso la que primero avisa de una caida general.
+constexpr double kGlobalBase = 307.0;
 
 /**
  * @brief Cuanto puede haber caido el TESTIGO sin invalidar la tanda.
@@ -874,6 +909,30 @@ uint64_t run_program(const std::string &velb, Engine engine, uint64_t *r0,
 double measure(uint64_t loops, uint64_t body, Mix mix, Engine engine,
              int repeats, uint64_t *instrs_out) {
     const uint64_t v = body == 0 ? loops : (loops * 4) / (body + 4);
+    /* CERO VUELTAS NO SE MIDE, SE DICE.
+     *
+     * Las vueltas se reparten entre los casos para que todos ejecuten un numero
+     * de instrucciones parecido, asi que un tramo largo con pocas vueltas de
+     * partida puede dar cero.  Y cero no daba un error: el programa sale con
+     * `mov r1, 0`, y el `subs r1, 1` del cierre deja el contador en -1 -- que
+     * sin signo es enorme --, asi que el bucle se va a dos elevado a sesenta y
+     * cuatro vueltas.  Pedir de menos se manifestaba como un CUELGUE, sin una
+     * sola pista de por que.
+     *
+     * Costo encontrarlo desde fuera: parecia una regresion del interprete en el
+     * caso `no cabe en icache`, y no lo era.  Asi que aqui se dice que pasa y
+     * cuanto hace falta. */
+    if (v == 0) {
+        std::fprintf(stderr,
+                     "[medida] vueltas insuficientes: con un tramo de %llu se "
+                     "reparten a CERO,\n"
+                     "         y un bucle de cero vueltas da la vuelta al "
+                     "contador.  Hacen falta\n"
+                     "         al menos %llu vueltas (mezcla=%s).\n",
+                     (unsigned long long)(body + 4),
+                     (unsigned long long)((body + 4 + 3) / 4), mix_name(mix));
+        return 0.0;
+    }
 
     /* UN FICHERO POR PROGRAMA, no por medida ni compartido.
      *
