@@ -44,7 +44,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ---------------------------------------------------------------------------
 # Infraestructura
@@ -59,6 +60,55 @@ AOT_FMT = "pe" if sys.platform.startswith("win") else "elf"
 
 VM_EXE = None      # se rellena en main()
 TMP_ROOT = None    # se rellena en main()
+
+
+def _pico_memoria(proc):
+    """@brief Lo que llego a ocupar un proceso ya terminado, en bytes.
+
+    En Windows se pregunta por el handle que `Popen` mantiene abierto: el
+    sistema guarda el MAXIMO alcanzado, asi que preguntarlo al final es exacto
+    y no hay que muestrear -- muestrear se perderia justo el pico, que es lo
+    unico que interesa.
+
+    Fuera de Windows se usa el maximo de todos los hijos, que es lo que da el
+    sistema; con un caso por proceso y los casos en hilos distintos no es
+    exacto por caso, y por eso ahi el numero se informa como orientativo.
+
+    @return Bytes, o 0 si no se pudo averiguar.
+    """
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class _PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD),
+                            ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t),
+                            ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t),
+                            ("PeakPagefileUsage", ctypes.c_size_t)]
+
+            h = int(proc._handle)
+            info = _PMC()
+            info.cb = ctypes.sizeof(_PMC)
+            if ctypes.windll.psapi.GetProcessMemoryInfo(
+                    wintypes.HANDLE(h), ctypes.byref(info), info.cb):
+                return int(info.PeakWorkingSetSize)
+        except Exception:
+            return 0
+        return 0
+    try:
+        import resource
+        ru = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+        # Linux lo da en KiB; macOS en bytes.
+        return int(ru) * (1 if sys.platform == "darwin" else 1024)
+    except Exception:
+        return 0
 
 
 class CaseFail(Exception):
@@ -78,6 +128,9 @@ class Ctx:
         os.makedirs(self.dir, exist_ok=True)
         self.lines = []   # ("OK"|"SKIP"|"FAIL", texto)
         self.n_ok = 0
+        # Lo que mas llego a ocupar UN proceso de este caso.  No la suma: lo
+        # que se vigila es que un solo programa no se coma la maquina.
+        self.pico_bytes = 0
 
     # -- reporte --------------------------------------------------------
     def ok(self, msg):
@@ -118,12 +171,27 @@ class Ctx:
         replica juntando stdout y stderr en una sola cadena.
         """
         try:
-            p = subprocess.run(args, cwd=cwd, env=env, timeout=timeout,
-                               capture_output=True, text=True,
-                               errors="replace")
+            p = subprocess.Popen(args, cwd=cwd, env=env,
+                                 stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True,
+                                 errors="replace")
+        except OSError as e:
+            return 127, "no se pudo lanzar: %s" % e
+        try:
+            out, err = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            return 124, "TIMEOUT tras %ds: %s" % (timeout, " ".join(map(str, args)))
-        return p.returncode, (p.stdout or "") + (p.stderr or "")
+            p.kill()
+            p.communicate()
+            return 124, "TIMEOUT tras %ds: %s" % (timeout,
+                                                  " ".join(map(str, args)))
+        # Lo que llego a ocupar.  Se pregunta DESPUES de que muera, que se
+        # puede: el handle sigue abierto hasta que Popen se destruye, y el
+        # sistema conserva el maximo.  Muestrear mientras corre se perderia
+        # justo el pico.
+        pico = _pico_memoria(p)
+        if pico > self.pico_bytes:
+            self.pico_bytes = pico
+        return p.returncode, (out or "") + (err or "")
 
     # -- pasos de alto nivel --------------------------------------------
     def compile_vx(self, src, out, extra=None, must_succeed=True, cwd=None,
@@ -4560,19 +4628,28 @@ def _(ctx):
 # ---------------------------------------------------------------------------
 
 def run_case(entry):
-    """Ejecuta un caso y devuelve (tag, lines, n_ok, ok?)."""
+    """Ejecuta un caso y devuelve (tag, lines, n_ok, ok?, segundos).
+
+    El tiempo se mide SIEMPRE, tambien cuando el caso falla: un caso que se
+    arrastra es un problema aunque pase, y sin medirlo no hay forma de saber
+    cual de los quinientos es.
+    """
     _, tag, fn, _ = entry
     ctx = Ctx(tag)
+    t0 = time.time()
     try:
         fn(ctx)
-        return (tag, ctx.lines, ctx.n_ok, True)
+        return (tag, ctx.lines, ctx.n_ok, True, time.time() - t0,
+                ctx.pico_bytes)
     except CaseFail:
-        return (tag, ctx.lines, ctx.n_ok, False)
+        return (tag, ctx.lines, ctx.n_ok, False, time.time() - t0,
+                ctx.pico_bytes)
     except Exception as e:      # error del propio harness: reportarlo como fallo
         import traceback
         ctx.lines.append(("FAIL", "%s: excepcion del harness: %s" % (tag, e)))
         ctx.lines.append(("DETAIL", traceback.format_exc()))
-        return (tag, ctx.lines, ctx.n_ok, False)
+        return (tag, ctx.lines, ctx.n_ok, False, time.time() - t0,
+                ctx.pico_bytes)
 
 
 # --- Fallos sin capturar: se cuentan igual en interprete y JIT ---
@@ -4725,6 +4802,12 @@ def main():
                     help="ejecutar solo los casos cuyo tag contenga esta cadena")
     ap.add_argument("--keep", action="store_true",
                     help="no borrar el directorio temporal al terminar")
+    ap.add_argument("--keep-going", action="store_true",
+                    help="no parar en el primer fallo: correr la suite entera")
+    ap.add_argument("--slow-s", type=float, default=30.0,
+                    help="a partir de aqui un caso cuenta como LENTO (aparte)")
+    ap.add_argument("--mem-mb", type=float, default=1024.0,
+                    help="a partir de aqui un caso cuenta como GLOTON (aparte)")
     ap.add_argument("--verify-ir", action="store_true",
                     help="hacer que el compilador verifique el IR que "
                          "construye (cada valor definido una vez, operandos "
@@ -4755,15 +4838,36 @@ def main():
 
     jobs = args.jobs or min(8, os.cpu_count() or 4)
     results = {}
+    abortado = False
     try:
         # Los casos paralelizables van al pool; los que tocan estado global
         # (directorios fijos del repo) se ejecutan despues, de uno en uno.
+        #
+        # Al PRIMER fallo se corta, salvo que se pida lo contrario.  Esperar a
+        # que termine la suite entera para leer un fallo que ya se conoce son
+        # veinte minutos de nada: quien la lanza va a arreglar ese fallo y a
+        # volver a lanzarla.  `--keep-going` recupera el recorrido completo,
+        # que es lo que hace falta para saber CUANTOS quedan rotos.
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            for tag, lines, n_ok, ok in pool.map(run_case, par):
-                results[tag] = (lines, n_ok, ok)
+            pendientes = {pool.submit(run_case, e): e[1] for e in par}
+            for f in as_completed(pendientes):
+                tag, lines, n_ok, ok, secs, pico = f.result()
+                results[tag] = (lines, n_ok, ok, secs, pico)
+                if not ok and not args.keep_going:
+                    abortado = True
+                    # Las que aun no arrancaron se cancelan; las que ya estan
+                    # dentro terminan solas -- no hay forma de matarlas sin
+                    # dejar procesos sueltos.
+                    for otra in pendientes:
+                        otra.cancel()
+                    break
         for e in ser:
-            tag, lines, n_ok, ok = run_case(e)
-            results[tag] = (lines, n_ok, ok)
+            if abortado:
+                break
+            tag, lines, n_ok, ok, secs, pico = run_case(e)
+            results[tag] = (lines, n_ok, ok, secs, pico)
+            if not ok and not args.keep_going:
+                abortado = True
     finally:
         if not args.keep:
             shutil.rmtree(TMP_ROOT, ignore_errors=True)
@@ -4771,8 +4875,14 @@ def main():
     # Reporte en el orden del .sh original (determinista pese al paralelismo).
     steps = 0
     failed = []
+    sin_correr = []
+    medidas = []   # (segundos, pico de memoria, tag)
     for _, tag, _, _ in entries:
-        lines, n_ok, ok = results[tag]
+        if tag not in results:      # se corto antes de llegar
+            sin_correr.append(tag)
+            continue
+        lines, n_ok, ok, secs, pico = results[tag]
+        medidas.append((secs, pico, tag))
         for kind, msg in lines:
             if kind == "DETAIL":
                 print("      | " + msg.replace("\n", "\n      | "))
@@ -4800,8 +4910,46 @@ def main():
         else:
             steps += 1
 
+    # -- Lo que se sale de lo normal, con contador PROPIO ------------------
+    #
+    # Un caso lento o glotón no es un fallo, pero tampoco es un caso corriente:
+    # mezclarlo con los demas esconde las dos cosas a la vez -- la media deja
+    # de decir nada, y el que se pasa no aparece por ningun sitio --.  Se
+    # cuentan aparte y se nombran, que es lo unico que permite ir a por ellos.
+    if medidas:
+        lentos = sorted([m for m in medidas if m[0] > args.slow_s],
+                        reverse=True)
+        glotones = sorted([m for m in medidas if m[1] > args.mem_mb * 1048576],
+                          key=lambda m: m[1], reverse=True)
+        normales = [m for m in medidas if m[0] <= args.slow_s]
+        print("")
+        if normales:
+            media = sum(m[0] for m in normales) / len(normales)
+            pmax = max(m[1] for m in normales) if normales else 0
+            print("=== e2e: %d casos normales, media %.1f s, pico de memoria "
+                  "%.0f MiB ===" % (len(normales), media, pmax / 1048576.0))
+        if lentos:
+            print("=== e2e: %d casos LENTOS (mas de %.0f s), contados aparte ==="
+                  % (len(lentos), args.slow_s))
+            for secs, pico, tag in lentos[:20]:
+                print("    %7.1f s  %6.0f MiB  %s"
+                      % (secs, pico / 1048576.0, tag))
+            if len(lentos) > 20:
+                print("    ... y %d mas" % (len(lentos) - 20))
+        if glotones:
+            print("=== e2e: %d casos que pasan de %.0f MiB, contados aparte ==="
+                  % (len(glotones), args.mem_mb))
+            for secs, pico, tag in glotones[:20]:
+                print("    %6.0f MiB  %7.1f s  %s"
+                      % (pico / 1048576.0, secs, tag))
+            if len(glotones) > 20:
+                print("    ... y %d mas" % (len(glotones) - 20))
+
     print("")
     if failed:
+        if sin_correr:
+            print("=== e2e: CORTADA en el primer fallo -- %d casos sin correr."
+                  "  `--keep-going` para la suite entera ===" % len(sin_correr))
         print("=== e2e: %d pasos OK, %d casos fallidos (%s) ==="
               % (steps, len(failed), ", ".join(failed)))
         sys.exit(1)
