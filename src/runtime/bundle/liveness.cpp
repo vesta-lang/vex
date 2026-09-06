@@ -74,12 +74,13 @@ void bundle_live_after(const Bundle &b, const Touch *t, uint16_t live_out,
  * en el historial de git. */
 
 
-uint16_t live_out_after(ProcessVM *process, uint64_t pc) {
+uint16_t live_out_after(ProcessVM *process, uint64_t pc,
+                        vm::VirtualMemory::PageView *view) {
     uint16_t live = 0;   // lo que LEE lo que viene detras
     uint16_t killed = 0; // lo que ya se piso, y por tanto no puede leerse
     for (uint32_t n = 0; n < kLookahead; ++n) {
         DecodedInstr ins;
-        if (!decode_peek(process, pc, ins)) return kAllLive;
+        if (!decode_peek(process, pc, ins, view)) return kAllLive;
         if (ins.exec_cached == nullptr && ins.metadata != nullptr)
             ins.exec_cached = ins.metadata->exec;
 

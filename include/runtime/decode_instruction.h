@@ -29,6 +29,7 @@
 #define DECODE_INSTRUCTION_H
 
 #include <cstdint>
+#include "arena/VirtualMemory.h" // PageView: leer bytecode desde otro hilo
 #include "decode_table.h"
 #include "runtime.h"
 #include "emmit/emmit_decl.h"
@@ -638,7 +639,12 @@ vm_event execute_instruction(ProcessVM *process);
  * @param out Recibe la instruccion descodificada.
  * @return @c false si en esa direccion no hay una instruccion utilizable.
  */
-bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out);
+/// @param view Cache de pagina del LLAMANTE.  Pasandola, esto se puede llamar
+///        desde otro hilo: la lectura deja de tocar la cache del objeto, que es
+///        el unico estado compartido del camino.  Con `nullptr` va como
+///        siempre, por el camino rapido.  Ver `VirtualMemory::PageView`.
+bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out,
+                 vm::VirtualMemory::PageView *view = nullptr);
 
 void decode_instruction(ProcessVM *process);
 

@@ -124,6 +124,24 @@ enum class Mix {
      * arrastraria ahi dentro. */
     Float,  ///< coma flotante ESCALAR (f64) sobre el banco ZMM
     Vector, ///< las mismas, empaquetadas en 256 bits (ymm)
+    /**
+     * @brief Paquetes CONSECUTIVOS de verdad independientes.
+     *
+     * Es la unica mezcla que contesta si el reparto entre nucleos sirve cuando
+     * HAY material.  Las demas tienen una cadena de dependencias por
+     * construccion -- el cuerpo siguiente comparte registros consigo mismo --,
+     * asi que con ellas solo se mide que no hay nada que repartir, y eso se lee
+     * mal: parece que el mecanismo no funciona cuando lo que pasa es que no se
+     * le esta dando nada.
+     *
+     * Es de COMA FLOTANTE y no de ALU entera por una razon concreta: las
+     * banderas son un byte COMPARTIDO y casi toda instruccion de ALU las
+     * escribe, asi que dos paquetes de ALU chocan siempre por ahi aunque sus
+     * registros sean disjuntos.  `fadd` y `fmul` no las tocan -- comprobado en
+     * la base de efectos, `W_FLAGS=0` --, asi que son lo unico que da paquetes
+     * independientes de verdad mientras no exista vivacidad de banderas.
+     */
+    Independent,
 };
 
 /// @brief Nombre corto de una mezcla, para la columna de la tabla.
@@ -133,6 +151,7 @@ const char *mix_name(Mix m) {
     case Mix::Widths: return "anchos";
     case Mix::Memory: return "memoria";
     case Mix::Mixed: return "mixta";
+    case Mix::Independent: return "independ";
     case Mix::Float: return "float";
     default: return "vector";
     }
@@ -557,6 +576,25 @@ std::string generate(uint64_t loops, uint64_t body, Mix mix) {
                 straight +="    mov r" + rn + ", [r14]\n";
             break;
 
+        case Mix::Independent: {
+            /* Dos grupos de registros DISJUNTOS que se alternan cada paquete,
+             * para que un paquete y el siguiente no compartan NADA.
+             *
+             * El corte va cada 32, que es `BUNDLE_MAX`: asi cada paquete cae
+             * entero dentro de un grupo y el que sigue entero en el otro.  Con
+             * un corte mas fino los dos grupos se mezclarian dentro del mismo
+             * paquete y volveria a no haber nada independiente que repartir. */
+            const bool second = ((i / 32u) & 1u) != 0;
+            const int base = second ? 8 : 2; // f8..f13 contra f2..f7
+            const std::string d = "f" + std::to_string(base + (int)(i % 6));
+            const std::string o = "f" + std::to_string(base + (int)((i + 1) % 6));
+            if (i % 2 == 0)
+                straight += "    fadd " + d + ", " + o + "\n";
+            else
+                straight += "    fmul " + d + ", " + o + "\n";
+            break;
+        }
+
         case Mix::Float:
         case Mix::Vector: {
             /* Coma flotante, sobre el OTRO banco de registros.
@@ -963,9 +1001,9 @@ int sweep_peak(uint64_t loops, int repeats) {
      * de medir lo unico que solo el mide. */
     const uint64_t kLengths[] = {0,    4,    12,   28,   60,   124,
                                 252,  508,  1020, 2044, 4092, 8188};
-    const Mix kMixes[] = {Mix::Alu,      Mix::Widths,
-                               Mix::Memory,  Mix::Mixed,
-                               Mix::Float, Mix::Vector};
+    const Mix kMixes[] = {Mix::Alu,   Mix::Widths, Mix::Memory,
+                          Mix::Mixed, Mix::Float,  Mix::Vector,
+                          Mix::Independent};
 
     const char *RESET = ansi::c(ansi::RESET);
     const char *BOLD = ansi::c(ansi::BOLD);
@@ -1268,6 +1306,8 @@ int main(int argc, char **argv) {
         else if (std::strcmp(mezcla_txt, "mixta") == 0) m = Mix::Mixed;
         else if (std::strcmp(mezcla_txt, "float") == 0) m = Mix::Float;
         else if (std::strcmp(mezcla_txt, "vector") == 0) m = Mix::Vector;
+        else if (std::strcmp(mezcla_txt, "independ") == 0)
+            m = Mix::Independent;
         else {
             std::fprintf(stderr, "--solo: mezcla '%s' desconocida\n",
                          mezcla_txt);

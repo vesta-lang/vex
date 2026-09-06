@@ -78,6 +78,15 @@ enum class BodyKind {
     Float,   ///< coma flotante escalar: OTRO banco de registros
     Mixed,   ///< las anteriores alternadas
     /**
+     * @brief Paquetes CONSECUTIVOS de verdad independientes.
+     *
+     * Es el unico cuerpo que contesta si el reparto entre nucleos sirve cuando
+     * HAY material.  Los demas tienen una cadena de dependencias por
+     * construccion -- el cuerpo siguiente comparte el acumulador consigo mismo
+     * --, asi que con ellos solo se mide que no hay nada que repartir.
+     */
+    Independent,
+    /**
      * @brief El patron que el FUSIONADOR sabe juntar: `mov` + ALU.
      *
      * Existe porque el codigo real no lo trae -- el emisor de intermedio ya lo
@@ -97,6 +106,7 @@ inline const char *body_kind_name(BodyKind k) {
     case BodyKind::Memory: return "memoria";
     case BodyKind::Branch: return "ramas";
     case BodyKind::Float: return "float";
+    case BodyKind::Independent: return "independiente";
     case BodyKind::Fusable: return "fusible";
     default: return "mixta";
     }
@@ -137,6 +147,31 @@ inline std::string body_instruction(BodyKind kind, uint32_t i) {
         const std::string g = "f" + std::to_string((int)((i + 1) % 3) + 2);
         if (i % 2 == 0) return "    fadd " + f + ", " + g + "\n";
         return "    fsub " + f + ", " + g + "\n";
+    }
+    case BodyKind::Independent: {
+        /* Dos grupos de registros DISJUNTOS que se alternan cada paquete.
+         *
+         * Existe para contestar una pregunta que ningun otro cuerpo contesta:
+         * el reparto entre nucleos sirve CUANDO HAY material?  Todos los demas
+         * tienen una cadena de dependencias por construccion -- el cuerpo
+         * siguiente comparte el acumulador consigo mismo --, asi que con ellos
+         * solo se mide que no hay nada que repartir, no si repartir funciona.
+         *
+         * Y son de COMA FLOTANTE a proposito, no de ALU entera: las banderas
+         * son un byte COMPARTIDO y casi toda instruccion de ALU las escribe,
+         * asi que dos paquetes de ALU chocan siempre por ahi aunque sus
+         * registros sean disjuntos.  `fadd` y `fmul` no las tocan (comprobado
+         * en la base: `W_FLAGS=0`), asi que son lo unico que da paquetes de
+         * verdad independientes hasta que exista vivacidad de banderas.
+         *
+         * El corte va cada 32, que es `BUNDLE_MAX`: asi cada paquete cae entero
+         * dentro de un grupo y el siguiente entero en el otro. */
+        const bool second = ((i / 32u) & 1u) != 0;
+        const int base = second ? 8 : 2; // f8..f13 contra f2..f7
+        const std::string d = "f" + std::to_string(base + (int)(i % 6));
+        const std::string s = "f" + std::to_string(base + (int)((i + 1) % 6));
+        if (i % 2 == 0) return "    fadd " + d + ", " + s + "\n";
+        return "    fmul " + d + ", " + s + "\n";
     }
     case BodyKind::Fusable: {
         /* `mov rd, rs1` + ALU sobre rd: el par que el fusionador convierte en

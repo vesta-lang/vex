@@ -15,6 +15,9 @@
 
 #include "runtime/bundle/ooo.h"
 
+#include "runtime/bundle/predecode.h"
+#include "runtime/decode_instruction.h"
+
 #if VM_BUNDLES
 
 #if !defined(_WIN32)
@@ -93,6 +96,15 @@ struct ProcessBasicAffinity {
  * evitar.
  */
 void worker_loop() {
+    /* La cache de pagina DE ESTE HILO.
+     *
+     * Es lo que le permite leer bytecode del proceso -- la fusion mira que
+     * registros siguen vivos detras del paquete, y eso descodifica hasta ocho
+     * instrucciones mas alla --.  Con la cache del objeto seria una carrera, y
+     * de las que no fallan: fusionaba MAL y el programa devolvia 0 donde
+     * esperaba 19.  Vive fuera del bucle para que los encargos seguidos
+     * aprovechen la pagina del anterior. */
+    vm::VirtualMemory::PageView page_view;
     for (;;) {
         const uint32_t t = g_ooo.tail.load(std::memory_order_relaxed);
         /* `acquire` sobre `head`: si hay encargo nuevo, su ranura tiene que
@@ -120,6 +132,31 @@ void worker_loop() {
              * verse ANTES de que el principal vea el contador a cero, que es
              * lo que le dice que puede seguir. */
             g_ooo_exec_pending.fetch_sub(1, std::memory_order_release);
+        } else if (job.kind == OooKind::Decode) {
+            /* DESCODIFICAR POR ADELANTADO el tramo que viene.
+             *
+             * Es el encargo mas caro que se puede quitar del camino critico:
+             * descodificar es el 5,7% del banco, cinco veces lo que cuesta
+             * formar paquetes.  Y es independiente por construccion -- una
+             * funcion del bytecode, que ya esta --, asi que no hace falta
+             * ninguna condicion sobre registros ni memoria.
+             *
+             * Se para en cuanto una direccion no se puede leer o el opcode no
+             * existe: seguir seria adelantar basura, y adelantar basura no la
+             * hace mas util -- el principal la descartaria igual --.
+             *
+             * NO se sigue a traves de saltos: se avanza secuencialmente.  A
+             * donde va un salto depende de banderas que solo existen
+             * ejecutando, y aqui no se ejecuta nada. */
+            uint64_t pc = job.next_pc;
+            for (uint32_t i = 0; i < job.n; ++i) {
+                DecodedInstr d;
+                if (!decode_peek(proc, pc, d, &page_view)) break;
+                const uint32_t size = d.flags_info.size_instr;
+                if (size == 0) break; // no avanzaria: parar antes de girar
+                predecode_publish(pc, d);
+                pc += size;
+            }
         } else {
             /* PREPARAR: reordenar y fusionar una copia que nadie mas mira.
              *
@@ -130,8 +167,7 @@ void worker_loop() {
              * Al terminar se publica el puntero con `release`: quien ejecuta lo
              * lee con `acquire` y solo entonces mira el contenido, que para
              * entonces ya esta escrito entero. */
-            bundle_prepare_worker(proc, *job.scratch, job.next_pc,
-                                  job.live_out);
+            bundle_prepare_worker(proc, *job.scratch, job.next_pc, page_view);
             __atomic_store_n(&job.target->improved, job.scratch,
                              __ATOMIC_RELEASE);
         }

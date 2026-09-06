@@ -178,6 +178,7 @@ constexpr uint32_t kOooSlots = 8;
 enum class OooKind : uint8_t {
     Execute, ///< ejecutar un paquete entero
     Prepare, ///< reordenar y fusionar una COPIA, y publicarla cuando este
+    Decode,  ///< descodificar POR ADELANTADO el tramo que viene
 };
 
 /**
@@ -207,15 +208,11 @@ struct OooJob {
     /// `Prepare`: la copia sobre la que trabajar.  La reserva el principal
     /// porque la arena no es de varios hilos.
     Bundle *scratch = nullptr;
-    /// `Prepare`: direccion siguiente al paquete.
+    /// `Prepare`: direccion siguiente al paquete.  La vivacidad NO viaja: el
+    /// ayudante la mira el mismo, con su propia cache de pagina, y solo si un
+    /// patron de fusion llega a pedirla.
+    /// `Decode`: por donde empezar a descodificar por adelantado.
     uint64_t next_pc = 0;
-    /// `Prepare`: que registros siguen vivos detras del paquete.
-    ///
-    /// Viaja CALCULADO porque mirarlo exige descodificar bytecode del proceso,
-    /// y hacerlo desde el ayudante mientras el principal ejecuta es una carrera
-    /// -- y no de las que fallan: fusionaba mal y el programa devolvia 0 donde
-    /// esperaba 19 --.
-    uint16_t live_out = 0xFFFF;
 };
 
 /**
@@ -383,7 +380,7 @@ void ooo_start();
  */
 [[gnu::always_inline]] inline bool
 ooo_push_prepare(ProcessVM *process, Bundle *target, Bundle *scratch,
-                 uint64_t next_pc, uint16_t live_out) {
+                 uint64_t next_pc) {
     if (__builtin_expect(!g_ooo_started.load(std::memory_order_acquire), 0)) {
         ooo_start();
         return false;
@@ -407,7 +404,46 @@ ooo_push_prepare(ProcessVM *process, Bundle *target, Bundle *scratch,
     slot.target = target;
     slot.scratch = scratch;
     slot.next_pc = next_pc;
-    slot.live_out = live_out;
+    g_ooo.head.store(h + 1, std::memory_order_release);
+    return true;
+}
+
+/**
+ * @brief Encarga descodificar por adelantado @p n instrucciones desde @p pc.
+ *
+ * Es el encargo mas barato de justificar de los tres: descodificar cuesta el
+ * 5,7% del banco -- cinco veces lo que cuesta formar paquetes -- y es
+ * independiente por construccion, porque el bytecode ya esta.  Lo que el
+ * ayudante deja en `g_predecode` el principal se lo lleva copiando, en vez de
+ * descodificar.
+ *
+ * Si no cabe en la cola se pierde y no pasa nada: el principal descodifica como
+ * siempre.  Por eso no se cuenta como fallo.
+ */
+[[gnu::always_inline]] inline bool ooo_push_decode(ProcessVM *process,
+                                                   uint64_t pc, uint32_t n) {
+    if (__builtin_expect(!g_ooo_started.load(std::memory_order_acquire), 0)) {
+        ooo_start();
+        if (!g_ooo_started.load(std::memory_order_acquire)) return false;
+    }
+    ProcessVM *owner = g_ooo_owner.load(std::memory_order_relaxed);
+    if (__builtin_expect(owner != process, 0)) {
+        if (owner != nullptr) return false;
+        ProcessVM *none = nullptr;
+        if (!g_ooo_owner.compare_exchange_strong(none, process,
+                                                 std::memory_order_acq_rel))
+            return false;
+    }
+
+    const uint32_t h = g_ooo.head.load(std::memory_order_relaxed);
+    if (h - g_ooo.tail.load(std::memory_order_acquire) >= kOooSlots)
+        return false;
+
+    OooJob &slot = g_ooo.job[h & (kOooSlots - 1)];
+    slot.proc = process;
+    slot.kind = OooKind::Decode;
+    slot.next_pc = pc;
+    slot.n = n;
     g_ooo.head.store(h + 1, std::memory_order_release);
     return true;
 }

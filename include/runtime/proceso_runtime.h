@@ -965,6 +965,12 @@ class ProcessVM {
     struct OooInflight {
         uint16_t reg_read = 0;
         uint16_t reg_write = 0;
+        /// El banco VECTORIAL, aparte del general: son sitios distintos, y
+        /// juntarlos inventaria dependencias que no existen.  Sin ellos, dos
+        /// paquetes de coma flotante sobre el mismo registro se veian
+        /// independientes.
+        uint16_t vec_read = 0;
+        uint16_t vec_write = 0;
         uint8_t field = 0;
         bool mem = false;
     };
@@ -998,11 +1004,57 @@ class ProcessVM {
      * parada, se deja de intentar.  Delegar el ANALISIS sigue igual, que ese no
      * depende de nada y siempre compensa.
      *
-     * Se apaga solo, no se enciende solo: un programa que empieza dependiente y
-     * se vuelve paralelo mas adelante es raro, y reintentar seria pagar la
-     * comprobacion para siempre.
+     * Y se VUELVE A PROBAR mas adelante, con la espera doblandose cada vez que
+     * falla.  Apagarlo para siempre daria por hecho que un programa se comporta
+     * igual de principio a fin, y no es cierto: recorre fases, y la respuesta
+     * cambia con ellas.  Con el reintento espaciado, uno que nunca gana acaba
+     * pagando casi nada y uno que cambia se entera pronto.
      */
     bool ooo_try_exec = true;
+    uint32_t ooo_exec_wait = 0;    ///< despachos que faltan para reintentar
+    uint32_t ooo_exec_backoff = 0; ///< y cuantos seran la proxima vez
+    /// Espera del primer reintento y su tope, en despachos.
+    static constexpr uint32_t kOooRetry = 4096;
+    static constexpr uint32_t kOooRetryMax = 262144;
+
+    /**
+     * @brief Se sigue adelantando la DESCODIFICACION?
+     *
+     * Adelantarla sale muy a cuenta cuando acierta -- descodificar es el 5,7%
+     * del banco, cinco veces lo que cuesta formar paquetes -- y muy cara cuando
+     * no: la tabla de adelanto son 38 KB que el ayudante machaca mientras el
+     * principal la consulta, y en un programa que YA va justo de cache eso es lo
+     * peor que se le puede anadir.  Medido en un tramo recto de 8188
+     * instrucciones: 3,4% de aciertos y el caso pasa de 216 a 55 MIPS.
+     *
+     * Asi que se prueba y se decide con el dato: si en una ventana de
+     * `kDecodeProbe` consultas no acierta al menos la mitad, se deja de
+     * encargar.
+     *
+     * Y se VUELVE A PROBAR mas adelante.  Apagarlo para siempre daria por hecho
+     * que un programa se comporta igual de principio a fin, y no es cierto:
+     * recorre fases -- carga, un bucle que cabe, otro que no --, y la respuesta
+     * cambia con ellas.  El reintento se espacia cada vez que vuelve a fallar,
+     * asi que un programa que de verdad no gana nunca acaba pagando casi nada,
+     * y uno que cambia de fase lo aprovecha en cuanto le toca.
+     */
+    bool ooo_try_decode = true;
+    uint32_t ooo_decode_probe = 0; ///< consultas contadas en esta ventana
+    /// ...y cuantas acertaron.  Propio y no el de la telemetria: ese solo
+    /// cuenta con las estadisticas pedidas, y entonces la decision dependeria
+    /// de si alguien esta mirando.
+    uint32_t ooo_decode_hits = 0;
+    uint32_t ooo_decode_wait = 0;    ///< consultas que faltan para reintentar
+    uint32_t ooo_decode_backoff = 0; ///< y cuantas seran la proxima vez
+    /// Cuantas consultas tiene una ventana.  Bastantes para que el porcentaje
+    /// signifique algo, pocas para no arrastrar la perdida: en el caso malo
+    /// cada consulta fallida cuesta una linea de cache disputada.
+    static constexpr uint32_t kDecodeProbe = 128;
+    /// Espera del primer reintento, y su tope.  Se dobla en cada fallo: un
+    /// programa que nunca gana acaba probando una vez cada 64 mil consultas, o
+    /// sea nada; uno que cambia de fase no tarda en enterarse.
+    static constexpr uint32_t kDecodeRetry = 1024;
+    static constexpr uint32_t kDecodeRetryMax = 65536;
     uint32_t ooo_probe_splits = 0; ///< entregas contadas durante la prueba
     uint32_t ooo_probe_drains = 0; ///< ...y cuantas acabaron en parada
     /// Cuantas entregas se prueban antes de decidir.
@@ -1129,6 +1181,11 @@ class ProcessVM {
         /// de lo que estaba en vuelo.  Dividido por `ooo_split` dice si esto es
         /// una tuberia o un fork-join disfrazado: uno a uno seria lo segundo.
         uint64_t ooo_drains;
+        /// Fallos de icache que el ayudante ya traia DESCODIFICADOS, y los que
+        /// no.  Es la medida de si adelantar la descodificacion sirve: llegar
+        /// tarde se lee igual que no haberlo intentado, y no es lo mismo.
+        uint64_t predecode_hits;
+        uint64_t predecode_misses;
         /// Paquetes cuyo ANALISIS se le encargo al ayudante.
         uint64_t ooo_prepares;
         /// ...y los que hubo que preparar AQUI porque no habia sitio en la cola

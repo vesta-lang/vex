@@ -99,6 +99,63 @@ class VirtualMemory {
 
   public:
     /**
+     * @brief La cache de pagina de UN lector, en vez de la del objeto.
+     *
+     * POR QUE EXISTE
+     * --------------
+     * Leer memoria de la VM desde OTRO hilo era imposible, y no por la TLB --
+     * consultarla no muta nada, es un recorrido de tres niveles y ya --: era por
+     * `cached_page_vaddr` y `cached_page_host`, que se escriben en cada acceso.
+     * Dos hilos leyendo se pisan esa pareja y uno acaba usando el puntero de una
+     * pagina con la direccion de otra.  Y eso no falla: lee bytes equivocados.
+     *
+     * Ya mordio una vez.  El fusionador de paquetes se llevo a un hilo ayudante
+     * y por dentro llamaba a `live_out_after`, que descodifica hasta ocho
+     * instrucciones mas alla del paquete.  No hubo ningun error: fusionaba MAL,
+     * y el programa devolvia 0 donde esperaba 19.
+     *
+     * Con la cache del LLAMANTE, la lectura deja de tener estado compartido y
+     * cualquier hilo puede mirar el bytecode.
+     */
+    struct PageView {
+        uint64_t vaddr = UINT64_MAX; ///< pagina cacheada, o ninguna
+        uint8_t *host = nullptr;     ///< su puntero de anfitrion
+    };
+
+    /**
+     * @brief Puntero de anfitrion de @p vaddr, SIN tocar nada compartido.
+     *
+     * No asigna paginas: si la direccion no esta mapeada devuelve null, y quien
+     * llama decide.  Asignar es lo unico que muta de verdad en este camino
+     * -- crea nodos en la TLB --, asi que dejarlo fuera es lo que hace segura la
+     * lectura desde otro hilo.
+     *
+     * @param vaddr Direccion virtual de la VM.
+     * @param view  Cache de pagina del llamante.  Se actualiza.
+     * @return Puntero al byte, o null si esa pagina no existe todavia.
+     */
+    [[nodiscard]] inline uint8_t *host_ptr_readonly(uint64_t vaddr,
+                                                    PageView &view) const {
+        const uint64_t page = vaddr & ~0xFFFULL;
+        if (__builtin_expect(page == view.vaddr, 1))
+            return view.host + (vaddr & 0xFFFULL);
+
+        const tlb::TLBEntryData *entry = tlb.get_entry(vaddr);
+        /* Sin entrada, sin pagina, o mapeada de una forma que no es un puntero
+         * del anfitrion: se dice que no.  Aqui NO se asigna nada -- eso muta la
+         * TLB -- ni se aborta el proceso, que es lo que hace el camino normal
+         * ante un modo raro: este es un camino de solo lectura y su respuesta a
+         * "no se puede" es null. */
+        if (entry == nullptr || entry->type_address != MAPPED_PTR_HOST)
+            return nullptr;
+        uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
+        if (base == nullptr) return nullptr;
+        view.vaddr = page;
+        view.host = base;
+        return base + (vaddr & 0xFFFULL);
+    }
+
+    /**
      * @brief Invalida la cache de pagina (usar tras @c map / lazy alloc).
      */
     inline void invalidate_page_cache() const {

@@ -79,9 +79,16 @@ void bundle_live_after(const Bundle &b, const Touch *t, uint16_t live_out,
  *
  * @param process Proceso del que leer el bytecode.
  * @param pc      Primera direccion DESPUES del paquete.
+ * @param view    Cache de pagina del LLAMANTE, o null para el camino normal.
+ *                Pasandola, esto se puede llamar desde el hilo ayudante: la
+ *                lectura deja de tocar la del objeto, que es lo unico
+ *                compartido.  Sin esto hubo que calcularla en el hilo duenyo y
+ *                mandarla dentro del encargo, porque hacerlo alli no fallaba
+ *                -- fusionaba MAL y el programa devolvia otro valor --.
  * @return Mascara de registros generales vivos; 0xFFFF si no se pudo resolver.
  */
-uint16_t live_out_after(ProcessVM *process, uint64_t pc);
+uint16_t live_out_after(ProcessVM *process, uint64_t pc,
+                        vm::VirtualMemory::PageView *view = nullptr);
 
 } // namespace runtime
 

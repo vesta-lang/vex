@@ -20,6 +20,8 @@
  */                                                                            \
 #include "ffi/native_ffi.h"
 #include "runtime/bundle.h"
+#include "runtime/bundle/ooo.h"
+#include "runtime/bundle/predecode.h"
 #include "runtime/decode_table.h"
 #include "runtime/dispatch_table.h"
 #include "runtime/runtime.h"
@@ -1322,13 +1324,34 @@ static void cachear_estado_de_runtime(ProcessVM *process, const InstrFormat &m,
             static_cast<uint64_t>(process->registers.regs[R15].qword());
 }
 
-bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
+bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out,
+                 vm::VirtualMemory::PageView *view) {
     if (process == nullptr) return false;
     out = DecodedInstr{};
     out.pc = pc;
-    out.flags_info.is_not_extended = process->vm_mem[pc];
-    if (out.flags_info.is_not_extended == 0x00)
-        out.flags_info.opcode_index = process->vm_mem[pc + 1];
+
+    /* Con `view`, esto lo puede llamar OTRO HILO.
+     *
+     * La diferencia no es la TLB -- consultarla no muta nada --: es la cache de
+     * pagina del objeto, que se escribe en cada acceso y que dos lectores se
+     * pisan.  Con la cache del llamante no queda estado compartido, y a cambio
+     * hay que aceptar que una pagina sin mapear se conteste con "no se puede"
+     * en vez de asignarla, porque asignar SI muta. */
+    if (view != nullptr) {
+        const uint8_t *p = process->vm_mem.host_ptr_readonly(pc, *view);
+        if (p == nullptr) return false;
+        out.flags_info.is_not_extended = *p;
+        if (out.flags_info.is_not_extended == 0x00) {
+            const uint8_t *p1 =
+                process->vm_mem.host_ptr_readonly(pc + 1, *view);
+            if (p1 == nullptr) return false;
+            out.flags_info.opcode_index = *p1;
+        }
+    } else {
+        out.flags_info.is_not_extended = process->vm_mem[pc];
+        if (out.flags_info.is_not_extended == 0x00)
+            out.flags_info.opcode_index = process->vm_mem[pc + 1];
+    }
 
     InstrFormat *m = select_metadata(out.flags_info.is_not_extended,
                                      out.flags_info.opcode_index);
@@ -1341,7 +1364,34 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out) {
      * obligaba a ponerlo, descodificar y devolverlo.  Con el cursor la
      * direccion es un argumento y el proceso no se toca. */
     uint8_t buf[INSTR_BYTES_MAX];
-    m->decode(cursor_en(process, pc, buf), out);
+    if (view != nullptr) {
+        /* Los bytes, uno a uno y con la cache del llamante.  Mas lento que el
+         * cursor normal -- que devuelve un puntero a la pagina -- y da igual:
+         * esto corre FUERA del camino critico, y a cambio no toca nada
+         * compartido.
+         *
+         * SI UN BYTE NO SE PUEDE LEER, SE ABANDONA.  Aqui habia un relleno con
+         * ceros -- "el decodificador ya aguanta bytes cualesquiera" -- y era el
+         * fallo: la VM mapea las paginas de forma PEREZOSA, asi que leer por
+         * delante entra en codigo que el hilo principal todavia no ha
+         * ejecutado y cuya pagina AUN NO EXISTE.  Con el relleno se
+         * descodificaba una instruccion inventada y se publicaba para un `pc`
+         * que el principal SI iba a ejecutar despues.
+         *
+         * Medido, mezcla `memoria`: con adelanto 1, 8 y 1 valores incorrectos
+         * en tres tandas; sin adelanto, cero en tres.  Un valor por defecto que
+         * "funciona" convierte un error en un resultado equivocado, y este no
+         * fallaba en ningun sitio -- daba `R0 = 0` donde tocaba 30769 --. */
+        for (size_t i = 0; i < INSTR_BYTES_MAX; ++i) {
+            const uint8_t *p =
+                process->vm_mem.host_ptr_readonly(pc + i, *view);
+            if (p == nullptr) return false; // no se sabe: no se adelanta nada
+            buf[i] = *p;
+        }
+        m->decode(InstrCursor{buf, INSTR_BYTES_MAX, pc}, out);
+    } else {
+        m->decode(cursor_en(process, pc, buf), out);
+    }
     /* Las binarias de coma flotante tienen variante por nivel de ISA Y por
      * ancho, con el cuerpo SIMD ya metido en linea.  Se elige AQUI -- DESPUES
      * de descodificar, que es cuando `mode` ya esta puesto -- y no en cada
@@ -1399,6 +1449,111 @@ static void decode_impl(ProcessVM *process) {
         return;
     }
     }
+
+#if VM_BUNDLES
+    /* LA TRAIA HECHA EL AYUDANTE?
+     *
+     * Descodificar es el 5,7% del banco -- cinco veces lo que cuesta formar
+     * paquetes --, y es trabajo independiente por construccion: una funcion del
+     * bytecode, que ya esta.  Si el ayudante llego antes, aqui solo queda
+     * copiar 64 bytes, que es lo que este camino ya hacia de todas formas.
+     *
+     * Rendirse no cuesta nada: si no esta, o esta a medias, se descodifica como
+     * siempre.  Por eso no hay ninguna espera. */
+    /* Solo el DUENYO del ayudante mira la tabla.
+     *
+     * Las entradas se guardan por `pc`, y dos programas distintos usan las
+     * mismas direcciones: sin esta condicion un proceso cosechaba
+     * instrucciones que otro habia dejado ahi y ejecutaba OTRO PROGRAMA.  No
+     * fallaba: contaba 253.772 instrucciones donde el programa tenia
+     * 7.995.405, o sea que se iba por donde no debia y terminaba antes.
+     *
+     * Y la condicion es exacta, no una precaucion: quien no ha encargado nada
+     * no tiene nada suyo ahi dentro. */
+    if (__builtin_expect(process->bundle_ooo_on &&
+                             g_ooo_owner.load(std::memory_order_relaxed) ==
+                                 process,
+                         0)) {
+        if (__builtin_expect(!process->ooo_try_decode, 0)) {
+            /* Apagado, pero no para siempre: se cuenta hacia el reintento.  Un
+             * programa recorre FASES y la respuesta cambia con ellas. */
+            if (--process->ooo_decode_wait == 0) {
+                process->ooo_try_decode = true;
+                process->ooo_decode_probe = 0;
+                process->ooo_decode_hits = 0;
+            }
+        } else {
+        DecodedInstr pre;
+        const bool hit = predecode_probe(pc, pre);
+        /* La PRUEBA: acierta bastante como para compensar?
+         *
+         * Cada consulta fallida cuesta una linea de cache que el ayudante esta
+         * escribiendo, asi que fallar mucho es peor que no intentarlo.  Se
+         * decide con el dato al cerrar la ventana, no antes. */
+        process->ooo_decode_hits += hit ? 1u : 0u;
+        if (__builtin_expect(++process->ooo_decode_probe >=
+                                 ProcessVM::kDecodeProbe,
+                             0)) {
+            // La mitad.  Por debajo, la linea disputada se come lo que ahorra.
+            if (process->ooo_decode_hits * 2 >= process->ooo_decode_probe) {
+                // Compensa: se sigue, y el proximo reintento vuelve a ser corto.
+                process->ooo_decode_backoff = 0;
+            } else {
+                process->ooo_try_decode = false;
+                process->ooo_decode_backoff =
+                    process->ooo_decode_backoff == 0
+                        ? ProcessVM::kDecodeRetry
+                        : (process->ooo_decode_backoff <
+                                   ProcessVM::kDecodeRetryMax / 2
+                               ? process->ooo_decode_backoff * 2
+                               : ProcessVM::kDecodeRetryMax);
+                process->ooo_decode_wait = process->ooo_decode_backoff;
+            }
+            process->ooo_decode_probe = 0;
+            process->ooo_decode_hits = 0;
+        }
+        if (hit) {
+            /* Se instala igual que el camino normal, incluida la ranura de
+             * reserva cuando la victima es la que se esta ejecutando: eso no lo
+             * puede saltar nadie, ni siquiera un camino mas rapido. */
+            DecodedInstr *slot_pre = icache_victim(process, pc);
+            if (slot_pre == nullptr) slot_pre = &process->decoded_scratch;
+#if VM_BUNDLES && ICACHE_HEAD_SHIFT
+            /* Lo mismo que hace el camino normal, y por lo mismo: si lo que se
+             * va a pisar era la CABECERA de un paquete de otra direccion, esta
+             * ranura esta disputada y hay que apuntarlo ANTES de pisarla. */
+            const bool was_bundle_head_pre =
+                (slot_pre != &process->decoded_scratch) &&
+                slot_pre->pc != pc && slot_pre->exec_cached == &exec_bundle;
+#endif
+            *slot_pre = pre;
+#if VM_BUNDLES && ICACHE_HEAD_SHIFT
+            if (was_bundle_head_pre) process->icache_head_clash = pc;
+#endif
+#if VM_BUNDLES
+            /* Y FORMAR PAQUETE, que es lo que el camino normal hace justo
+             * despues de instalar.
+             *
+             * Saltarselo no era solo perder el paquete: la entrada queda como
+             * una instruccion suelta donde el resto del sistema espera poder
+             * encontrar una cabecera, y eso es un estado que el camino normal
+             * no produce nunca.  Un atajo tiene que dejar el mismo estado que
+             * el camino que ataja, no uno parecido. */
+            bundle_try_form(process, slot_pre, pc);
+#endif
+            process->decoded_ptr = slot_pre;
+            if (process->bundle_stats_on)
+                ++process->bundle_stats.predecode_hits;
+            if (measuring) process->scheduler.time_decode += elapsed_ns(t1);
+            PROFILE_END("DECODER");
+            vm_hook(process, DebugStage::DecodeEnd);
+            return;
+        }
+        if (process->bundle_stats_on)
+            ++process->bundle_stats.predecode_misses;
+        }
+    }
+#endif
 
     /**
      * Prefetch de la siguiente instruccion para aprovechar el tiempo de

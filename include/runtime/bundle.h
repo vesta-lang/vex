@@ -269,8 +269,22 @@ struct Bundle {
         SUM_BARRIER | SUM_READS_PC | SUM_UNKNOWN;
 
     struct Summary {
-        uint16_t reg_read = 0;  ///< registros que LEE, en total
-        uint16_t reg_write = 0; ///< registros que ESCRIBE, en total
+        uint16_t reg_read = 0;  ///< registros generales que LEE, en total
+        uint16_t reg_write = 0; ///< ...y los que ESCRIBE
+        /**
+         * @brief Lo mismo para el banco VECTORIAL (`f`/`xmm`/`ymm`/`zmm`).
+         *
+         * Va aparte porque es OTRO banco: `f2` y `r2` no son el mismo sitio, y
+         * meterlos en la misma mascara inventaria dependencias que no existen.
+         *
+         * Y tiene que estar.  Sin estos dos campos, dos paquetes de coma
+         * flotante que escriben el MISMO registro se veian independientes -- el
+         * resumen solo miraba los generales -- y se podian repartir a la vez.
+         * Eso no falla: da otro resultado.  Y la coma flotante es justo el
+         * material que mas se puede repartir, porque no escribe banderas.
+         */
+        uint16_t vec_read = 0;
+        uint16_t vec_write = 0;
         uint8_t field = 0;      ///< campos implicitos que toca (banderas, pila)
         /// @see SUM_MEM, SUM_BARRIER, SUM_READS_PC, SUM_UNKNOWN.  Arranca en
         /// `SUM_UNKNOWN`: hasta que alguien mire, el paquete no se delega.
@@ -561,14 +575,14 @@ inline Bundle *bundle_of(const DecodedInstr &d) {
  *
  * @param process Proceso duenyo, para los interruptores y la telemetria.
  * @param b       La COPIA sobre la que trabajar.  Nadie mas la mira.
- * @param next_pc  Direccion siguiente al paquete, para los mensajes.
- * @param live_out Registros vivos detras del paquete, calculados YA por el
- *                 hilo duenyo.  No se pueden mirar aqui: exige descodificar
- *                 bytecode del proceso, y eso desde otro hilo es una carrera
- *                 que fusiona MAL en vez de fallar.
+ * @param next_pc Direccion siguiente al paquete.
+ * @param view    Cache de pagina DEL AYUDANTE.  Es lo que le permite leer
+ *                bytecode del proceso -- la fusion mira que registros siguen
+ *                vivos detras -- sin tocar la cache del objeto, que es el unico
+ *                estado compartido del camino de lectura.
  */
 void bundle_prepare_worker(ProcessVM *process, Bundle &b, uint64_t next_pc,
-                           uint16_t live_out);
+                           vm::VirtualMemory::PageView &view);
 
 /// Guarda el paquete en la entrada de icache.
 inline void bundle_store(DecodedInstr *d, Bundle *b) {
@@ -663,13 +677,13 @@ struct FuseTelemetry {
     uint64_t *newop_livewall; ///< ...y los que no, por seguir vivo el temporal
 };
 
-/// @param live_out_pre Registros vivos detras del paquete, YA calculados, o
-///        null para mirarlo aqui.  Viene dado cuando esto corre en el hilo
-///        ayudante: mirarlo exige descodificar bytecode del proceso, y hacerlo
-///        desde otro hilo mientras el principal ejecuta es una carrera que no
-///        falla ruidosamente -- fusiona MAL y el programa da otro valor --.
+/// @param view Cache de pagina del LLAMANTE, o null.  Con ella, la fusion se
+///        puede correr en el hilo ayudante: `live_out_after` descodifica
+///        bytecode del proceso, y sin cache propia eso es una carrera que no
+///        falla -- fusiona MAL y el programa da otro valor --.
+
 uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
-                     uint64_t next_pc, const uint16_t *live_out_pre,
+                     uint64_t next_pc, vm::VirtualMemory::PageView *view,
                      const FuseTelemetry *tel);
 
 /**

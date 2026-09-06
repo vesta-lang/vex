@@ -23,6 +23,7 @@
 #include "util/env_flags.h" // VESTA_CACHE_DUMP: volcado del estado de caches
 #include "runtime/bundle/fuse_report.h"
 #include "runtime/bundle/bundle_touch_all.h"
+#include "runtime/bundle/predecode.h"
 #include "runtime/bundle/liveness.h"
 #include "runtime/bundle/ooo.h"
 #include "runtime/exec_instruction.h"
@@ -494,6 +495,18 @@ void bundle_release(ProcessVM *process) {
                          (unsigned long long)s.ooo_prepares,
                          (unsigned long long)s.ooo_prepares_lost,
                          (unsigned long long)s.ooo_improved);
+        /* La descodificacion adelantada, que es el encargo mas caro que se le
+         * quita al camino critico.  El porcentaje es la cifra: llegar tarde se
+         * lee igual que no haberlo intentado, y no es lo mismo. */
+        if (s.predecode_hits != 0 || s.predecode_misses != 0) {
+            const uint64_t tot = s.predecode_hits + s.predecode_misses;
+            std::fprintf(stderr,
+                         "           adelantado: %llu de %llu fallos de icache "
+                         "ya venian descodificados (%.1f%%)\n",
+                         (unsigned long long)s.predecode_hits,
+                         (unsigned long long)tot,
+                         100.0 * (double)s.predecode_hits / (double)tot);
+        }
         /* Y POR QUE no se delego, cuando no se delego.  Con "repartidos=0" a
          * secas no se sabe si es que no hay paralelismo o si una condicion mia
          * lo descarta todo, y eso ya ha costado dos suposiciones seguidas.
@@ -525,6 +538,19 @@ void bundle_release(ProcessVM *process) {
      * viera. */
     if (process->bundle_ooo_on) {
         ooo_drain_all();
+        /* Y VACIAR lo adelantado, que es de ESTE programa.
+         *
+         * La tabla se indexa por `pc` y guarda el `pc` como etiqueta, asi que
+         * dos programas distintos tienen entradas indistinguibles para la misma
+         * direccion.  Mirar solo al duenyo no basta: el duenyo se compara por
+         * PUNTERO y los punteros se reciclan -- un proceso nuevo en la misma
+         * direccion que el anterior pasa la comprobacion y hereda sus
+         * instrucciones --.
+         *
+         * Se vacia ANTES de soltar al duenyo: entre las dos cosas no puede
+         * haber un instante en el que otro proceso ya sea duenyo y la tabla
+         * todavia tenga lo viejo. */
+        predecode_clear();
         ooo_release_owner(process);
     }
     delete static_cast<BundleArena *>(process->bundle_arena);
@@ -601,7 +627,7 @@ namespace {
  */
 [[gnu::noinline]] void bundle_prepare(ProcessVM *process, Bundle &b,
                                       uint64_t next_pc,
-                                      const uint16_t *live_out_pre) {
+                                      vm::VirtualMemory::PageView *view) {
     /* QUE TOCA cada instruccion, UNA sola vez.
      *
      * Los tres pasos que vienen detras -- reordenar, fusionar y buscar por
@@ -655,7 +681,7 @@ namespace {
                                    &process->bundle_stats.newop_ready,
                                    &process->bundle_stats.newop_livewall};
         BSTAT_ADD(process, fused,
-                  bundle_fuse(b, tc, process, next_pc, live_out_pre,
+                  bundle_fuse(b, tc, process, next_pc, view,
                               process->bundle_stats_on ? &tel : nullptr));
     }
 
@@ -684,6 +710,8 @@ namespace {
         for (uint32_t i = 0; i < b.k; ++i) {
             su.reg_read = (uint16_t)(su.reg_read | tc.t[i].reg_read);
             su.reg_write = (uint16_t)(su.reg_write | tc.t[i].reg_write);
+            su.vec_read = (uint16_t)(su.vec_read | tc.t[i].vec_read);
+            su.vec_write = (uint16_t)(su.vec_write | tc.t[i].vec_write);
             su.field = (uint8_t)(su.field | tc.t[i].field_read |
                                  tc.t[i].field_write);
             if (tc.t[i].mem) su.flags |= Bundle::SUM_MEM;
@@ -699,8 +727,8 @@ namespace {
 } // namespace
 
 void bundle_prepare_worker(ProcessVM *process, Bundle &b, uint64_t next_pc,
-                           uint16_t live_out) {
-    bundle_prepare(process, b, next_pc, &live_out);
+                           vm::VirtualMemory::PageView &view) {
+    bundle_prepare(process, b, next_pc, &view);
 }
 
 /**
@@ -877,20 +905,24 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
             ooo_pending() < kOooSlots ? arena->alloc() : nullptr;
         if (scratch != nullptr) {
             *scratch = b;
-            /* La vivacidad se mira AQUI, no en el ayudante: exige descodificar
-             * hasta ocho instrucciones mas alla del paquete, o sea leer el
-             * bytecode del proceso, y eso desde otro hilo es una carrera.  Y de
-             * las malas: no falla, fusiona MAL -- el programa devolvia 0 donde
-             * esperaba 19 --. */
-            const uint16_t live_out = live_out_after(process, next_pc);
-            if (live_out == 0xFFFF) BSTAT(process, lookahead_blind);
             // Crudo, para publicarlo ya: se ejecuta correcto desde la vuelta 1
             // y la version buena lo sustituye cuando llegue.
             *rec = b;
-            delegated =
-                ooo_push_prepare(process, rec, scratch, next_pc, live_out);
+            delegated = ooo_push_prepare(process, rec, scratch, next_pc);
             if (delegated) BSTAT(process, ooo_prepares);
         }
+        /* Y de paso, que vaya DESCODIFICANDO lo que viene detras.
+         *
+         * Este es el sitio donde se sabe: acabamos de recorrer el tramo hasta
+         * `next_pc`, asi que lo siguiente que el programa va a descodificar
+         * empieza justo ahi.  Se piden dos paquetes por delante para que le de
+         * tiempo a llegar antes que el principal.
+         *
+         * Si no cabe en la cola se pierde y no pasa nada: el principal
+         * descodifica como siempre.  Por eso no se apunta como fallo. */
+
+        if (process->ooo_try_decode)
+            (void)ooo_push_decode(process, next_pc, BUNDLE_MAX * 2);
     }
     /* Si no se pudo delegar, se prepara AQUI.
      *
@@ -1187,17 +1219,77 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
      *
      * Se apaga con `VESTA_NO_BUNDLE_OOO`, que es lo que permite medir las dos
      * cosas en la misma maquina y el mismo binario. */
-    if (__builtin_expect(process->bundle_ooo_on && process->ooo_try_exec, 0)) {
+    if (__builtin_expect(process->bundle_ooo_on && !process->ooo_try_exec, 0)) {
+        /* Apagado, pero no para siempre: se cuenta hacia el reintento.  Un
+         * programa recorre fases y la respuesta cambia con ellas. */
+        if (--process->ooo_exec_wait == 0) {
+            process->ooo_try_exec = true;
+            process->ooo_probe_splits = 0;
+            process->ooo_probe_drains = 0;
+        }
+    }
+    /* DELEGAR el paquete que toca ahora, si se puede.  Devuelve true si se
+     * fue entero y aqui no queda nada que ejecutar.
+     *
+     * Es una lambda y no codigo suelto porque hay DOS sitios que la necesitan:
+     * al entrar al despacho y al ENCADENAR con el paquete siguiente.  Con solo
+     * el primero, un despacho que encadena ocho paquetes delegaba uno y
+     * esperaba al final -- una parada por entrega, o sea el fork-join otra vez
+     * --, y eso pasaba incluso con material perfectamente independiente: se
+     * veia en la mezcla `independ`, hecha justo para descartar esa duda. */
+    const auto try_delegate = [&]() -> bool {
+        bool delegated = false;
+        /* Salir pronto SOLO si no hay nada en vuelo.
+         *
+         * La comprobacion de choque que viene abajo NO es parte de delegar: es
+         * lo que protege a lo que se ejecuta AQUI de pisarse con lo que el
+         * ayudante todavia esta haciendo.  Meterla detras del interruptor de
+         * la sonda fue un error, y de los que dan otro valor sin fallar: la
+         * entrega que apaga la sonda deja un paquete en vuelo, y el siguiente
+         * del mismo despacho se ejecutaba sin mirar si chocaba con el.  Salio
+         * en `memoria`, que es la mezcla donde chocar es lo normal: `R0 = 0`
+         * donde esperaba 30769.
+         *
+         * Asi que la condicion es "nada que delegar Y nada en vuelo".  Con las
+         * dos, esto es una carga local y una rama. */
+        if (__builtin_expect(!process->bundle_ooo_on ||
+                                 (!process->ooo_try_exec &&
+                                  !process->ooo_exec_dirty),
+                             1))
+            return false;
         const Bundle::Summary &su = b->summary;
         ProcessVM::OooInflight &fly = process->ooo_inflight;
 
         /* Choca con lo que vuela?  Las tres formas: leer o escribir lo que el
          * otro escribe, escribir lo que el otro lee, y coincidir en un recurso
          * que no se puede desambiguar (los campos implicitos y la memoria de
-         * la VM). */
+         * la VM).
+         *
+         * Y SIN ANALIZAR choca con todo.  No es una precaucion: el resumen de un
+         * paquete que nadie ha mirado esta a cero, y cero se lee exactamente
+         * igual que "no toca nada" -- incluida la memoria --.  Con la lectura
+         * ingenua, un paquete crudo pasaba por aqui diciendo que no chocaba con
+         * nada, se rechazaba su delegacion por estar sin analizar, y entonces se
+         * EJECUTABA aqui mientras el anterior seguia en vuelo.  En la mezcla
+         * `memoria` los dos escriben la misma direccion: `R0 = 0` donde
+         * esperaba 30769.
+         *
+         * Es el mismo agujero que ya obliga a no delegar lo desconocido, y hay
+         * que taparlo en los DOS sitios: no poder demostrar que algo es seguro
+         * no autoriza a tratarlo como seguro. */
         const bool clash =
+            /* Atado a que HAYA algo en vuelo.  Los demas terminos ya salen
+             * falsos solos cuando no vuela nada -- sus mascaras estan a cero
+             * --, pero este no miraria `fly` en absoluto, y entonces cada
+             * paquete crudo vaciaria una cola vacia y apuntaria una parada que
+             * no ocurrio.  Eso no rompe nada, pero le mentiria a la sonda, que
+             * decide justo por esa proporcion. */
+            (process->ooo_exec_dirty &&
+             (su.flags & Bundle::SUM_UNKNOWN) != 0) ||
             (((uint16_t)(su.reg_read | su.reg_write) & fly.reg_write) != 0) ||
             ((su.reg_write & fly.reg_read) != 0) ||
+            (((uint16_t)(su.vec_read | su.vec_write) & fly.vec_write) != 0) ||
+            ((su.vec_write & fly.vec_read) != 0) ||
             ((su.field & fly.field) != 0) ||
             (((su.flags & Bundle::SUM_MEM) != 0) && fly.mem);
 
@@ -1215,7 +1307,11 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
 
         /* Y por que NO se delega, cuando no se delega.  Es lo que contesta "no
          * le estamos dando bastante" frente a "no hay nada que dar". */
-        if ((su.flags & Bundle::SUM_UNKNOWN) != 0) {
+        if (!process->ooo_try_exec) {
+            /* La sonda dice que aqui no compensa delegar.  Se ha llegado hasta
+             * este punto solo por la comprobacion de choque de arriba, que es
+             * de correccion y no de rendimiento. */
+        } else if ((su.flags & Bundle::SUM_UNKNOWN) != 0) {
             /* Todavia no lo ha mirado nadie -- el analisis va en el ayudante y
              * llega despues --, asi que NO se toca.  Tratarlo como delegable
              * era delegar saltos: la telemetria decia `partibles=0
@@ -1234,13 +1330,15 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
             }
             fly.reg_read = (uint16_t)(fly.reg_read | su.reg_read);
             fly.reg_write = (uint16_t)(fly.reg_write | su.reg_write);
+            fly.vec_read = (uint16_t)(fly.vec_read | su.vec_read);
+            fly.vec_write = (uint16_t)(fly.vec_write | su.vec_write);
             fly.field = (uint8_t)(fly.field | su.field);
             fly.mem = fly.mem || ((su.flags & Bundle::SUM_MEM) != 0);
             process->ooo_exec_dirty = true;
 
             BSTAT(process, ooo_split);
             BSTAT_ADD(process, ooo_delegated, k);
-            i = k; // nada que ejecutar aqui: el bucle de abajo no entra
+            delegated = true; // nada que ejecutar aqui
 
             /* Y la PRUEBA: esto sirve o solo estorba?
              *
@@ -1255,9 +1353,21 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
              * puede tenerlos. */
             if (++process->ooo_probe_splits >= ProcessVM::kOooProbe) {
                 // Nueve de cada diez: por debajo de eso todavia hay tuberia.
-                process->ooo_try_exec =
-                    process->ooo_probe_drains * 10u <
-                    process->ooo_probe_splits * 9u;
+                if (process->ooo_probe_drains * 10u <
+                    process->ooo_probe_splits * 9u) {
+                    // Compensa: el proximo reintento vuelve a ser corto.
+                    process->ooo_exec_backoff = 0;
+                } else {
+                    process->ooo_try_exec = false;
+                    process->ooo_exec_backoff =
+                        process->ooo_exec_backoff == 0
+                            ? ProcessVM::kOooRetry
+                            : (process->ooo_exec_backoff <
+                                       ProcessVM::kOooRetryMax / 2
+                                   ? process->ooo_exec_backoff * 2
+                                   : ProcessVM::kOooRetryMax);
+                    process->ooo_exec_wait = process->ooo_exec_backoff;
+                }
                 process->ooo_probe_splits = 0;
                 process->ooo_probe_drains = 0;
             }
@@ -1269,7 +1379,26 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
             BSTAT_IDX(process, ooo_reject,
                       ooo_pending() >= kOooSlots ? 3u : 4u);
         }
-    }
+
+        return delegated;
+    };
+
+    /* Delegado el paquete, aqui no queda nada que ejecutar.
+     *
+     * PENDIENTE, y medido: esto TERMINA el despacho.  El hilo principal ya no
+     * ejecuta la ultima instruccion del paquete, asi que no ve ningun salto y
+     * no encadena con el siguiente -- y al volver, el guardia espera --.  El
+     * resultado es una entrega y una parada, o sea el fork-join de siempre con
+     * otro nombre, y pasa INCLUSO con material perfectamente independiente: la
+     * mezcla `independ` esta hecha para distinguir eso de "no hay nada que
+     * repartir", y da 1,00 paradas por entrega igual.
+     *
+     * Se intento seguir con el paquete siguiente dentro del mismo despacho y
+     * NO vale: no aumentaba las entregas y daba valores incorrectos
+     * (`memoria` devolvia 0 donde esperaba 615).  Queda apuntado como lo que
+     * hay que resolver para que esto llegue a ser una tuberia, no como algo
+     * que ya funcione. */
+    if (try_delegate()) i = k;
 
     while (i < k) {
         DecodedInstr &ins = insts[i];
@@ -1377,7 +1506,11 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
                     b = bundle_of(*next);
                     k = b->k;
                     insts = b->instr;
-                    i = 0;
+                    /* El encadenado tambien delega.  Aqui es donde la tuberia
+                     * se forma de verdad: un despacho recorre varios paquetes,
+                     * y si solo se mirara al entrar se delegaria uno y se
+                     * esperaria al salir. */
+                    i = try_delegate() ? k : 0;
                     continue;
                 }
             }

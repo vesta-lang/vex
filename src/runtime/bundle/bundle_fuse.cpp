@@ -678,7 +678,7 @@ FuseReject fuse_would_apply(const DecodedInstr &a, const DecodedInstr &b) {
 
 
 uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
-                     uint64_t next_pc, const uint16_t *live_out_pre,
+                     uint64_t next_pc, vm::VirtualMemory::PageView *view,
                      const FuseTelemetry *tel) {
     if (b.k < 2) return 0;
     if (__builtin_expect(::util::flag_on(::util::FlagId::NoBundleFuse), 0))
@@ -707,20 +707,20 @@ uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
     bool live_ready = false;
     const auto live_at = [&](uint32_t idx) -> uint16_t {
         if (!live_ready) {
-            /* O viene dado, o se mira aqui.
+            /* Y sigue siendo PEREZOSO aunque esto corra en el ayudante.
              *
-             * Viene dado cuando esto corre en el hilo AYUDANTE, y no es un
-             * detalle: `live_out_after` DESCODIFICA bytecode del proceso, y
-             * hacerlo desde otro hilo mientras el principal ejecuta es una
-             * carrera.  Y no una que falle ruidosamente -- daba un paquete
-             * fusionado MAL, o sea el programa devolviendo 0 donde esperaba
-             * 19 --.  Por eso lo calcula quien puede: el que es duenyo del
-             * proceso, antes de encargar nada. */
-            const uint16_t live_out = live_out_pre != nullptr
-                                          ? *live_out_pre
-                                          : live_out_after(process, next_pc);
-            if (live_out == 0xFFFF && live_out_pre == nullptr &&
-                process->bundle_stats_on)
+             * `live_out_after` descodifica bytecode del proceso, y eso desde
+             * otro hilo era una carrera -- no de las que fallan: fusionaba MAL
+             * y el programa devolvia 0 donde esperaba 19 --.  Se aparto
+             * calculandolo en el hilo duenyo y mandandolo dentro del encargo,
+             * pero eso lo volvia ANSIOSO: se pagaba en cada formacion, tambien
+             * en las mezclas donde no se fusiona nada, que es justo lo que la
+             * pereza evitaba (medido: 29%).
+             *
+             * Con la cache de pagina del llamante ya no hace falta elegir: el
+             * ayudante trae la suya y lo mira aqui, cuando un patron lo pide. */
+            const uint16_t live_out = live_out_after(process, next_pc, view);
+            if (live_out == 0xFFFF && process->bundle_stats_on)
                 ++process->bundle_stats.lookahead_blind;
             bundle_live_after(b, t, live_out, live_after);
             live_ready = true;
