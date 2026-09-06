@@ -100,6 +100,7 @@
 #include "runtime/manager_runtime.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
+#include "util/cpu_topology.h"
 #include "util/ansi.h"
 #include "util/reloj.h"
 
@@ -1234,6 +1235,78 @@ int sweep_peak(uint64_t loops, int repeats) {
     std::printf("%s  testigo: %.0f MIPS al empezar, %.0f al terminar "
                 "(%+.1f%%)%s\n",
                 DIM, canary_start, canary_end, (drift - 1.0) * 100.0, RESET);
+
+    /* EL MISMO PUNTO, EN CADA CLASE DE NUCLEO.
+     *
+     * En una maquina hibrida el mismo banco puede dar cifras muy distintas solo
+     * por donde decida ponerlo el sistema, y eso no se ve en la tabla: sale
+     * como ruido y se confunde con una regresion.  Ya paso en esta sesion --
+     * dos corridas del mismo binario dando 265 y 450 MIPS --.
+     *
+     * Cinco configuraciones, y cada una contesta algo distinto:
+     *
+     *   1 E / 1 P   un solo procesador de cada clase: la cifra LIMPIA, sin
+     *               que el sistema pueda mover nada.  El cociente entre las
+     *               dos es cuanto vale un nucleo rapido frente a uno lento.
+     *   E / P       la clase entera: lo mismo, pero dejando migrar dentro de
+     *               ella.  Si difiere del caso de uno, migrar cuesta.
+     *   P+E         todo, que es como corre la tabla de arriba.  Si queda por
+     *               debajo de `P`, el sistema esta metiendo trabajo en nucleos
+     *               lentos y la tabla lleva ese ruido dentro.
+     *
+     * Se ata el PROCESO y no el hilo: el programa lo ejecutan los hilos del
+     * planificador de la VM, asi que atar el que mide no ataria nada. */
+    {
+        const uint64_t rapidos = ::util::cpu_class_mask(::util::CoreClass::Fast);
+        const uint64_t lentos = ::util::cpu_class_mask(::util::CoreClass::Slow);
+        const uint64_t todos = rapidos | lentos;
+        if (lentos == 0) {
+            std::printf("%s  nucleos: la maquina es homogenea, no hay clases "
+                        "que separar%s\n",
+                        DIM, RESET);
+        } else {
+            struct Caso {
+                const char *nombre;
+                uint64_t mask;
+            };
+            const Caso casos[] = {
+                {"1 E-core", ::util::cpu_one_of_class(::util::CoreClass::Slow)},
+                {"E-cores", lentos},
+                {"1 P-core", ::util::cpu_one_of_class(::util::CoreClass::Fast)},
+                {"P-cores", rapidos},
+                {"P+E", todos},
+            };
+            /* Se mide TODO antes de imprimir nada: el cociente se da contra los
+             * P-cores, y esa fila es la cuarta.  Imprimiendo sobre la marcha
+             * solo la ultima podria compararse, que es justo la menos util. */
+            double v[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+            bool atado[5] = {false, false, false, false, false};
+            for (int i = 0; i < 5; ++i) {
+                if (!::util::pin_process(casos[i].mask)) continue;
+                atado[i] = true;
+                v[i] = measure(loops, 16, Mix::Alu, Engine::Scalar, repeats,
+                               nullptr);
+            }
+            std::printf("%s  el mismo punto, atando el proceso:%s\n", DIM,
+                        RESET);
+            const double ref = v[3]; // los P-cores
+            for (int i = 0; i < 5; ++i) {
+                if (!atado[i]) {
+                    /* No se calla: publicar como "en E-cores" algo que corrio
+                     * donde quiso seria peor que no medirlo. */
+                    std::printf("    %-9s  no se pudo atar\n", casos[i].nombre);
+                    continue;
+                }
+                std::printf("    %-9s %7.1f MIPS", casos[i].nombre, v[i]);
+                if (ref > 0.0 && v[i] > 0.0 && i != 3)
+                    std::printf("   %s(%.2fx los P-cores)%s", DIM, v[i] / ref,
+                                RESET);
+                std::printf("\n");
+            }
+            // Devolver el proceso a donde estaba: lo de abajo no va atado.
+            (void)::util::pin_process(todos);
+        }
+    }
 
     if (drift < kCanaryMin) {
         std::printf(
