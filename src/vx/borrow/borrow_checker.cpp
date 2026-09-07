@@ -31,7 +31,7 @@
  *       |   |                     ------- prestamo activo desde aqui
  */
 
-#include "vx/borrow_checker.h"
+#include "vx/borrow/borrow_checker.h"
 
 #include "vx/diag/diag_catalog.h" // las palabras del mensaje, por idioma
 

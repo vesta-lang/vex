@@ -354,7 +354,10 @@ add_library(vx_lib STATIC
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
-    borrow_checker.cpp
+    # El comprobador de prestamos, en su propia carpeta: es una pieza aparte --
+    # sus reglas no son las del sistema de tipos -- y ahi es donde entrara la
+    # segunda etapa, la que comprueba sobre el IR en vez de sobre el AST.
+    borrow/borrow_checker.cpp
     compiler.cpp
     compiler_project.cpp
     # Traductor de los tipos de Vesta a entidades de la base de conocimiento de

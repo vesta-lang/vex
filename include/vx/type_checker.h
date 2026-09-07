@@ -49,7 +49,7 @@
 
 #include <memory>
 #include "vx/ast.h"
-#include "vx/borrow_checker.h"
+#include "vx/borrow/borrow_checker.h"
 #include "vx/comptime/comptime_vm.h"
 #include "vx/diag/diag_catalog.h"
 #include "vx/diagnostic.h"
