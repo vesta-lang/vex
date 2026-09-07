@@ -125,11 +125,10 @@ void LocSet::asegurar_indice_() const {
     idx_kinds_gen_ = 0;
     // Se reserva la tabla AQUI, que es el unico sitio donde se llena: un
     // conjunto al que nadie pregunte por aliasing no la tiene nunca.
-    if (!idx_raiz_)
-        idx_raiz_.reset(
-            new std::unordered_map<uint64_t, std::vector<uint32_t>>());
-    idx_raiz_->clear();
-    idx_raiz_->reserve(locs.size());
+    if (!idx_raiz_) idx_raiz_.reset(new Index());
+    idx_raiz_->by_root.clear();
+    idx_raiz_->arg_derived.clear();
+    idx_raiz_->by_root.reserve(locs.size());
     for (uint32_t i = 0; i < locs.size(); ++i) {
         const AbstractLoc &e = locs[i];
         if (e.kind == AbstractLoc::Kind::None) continue;
@@ -143,7 +142,10 @@ void LocSet::asegurar_indice_() const {
             idx_kinds_gen_ |= bit; // la clase entera, sin raiz concreta.
             continue;
         }
-        (*idx_raiz_)[clave_raiz_(e.kind, e.id)].push_back(i);
+        idx_raiz_->by_root[clave_raiz_(e.kind, e.id)].push_back(i);
+        // Y aparte los del parametro, que aliasan CRUZANDO raices.
+        if (e.kind == AbstractLoc::Kind::ArgDerived)
+            idx_raiz_->arg_derived.push_back(i);
     }
 }
 
@@ -154,7 +156,9 @@ bool LocSet::may_alias_any(const AbstractLoc &l) const {
      *   - un TOP dentro aliasa todo;
      *   - si lo preguntado es TOP, aliasa con cualquier elemento que haya;
      *   - la raiz generica de una clase aliasa toda su clase;
-     *   - y si no, solo pueden aliasar los de SU misma raiz, que es el cubo. */
+     *   - y si no, solo pueden aliasar los de SU misma raiz, que es el cubo...
+     *     salvo en @c ArgDerived, donde la raiz es un NOMBRE y no una
+     *     identidad, asi que dos raices distintas tambien pueden coincidir. */
     asegurar_indice_();
     if (idx_top_) return true;
     if (l.kind == AbstractLoc::Kind::Unknown)
@@ -163,8 +167,17 @@ bool LocSet::may_alias_any(const AbstractLoc &l) const {
     if ((idx_kinds_gen_ & bit) != 0) return true;
     if (l.id == LOC_GENERIC) return (idx_kinds_ & bit) != 0;
     if (!idx_raiz_) return false;
-    auto it = idx_raiz_->find(clave_raiz_(l.kind, l.id));
-    if (it == idx_raiz_->end()) return false;
+    /* El parametro se responde con SU lista, no con el cubo: ahi la raiz no
+     * distingue regiones, asi que quedarse en el cubo daba por disjunto lo que
+     * el barrido lineal -- y la realidad -- dan por aliasado.  La lista lleva
+     * tambien los de la misma raiz, con lo que cubre el cubo entero. */
+    if (l.kind == AbstractLoc::Kind::ArgDerived) {
+        for (uint32_t i : idx_raiz_->arg_derived)
+            if (may_alias(locs[i], l)) return true;
+        return false;
+    }
+    auto it = idx_raiz_->by_root.find(clave_raiz_(l.kind, l.id));
+    if (it == idx_raiz_->by_root.end()) return false;
     for (uint32_t i : it->second)
         if (may_alias(locs[i], l)) return true;
     return false;

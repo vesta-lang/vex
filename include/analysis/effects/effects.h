@@ -86,10 +86,18 @@ struct AbstractLoc {
      *
      * Lo pone el CONTRATO del parametro, con cualquiera de las formas que lo
      * escriben: `out`/`inout` -- que lo AFIRMA el que llama y hay que
-     * comprobarselo -- o `borrow_mut<T>` / `unique<T>`, que lo garantiza el
-     * compilador.  Cual de las dos fue viaja en el hecho del ASA
-     * (@c asa.param_contracts), no aqui: a la regla de aliasing solo le importa
-     * si la promesa esta, y quien tenga que verificar contratos pregunta alli.
+     * comprobarselo -- o `unique<T>`, que lo garantiza el compilador.  Cual de
+     * las dos fue viaja en el hecho del ASA (@c asa.param_contracts), no aqui:
+     * a la regla de aliasing solo le importa si la promesa esta, y quien tenga
+     * que verificar contratos pregunta alli.
+     *
+     * `borrow_mut<T>` NO esta en la lista, aunque el tipo parezca darlo: el
+     * comprobador de prestamos lleva los suyos por NOMBRE de variable, asi que
+     * dos nombres de la misma region no chocan y un prestamo tomado dentro del
+     * llamado es otra entrada.  Creerselo daba un resultado equivocado -- una
+     * lectura adelantando a una escritura al mismo byte --.  Entra en cuanto la
+     * pasada sobre el IR, que indexa el prestamo por localizacion abstracta en
+     * vez de por nombre, lo confirme.
      *
      * Ausente = no se dijo, y no saber obliga a lo conservador.  Que es lo
      * contrario de lo que se hacia: dos indices distintos se daban por regiones
@@ -216,8 +224,28 @@ struct LocSet {
      * puntero nulo.  Lo que se paga cuando SI se usa es una reserva y una
      * indireccion, y eso ocurre pocas veces.
      */
-    mutable std::unique_ptr<std::unordered_map<uint64_t, std::vector<uint32_t>>>
-        idx_raiz_;
+    struct Index {
+        /// Los sitios de cada raiz concreta, por (clase, raiz).
+        std::unordered_map<uint64_t, std::vector<uint32_t>> by_root;
+        /**
+         * @brief Los @c ArgDerived concretos, TODOS juntos aparte.
+         *
+         * Buscar solo en el cubo de la raiz da por disjunto lo que no comparte
+         * raiz, y eso vale donde la raiz es una IDENTIDAD.  En @c ArgDerived es
+         * un NOMBRE -- el indice del parametro --, asi que dos raices distintas
+         * pueden ser la misma memoria y la busqueda por cubo se saltaba
+         * justamente los casos que aliasan.  El barrido lineal ya contestaba
+         * bien, asi que el indice contestaba lo CONTRARIO que el conjunto que
+         * indexa, y del lado inseguro.
+         *
+         * Son pocos -- como mucho uno por parametro --, asi que recorrerlos
+         * enteros no vuelve lineal la consulta en el tamano del conjunto.  Y
+         * quien decide sigue siendo @ref may_alias: esta lista solo acota los
+         * candidatos, no repite el criterio.
+         */
+        std::vector<uint32_t> arg_derived;
+    };
+    mutable std::unique_ptr<Index> idx_raiz_;
 
     /// Construye el indice si hace falta.
     void asegurar_indice_() const;
