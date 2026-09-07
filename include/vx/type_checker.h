@@ -1527,10 +1527,14 @@ class TypeChecker {
 
     void check_stmt(ast::Stmt *s, const Type &fn_return_type);
     /**
-     * @brief Expande los `inject(expr)` del cuerpo de un bloque `asm`.
+     * @brief Expande las llamadas `comptime` del cuerpo de un bloque `asm`.
      *
-     * Sustituye cada `inject(expr)` por el texto que la expresion produce en
-     * compilacion, dejando el cuerpo ya listo en el propio nodo.
+     * Sustituye cada llamada a una funcion `comptime` que devuelva `string`
+     * por el texto que produce al compilar, dejando el cuerpo ya listo en el
+     * propio nodo.  Vale CUALQUIERA, de la biblioteca o del usuario: aqui se
+     * buscaba el nombre `inject`, que es una macro de la stdlib -- una
+     * identidad, `return code;` -- y tenerlo cableado dejaba fuera a todas las
+     * demas.
      *
      * Se hace en el CHEQUEO y no en el lowering por dos motivos: la expresion
      * hay que chequearla antes de poder evaluarla -- si no, una llamada a una
@@ -1539,7 +1543,7 @@ class TypeChecker {
      *
      * @param as Nodo del bloque asm; se modifica su cuerpo.
      */
-    void expandir_inject_en_asm(ast::AsmStmt *as);
+    void expand_comptime_calls_in_asm(ast::AsmStmt *as);
     void check_block(ast::BlockStmt *b, const Type &fn_return_type);
     void check_var_decl(ast::VarDeclStmt *vd);
     void check_if(ast::IfStmt *s, const Type &fn_return_type);
@@ -2228,6 +2232,14 @@ class TypeChecker {
         /// en pass 2; los reads propagan `deferred` para que static_assert no
         /// se dispare sobre el placeholder.
         bool deferred = false;
+        /// POR QUE quedo diferido: el CODIGO del catalogo multi-idioma y el
+        /// argumento con que se formatea.  Viaja con @c deferred para que
+        /// quien diagnostique no tenga que volver a averiguarlo -- y sobre
+        /// todo para que no se pierda al leer la constante, que es donde antes
+        /// desaparecia sin dejar rastro.  Sin formatear a proposito: el texto
+        /// se escribe al IMPRIMIR, en el idioma de quien lo lee.
+        std::string deferred_code;
+        std::string deferred_arg;
         int64_t value = 0;
         std::string str_value;
         std::vector<std::shared_ptr<ComptimeValue>> array_vals;
@@ -2469,6 +2481,12 @@ class TypeChecker {
     /// repetir la compilacion con esa maquina ya cargada.
     bool inject_diferido_ = false;
 
+    /// POR QUE quedo sin generar el PRIMERO de esos cuerpos: codigo del
+    /// catalogo y su argumento.  El aviso decia que un cuerpo no se genero y
+    /// ahi acababa; quien lo leia no tenia por donde empezar.
+    std::string asm_body_pending_code_;
+    std::string asm_body_pending_arg_;
+
     /// @copydoc set_comptime_artifact
     const std::vector<uint8_t> *comptime_artifact_ = nullptr;
 
@@ -2493,6 +2511,15 @@ class TypeChecker {
 
     /// @copydoc inject_diferido_
     bool inject_diferido() const noexcept { return inject_diferido_; }
+
+    /// @copydoc asm_body_pending_code_
+    const std::string &asm_body_pending_code() const noexcept {
+        return asm_body_pending_code_;
+    }
+    /// @copydoc asm_body_pending_code_
+    const std::string &asm_body_pending_arg() const noexcept {
+        return asm_body_pending_arg_;
+    }
 
   private:
     // -----------------------------------------------------------------

@@ -676,6 +676,18 @@ struct CompileResult {
     bool unresolved_inject = false;
 
     /**
+     * @brief POR QUE quedo sin resolver: codigo del catalogo y su argumento.
+     *
+     * Decir que un cuerpo no se genero, sin mas, no lleva a ninguna parte: son
+     * varias situaciones distintas y solo una de ellas -- que sea la primera
+     * pasada -- es normal.  Sin formatear a proposito: el texto se escribe al
+     * imprimir, en el idioma de quien lo lee.  Vacio significa que no se pudo
+     * averiguar, no que no haya motivo.
+     */
+    std::string unresolved_inject_code;
+    std::string unresolved_inject_arg;
+
+    /**
      * @brief Fuente del CONJUNTO COMPTIME de la compilacion: las decls que se
      *        ejecutan al compilar (`comptime` y `@Macro`), sus dependencias y
      *        los `import` que necesitan, concatenadas.

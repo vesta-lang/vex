@@ -846,6 +846,24 @@ enum class IrOp : uint16_t {
 };
 
 /**
+ * @brief Marca de un bloque de ensamblador cuyo cuerpo NO se llego a generar.
+ *
+ * La deja el comprobador de tipos cuando la funcion que produce el cuerpo no
+ * se pudo ejecutar al compilar, y sobrevive dentro del @c func_name de la
+ * @c INLINE_ASM.  La leen el compilador -- para saber que esa pasada no es la
+ * buena -- y el ASA, para no dar por bueno un bloque que esta vacio.
+ *
+ * Detras de la marca van el CODIGO del catalogo con el motivo y su argumento,
+ * separados por espacios.  Sin formatear a proposito: el texto se escribe al
+ * imprimir, en el idioma de quien lo lee.
+ *
+ * Vive en UN sitio a proposito.  Estuvo escrita en tres, y las tres no
+ * coincidian: una buscaba un texto que no emitia nadie, con lo que su
+ * comprobacion no saltaba NUNCA y un cuerpo vacio pasaba por bueno.
+ */
+inline constexpr const char *kAsmBodyPendingMark = "; __asm_body_pending";
+
+/**
  * @brief Convierte un IrOp a su nombre en el formato de texto.
  * @param op Operacion a convertir.
  * @return Nombre de texto del opcode.

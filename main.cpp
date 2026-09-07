@@ -404,8 +404,21 @@ static bool warn_unresolved_inject(const vx::CompileResult &cr,
      * el cuerpo este siempre disponible, esto pasa a ERROR: un bloque de
      * ensamblador sin cuerpo no es un programa valido. */
     d.level = vx::DiagLevel::WARN;
-    d.code = "VXA052";
-    d.args.push_back(vx_path);
+    /* CON el motivo cuando se sabe.  Sin el, el aviso decia que un cuerpo no
+     * se genero y ahi acababa: quien lo leia no tenia por donde empezar, y son
+     * varias situaciones distintas de las que solo una es normal.  El texto se
+     * arma AQUI, al imprimir, porque lo que viaja es el codigo del catalogo y
+     * su argumento -- asi sale en el idioma de quien lee, no en el de quien
+     * compilo. */
+    if (!cr.unresolved_inject_code.empty()) {
+        d.code = "VXA071";
+        d.args.push_back(vx_path);
+        d.args.push_back(vx::diag::format(cr.unresolved_inject_code,
+                                          {cr.unresolved_inject_arg}));
+    } else {
+        d.code = "VXA052";
+        d.args.push_back(vx_path);
+    }
     d.loc.set_file(vx_path);
     vx::print_diagnostic(std::cerr, d);
     return true;
@@ -456,20 +469,20 @@ static bool recompilar_con_maquina_de_compilacion(
     }
 
     const std::string velb = prefijo + ".velb";
-#if defined(_WIN32)
-    _putenv_s("VESTA_MC_PREBUILT", velb.c_str());
-#else
-    setenv("VESTA_MC_PREBUILT", velb.c_str(), 1);
-#endif
+    /* La maquina de compilacion recien ensamblada, EN MEMORIA.  Por el entorno
+     * el traspaso puede quedarse en nada sin decirlo -- anadir una variable
+     * hace que el CRT realoje su tabla, que es un bloque suyo y no de nuestro
+     * asignador --, y entonces esta segunda compilacion no tendria que
+     * ejecutar y volveria a dejar los cuerpos vacios. */
+    std::vector<uint8_t> machine_bytes;
+    vx::CompileOptions copts2 = copts;
+    if (util::read_whole_file(velb, machine_bytes) && !machine_bytes.empty()) {
+        copts2.comptime_artifact = &machine_bytes;
+    }
     vx::CompileResult cr2 =
         vx::vx_source_has_imports(vx_source)
-            ? vx::compile_vx_project(vx_path, copts)
-            : vx::compile_vx_source(vx_source, vx_path, copts);
-#if defined(_WIN32)
-    _putenv_s("VESTA_MC_PREBUILT", "");
-#else
-    unsetenv("VESTA_MC_PREBUILT");
-#endif
+            ? vx::compile_vx_project(vx_path, copts2)
+            : vx::compile_vx_source(vx_source, vx_path, copts2);
     /* La segunda manda, incluso si trae errores: puede ser un `static_assert`
      * que ha resuelto a false con el valor REAL.  Quedarse con la primera --
      * que se los salto por no poder evaluarlos -- seria dar por bueno un
@@ -4308,16 +4321,30 @@ int main(int argc, char *argv[]) {
             !util::flag_text(util::FlagId::McPrebuilt).empty();
         const bool verbose_mc = util::flag_on(util::FlagId::McVerbose);
 
-        /* CACHE HIT path: setear env var ANTES del primer compile_vx_source.
-         * Solo 1 invocacion de compile, con VM eval activo desde el inicio. */
+        /* CACHE HIT: el artefacto se entrega EN MEMORIA, antes del unico
+         * compile, para que ejecutar codigo al compilar funcione desde el
+         * primer sitio de llamada.
+         *
+         * Antes viajaba por el ENTORNO -- `_putenv_s` aqui, `getenv` dentro
+         * del comprobador --, y ese viaje puede fallar sin decir nada: para
+         * anadir una variable el CRT hace `realloc` de su tabla de entorno, un
+         * bloque que creo el propio CRT antes de que nuestro asignador tomara
+         * el control, y este lo rechaza porque no puede saber su tamano.  La
+         * escritura se quedaba en nada, la compilacion seguia sin bytecode que
+         * ejecutar, y lo que dependia de el se horneaba a CERO sin un solo
+         * diagnostico.  Los bytes ya estan aqui: se pasan por la puerta que el
+         * comprobador prefiere, sin frontera de por medio. */
+        std::vector<uint8_t> comptime_bytes;
         if (cache_hit && !user_already_set_prebuilt) {
-#if defined(_WIN32)
-            _putenv_s("VESTA_MC_PREBUILT", cache_path.c_str());
-#else
-            setenv("VESTA_MC_PREBUILT", cache_path.c_str(), 1);
-#endif
-            if (verbose_mc) {
-                std::cerr << "[mc-cache] hit: " << cache_path << "\n";
+            if (util::read_whole_file(cache_path, comptime_bytes) &&
+                !comptime_bytes.empty()) {
+                copts.comptime_artifact = &comptime_bytes;
+                if (verbose_mc) {
+                    std::cerr << "[mc-cache] hit: " << cache_path << "\n";
+                }
+            } else if (verbose_mc) {
+                std::cerr << "[mc-cache] hit pero ilegible: " << cache_path
+                          << "\n";
             }
         }
 
@@ -4338,7 +4365,14 @@ int main(int argc, char *argv[]) {
         pck.vx_base = 0; // no usado por compile_vx_project; queda 0
         pck.instrument_mode = copts.instrument_mode;
         pck.port_target = copts.port_target;
+        /* Que el codigo comptime este disponible CAMBIA lo compilado, asi que
+         * entra en la clave.  Cuenta por las dos vias: la de memoria, que es
+         * la de casa, y la variable de entorno, que es como entra cuando quien
+         * orquesta es otro proceso.  Mirar solo la variable dejaba fuera la
+         * via de memoria: un acierto servia un artefacto compilado SIN poder
+         * ejecutar nada al compilar. */
         pck.comptime_prebuilt =
+            copts.comptime_artifact != nullptr ||
             !util::flag_text(util::FlagId::McPrebuilt).empty();
         /* De donde salen los modulos que no son del proyecto.  Es lo mismo que
          * lo de abajo: si algo que cambia lo compilado no esta en la clave, un
@@ -4537,14 +4571,8 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        /* Limpiar env var si lo seteamos arriba (cache hit). */
-        if (cache_hit && !user_already_set_prebuilt) {
-#if defined(_WIN32)
-            _putenv_s("VESTA_MC_PREBUILT", "");
-#else
-            unsetenv("VESTA_MC_PREBUILT");
-#endif
-        }
+        /* Nada que limpiar: el artefacto viajo en memoria y su vida acaba con
+         * `comptime_bytes`, que es de este bloque. */
 
         if (!cr.ok) {
             vx::render_diagnostics(
@@ -4867,7 +4895,6 @@ int main(int argc, char *argv[]) {
              *
              * El nombre se conserva porque los diagnosticos lo citan, no porque
              * se abra nada. */
-            warn_unresolved_inject(cr, vx_path);
             std::string vel_en_memoria;
             if (copts.emit_debug) vel_en_memoria = "// @file " + vx_path + "\n";
             vel_en_memoria += vel_artefacto;
@@ -4889,28 +4916,35 @@ int main(int argc, char *argv[]) {
                 /*ir_section_bytes=*/&cr.ir_section_bytes,
                 /*emit_map=*/false);
             if (tmp_rc == EXIT_SUCCESS) {
-#if defined(_WIN32)
-                _putenv_s("VESTA_MC_PREBUILT", cache_path.c_str());
-#else
-                setenv("VESTA_MC_PREBUILT", cache_path.c_str(), 1);
-#endif
+                /* El artefacto recien ensamblado, EN MEMORIA para la segunda
+                 * pasada.  Igual que en el acierto de cache: por el entorno el
+                 * traspaso puede fallar en silencio y la pasada autoritativa
+                 * compilaria sin poder ejecutar nada al compilar. */
+                std::vector<uint8_t> pass2_bytes;
+                vx::CompileOptions copts_pass2 = copts;
+                if (util::read_whole_file(cache_path, pass2_bytes) &&
+                    !pass2_bytes.empty()) {
+                    copts_pass2.comptime_artifact = &pass2_bytes;
+                }
                 //  M.2.e: same dispatch en el path two- del macro
                 // cache.  Si el source tiene imports, usar compile_vx_project.
                 vx::CompileResult cr2 =
                     vx::vx_source_has_imports(vx_source)
-                        ? vx::compile_vx_project(vx_path, copts)
-                        : vx::compile_vx_source(vx_source, vx_path, copts);
-#if defined(_WIN32)
-                _putenv_s("VESTA_MC_PREBUILT", "");
-#else
-                unsetenv("VESTA_MC_PREBUILT");
-#endif
+                        ? vx::compile_vx_project(vx_path, copts_pass2)
+                        : vx::compile_vx_source(vx_source, vx_path,
+                                                copts_pass2);
                 /* pass-2 es AUTORITATIVO (compilado con el bytecode comptime
                  * cargado): adoptamos su cr SIEMPRE, incluso con errores (p.ej.
                  * un static_assert que resolvio a false con el valor real).
                  * Quedarnos con pass-1 (asserts diferidos SALTADOS) ocultaria
                  * el fallo -> compile con valores incorrectos. */
                 cr = std::move(cr2);
+                /* Y el aviso se da sobre la pasada AUTORITATIVA, no sobre la
+                 * primera.  Que a la primera le falte la maquina es lo normal
+                 * -- todavia se esta construyendo --, asi que avisar ahi era
+                 * ruido que ademas tapaba el caso que importa: un cuerpo que
+                 * sigue vacio DESPUES de cargarla es el que llega al binario. */
+                warn_unresolved_inject(cr, vx_path);
                 if (verbose_mc) {
                     std::cerr << "[mc-cache] miss + populated: " << cache_path
                               << "\n";

@@ -7297,44 +7297,113 @@ std::string TypeChecker::render_comptime_value(const ComptimeValue &v) {
     return std::to_string(v.value);
 }
 
-void TypeChecker::expandir_inject_en_asm(ast::AsmStmt *as) {
-    if (as == nullptr || as->body.find("inject(") == std::string::npos) return;
+void TypeChecker::expand_comptime_calls_in_asm(ast::AsmStmt *as) {
+    /* Sin parentesis no hay llamada que expandir, y ese es el caso comun: un
+     * bloque de ensamblador normal sale por aqui sin mirar nada mas. */
+    if (as == nullptr || as->body.find('(') == std::string::npos) return;
     const std::string orig = as->body;
-    std::string salida;
-    salida.reserve(orig.size());
+    std::string out;
+    out.reserve(orig.size());
     size_t p = 0;
     while (p < orig.size()) {
-        if (orig.compare(p, 7, "inject(") != 0) {
-            salida.push_back(orig[p]);
-            ++p;
+        /* Se expande CUALQUIER llamada a una funcion `comptime` que devuelva
+         * `string`, no una con un nombre concreto.
+         *
+         * Antes se buscaba el literal `inject(`, con lo que el nombre de una
+         * macro de la biblioteca estaba cableado dentro del compilador: la
+         * stdlib declara `inject` como una identidad (`return code;`) y todo
+         * su significado estaba aqui.  Con eso, una macro del usuario que
+         * generara ensamblador no se expandia -- y ninguna otra de la
+         * biblioteca tampoco, salvo que se llamara igual. */
+        const char c = orig[p];
+        const bool starts_ident =
+            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+        /* Y que no venga pegado a un identificador mas largo: en `xinject(`
+         * el nombre es `xinject`, no `inject`. */
+        const bool at_word_start =
+            p == 0 || !((orig[p - 1] >= 'A' && orig[p - 1] <= 'Z') ||
+                        (orig[p - 1] >= 'a' && orig[p - 1] <= 'z') ||
+                        (orig[p - 1] >= '0' && orig[p - 1] <= '9') ||
+                        orig[p - 1] == '_' || orig[p - 1] == '.');
+        size_t name_end = p;
+        if (starts_ident && at_word_start) {
+            while (name_end < orig.size()) {
+                const char n = orig[name_end];
+                if ((n >= 'A' && n <= 'Z') || (n >= 'a' && n <= 'z') ||
+                    (n >= '0' && n <= '9') || n == '_')
+                    ++name_end;
+                else
+                    break;
+            }
+        }
+        /* Un solo recorrido del cuerpo y una consulta a tabla por nombre: el
+         * coste sigue siendo lineal en el tamano del bloque. */
+        bool is_call = false;
+        if (name_end > p && name_end < orig.size() && orig[name_end] == '(') {
+            const auto it_fn = comptime_fns_.find(orig.substr(p, name_end - p));
+            if (it_fn != comptime_fns_.end() && it_fn->second != nullptr &&
+                it_fn->second->return_type) {
+                const Type rt =
+                    resolve_type_node(it_fn->second->return_type.get());
+                is_call = rt.kind == PrimitiveKind::STRING;
+            }
+        }
+        if (!is_call) {
+            /* Si empezaba un identificador, se copia ENTERO: volver a mirarlo
+             * letra a letra lo unico que haria es reconocer dentro de el un
+             * nombre que no es. */
+            if (name_end > p) {
+                out.append(orig, p, name_end - p);
+                p = name_end;
+            } else {
+                out.push_back(c);
+                ++p;
+            }
             continue;
         }
         // Buscar el ')' que cierra, contando anidados: el argumento puede ser
         // una llamada con sus propios parentesis.
-        size_t cierre = p + 7;
-        int prof = 1;
-        while (cierre < orig.size() && prof > 0) {
-            if (orig[cierre] == '(')
-                ++prof;
-            else if (orig[cierre] == ')')
-                --prof;
-            if (prof > 0) ++cierre;
+        const size_t open_at = name_end;
+        size_t close_at = open_at + 1;
+        int depth = 1;
+        while (close_at < orig.size() && depth > 0) {
+            if (orig[close_at] == '(')
+                ++depth;
+            else if (orig[close_at] == ')')
+                --depth;
+            if (depth > 0) ++close_at;
         }
-        if (prof != 0) {
-            diags_.error(as->loc, "asm: falta ')' al cerrar un inject(...)");
-            salida += orig.substr(p);
+        if (depth != 0) {
+            diags_.error(as->loc,
+                         vx::diag::format("asm.call_unclosed",
+                                          {orig.substr(p, open_at - p)}));
+            out += orig.substr(p);
             break;
         }
-        const std::string texto = orig.substr(p + 7, cierre - (p + 7));
+        const std::string text = orig.substr(p, close_at + 1 - p);
         Diagnostics d_tmp;
-        Lexer lex_tmp(texto, "<asm-inject>", d_tmp);
+        Lexer lex_tmp(text, "<asm>", d_tmp);
         Parser par_tmp(lex_tmp, d_tmp);
         auto e_tmp = par_tmp.parse_one_expr();
-        bool hecho = false;
+        bool done = false;
         if (e_tmp && !d_tmp.has_errors()) {
-            // CHEQUEAR antes de evaluar: sin esto una llamada a una funcion
-            // comptime no resuelve y la evaluacion no da nada.
-            (void)check_expr(e_tmp.get());
+            /* CHEQUEAR antes de evaluar: sin esto una llamada a una funcion
+             * comptime no resuelve y la evaluacion no da nada.
+             *
+             * Pero se chequean los ARGUMENTOS, no la llamada entera.  Dentro
+             * de un bloque de ensamblador una llamada es un GENERADOR DE
+             * TEXTO, no un sitio de expansion de macro: chequear la llamada
+             * mete a un `@Macro` por su via de expansion -- que produce una
+             * EXPRESION y la sustituye -- y ahi no hay ninguna expresion que
+             * sustituir, solo texto que empalmar.  Asi un `@Macro` y una
+             * `comptime` corriente se tratan IGUAL, que es lo que permite que
+             * el compilador no tenga cableado el nombre de ninguna. */
+            if (auto *call_e = dynamic_cast<ast::CallExpr *>(e_tmp.get())) {
+                for (auto &a : call_e->args)
+                    if (a) (void)check_expr(a.get());
+            } else {
+                (void)check_expr(e_tmp.get());
+            }
             const ComptimeEvalResult r = comptime_eval_expr(*this, e_tmp.get());
             /* Un resultado DIFERIDO no es un resultado: llega con la cadena
              * VACIA porque la maquina de compilacion aun no podia ejecutar la
@@ -7344,8 +7413,8 @@ void TypeChecker::expandir_inject_en_asm(ast::AsmStmt *as) {
              * quien si pueda; si no lo expanda nadie, el ensamblador se queja
              * del `inject(` que sigue ahi, y eso se ve. */
             if (r.ok && r.is_str && !r.deferred) {
-                salida += r.str;
-                hecho = true;
+                out += r.str;
+                done = true;
             } else if (r.ok && r.deferred) {
                 /* Se anota que quedo pendiente para que el compilador sepa que
                  * esta pasada NO es la buena y tenga que repetirla con la
@@ -7353,18 +7422,39 @@ void TypeChecker::expandir_inject_en_asm(ast::AsmStmt *as) {
                  * comentario: la pasada intermedia tiene que poder ensamblar.
                  */
                 inject_diferido_ = true;
-                salida += "; inject pendiente\n";
-                hecho = true;
+                /* Y CON EL MOTIVO.  Sin el, lo unico que se sabia es que "no
+                 * se pudo ejecutar", que no lleva a ninguna parte: son varias
+                 * situaciones distintas y solo una -- que sea la primera
+                 * pasada -- es normal.
+                 *
+                 * Viaja como CODIGO del catalogo mas su argumento, nunca como
+                 * texto ya formateado: el texto se escribe al imprimir, en el
+                 * idioma de quien lo lee.  Y viaja DENTRO del marcador porque
+                 * un modulo servido del cache no trae comprobador al que
+                 * preguntar, y su cuerpo vacio se hereda tal cual. */
+                if (asm_body_pending_code_.empty()) {
+                    asm_body_pending_code_ = r.deferred_code;
+                    asm_body_pending_arg_ = r.deferred_arg;
+                }
+                out += ir::kAsmBodyPendingMark;
+                if (!r.deferred_code.empty()) {
+                    out += " ";
+                    out += r.deferred_code;
+                    out += " ";
+                    out += r.deferred_arg;
+                }
+                out += "\n";
+                done = true;
             }
         }
-        if (!hecho) {
+        if (!done) {
             diags_.error(as->loc,
-                         "asm: el inject(...) no dio texto en compilacion; "
-                         "tiene que ser una expresion comptime de tipo string");
+                         vx::diag::format("asm.call_no_text",
+                                          {orig.substr(p, open_at - p)}));
         }
-        p = cierre + 1;
+        p = close_at + 1;
     }
-    as->body = salida;
+    as->body = out;
 }
 
 void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
@@ -7400,7 +7490,7 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
          *
          * Expandido una sola vez y guardado en el propio nodo, el lowering ya
          * recibe el cuerpo listo. */
-        expandir_inject_en_asm(as);
+        expand_comptime_calls_in_asm(as);
         for (auto &op : as->operands) {
             // Tipo: inferido del inicializador; sin init (scratch) -> i64.
             Type ty{PrimitiveKind::I64};

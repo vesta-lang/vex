@@ -21,6 +21,8 @@
 #include "jit/naked_native.h" // la clave del despachador, calculada en UN sitio
 #include "vx/collection_intrinsics.h"
 #include "vx/comptime/comptime_introspect.h"
+#include "vx/comptime/comptime_vm.h" // la maquina de compilacion, para saber si HAY
+#include "vx/diag/diag_catalog.h"    // el texto sale del catalogo, nunca a mano
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
@@ -2747,10 +2749,29 @@ bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
                 vm_args.push_back(static_cast<uint64_t>(av.value));
             }
             uint64_t r0 = 0;
+            bool invoked = false;
+            ComptimeRuntime &machine =
+                const_cast<TypeChecker &>(tc_).comptime_runtime();
             if (args_ok) {
-                (void)const_cast<TypeChecker &>(tc_)
-                    .comptime_runtime()
-                    .invoke_simple_macro("__macro_" + cid->name, vm_args, r0);
+                invoked = machine.invoke_simple_macro("__macro_" + cid->name,
+                                                      vm_args, r0);
+            }
+            /* SIN maquina de compilacion cargada el 0 es un MARCADOR legitimo
+             * de la primera pasada: la segunda -- la autoritativa, ya con el
+             * bytecode comptime -- recompila y lo sustituye por el valor real.
+             *
+             * CON maquina cargada ya no hay excusa.  Si la invocacion falla,
+             * ese 0 no es un marcador: es un resultado EQUIVOCADO que llega
+             * hasta el binario, y el programa devuelve otro valor sin que nadie
+             * lo diga.  Aqui se descartaba el veredicto con un `(void)` y se
+             * horneaba el cero; ahora se dice, con el nombre de la funcion. */
+            if (!invoked && machine.registered_macro_count() > 0) {
+                error_at(e->loc,
+                         vx::diag::format(args_ok ? "comptime.exec_failed"
+                                                  : "comptime.arg_not_const",
+                                          {cid->name}));
+                out = ir::IR_NO_VALUE;
+                return true;
             }
             out = emit_const(t_asm, r0, src_line_asm);
             return true;

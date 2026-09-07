@@ -252,6 +252,43 @@ class ComptimeRuntime {
                              uint64_t &out_r0) noexcept;
 
     /**
+     * @brief Por que la maquina de compilacion no pudo ejecutar una funcion.
+     *
+     * Un `false` a secas no se puede reportar: quien lo recibe solo sabe que
+     * "no se pudo", y ese es justo el fallo que deja un cuerpo vacio o un cero
+     * horneado sin que nadie diga nada.  Cada salida de fallo de
+     * @c invoke_simple_macro deja aqui SU motivo, y las tres formas de invocar
+     * pasan por ella, asi que el motivo se produce en UN solo sitio.
+     */
+    enum class InvokeFailure : uint8_t {
+        None = 0,      ///< se ejecuto.
+        NoMachine,     ///< aun no hay bytecode cargado (la primera pasada).
+        NotRegistered, ///< la maquina esta cargada, pero esa fn no esta en ella.
+        NoAddress,     ///< registrada y sin direccion resuelta.
+        TooManyArgs,   ///< mas de 12: la convencion de llamada no los lleva.
+        Trapped,       ///< la ejecucion murio dentro de la maquina.
+    };
+
+    /// @brief Motivo del ultimo intento fallido de invocar.
+    InvokeFailure last_invoke_failure() const noexcept {
+        return last_failure_;
+    }
+
+    /// @brief Nombre que se intento invocar en ese ultimo intento fallido.
+    const std::string &last_invoke_name() const noexcept {
+        return last_failure_name_;
+    }
+
+    /**
+     * @brief El motivo como codigo del catalogo multi-idioma.
+     *
+     * Devuelve el identificador, no el texto: quien diagnostica lo formatea
+     * con @c vx::diag::format y su argumento, que es el nombre de la funcion.
+     * Cadena vacia si el ultimo intento no fallo.
+     */
+    const char *last_invoke_failure_code() const noexcept;
+
+    /**
      * @brief Presupuesto del modo CTPE (compile-time program execution).
      *
      * EXCLUSIVO del CTPE inferido; las `comptime`/`@Macro` del lenguaje NO
@@ -558,6 +595,12 @@ class ComptimeRuntime {
     /// sin su prefijo), de que nombre completo salio.  Sirve para detectar
     /// que dos modulos distintos reclaman el mismo nombre corto y retirarlo.
     std::unordered_map<std::string, std::string> macro_corto_origen_;
+
+    /// Motivo del ultimo intento fallido de invocar, y a que nombre fue.  Lo
+    /// escribe cada salida de fallo de @c invoke_simple_macro; lo lee quien
+    /// tenga que DECIR por que no se pudo ejecutar algo al compilar.
+    InvokeFailure last_failure_ = InvokeFailure::None;
+    std::string last_failure_name_;
 
     uint64_t call_count_ = 0;
     uint64_t cache_hit_count_ = 0;

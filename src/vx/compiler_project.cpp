@@ -2241,6 +2241,24 @@ CompileResult compile_vx_project(
             source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +
                            (source_hash << 6) + (source_hash >> 2);
         }
+        /* Y SI HABIA maquina de compilacion, que es lo que decide si el cuerpo
+         * de un bloque `asm` generado por una funcion comptime sale ESCRITO o
+         * VACIO.  Son dos artefactos distintos del mismo fuente.
+         *
+         * Sin esto, la segunda pasada -- que existe precisamente para rehacer
+         * el modulo con la maquina ya cargada -- se servia del que guardo la
+         * primera, que se compilo SIN ella, y heredaba el cuerpo vacio.  Solo
+         * el modulo raiz se rehacia; los demas entraban al binario con el
+         * bloque en blanco y el programa daba otro valor, sin error.  Es el
+         * mismo modo de fallo de siempre: lo que cambia lo compilado y no esta
+         * en la clave hace que un acierto sirva algo que no corresponde. */
+        if ((opts_modulos.comptime_artifact != nullptr &&
+             !opts_modulos.comptime_artifact->empty()) ||
+            !util::flag_text(util::FlagId::McPrebuilt).empty()) {
+            const uint64_t machine_hash = vxi_fnv1a("comptime-machine");
+            source_hash ^= machine_hash + 0x9E3779B97F4A7C15ULL +
+                           (source_hash << 6) + (source_hash >> 2);
+        }
         /* Y los `@Hook` del raiz, por la misma razon y con mas motivo: tejen
          * LLAMADAS en el IR de este modulo, cuyo fuente no ha cambiado por
          * ello.  Sin esto, compilar un programa con `@Hook(enter, "std.*")`
@@ -4831,6 +4849,8 @@ CompileResult compile_vx_project(
         if (pm.tc && pm.tc->inject_diferido()) {
             res.has_lowerable_macros = true;
             res.unresolved_inject = true;
+            res.unresolved_inject_code = pm.tc->asm_body_pending_code();
+            res.unresolved_inject_arg = pm.tc->asm_body_pending_arg();
             break;
         }
     }
@@ -4849,10 +4869,20 @@ CompileResult compile_vx_project(
             for (const ir::IrBlock &b : fn.blocks) {
                 for (const ir::IrInstr &in : b.instrs) {
                     if (in.op != ir::IrOp::INLINE_ASM) continue;
-                    if (in.func_name.find("inject pendiente") ==
-                        std::string::npos)
-                        continue;
+                    const size_t at =
+                        in.func_name.find(ir::kAsmBodyPendingMark);
+                    if (at == std::string::npos) continue;
                     res.unresolved_inject = true;
+                    /* Y el motivo que la marca lleva detras: codigo del
+                     * catalogo y argumento.  Es la UNICA via para un modulo
+                     * servido del cache, que no trae comprobador al que
+                     * preguntar. */
+                    if (res.unresolved_inject_code.empty()) {
+                        std::istringstream tail(in.func_name.substr(
+                            at + std::strlen(ir::kAsmBodyPendingMark)));
+                        tail >> res.unresolved_inject_code >>
+                            res.unresolved_inject_arg;
+                    }
                     break;
                 }
                 if (res.unresolved_inject) break;

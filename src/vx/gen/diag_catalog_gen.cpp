@@ -206,6 +206,8 @@ const CatEntry kEntries[] = {
     {"VX9245", {"line {0}: {1}   <-- {2}", "linea {0}: {1}   <-- {2}"}},
     {"VX9246", {"note: `--asm-file` expects MASM/Intel syntax, where the size operator carries `ptr` (`add byte ptr [rcx+8], 2`).  The inline asm block of the language uses NASM syntax, without it.", "nota: `--asm-file` espera sintaxis MASM/Intel, donde el operador de tamano lleva `ptr` (`add byte ptr [rcx+8], 2`).  El bloque de ensamblador en linea del lenguaje usa sintaxis NASM, sin el."}},
     {"VX9247", {"no instruction produced (the assembler reported no error)", "no produjo ninguna instruccion (el ensamblador no dio error)"}},
+    {"VX9248", {"`--unwind`: unrecognised value '{0}'.  Use auto|none|table|cfi|both.", "`--unwind`: valor no reconocido '{0}'.  Usa auto|none|table|cfi|both."}},
+    {"VX9249", {"`--unwind table` asks for `.pdata`/`.xdata`, which only exist in PE; the target format is ELF.  Use `cfi` there, or `auto`.", "`--unwind table` pide `.pdata`/`.xdata`, que solo existen en PE; el formato del objetivo es ELF.  Ahi usa `cfi`, o `auto`."}},
     {"VXA001", {"asm: dead code: unreachable instruction in the asm block", "asm: codigo muerto: instruccion inalcanzable en el bloque asm"}},
     {"VXA002", {"asm: jump to label '{0}' not defined in the asm block", "asm: salto a etiqueta '{0}' no definida en el bloque asm"}},
     {"VXA003", {"asm: infinite loop: control cannot leave the asm block", "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"}},
@@ -270,6 +272,7 @@ const CatEntry kEntries[] = {
     {"VXA068", {"while compiling '{2}': MOp {0} does not say which registers it touches, and nothing answers for it on {1}. An instruction's effects are never guessed: declare them in isa_effects_{1}.cpp -- its mnemonic if the ISA has that instruction, its case in `pseudo` if it is one of ours -- or in `generic_pseudo` when everything it touches is already in its operands", "al compilar '{2}': la MOp {0} no dice que registros toca, y para {1} no hay quien lo conteste.  Los efectos de una instruccion no se adivinan: hay que declararlos en isa_effects_{1}.cpp -- su mnemonico si la ISA tiene esa instruccion, su caso en `pseudo` si es de las nuestras -- o en `generic_pseudo` si todo lo que toca ya esta en sus operandos"}},
     {"VXA069", {"while compiling '{2}': there is no effects table for {1}, so nothing can say what MOp {0} touches -- declare one in src/jit/sched/isa_effects_{1}.cpp and list it in isa_effects()", "al compilar '{2}': no hay tabla de efectos para {1}, asi que nadie puede decir que toca la MOp {0} -- hay que declararla en src/jit/sched/isa_effects_{1}.cpp y nombrarla en isa_effects()"}},
     {"VXA070", {"the function '{2}' does not say which target it is compiled for, so its calling convention is unknown -- whoever builds it must set MFunction::target", "la funcion '{2}' no dice para que objetivo se compila, asi que su convencion de llamada se desconoce -- quien la construye tiene que poner MFunction::target"}},
+    {"VXA071", {"the body of an inline asm block in '{0}' was never generated: {1}", "el cuerpo de un bloque de ensamblador en '{0}' no se llego a generar: {1}"}},
     {"VXE930", {"@Hook(<point>) needs the instrumentation point.  Available: {0}", "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"}},
     {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
     {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
@@ -325,6 +328,8 @@ const CatEntry kEntries[] = {
     {"VXW932", {"@Hook(exit): this module throws, and an exception does NOT leave through the epilogue: the functions it crosses will not call '{0}'.  Add a @Hook(unwind) if the hook keeps a count of the entries", "@Hook(exit): este modulo lanza excepciones, y una excepcion NO sale por el epilogo: las funciones que atraviesa no llamaran a '{0}'.  Anade un @Hook(unwind) si el gancho lleva cuenta de las entradas"}},
     {"VXW933", {"@Hook: the hook '{0}' was not installed anywhere: there is no function to instrument.  The program will run WITHOUT instrumentation", "@Hook: el gancho '{0}' no se instalo en ningun sitio: no hay ninguna funcion que instrumentar.  El programa correra SIN instrumentar"}},
     {"VXW934", {"@Hook: the `call_site` of '{0}' is not reliable: the function has an asm block that writes {1}, and the return address is read from the stack. The value will be whatever is at that position", "@Hook: el `call_site` de '{0}' no es fiable: la funcion tiene un bloque asm que escribe {1}, y la direccion de retorno se lee de la pila.  El valor sera lo que haya en esa posicion"}},
+    {"asm.call_no_text", {"asm: the call to '{0}' produced no text at compile time; it has to be a comptime expression of type string", "asm: la llamada a '{0}' no dio texto al compilar; tiene que ser una expresion comptime de tipo string"}},
+    {"asm.call_unclosed", {"asm: missing ')' closing the call to '{0}'", "asm: falta ')' al cerrar la llamada a '{0}'"}},
     {"asm_flow.no_asm", {"it has no asm blocks whose control flow to analyse", "no tiene bloques asm cuyo flujo analizar"}},
     {"bulk.body_does_more", {"the body does something beyond walking the run and moving it", "el cuerpo hace algo mas que recorrer el tramo y moverlo"}},
     {"bulk.bound_varies", {"the limit changes inside the loop, so there is no fixed run", "el limite cambia dentro del bucle, asi que no hay un tramo fijo"}},
@@ -365,6 +370,15 @@ const CatEntry kEntries[] = {
     {"bulk.unknown_width", {"how many bytes each access moves cannot be stated", "no se puede afirmar cuantos bytes mueve cada acceso"}},
     {"bulk.width_mismatch", {"the read and the write do not move the same number of bytes", "la lectura y la escritura no mueven el mismo numero de bytes"}},
     {"bulk.would_be_a_copy_needs_no_overlap", {"these adjacent accesses ARE a block copy, but turning them into one needs proof that the two regions do not overlap -- with two pointers arriving as parameters that is not known here, and assuming it would give a different result when they do overlap", "estos accesos seguidos SI son una copia de bloque, pero convertirlos en una exige demostrar que las dos regiones no se solapan -- con dos punteros que llegan como parametros eso no se sabe aqui, y suponerlo daria otro resultado cuando de verdad se solapen"}},
+    {"comptime.arg_not_const", {"argument of comptime function '{0}' is not known at compile time, so the function cannot be run", "un argumento de la funcion comptime '{0}' no se conoce al compilar, asi que la funcion no se puede ejecutar"}},
+    {"comptime.exec_failed", {"comptime function '{0}' could not be run in the compile-time machine; its result would be baked as 0", "la funcion comptime '{0}' no se pudo ejecutar en la maquina de compilacion; su resultado quedaria horneado como 0"}},
+    {"comptime.why.arg_deferred", {"an argument of '{0}' is itself pending, so the whole call is deferred", "un argumento de '{0}' esta a su vez pendiente, asi que se difiere la llamada entera"}},
+    {"comptime.why.no_address", {"'{0}' is in the compile-time machine with no resolved address", "'{0}' esta en la maquina de compilacion sin direccion resuelta"}},
+    {"comptime.why.no_machine", {"the compile-time machine is not loaded yet (this is the first pass; the second one resolves it)", "la maquina de compilacion todavia no esta cargada (es la primera pasada; la segunda lo resuelve)"}},
+    {"comptime.why.no_marshal", {"the aggregate arguments of '{0}' could not be handed to the compile-time machine, which is not ready yet", "los argumentos agregados de '{0}' no se pudieron pasar a la maquina de compilacion, que aun no esta lista"}},
+    {"comptime.why.not_registered", {"'{0}' is not in the compile-time machine, although other functions are: it did not make it into the comptime set", "'{0}' no esta en la maquina de compilacion, aunque si hay otras funciones: no entro en el conjunto comptime"}},
+    {"comptime.why.too_many_args", {"'{0}' takes more than 12 arguments, which the compile-time calling convention does not carry", "'{0}' lleva mas de 12 argumentos, que es lo que la convencion de llamada al compilar no puede pasar"}},
+    {"comptime.why.trapped", {"'{0}' died while running in the compile-time machine", "'{0}' murio al ejecutarse en la maquina de compilacion"}},
     {"debug.jit_off", {"the JIT is off while the debugger is attached: compiled code does not go through its hook, so a breakpoint inside a compiled function would never fire. Execution is interpreted and therefore slower", "el JIT queda apagado mientras el depurador este conectado: el codigo compilado no pasa por su gancho, asi que un punto de ruptura dentro de una funcion compilada no saltaria nunca.  La ejecucion va interpretada y por tanto mas lenta"}},
     {"definite_store.always", {"'{2}' is written on every path that returns", "'{2}' se escribe en todos los caminos que retornan"}},
     {"definite_store.escapes", {"the pointer is handed to something else, so it cannot be told whether it gets written", "el puntero se le pasa a otro, asi que no se puede decir si se escribe"}},
@@ -446,7 +460,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 425;
+const int kEntryCount = 439;
 
 } // namespace
 

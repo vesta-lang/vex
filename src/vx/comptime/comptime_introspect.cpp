@@ -24,7 +24,8 @@
  */
 
 #include "vx/comptime/comptime_introspect.h"
-#include <algorithm> // UCRT64: no transitivo
+#include <algorithm>             // UCRT64: no transitivo
+#include "vx/diag/diag_catalog.h" // el motivo sale del catalogo, nunca a mano
 #include "vx/lexer.h"
 #include "vx/parser.h"
 #include "vx/generics/concepts.h" // #6: composicion de conceptos en predicados comptime
@@ -888,6 +889,8 @@ bool comptime_eval_stmt(TypeChecker &tc, const ast::Stmt *s,
          * de esperar a pass 2.  Es el bloqueador central para que un block
          * consuma valores calculados en la ComptimeVM. */
         c.deferred = v.deferred;
+        c.deferred_code = v.deferred_code;
+        c.deferred_arg = v.deferred_arg;
         if (v.is_str)
             c.str_value = v.str;
         else if (v.is_array)
@@ -1650,6 +1653,27 @@ void fill_struct_fields_from_bytes(const TypeChecker &tc,
     }
 }
 
+/**
+ * @brief Por que la maquina de compilacion no pudo ejecutar, ya en texto.
+ *
+ * El motivo lo produce la invocacion misma, que es el unico sitio que
+ * distingue las cinco situaciones; aqui solo se formatea con el nombre de la
+ * funcion.  Se envuelve en una funcion porque son cinco los sitios que
+ * difieren tras un intento fallido, y repetir el formateo en cada uno seria
+ * cinco copias de la misma decision.
+ *
+ * @param tc Comprobador dueno de la maquina de compilacion.
+ * @return El motivo formateado, o cadena vacia si el ultimo intento no fallo.
+ */
+static void set_machine_failure_reason(const TypeChecker &tc,
+                                       ComptimeEvalResult &out) {
+    const ComptimeRuntime &m = const_cast<TypeChecker &>(tc).comptime_runtime();
+    const char *code = m.last_invoke_failure_code();
+    if (code == nullptr || code[0] == '\0') return;
+    out.deferred_code = code;
+    out.deferred_arg = m.last_invoke_name();
+}
+
 ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                                       const ast::Expr *expr) {
     ComptimeEvalResult r{};
@@ -1764,6 +1788,8 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     r.value = hit->second.value;
                 }
                 r.deferred = hit->second.deferred; /* #2: propaga diferido */
+                r.deferred_code = hit->second.deferred_code;
+                r.deferred_arg = hit->second.deferred_arg;
                 return r;
             }
         }
@@ -1814,6 +1840,8 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             r.value = it->second.value;
         }
         r.deferred = it->second.deferred; /* #2: propaga diferido */
+        r.deferred_code = it->second.deferred_code;
+        r.deferred_arg = it->second.deferred_arg;
         return r;
     }
     case ast::NodeKind::CallExpr: {
@@ -2612,10 +2640,23 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 std::vector<ComptimeEvalResult> args;
                 args.reserve(ce->args.size());
                 bool algun_arg_diferido = false;
+                /* El motivo del PRIMER argumento diferido: es la causa de que
+                 * la llamada entera se difiera, y sin el la cadena se corta
+                 * justo donde empieza a ser util.  Se lleva el CODIGO y su
+                 * argumento, no el texto ya escrito: formatearlo aqui
+                 * congelaria el idioma del compilador en vez del de quien lee. */
+                std::string arg_code;
+                std::string arg_arg;
                 for (const auto &a : ce->args) {
                     args.push_back(comptime_eval_expr(tc, a.get()));
                     if (!args.back().ok) return r;
-                    if (args.back().deferred) algun_arg_diferido = true;
+                    if (args.back().deferred) {
+                        algun_arg_diferido = true;
+                        if (arg_code.empty()) {
+                            arg_code = args.back().deferred_code;
+                            arg_arg = args.back().deferred_arg;
+                        }
+                    }
                 }
                 /* Un argumento DIFERIDO no es un valor: es un marcador de la
                  * primera pasada, a la espera de que la segunda lo resuelva con
@@ -2630,6 +2671,13 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 if (algun_arg_diferido) {
                     r.ok = true;
                     r.deferred = true;
+                    if (arg_code.empty()) {
+                        r.deferred_code = "comptime.why.arg_deferred";
+                        r.deferred_arg = cid->name;
+                    } else {
+                        r.deferred_code = arg_code;
+                        r.deferred_arg = arg_arg;
+                    }
                     if (fn_it->second->return_type) {
                         const Type rtd = tc.resolve_type_node(
                             fn_it->second->return_type.get());
@@ -2826,6 +2874,8 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                          */
                         if (ret_is_str) vr.is_str = true;
                         vr.deferred = true;
+                        vr.deferred_code = "comptime.why.no_marshal";
+                        vr.deferred_arg = cid->name;
                         return vr;
                     }
                     /* Nombre del macro: para las LOCALES el call site
@@ -2867,8 +2917,10 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         vr.is_str = true;
                         if (inv)
                             vr.str = std::move(out);
-                        else
+                        else {
                             vr.deferred = true;
+                            set_machine_failure_reason(tc, vr);
+                        }
                     } else if (ret_is_enum) {
                         /* Mismo camino que un struct -- la funcion escribe en
                          * un bufer de retorno --, pero el valor de un enum es
@@ -2893,6 +2945,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         } else {
                             vr.value = 0;
                             vr.deferred = true;
+                            set_machine_failure_reason(tc, vr);
                         }
                     } else if (ret_is_struct) {
                         /* La funcion escribe el struct en un buffer de retorno
@@ -2913,8 +2966,10 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         if (inv)
                             fill_struct_fields_from_bytes(tc, *ret_slay, sbytes,
                                                           0, vr);
-                        else
+                        else {
                             vr.deferred = true;
+                            set_machine_failure_reason(tc, vr);
+                        }
                     } else {
                         uint64_t r0 = 0;
                         bool inv =
@@ -2931,6 +2986,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                         else {
                             vr.value = 0;
                             vr.deferred = true;
+                            set_machine_failure_reason(tc, vr);
                         }
                     }
                     return vr;

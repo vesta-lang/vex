@@ -259,10 +259,29 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
             if (im) im->agg_args.clear();
         }
     } devolver{impl_.get()};
-    if (args.size() > 12) return false;       /* CALLVM max */
-    if (!impl_ || !impl_->proc) return false; /* No VM cargado. */
+    /* Cada salida deja dicho POR QUE.  Antes las cuatro devolvian el mismo
+     * `false`, y quien lo recibia solo sabia que "no se pudo": con eso no se
+     * puede diagnosticar nada, y por eso un cuerpo de `asm` sin generar o un
+     * cero horneado llegaban al binario sin una sola linea que lo explicara. */
+    last_failure_name_ = macro_name;
+    last_failure_ = InvokeFailure::None;
+    if (args.size() > 12) { /* CALLVM max */
+        last_failure_ = InvokeFailure::TooManyArgs;
+        return false;
+    }
+    if (!impl_ || !impl_->proc) { /* No VM cargado. */
+        last_failure_ = InvokeFailure::NoMachine;
+        return false;
+    }
     auto it = macro_entry_pc_.find(macro_name);
-    if (it == macro_entry_pc_.end()) return false;
+    if (it == macro_entry_pc_.end()) {
+        /* Sin NINGUN macro registrado no es que falte este: es que la maquina
+         * todavia no esta cargada, que es lo normal en la primera pasada y no
+         * un fallo.  Distinguirlo evita acusar a una funcion que si existe. */
+        last_failure_ = macro_entry_pc_.empty() ? InvokeFailure::NoMachine
+                                                : InvokeFailure::NotRegistered;
+        return false;
+    }
     const uint64_t entry_pc = it->second;
     /* Sin direccion no hay invocacion.  Antes ni se miraba: el marcador valia
      * 0, que es una direccion legitima, asi que la VM saltaba al principio del
@@ -270,7 +289,10 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
      * esta en los registros.  Devolver `false` es el contrato de siempre para
      * "todavia no se puede": el llamante lo reintenta cuando el artefacto este
      * cargado. */
-    if (entry_pc == kPcUnresolved) return false;
+    if (entry_pc == kPcUnresolved) {
+        last_failure_ = InvokeFailure::NoAddress;
+        return false;
+    }
 
     try {
         runtime::ProcessVM *proc = impl_->proc;
@@ -352,6 +374,7 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
             if (proc->fatal_trace_buf && proc->fatal_trace_buf[0])
                 std::fprintf(stderr, "%s\n", proc->fatal_trace_buf);
             std::fflush(stderr);
+            last_failure_ = InvokeFailure::Trapped;
             return false;
         }
 
@@ -360,8 +383,21 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
         ++call_count_;
         return true;
     } catch (...) {
+        last_failure_ = InvokeFailure::Trapped;
         return false;
     }
+}
+
+const char *ComptimeRuntime::last_invoke_failure_code() const noexcept {
+    switch (last_failure_) {
+    case InvokeFailure::None: return "";
+    case InvokeFailure::NoMachine: return "comptime.why.no_machine";
+    case InvokeFailure::NotRegistered: return "comptime.why.not_registered";
+    case InvokeFailure::NoAddress: return "comptime.why.no_address";
+    case InvokeFailure::TooManyArgs: return "comptime.why.too_many_args";
+    case InvokeFailure::Trapped: return "comptime.why.trapped";
+    }
+    return "";
 }
 
 // ---------------------------------------------------------------------------

@@ -425,7 +425,8 @@ void produce_asm_flow(Production &p) {
                  * el lowering ve el asm expandido y avisa (VXA018), y aqui
                  * llega un marcador --, y por eso los dos recuentos nunca
                  * cuadraron. */
-                if (body.find("__vxf_inject") != std::string::npos) continue;
+                if (body.find(ir::kAsmBodyPendingMark) != std::string::npos)
+                    continue;
                 const vx::AsmCfg cfg = vx::build_asm_cfg(isa, body);
                 if (util::flag_on(util::FlagId::AsmFlujoDebug))
                     std::fprintf(stderr,

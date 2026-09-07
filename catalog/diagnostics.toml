@@ -1545,6 +1545,14 @@ es = "no produjo ninguna instruccion (el ensamblador no dio error)"
 en = "note: `--asm-file` expects MASM/Intel syntax, where the size operator carries `ptr` (`add byte ptr [rcx+8], 2`).  The inline asm block of the language uses NASM syntax, without it."
 es = "nota: `--asm-file` espera sintaxis MASM/Intel, donde el operador de tamano lleva `ptr` (`add byte ptr [rcx+8], 2`).  El bloque de ensamblador en linea del lenguaje usa sintaxis NASM, sin el."
 
+[VX9248]
+en = "`--unwind`: unrecognised value '{0}'.  Use auto|none|table|cfi|both."
+es = "`--unwind`: valor no reconocido '{0}'.  Usa auto|none|table|cfi|both."
+
+[VX9249]
+en = "`--unwind table` asks for `.pdata`/`.xdata`, which only exist in PE; the target format is ELF.  Use `cfi` there, or `auto`."
+es = "`--unwind table` pide `.pdata`/`.xdata`, que solo existen en PE; el formato del objetivo es ELF.  Ahi usa `cfi`, o `auto`."
+
 # --- la ayuda del propio subcomando y las familias (VXW903-VXW911) ---
 #
 # El NOMBRE de una familia no se traduce nunca: es lo que se escribe en
@@ -2162,6 +2170,62 @@ es = "el JIT queda apagado mientras el depurador este conectado: el codigo compi
 ["emit.unsupported_op"]
 en = "the bytecode emitter does not know how to emit '{2}' (function '{0}', line {1})"
 es = "el emisor de bytecode no sabe emitir '{2}' (funcion '{0}', linea {1})"
+
+# Una funcion `comptime` con ensamblador se EJECUTA al compilar, en la maquina
+# de compilacion.  Cuando su bytecode ya esta cargado y aun asi no se puede
+# invocar, lo que quedaba era un CERO horneado en el binario, sin un solo
+# diagnostico: el programa devolvia otro valor y nadie se enteraba.  Los dos
+# motivos se separan porque lo que hay que hacer es distinto -- uno es del
+# programa (un argumento que no es constante) y el otro es del compilador.
+["comptime.exec_failed"]
+en = "comptime function '{0}' could not be run in the compile-time machine; its result would be baked as 0"
+es = "la funcion comptime '{0}' no se pudo ejecutar en la maquina de compilacion; su resultado quedaria horneado como 0"
+["comptime.arg_not_const"]
+en = "argument of comptime function '{0}' is not known at compile time, so the function cannot be run"
+es = "un argumento de la funcion comptime '{0}' no se conoce al compilar, asi que la funcion no se puede ejecutar"
+
+# POR QUE no se pudo ejecutar.  Un "no se pudo" a secas no se puede diagnosticar
+# ni arreglar: son cinco situaciones distintas y solo una de ellas -- la
+# primera -- es normal.  Las escribe el unico sitio que las distingue, la
+# invocacion misma.
+["comptime.why.no_machine"]
+en = "the compile-time machine is not loaded yet (this is the first pass; the second one resolves it)"
+es = "la maquina de compilacion todavia no esta cargada (es la primera pasada; la segunda lo resuelve)"
+["comptime.why.not_registered"]
+en = "'{0}' is not in the compile-time machine, although other functions are: it did not make it into the comptime set"
+es = "'{0}' no esta en la maquina de compilacion, aunque si hay otras funciones: no entro en el conjunto comptime"
+["comptime.why.no_address"]
+en = "'{0}' is in the compile-time machine with no resolved address"
+es = "'{0}' esta en la maquina de compilacion sin direccion resuelta"
+["comptime.why.too_many_args"]
+en = "'{0}' takes more than 12 arguments, which the compile-time calling convention does not carry"
+es = "'{0}' lleva mas de 12 argumentos, que es lo que la convencion de llamada al compilar no puede pasar"
+["comptime.why.trapped"]
+en = "'{0}' died while running in the compile-time machine"
+es = "'{0}' murio al ejecutarse en la maquina de compilacion"
+["comptime.why.no_marshal"]
+en = "the aggregate arguments of '{0}' could not be handed to the compile-time machine, which is not ready yet"
+es = "los argumentos agregados de '{0}' no se pudieron pasar a la maquina de compilacion, que aun no esta lista"
+["comptime.why.arg_deferred"]
+en = "an argument of '{0}' is itself pending, so the whole call is deferred"
+es = "un argumento de '{0}' esta a su vez pendiente, asi que se difiere la llamada entera"
+
+# Una llamada a una funcion `comptime` dentro de un bloque de ensamblador.  El
+# mensaje nombra la funcion en vez de dar por hecho que se llama de una manera
+# concreta: cualquier `comptime` que devuelva `string` vale ahi.
+["asm.call_unclosed"]
+en = "asm: missing ')' closing the call to '{0}'"
+es = "asm: falta ')' al cerrar la llamada a '{0}'"
+["asm.call_no_text"]
+en = "asm: the call to '{0}' produced no text at compile time; it has to be a comptime expression of type string"
+es = "asm: la llamada a '{0}' no dio texto al compilar; tiene que ser una expresion comptime de tipo string"
+
+# El cuerpo de un bloque `asm` que nunca se genero, CON el motivo.  Sin el, el
+# aviso decia que algo no se pudo ejecutar y ahi acababa: quien lo leia no tenia
+# por donde empezar, y el binario salia con el bloque vacio igualmente.
+["VXA071"]
+en = "the body of an inline asm block in '{0}' was never generated: {1}"
+es = "el cuerpo de un bloque de ensamblador en '{0}' no se llego a generar: {1}"
 
 # La cara NEGATIVA de cada promesa.  No es lo mismo "no consta que escriba" que
 # "consta que NO escribe": lo primero es no haber mirado, lo segundo es un dato

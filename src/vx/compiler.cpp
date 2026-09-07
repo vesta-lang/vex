@@ -985,6 +985,8 @@ CompileResult compile_vx_source(const std::string &source,
     if (tc.inject_diferido()) {
         res.has_lowerable_macros = true;
         res.unresolved_inject = true;
+        res.unresolved_inject_code = tc.asm_body_pending_code();
+        res.unresolved_inject_arg = tc.asm_body_pending_arg();
     }
 
     /* +: copiar las razones de skip del lowering a la

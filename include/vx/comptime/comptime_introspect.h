@@ -216,6 +216,16 @@ struct ComptimeEvalResult {
     /// un valor diferido (se resuelve en pass 2).  Se propaga por ident-reads
     /// y binops.
     bool deferred = false;
+    /// POR QUE quedo diferido: el CODIGO del catalogo multi-idioma y el
+    /// argumento con que se formatea (el nombre de la funcion).  Va sin
+    /// formatear a proposito -- el texto se escribe al IMPRIMIR, en el idioma
+    /// de quien lo lee; formatearlo aqui congelaria el idioma del compilador.
+    /// Un diferido sin motivo no se puede reportar, y es justo el que acaba
+    /// dejando un cuerpo vacio o un cero horneado sin que nadie lo diga.  Se
+    /// propaga con @c deferred; cuando concurren varios se conserva el
+    /// PRIMERO, que es el de mas adentro y por tanto la causa.
+    std::string deferred_code;
+    std::string deferred_arg;
     int64_t value = 0;
     std::string str;
     std::vector<std::shared_ptr<ComptimeValue>> array_vals;
