@@ -41,6 +41,7 @@
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/vel_sink.h" // a donde sale lo emitido (una emision, N destinos)
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
+#include "vx/diag/diag_catalog.h" // el texto del fallo vive en el catalogo
 #include "analysis/asa/aggregate_facts.h"
 #include <chrono>
 #include <iostream>
@@ -135,6 +136,21 @@ struct EmitCtx {
     // asi que el stackmap de sitio de retorno NO registra las raices
     // register-held empujadas (el scan conservador las cubre en modo aditivo).
     bool has_alloca = false;
+
+    /**
+     * @brief Lo que impidio emitir, si algo lo impidio.
+     *
+     * Vacio = la emision va bien.  Lo pone quien se encuentra algo que no sabe
+     * emitir, y @c emit_function lo devuelve para que la compilacion PARE.
+     *
+     * Existe porque el reparto de instrucciones no tenia por donde quejarse:
+     * ante una operacion que no conocia dejaba un comentario y un `NOP`, y
+     * seguir asi no da un error, da un REGISTRO CON BASURA -- la instruccion
+     * tenia que producir un valor y no produce ninguno --.  Un fallo que se
+     * convierte en otro resultado es el peor de los modos de fallo de este
+     * proyecto, y ya ha mordido varias veces.
+     */
+    std::string emit_error;
 
     // Fusion de direccion en mld/mst: instrucciones ADD/MUL que se fusionaron
     // en el direccionamiento de un LOAD/STORE.  Se SALTAN en el loop de emision
@@ -6535,9 +6551,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
 
     default:
-        ctx.comment("instruccion no soportada: " +
-                    std::string(ir_op_name(ins.op)));
-        ctx.out.emit(emmit::Mnemonic::NOP1);
+        /* Se PARA.  Antes se dejaba un comentario y un `NOP`, y eso no es
+         * conservador: la instruccion tenia que PRODUCIR un valor y el `NOP` no
+         * produce ninguno, asi que quien lo lea despues encuentra lo que hubiera
+         * en el registro.  No un error -- otro resultado.
+         *
+         * Y es un fallo NUESTRO, no del programa del usuario: significa que el
+         * intermedio lleva una operacion que este emisor no conoce, casi
+         * siempre porque se anadio y se olvido este reparto.  Por eso el texto
+         * dice la operacion por su nombre: es lo unico que hace falta para
+         * saber donde ponerla. */
+        if (ctx.emit_error.empty())
+            ctx.emit_error = vx::diag::format(
+                "emit.unsupported_op",
+                {ctx.fn.name, std::to_string(ins.source_line),
+                 std::string(ir_op_name(ins.op))});
         break;
     }
 }
@@ -7267,6 +7295,10 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
             if (ctx.fused_skip.find(&bb.instrs[i]) != ctx.fused_skip.end())
                 continue;
             emit_instr(ctx, bb, i, skip_count);
+            /* En cuanto haya algo que no se sepa emitir se PARA aqui.  Seguir
+             * emitiendo el resto solo sirve para producir un binario incompleto
+             * que ademas parece bueno. */
+            if (!ctx.emit_error.empty()) return ctx.emit_error;
             // Si esta instruccion no es una op float que deje su dst en f0,
             // el contenido de f0 ya no es fiable para la siguiente op float.
             if (!is_tracked_float_op(bb.instrs[i].op))

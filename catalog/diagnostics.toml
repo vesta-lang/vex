@@ -2146,6 +2146,15 @@ es = "no es nula"
 en = "the pointer does not outlive the call"
 es = "el puntero no sobrevive a la llamada"
 
+# Un hueco NUESTRO, no un error del programa: el intermedio lleva una operacion
+# que el emisor de bytecode no sabe emitir, casi siempre porque se anadio y se
+# olvido su reparto.  Antes se dejaba un comentario y un `NOP`, que no es lo
+# conservador: la instruccion tenia que PRODUCIR un valor y el `NOP` no produce
+# ninguno, asi que lo que salia no era un error sino OTRO RESULTADO.
+["emit.unsupported_op"]
+en = "the bytecode emitter does not know how to emit '{2}' (function '{0}', line {1})"
+es = "el emisor de bytecode no sabe emitir '{2}' (funcion '{0}', linea {1})"
+
 # La cara NEGATIVA de cada promesa.  No es lo mismo "no consta que escriba" que
 # "consta que NO escribe": lo primero es no haber mirado, lo segundo es un dato
 # del programa.  Con una sola cara los dos casos se leian igual, y quien

@@ -369,6 +369,7 @@ const CatEntry kEntries[] = {
     {"definite_store.escapes", {"the pointer is handed to something else, so it cannot be told whether it gets written", "el puntero se le pasa a otro, asi que no se puede decir si se escribe"}},
     {"definite_store.missing", {"'{2}' is not written on the path that returns at line {0}", "'{2}' no se escribe en el camino que retorna en la linea {0}"}},
     {"definite_store.no_pointer_params", {"none of its parameters points at anything", "ninguno de sus parametros apunta a nada"}},
+    {"emit.unsupported_op", {"the bytecode emitter does not know how to emit '{2}' (function '{0}', line {1})", "el emisor de bytecode no sabe emitir '{2}' (funcion '{0}', linea {1})"}},
     {"layout.no_static_data", {"the module has no static data in .data, so there is no section whose alignment to state", "el modulo no tiene datos estaticos en .data; no hay ninguna seccion cuya alineacion afirmar"}},
     {"layout.placement_is_configurable", {"in native builds the linker script places the section; without seeing it, its alignment cannot be stated", "en el nativo la seccion la coloca el guion de enlazado; sin verlo no se puede afirmar su alineacion"}},
     {"loop.early_exit", {"the guard does not let it run more times, but a break or a return can cut it short, so that is a bound and not the count", "la guarda no le deja dar mas vueltas, pero un break o un return pueden cortarlo antes, asi que eso es una cota y no el numero"}},
@@ -444,7 +445,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 423;
+const int kEntryCount = 424;
 
 } // namespace
 
