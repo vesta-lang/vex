@@ -36,7 +36,7 @@
  */
 
 #include "util/env_flags.h"
-#include "util/thread_slot.h" // un contador por hilo, sin `thread_local`
+#include "util/os/thread_slot.h" // un contador por hilo, sin `thread_local`
 #include "ir/ir_emitter.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/vel_sink.h" // a donde sale lo emitido (una emision, N destinos)

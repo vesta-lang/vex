@@ -142,24 +142,64 @@ bool CodeCache::reserve_chunk() {
         return false;
     }
 #if defined(_WIN32)
-    // VirtualAlloc:
-    //   - NULL = el SO escoge la direccion (random ASLR).
-    //   - chunk_bytes_ = tamano deseado.
-    //   - MEM_RESERVE|MEM_COMMIT = reservar VAS Y comprometer pages.
-    //   - PAGE_EXECUTE_READWRITE = permisos RWX para que podamos
-    //     escribir bytes y luego saltar a ellos.
-    void *p = ::VirtualAlloc(nullptr, chunk_bytes_, MEM_RESERVE | MEM_COMMIT,
-                             PAGE_EXECUTE_READWRITE);
+    /* La direccion NO da igual, y por eso hay un ancla.
+     *
+     * El codigo que se emite aqui referencia datos del anfitrion -- los globales
+     * del modulo, sobre todo -- con desplazamientos RELATIVOS A RIP de 32 bits.
+     * Eso solo alcanza +-2 GB.  Con `nullptr` la eleccion es del sistema, y
+     * mientras el codigo y los datos salian del mismo asignador caian cerca por
+     * pura casualidad: medido, a 18 MB.  Al sacar el asignador a su propio
+     * repositorio dejaron de compartir region, la distancia paso a ser
+     * arbitraria, y la compilacion nativa empezo a fallar por "rel32 fuera de
+     * rango" -- que no es un aviso: devolvia cero, y ese cero acababa siendo el
+     * punto de entrada de un hilo --.
+     *
+     * Con ancla se PIDE la zona: se prueba a reservar cerca, avanzando en saltos
+     * hasta agotar la ventana que el rel32 alcanza.  Si nada cuadra se cae a la
+     * eleccion del sistema, porque tener codigo lejos es peor que no tener
+     * codigo: el que necesite un rel32 fallara y ahora eso se DICE. */
+    void *p = nullptr;
+    if (anchor_ != 0) {
+        // Alineado al grano de reserva de Windows (64 KiB).
+        constexpr uintptr_t kGrano = 64u * 1024u;
+        constexpr uintptr_t kAlcance = 1u << 31; // lo que cubre un rel32
+        const uintptr_t base = (anchor_ & ~(kGrano - 1));
+        for (uintptr_t off = kGrano; off < kAlcance && p == nullptr;
+             off <<= 1) {
+            // Por encima y por debajo del ancla: cual de los dos lados esta
+            // libre no se sabe de antemano.
+            for (int lado = 0; lado < 2 && p == nullptr; ++lado) {
+                const uintptr_t cand = lado ? (base + off) : (base - off);
+                if (cand < kGrano) continue; // por debajo del espacio util
+                p = ::VirtualAlloc(reinterpret_cast<void *>(cand), chunk_bytes_,
+                                   MEM_RESERVE | MEM_COMMIT,
+                                   PAGE_EXECUTE_READWRITE);
+            }
+        }
+    }
+    if (!p)
+        p = ::VirtualAlloc(nullptr, chunk_bytes_, MEM_RESERVE | MEM_COMMIT,
+                           PAGE_EXECUTE_READWRITE);
     if (!p) return false;
 #else
-    // mmap con flags equivalentes:
-    //   - MAP_PRIVATE = copy-on-write, no compartido entre procesos.
-    //   - MAP_ANONYMOUS = no respaldo en fichero; -1 / 0 son los
-    //     valores convencionales para fd/offset en este caso.
-    void *p = ::mmap(nullptr, chunk_bytes_, PROT_READ | PROT_WRITE | PROT_EXEC,
-                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    // mmap devuelve MAP_FAILED (cast de -1) en error, NO nullptr.
-    if (p == MAP_FAILED) return false;
+    /* Igual que en Windows: `mmap` admite una direccion PREFERIDA (sin
+     * MAP_FIXED, asi que si esta ocupada el nucleo elige otra y no se pisa
+     * nada).  Ver el comentario de arriba para el por que. */
+    void *p = nullptr;
+    if (anchor_ != 0) {
+        void *q = ::mmap(reinterpret_cast<void *>(anchor_ & ~(uintptr_t)0xFFFF),
+                         chunk_bytes_, PROT_READ | PROT_WRITE | PROT_EXEC,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (q != MAP_FAILED) p = q;
+    }
+    if (p == nullptr) {
+        void *q = ::mmap(nullptr, chunk_bytes_,
+                         PROT_READ | PROT_WRITE | PROT_EXEC,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        // mmap devuelve MAP_FAILED (cast de -1) en error, NO nullptr.
+        if (q == MAP_FAILED) return false;
+        p = q;
+    }
 #endif
     // Registrar el chunk en la lista para tracking y cleanup posterior.
     Chunk c;

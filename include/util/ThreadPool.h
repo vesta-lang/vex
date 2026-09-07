@@ -41,7 +41,14 @@
 #include <atomic>
 #include <stdexcept>
 
-#ifdef WIN32
+/* La etiqueta de reservas viaja con la tarea; ver `QueuedTask`. */
+#include "util/alloc/host_allocator.h"
+
+/* `_WIN32` y no `WIN32`: el segundo es un macro del modo GNU, asi que con
+ * `-std=c++17` a secas desaparece y esta cabecera se iba por la rama de Linux
+ * -- en Windows eso no compila --.  `_WIN32` lo define el compilador en los dos
+ * modos, y tambien MSVC. */
+#ifdef _WIN32
 #include "Windows.h" // WakeByAddressSingle / WaitOnAddress
 #elif defined(__linux__)
 #include <linux/futex.h>
@@ -168,10 +175,14 @@ class ThreadPool {
      * captura y se descarta (no se propaga al llamante).
      */
     template <typename F> void enqueue(F &&f) {
+        /* Se lee FUERA del cerrojo, y en el hilo que encola: aqui todavia
+         * estamos en el que sabe para que es el trabajo.  Ver `QueuedTask`. */
+        const util::AllocTag tag = util::AllocScope::current();
         {
             std::lock_guard lk(tasks_m_);
             if (stopping_.load()) return; // pool en apagado: descartar tarea
-            tasks_.emplace(std::forward<F>(f));
+            tasks_.push(QueuedTask{std::function<void()>(std::forward<F>(f)),
+                                   tag});
         }
 
         /* Contador que solo SUBE, no un 0/1.  Con una bandera, el worker
@@ -183,7 +194,7 @@ class ThreadPool {
          * medio, el valor ya no coincide y la espera vuelve sola. */
         wake_flag_.fetch_add(1, std::memory_order_release);
 
-#ifdef WIN32
+#ifdef _WIN32
         WakeByAddressSingle(&wake_flag_); // despertar un worker (Windows)
 #else
         futex_wake(&wake_flag_, 1); // despertar un worker (Linux)
@@ -204,9 +215,34 @@ class ThreadPool {
      */
     void worker_loop();
 
-    std::vector<std::thread> workers_;        ///< Hilos worker del pool
-    std::queue<std::function<void()>> tasks_; ///< Cola de tareas pendientes
-    std::mutex tasks_m_;                      ///< Mutex que protege tasks_
+    /**
+     * @brief Una tarea encolada, con la etiqueta de reservas de quien la encolo.
+     *
+     * POR QUE VIAJA LA ETIQUETA.  Un `util::AllocScope` vale para SU hilo, y
+     * este compilador reparte casi todo: una fase etiquetada cuyo trabajo se
+     * reparta por el pool contaria como "no se" TODO lo que reserven los
+     * trabajadores.  Eso no es un dato que falta, es un dato falso.
+     *
+     * POR QUE AQUI Y NO EN CADA SITIO QUE REPARTE.  Porque se olvida.  De los
+     * tres sitios que encolan hoy -- `ir/parallel_for.cpp`,
+     * `util/assembler_multiprocess.cpp` y `cli/runtime_api_commands.cpp` --,
+     * solo el primero lo hacia, y quien anada el cuarto no tiene por que
+     * saberlo.  Puesto aqui, sale gratis para todos y no hay nada que recordar.
+     *
+     * POR QUE AL LADO DE LA TAREA Y NO ENVOLVIENDOLA.  Envolver el callable en
+     * otra lambda que lleve la etiqueta anade un byte al cierre, y `std::function`
+     * guarda dentro de si mismo solo hasta un tamano: pasarse convierte una
+     * tarea que no reservaba en una que pide memoria al encolarse.  Un campo al
+     * lado no puede provocar eso.
+     */
+    struct QueuedTask {
+        std::function<void()> fn;
+        util::AllocTag tag; ///< la del hilo que encolo; "no se" si no habia ninguna
+    };
+
+    std::vector<std::thread> workers_; ///< Hilos worker del pool
+    std::queue<QueuedTask> tasks_;     ///< Cola de tareas pendientes
+    std::mutex tasks_m_;               ///< Mutex que protege tasks_
     std::condition_variable
         tasks_cv_; ///< No usado en la implementacion actual (reservado)
     std::atomic<bool> stopping_{false}; ///< true cuando el pool esta en apagado
@@ -225,19 +261,24 @@ auto ThreadPool::submit(F &&f, Args &&...args)
         std::bind(std::forward<F>(f), std::forward<Args>(args)...));
     std::future<R> fut = task_ptr->get_future();
 
+    // Igual que en `enqueue`: en el hilo que encola, fuera del cerrojo.
+    const util::AllocTag tag = util::AllocScope::current();
+
     {
         std::lock_guard<std::mutex> lk(tasks_m_);
         if (stopping_.load())
             throw std::runtime_error(
                 "ThreadPool is stopping, cannot submit new tasks");
-        tasks_.emplace([task_ptr]() {
-            (*task_ptr)();
-        }); // envolver en lambda sin argumentos
+        // envolver en lambda sin argumentos
+        tasks_.push(QueuedTask{std::function<void()>([task_ptr]() {
+                                   (*task_ptr)();
+                               }),
+                               tag});
     }
 
     wake_flag_.fetch_add(1, std::memory_order_release); // ver enqueue()
 
-#ifdef WIN32
+#ifdef _WIN32
     WakeByAddressSingle(&wake_flag_);
 #else
     futex_wake(&wake_flag_, 1);

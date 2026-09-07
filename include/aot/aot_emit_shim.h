@@ -106,6 +106,22 @@ typedef struct {
     6 /* AArch64 BL/B (R_AARCH64_CALL26/JUMP26): parchea el campo imm26 de la  \
        * instruccion de 32 bits en el sitio con ((target - site) >> 2).  Para  \
        * el `bl main` del _start arm64 y llamadas cross-funcion arm64. */
+#define AOT_RELOC_RVA32                                                        \
+    7 /* *(uint32*)site = target_value - base de imagen.  Es la unica que      \
+       * necesita la base, y por eso `apply_reloc` la recibe: dejar la resta   \
+       * a quien llama repartiria por ocho sitios lo que es una sola regla.    \
+       *                                                                       \
+       * Hace falta para `.pdata`: un RUNTIME_FUNCTION son TRES campos y los   \
+       * tres son RVA, asi que sin esto no se puede escribir ni una entrada.   \
+       * Es tambien la que le falta al enlazador de objetos COFF              \
+       * (IMAGE_REL_AMD64_ADDR32NB) para conservar la `.pdata` ajena: el mismo \
+       * concepto, en las dos direcciones.                                     \
+       *                                                                       \
+       * Solo tiene sentido produciendo una IMAGEN con base conocida.  Un RVA  \
+       * que no cabe en 32 bits -- objetivo por debajo de la base, o a mas de  \
+       * 4 GiB -- se rechaza en vez de truncarse: una tabla de desenrollado    \
+       * que apunta a cualquier sitio es peor que no tenerla, porque el        \
+       * sistema la sigue. */
 
 /**
  * @brief Una relocation a resolver tras el layout.
@@ -122,6 +138,21 @@ typedef struct {
     uint64_t target_off; /* offset dentro del target (modo ADDR) */
     int target_is_size;  /* 1 => target_value = tamano de target_section */
     int target_is_end;   /* 1 => target_value = VA(target_section)+tamano */
+    /* 1 => target_value = la BASE DE LA IMAGEN, y `target_section`/`target_off`
+     * se ignoran.
+     *
+     * Es lo que hace falta para publicar `__ImageBase`, el simbolo que en PE
+     * NO define ningun fichero fuente sino el enlazador, y cuya direccion es el
+     * primer byte de la imagen cargada -- la cabecera `MZ` --.  El codigo lo
+     * usa como forma barata de saber donde esta cargado su modulo, sin llamar a
+     * `GetModuleHandle`; el simbolizador lo necesita para restarselo a una
+     * direccion de retorno y quedarse con el desplazamiento dentro del modulo.
+     *
+     * No cabe como seccion+offset: ninguna seccion empieza en la base (ahi
+     * viven las cabeceras), asi que hace falta decirlo aparte.  Solo tiene
+     * sentido al producir una IMAGEN (exe / .bin): en un objeto suelto la base
+     * todavia no existe, y ahi se rechaza diciendolo. */
+    int target_is_imagebase;
     int kind;            /* AOT_RELOC_* */
     int64_t addend;      /* desplazamiento adicional */
     /* Reloc a un SIMBOLO EXTERNO (libc: malloc/free/abort...): si != NULL, el

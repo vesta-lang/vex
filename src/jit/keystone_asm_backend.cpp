@@ -22,7 +22,7 @@
  */
 
 #include "util/env_flags.h"
-#include "util/thread_slot.h" // el estado de simbolos, sin `thread_local`
+#include "util/os/thread_slot.h" // el estado de simbolos, sin `thread_local`
 #include "jit/keystone_asm_backend.h"
 #include "vx/asm/asm_backend.h"
 
@@ -75,7 +75,7 @@ struct SymState {
 };
 /* En una RANURA propia, no en `thread_local`: en MinGW la TLS es emulada y cada
  * acceso es una llamada.  Lo que se guarda es un puntero, asi que cabe tal cual
- * y no hay nada que reservar.  Ver `util/thread_slot.h`. */
+ * y no hay nada que reservar.  Ver `util/os/thread_slot.h`. */
 util::ThreadSlot g_sym_state_slot;
 /// El estado de simbolos de ESTE hilo, o nulo si no hay ensamblado en curso.
 inline SymState *g_sym_state() {

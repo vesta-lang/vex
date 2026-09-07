@@ -36,7 +36,9 @@ endif ()
 # Los tres directorios que quedan aqui son los que no tienen libreria propia:
 # el modo analisis, el portador a C y el servidor LSP.  Cuando la tengan, esta
 # lista se queda vacia.
-file(GLOB_RECURSE ALL_PROJECT_SOURCES
+# CONFIGURE_DEPENDS: sin el, un fichero nuevo de estos tres directorios no
+# entra hasta reconfigurar a mano, y los tests enlazan sin el sin decir nada.
+file(GLOB_RECURSE ALL_PROJECT_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/src/analyze/*.cpp
         ${CMAKE_SOURCE_DIR}/src/port/*.cpp
         ${CMAKE_SOURCE_DIR}/src/lsp/*.cpp
@@ -218,8 +220,12 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             PRIVATE vesta_test_link)
 endfunction()
 
-# Buscar todos los archivos .cpp dentro de tests/ y subcarpetas
-file(GLOB_RECURSE TEST_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp)
+# Buscar todos los archivos .cpp dentro de tests/ y subcarpetas.
+# CONFIGURE_DEPENDS: un test nuevo tiene que entrar solo.  Sin el hay que
+# reconfigurar a mano, y un test que no se compila no se ejecuta -- que es
+# exactamente la clase de prueba que este arbol ya sabe que no sirve.
+file(GLOB_RECURSE TEST_FILES CONFIGURE_DEPENDS
+        RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp)
 
 # Quitar los que el CMakeLists de la raiz ya declara con nombre corto.
 #

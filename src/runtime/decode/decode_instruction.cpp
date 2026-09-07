@@ -167,7 +167,9 @@ void decode_instr_oop_reg_imm8(const InstrCursor &c, DecodedInstr &instr) {
 /**
  * @brief Descodifica una instruccion con direccionamiento SIB.
  *
- * Lee 4 bytes tras los 2 bytes de opcode extendido y extrae los campos:
+ * Sirve a las DOS tablas.  En la extendida ocupa 6 bytes
+ * (`[0x00][op2][ctrl][regs][index][pad]`) y en la primaria 4
+ * (`[op][ctrl][regs][index]`), sin el relleno.  Los campos son los mismos:
  *   - ctrl_byte: mode (2 bits), signed (1 bit), direction (1 bit), scale (2
  * bits), has_index (1 bit)
  *   - regs_byte: reg_final (nibble alto), reg_base (nibble bajo)
@@ -184,9 +186,20 @@ void decode_instr_sib(const InstrCursor &c, DecodedInstr &instr) {
     instr.flags_info.size_instr =
         Assembly::Bytecode::instr_size(instr.metadata->size); // fijar longitud
 
-    // 4 bytes tras los 2 bytes de opcode: ctrl | regs | index | pad
-    uint64_t offset = c.addr + 2;
-    uint32_t data = c.read_u32(offset); // lectura de bloque de 4 bytes
+    /* Los mismos tres campos en las DOS tablas, y un solo `u32` en las dos.
+     *
+     * Extendida: `[0x00][op2][ctrl][regs][index][pad]`.  El bloque arranca tras
+     * los dos bytes de opcode, y el relleno existe solo para que la lectura de
+     * cuatro bytes no se salga de la instruccion.
+     *
+     * Primaria: `[op][ctrl][regs][index]`.  El bloque arranca EN el opcode, asi
+     * que los campos quedan un byte mas arriba y el relleno sobra.  Leer desde
+     * `addr + 1` habria dejado las cuentas identicas, pero se sale un byte de
+     * la instruccion, y al final de una pagina eso no es un byte de mas: es un
+     * fallo de acceso. */
+    const bool primaria = instr.flags_info.is_not_extended != 0;
+    const uint32_t bruto = c.read_u32(c.addr + (primaria ? 0u : 2u));
+    const uint32_t data = primaria ? (bruto >> 8) : bruto;
 
     uint8_t ctrl_byte =
         static_cast<uint8_t>(data & 0xFF); // byte de control SIB

@@ -17,8 +17,8 @@
 #include "ir/parallel_for.h"
 
 #include "util/ThreadPool.h"
-#include "util/host_allocator.h" // la etiqueta de reservas viaja con la tarea
-#include "util/thread_slot.h"
+#include "util/alloc/host_allocator.h" // la etiqueta de reservas viaja con la tarea
+#include "util/os/thread_slot.h"
 
 #include <atomic>
 #include <chrono>
@@ -51,7 +51,7 @@ static std::atomic<unsigned> g_claimed{0};
  * En una ranura propia y NO en `thread_local`: en MinGW la TLS es emulada, y
  * una variable de hilo con inicializador dinamico genera una guarda que se
  * bloquea cuando hay hilos que nacen y mueren -- que es exactamente lo que hace
- * el reparto por modulo, un lote de hilos por nivel.  Ver `util/thread_slot.h`.
+ * el reparto por modulo, un lote de hilos por nivel.  Ver `util/os/thread_slot.h`.
  * El valor cabe en el propio puntero, asi que no hay nada que reservar.
  */
 static util::ThreadSlot g_in_pool_task;
@@ -67,22 +67,18 @@ inline void set_in_pool_task(bool v) noexcept {
 /**
  * @brief Pone la marca mientras vive.  Se usa dentro de cada tarea del pool.
  *
- * Y ADEMAS lleva la etiqueta de reservas del hilo que reparte hasta el que
- * trabaja.  No es un extra: un `util::AllocScope` vale para SU hilo, asi que
- * una fase etiquetada cuyo trabajo se reparta por el pool contaria todo lo que
- * reservan los trabajadores como "no se".  Eso no seria un dato que falta,
- * seria un dato FALSO -- y este compilador reparte casi todo.
- *
- * Por eso la etiqueta se pide como parametro y no se lee aqui dentro: aqui
- * dentro ya estamos en el hilo equivocado.  Quien anada un sitio de reparto
- * nuevo se encuentra con que el constructor se la exige.
+ * LA ETIQUETA DE RESERVAS YA NO SE LLEVA AQUI.  Se llevaba, porque un
+ * `util::AllocScope` vale solo para SU hilo y una fase etiquetada cuyo trabajo
+ * se reparta contaria como "no se" todo lo que reserven los trabajadores -- un
+ * dato falso, no un dato que falta --.  Pero hacerlo en cada sitio que reparte
+ * es una regla que se olvida: de los tres que encolan hoy, solo este la
+ * cumplia.  Ahora la lleva `ThreadPool` con la tarea, asi que sale gratis para
+ * todos y para los que vengan.  Ver `QueuedTask` en `util/ThreadPool.h`.
  */
 struct InPoolTaskScope {
     const bool previous;
-    const util::AllocScope inherited_tag;
 
-    explicit InPoolTaskScope(util::AllocTag parent) noexcept
-        : previous(in_pool_task()), inherited_tag(parent) {
+    InPoolTaskScope() noexcept : previous(in_pool_task()) {
         set_in_pool_task(true);
     }
     ~InPoolTaskScope() { set_in_pool_task(previous); }
@@ -238,11 +234,6 @@ void for_each_function(IrModule &mod,
     std::mutex m_error;
     std::exception_ptr first_error;
 
-    /* La etiqueta de reservas se lee AQUI, en el hilo que reparte, porque
-     * dentro de la tarea ya seria la del trabajador.  Vive hasta que la espera
-     * de mas abajo termina, asi que la lambda la puede tomar por referencia. */
-    const util::AllocTag parent_tag = util::AllocScope::current();
-
     auto work = [&] {
         /* Avisa al salir, salga por donde salga. */
         struct OnExit {
@@ -250,9 +241,9 @@ void for_each_function(IrModule &mod,
             ~OnExit() { v.fetch_sub(1); }
         } on_exit{alive};
         /* Dentro de una tarea: lo que corra aqui no puede volver a encolar en
-         * este mismo pool, y lo que reserve se cuenta con la etiqueta del que
-         * reparte.  Ver @c InPoolTaskScope. */
-        const InPoolTaskScope in_task{parent_tag};
+         * este mismo pool.  La etiqueta de reservas la pone el pool, no esto;
+         * ver @c InPoolTaskScope. */
+        const InPoolTaskScope in_task;
         for (;;) {
             const size_t i = next.fetch_add(1);
             if (i >= n) return;

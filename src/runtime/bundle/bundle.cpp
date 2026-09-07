@@ -13,7 +13,7 @@
  */
 
 #include <cstddef>
-#include "util/vesta_memcpy.h"
+#include "util/mem/vesta_memcpy.h"
 
 #include "runtime/bundle.h"
 

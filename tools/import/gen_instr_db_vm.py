@@ -593,8 +593,26 @@ def leer_declaraciones():
     # fichero donde cada linea es una renuncia a derivar hace falta poder decir
     # POR QUE ahi mismo: una lista de opcodes sin explicacion no se puede
     # revisar, solo creer.
-    return {(o["tabla"], o["indice"]): o
-            for o in d.get("opcodes", []) if "tabla" in o}
+    fuera = {}
+    for o in d.get("opcodes", []):
+        if "tabla" not in o:
+            continue
+        clave = (o["tabla"], o["indice"])
+        # DOS declaraciones del mismo opcode es un error, no una sustitucion.
+        # Antes ganaba la ultima y nadie se enteraba: declarar las lecturas de
+        # `callitf` le quito CALLADAMENTE su clase `runtime`, que es lo que le
+        # dice al que forma el paquete que su destino se puede observar.  Un
+        # fichero que es el CONTRATO no puede perder una clausula en silencio.
+        if clave in fuera:
+            raise SystemExit(
+                "%s: %s declarado dos veces (%s 0x%02X): '%s' y '%s'.\n"
+                "Una sola entrada por opcode; si necesita dos cosas a la vez,\n"
+                "usa las banderas (`runtime`, `foreign`) junto a la clase."
+                % (DECLARACIONES.name, o.get("nombre", "?"), o["tabla"],
+                   o["indice"], fuera[clave].get("clase", "?"),
+                   o.get("clase", "?")))
+        fuera[clave] = o
+    return fuera
 
 
 def revisar(por_clave, decl):
@@ -650,7 +668,14 @@ def bits(o, dec=None):
         v |= 1 << 11
     # Declarado como dependiente de la ejecucion: no es "no se sabe", es "no se
     # sabe todavia", y quien forme el paquete puede resolverlo observando.
-    if dec is not None and dec.get("clase") == "runtime":
+    #
+    # Se acepta tambien como BANDERA, no solo como clase, por lo mismo que
+    # `foreign`: no es excluyente con `fixed`.  `callitf` es las dos cosas --
+    # su destino se observa al ejecutar, Y sus lecturas hubo que declararlas a
+    # mano --, y con las clases excluyentes declarar lo segundo le quitaba lo
+    # primero en silencio.
+    if dec is not None and (dec.get("clase") == "runtime" or
+                            dec.get("runtime")):
         v |= 1 << 12
     # PUEDE salir a codigo ajeno.  Va como bandera aparte y no como clase
     # porque no es excluyente con `runtime`: `calln` es las dos cosas -- el
@@ -664,9 +689,24 @@ def bits(o, dec=None):
         v |= 1 << 13
     # Efectos declarados a mano, leidos del FUENTE del manejador.  Sustituyen a
     # lo derivado, no lo completan: existen justo porque lo derivado esta mal.
+    #
+    # Las mascaras declaradas usan la MISMA codificacion que las derivadas --
+    # bits 0..3 = [banderas, pila, marco, pc], bit 4 = memoria --, y no una
+    # propia de cuatro bits.  Con cuatro no se podia declarar que una
+    # instruccion toca memoria, y eso deja fuera justo el caso que motivo esto:
+    # `fastpush` perdio a la vez la escritura de la pila y el bit de memoria, y
+    # arreglar solo la primera lo dejaba diciendo que un push no toca memoria.
     if dec is not None and dec.get("clase") == "fixed":
+        d_esc = dec.get("escribe", 0) & 0x1F
+        d_lee = dec.get("lee", 0) & 0x1F
         v &= ~0xFF
-        v |= (dec.get("escribe", 0) & 0xF) | ((dec.get("lee", 0) & 0xF) << 4)
+        v |= (d_esc & 0xF) | ((d_lee & 0xF) << 4)
+        # El quinto campo no cabe en los nibbles y va a su bandera, igual que en
+        # el camino derivado.  Solo se ANADE: si lo derivado ya decia que toca
+        # memoria, una declaracion que no lo mencione no se lo quita -- sobrar
+        # una dependencia cuesta un reorden, faltar una cuesta un resultado.
+        if (d_esc | d_lee) & kMemoria:
+            v |= 1 << 10
         # NO se toca `VE_EXACT`: esa marca dice si el RECORRIDO llego al final,
         # y eso lo sabe el derivador y solo el.  Una declaracion aporta CAMPOS
         # -- lo que el fuente dice que toca --, no una promesa sobre lo que el
@@ -798,20 +838,38 @@ def emitir(por_clave, nombres_micro, decl):
             if o is None:
                 v = 0
             else:
+                # Una declaracion `fixed` corrige tambien la FORMA, no solo los
+                # cuatro campos implicitos.
+                #
+                # Hace falta porque los dos se pierden por el MISMO motivo.  El
+                # derivador atribuye un acceso solo si puede seguir el puntero
+                # al proceso hasta el; cuando el compilador lo deja en un
+                # registro que el rastro no alcanza, se pierden a la vez la
+                # escritura de banderas y la del registro destino.  Corregir
+                # solo la primera deja la segunda diciendo que la instruccion
+                # no escribe ningun registro, y eso permite mover por encima a
+                # quien lo leia -- que es el lado caro de equivocarse.
+                dec = decl.get((tabla, i))
+                forma = dict(o)
+                if dec is not None and dec.get("clase") == "fixed":
+                    for clave in ("form_read", "form_write", "form_vec_read",
+                                  "form_vec_write"):
+                        if clave in dec:
+                            forma[clave] = dec[clave]
                 # Dieciseis bits por campo: con ocho no cabian las doce
                 # ranuras y se perdia la forma con inmediato de los ocho
                 # opcodes mas ejecutados.  Se comprueba en vez de recortar:
                 # truncar en silencio es lo que lo escondio la primera vez.
                 for clave in ("form_read", "form_write", "form_vec_read",
                               "form_vec_write"):
-                    if o.get(clave, 0) & ~0xFFFF:
+                    if forma.get(clave, 0) & ~0xFFFF:
                         raise SystemExit(
                             "%s de %s no cabe en 16 bits: 0x%X"
-                            % (clave, o.get("nombre", "?"), o[clave]))
-                v = ((o.get("form_read", 0) & 0xFFFF)
-                     | ((o.get("form_write", 0) & 0xFFFF) << 16)
-                     | ((o.get("form_vec_read", 0) & 0xFFFF) << 32)
-                     | ((o.get("form_vec_write", 0) & 0xFFFF) << 48))
+                            % (clave, forma.get("nombre", "?"), forma[clave]))
+                v = ((forma.get("form_read", 0) & 0xFFFF)
+                     | ((forma.get("form_write", 0) & 0xFFFF) << 16)
+                     | ((forma.get("form_vec_read", 0) & 0xFFFF) << 32)
+                     | ((forma.get("form_vec_write", 0) & 0xFFFF) << 48))
             linea += " 0x%016XULL," % v
             if (i % 2) == 1:
                 filas.append(linea)

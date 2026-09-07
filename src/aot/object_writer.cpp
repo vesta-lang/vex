@@ -107,6 +107,7 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
         c.target_off = r.target.offset;
         c.target_is_size = r.target.is_size ? 1 : 0;
         c.target_is_end = r.target.is_end ? 1 : 0;
+        c.target_is_imagebase = r.target.is_imagebase ? 1 : 0;
         c.kind = static_cast<int>(r.kind); // espejo de AOT_RELOC_*
         c.addend = r.addend;
         // El puntero apunta al std::string en relocs_ (vive durante write()).

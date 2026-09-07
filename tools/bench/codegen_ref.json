@@ -1,0 +1,3192 @@
+{
+ "meta": {
+  "commit": "a29b1ddfebf6fdb4daf10e523f19d323a4dcd3b1",
+  "commit_corto": "a29b1ddf",
+  "commit_fecha": "2026-09-04T15:28:44+02:00",
+  "commit_asunto": "feat(bench): el medidor de ciclos, una version por arquitectura",
+  "rama": "feature",
+  "arbol_sucio": true,
+  "ficheros_sueltos": 6,
+  "medido": "2026-09-04T15:32:00+02:00",
+  "build": "cmake-build-release"
+ },
+ "results": [
+  {
+   "bench": "00_aritmetica",
+   "vx_text": 26
+  },
+  {
+   "bench": "01_factorial",
+   "vx_text": 114
+  },
+  {
+   "bench": "02_hola_mundo",
+   "vx_text": 985,
+   "vx_rodata": 29,
+   "vx_data": 12312
+  },
+  {
+   "bench": "03_contador",
+   "vx_text": 1277,
+   "vx_rodata": 44,
+   "vx_data": 12312
+  },
+  {
+   "bench": "05_struct_punto",
+   "vx_text": 26
+  },
+  {
+   "bench": "06_struct_multi",
+   "vx_text": 26
+  },
+  {
+   "bench": "07_punteros",
+   "vx_text": 26
+  },
+  {
+   "bench": "08_punteros_loop",
+   "vx_text": 169
+  },
+  {
+   "bench": "09_punteros_arith",
+   "vx_text": 26
+  },
+  {
+   "bench": "102_closure_env_gc",
+   "vx_text": 276
+  },
+  {
+   "bench": "104_hot_loop_bench",
+   "vx_text": 197
+  },
+  {
+   "bench": "105_decjnz_bench",
+   "vx_text": 123
+  },
+  {
+   "bench": "105_unique_with_vesta",
+   "vx_text": 93,
+   "vx_data": 8
+  },
+  {
+   "bench": "105b_decjnz_simple",
+   "vx_text": 123
+  },
+  {
+   "bench": "106_virtualalloc_unique",
+   "vx_text": 320,
+   "vx_data": 16
+  },
+  {
+   "bench": "107_unique_lifo_move_chain",
+   "vx_text": 493,
+   "vx_data": 32
+  },
+  {
+   "bench": "108_shared_use_count",
+   "vx_text": 6353,
+   "vx_data": 416
+  },
+  {
+   "bench": "109_unique_comprehensive",
+   "vx_text": 516,
+   "vx_data": 40
+  },
+  {
+   "bench": "10_heap_malloc",
+   "vx_text": 1326,
+   "vx_data": 32
+  },
+  {
+   "bench": "110_unique_return_from_fn",
+   "vx_text": 401,
+   "vx_data": 40
+  },
+  {
+   "bench": "111_borrow_shared_ok",
+   "vx_text": 359,
+   "vx_data": 32
+  },
+  {
+   "bench": "112_borrow_mut_ok",
+   "vx_text": 26
+  },
+  {
+   "bench": "117_borrow_param_elision",
+   "vx_text": 329,
+   "vx_data": 32
+  },
+  {
+   "bench": "118_borrow_nll",
+   "vx_text": 5809,
+   "vx_data": 416
+  },
+  {
+   "bench": "119_borrow_reborrow",
+   "vx_text": 326,
+   "vx_data": 32
+  },
+  {
+   "bench": "11_arrays_nativos",
+   "vx_text": 1416
+  },
+  {
+   "bench": "120_borrow_reborrow_mut",
+   "vx_text": 26
+  },
+  {
+   "bench": "121_borrow_shared_reborrow_of_mut",
+   "vx_text": 286,
+   "vx_data": 32
+  },
+  {
+   "bench": "122_borrow_reborrow_chain",
+   "vx_text": 26
+  },
+  {
+   "bench": "123_borrow_helper_mutation",
+   "vx_text": 273,
+   "vx_data": 32
+  },
+  {
+   "bench": "124_borrow_aggregator",
+   "vx_text": 419,
+   "vx_data": 32
+  },
+  {
+   "bench": "125_borrow_nll_realistic",
+   "vx_text": 6025,
+   "vx_data": 416
+  },
+  {
+   "bench": "126_borrow_reborrow_helper",
+   "vx_text": 297,
+   "vx_data": 32
+  },
+  {
+   "bench": "127_borrow_state_machine",
+   "vx_text": 6249,
+   "vx_data": 416
+  },
+  {
+   "bench": "128_borrow_factory_chain",
+   "vx_text": 289,
+   "vx_data": 32
+  },
+  {
+   "bench": "12_clases_basico",
+   "vx_text": 26
+  },
+  {
+   "bench": "131_borrow_combined_real",
+   "vx_text": 6202,
+   "vx_data": 416
+  },
+  {
+   "bench": "132_comptime_introspect",
+   "vx_text": 1978,
+   "vx_rodata": 3,
+   "vx_data": 416
+  },
+  {
+   "bench": "133_comptime_introspect2",
+   "vx_text": 2207,
+   "vx_rodata": 4,
+   "vx_data": 416
+  },
+  {
+   "bench": "134_comptime_introspect3",
+   "vx_text": 1203,
+   "vx_rodata": 8,
+   "vx_data": 16
+  },
+  {
+   "bench": "135_introspect_runtime",
+   "vx_text": 7655,
+   "vx_rodata": 152,
+   "vx_data": 448
+  },
+  {
+   "bench": "136_ternary_comptime_const",
+   "vx_text": 26
+  },
+  {
+   "bench": "138_metaprog_completa",
+   "vx_text": 26
+  },
+  {
+   "bench": "139_comptime_imperativo",
+   "vx_text": 26
+  },
+  {
+   "bench": "13_clases_modificadores",
+   "vx_text": 26
+  },
+  {
+   "bench": "140_metaprog_avanzada",
+   "vx_text": 26
+  },
+  {
+   "bench": "141_metaprog_nested",
+   "vx_text": 2199,
+   "vx_rodata": 14,
+   "vx_data": 416
+  },
+  {
+   "bench": "142_type_first_class",
+   "vx_text": 26
+  },
+  {
+   "bench": "143_type_composable",
+   "vx_text": 55
+  },
+  {
+   "bench": "144_method_enum_introspect",
+   "vx_text": 26
+  },
+  {
+   "bench": "145_auto_inference",
+   "vx_text": 26
+  },
+  {
+   "bench": "147_macros_comptime_compile",
+   "vx_text": 26
+  },
+  {
+   "bench": "148_macros_emit_splice",
+   "vx_text": 26
+  },
+  {
+   "bench": "149_macros_hygenic_gensym",
+   "vx_text": 26
+  },
+  {
+   "bench": "14_clases_visibilidad",
+   "vx_text": 26
+  },
+  {
+   "bench": "150_macros_pattern_template",
+   "vx_text": 26
+  },
+  {
+   "bench": "151_sugar_aliases_block",
+   "vx_text": 26
+  },
+  {
+   "bench": "152_macros_inject_at_macro",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "153_macros_compose_recurse_global",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "154_macros_zero_runtime_overhead",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "155_concat_loop_optimized",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "156_macros_pure_memoization",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "157_concat_multichunk",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "158_macros_lowered_to_ir",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "159_macro_expr_capture",
+   "vx_text": 6649,
+   "vx_rodata": 27,
+   "vx_data": 448
+  },
+  {
+   "bench": "15_herencia_basica",
+   "vx_text": 77
+  },
+  {
+   "bench": "160_macro_walk_pchase",
+   "vx_text": 1259,
+   "vx_data": 64
+  },
+  {
+   "bench": "161_macro_ffi_compile_time",
+   "vx_text": 26
+  },
+  {
+   "bench": "162_macro_comptime_data",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "163_try_operator",
+   "vx_text": 671
+  },
+  {
+   "bench": "164_enum_f64_payload",
+   "vx_text": 850
+  },
+  {
+   "bench": "165_unique_dtor",
+   "vx_text": 5283,
+   "vx_data": 432
+  },
+  {
+   "bench": "168_newtypes",
+   "vx_text": 2374,
+   "vx_rodata": 3,
+   "vx_data": 416
+  },
+  {
+   "bench": "169_newtype_advanced",
+   "vx_text": 26
+  },
+  {
+   "bench": "170_local_to_calln_native",
+   "vx_text": 172
+  },
+  {
+   "bench": "171_callback_qsort",
+   "vx_text": 987
+  },
+  {
+   "bench": "172_string_array_natural",
+   "vx_text": 2200,
+   "vx_rodata": 39,
+   "vx_data": 12312
+  },
+  {
+   "bench": "173_wndproc_win32",
+   "vx_text": 8698,
+   "vx_rodata": 43,
+   "vx_data": 12736
+  },
+  {
+   "bench": "173b_wndproc_visible",
+   "vx_text": 9693,
+   "vx_rodata": 136,
+   "vx_data": 12736
+  },
+  {
+   "bench": "175_generics_deep_nesting",
+   "vx_text": 7450,
+   "vx_rodata": 9,
+   "vx_data": 12728
+  },
+  {
+   "bench": "176_adt_complex_payloads",
+   "vx_text": 3903,
+   "vx_rodata": 35,
+   "vx_data": 12328
+  },
+  {
+   "bench": "177_callback_many_args",
+   "vx_text": 2045,
+   "vx_rodata": 23,
+   "vx_data": 12320
+  },
+  {
+   "bench": "178_escape_scalar_repl",
+   "vx_text": 5234,
+   "vx_data": 416
+  },
+  {
+   "bench": "179_spec_devirt_inherit",
+   "vx_text": 6377,
+   "vx_data": 416
+  },
+  {
+   "bench": "17_ecs_basico",
+   "vx_text": 1277
+  },
+  {
+   "bench": "180_vreg_obj_loop_callvirt",
+   "vx_text": 418,
+   "vx_data": 32
+  },
+  {
+   "bench": "181_truecolor",
+   "vx_text": 1740,
+   "vx_rodata": 51,
+   "vx_data": 12312
+  },
+  {
+   "bench": "181_vreg_alloca_vm_escape",
+   "vx_text": 184
+  },
+  {
+   "bench": "182_vectorize_elementwise",
+   "vx_text": 9677,
+   "vx_data": 416
+  },
+  {
+   "bench": "183_memcpy_idiom",
+   "vx_text": 2162,
+   "vx_data": 32
+  },
+  {
+   "bench": "184_vectorize_reduction",
+   "vx_text": 9006,
+   "vx_data": 416
+  },
+  {
+   "bench": "185_vectorize_int",
+   "vx_text": 9404,
+   "vx_data": 416
+  },
+  {
+   "bench": "186_float_params_loop",
+   "vx_text": 8605,
+   "vx_data": 416
+  },
+  {
+   "bench": "187_vectorize_unary",
+   "vx_text": 5421,
+   "vx_data": 32
+  },
+  {
+   "bench": "188_vectorize_f32",
+   "vx_text": 8113,
+   "vx_data": 416
+  },
+  {
+   "bench": "189_vectorize_while",
+   "vx_text": 3565,
+   "vx_data": 32
+  },
+  {
+   "bench": "190_vectorize_fma",
+   "vx_text": 7873,
+   "vx_data": 416
+  },
+  {
+   "bench": "191_vectorize_compound",
+   "vx_text": 3588,
+   "vx_data": 32
+  },
+  {
+   "bench": "192_vectorize_scalar",
+   "vx_text": 3668,
+   "vx_data": 32
+  },
+  {
+   "bench": "193_vectorize_int_widths",
+   "vx_text": 4748,
+   "vx_data": 32
+  },
+  {
+   "bench": "194_vectorize_scalar_int",
+   "vx_text": 4341,
+   "vx_data": 32
+  },
+  {
+   "bench": "195_vectorize_axpy",
+   "vx_text": 5348,
+   "vx_data": 32
+  },
+  {
+   "bench": "196_first_class_functions",
+   "vx_text": 253
+  },
+  {
+   "bench": "197_variadics",
+   "vx_text": 2327
+  },
+  {
+   "bench": "198_inline_asm_symbols",
+   "vx_text": 232,
+   "vx_data": 8
+  },
+  {
+   "bench": "199_cfn_vs_lambda",
+   "vx_text": 6669,
+   "vx_data": 416
+  },
+  {
+   "bench": "19_tco_basico",
+   "vx_text": 56
+  },
+  {
+   "bench": "200_closure_en_campo",
+   "vx_text": 6078,
+   "vx_data": 416
+  },
+  {
+   "bench": "200_vectorize_fmsub",
+   "vx_text": 7966,
+   "vx_data": 416
+  },
+  {
+   "bench": "201_metodo_ligado",
+   "vx_text": 6769,
+   "vx_data": 416
+  },
+  {
+   "bench": "201_vectorize_f32_scalar",
+   "vx_text": 2068,
+   "vx_data": 32
+  },
+  {
+   "bench": "202_closure_reasignacion",
+   "vx_text": 6210,
+   "vx_data": 416
+  },
+  {
+   "bench": "202_f32_param_coercion",
+   "vx_text": 26
+  },
+  {
+   "bench": "203_metodo_ligado_compuesto",
+   "vx_text": 6204,
+   "vx_data": 416
+  },
+  {
+   "bench": "203_vectorize_scalar_factor",
+   "vx_text": 1953,
+   "vx_data": 32
+  },
+  {
+   "bench": "204_struct_closure_escape_err",
+   "vx_text": 5871,
+   "vx_data": 416
+  },
+  {
+   "bench": "204_vectorize_two_scaled",
+   "vx_text": 1982,
+   "vx_data": 32
+  },
+  {
+   "bench": "206_struct_dtor",
+   "vx_text": 5861,
+   "vx_data": 424
+  },
+  {
+   "bench": "207_struct_dtor_store_err",
+   "vx_text": 5913,
+   "vx_data": 424
+  },
+  {
+   "bench": "208_struct_composition",
+   "vx_text": 365,
+   "vx_data": 40
+  },
+  {
+   "bench": "210_unique_en_campo",
+   "vx_text": 5915,
+   "vx_data": 424
+  },
+  {
+   "bench": "211_unique_reassign",
+   "vx_text": 5949,
+   "vx_data": 424
+  },
+  {
+   "bench": "212_shared_en_campo",
+   "vx_text": 6106,
+   "vx_data": 416
+  },
+  {
+   "bench": "213_copy_hook_refcount",
+   "vx_text": 5993,
+   "vx_data": 424
+  },
+  {
+   "bench": "214_copy_hook_en_campo",
+   "vx_text": 6046,
+   "vx_data": 424
+  },
+  {
+   "bench": "216_copy_hook_por_valor",
+   "vx_text": 6043,
+   "vx_data": 424
+  },
+  {
+   "bench": "217_shared_refcount_nogc",
+   "vx_text": 460,
+   "vx_data": 32
+  },
+  {
+   "bench": "218_structs_genericos",
+   "vx_text": 77
+  },
+  {
+   "bench": "219_genericos_tipos_usuario",
+   "vx_text": 5158,
+   "vx_data": 416
+  },
+  {
+   "bench": "220_funciones_genericas",
+   "vx_text": 26
+  },
+  {
+   "bench": "221_inferencia_generica",
+   "vx_text": 26
+  },
+  {
+   "bench": "222_metodos_genericos",
+   "vx_text": 26
+  },
+  {
+   "bench": "223_conceptos_genericos",
+   "vx_text": 1501,
+   "vx_rodata": 26,
+   "vx_data": 12312
+  },
+  {
+   "bench": "225_especializacion",
+   "vx_text": 1697,
+   "vx_rodata": 21,
+   "vx_data": 12344
+  },
+  {
+   "bench": "226_especializacion_avanzada",
+   "vx_text": 7331,
+   "vx_rodata": 29,
+   "vx_data": 12728
+  },
+  {
+   "bench": "227_concepts_avanzado",
+   "vx_text": 1431,
+   "vx_rodata": 15,
+   "vx_data": 12312
+  },
+  {
+   "bench": "229_typedef_genericos",
+   "vx_text": 1404,
+   "vx_rodata": 14,
+   "vx_data": 12312
+  },
+  {
+   "bench": "22_iface_polimorfismo",
+   "vx_text": 50
+  },
+  {
+   "bench": "230_fiber_pingpong",
+   "vx_text": 6303,
+   "vx_data": 416
+  },
+  {
+   "bench": "231_naked_call_from_normal",
+   "vx_text": 70
+  },
+  {
+   "bench": "232_fiber_lifecycle",
+   "vx_text": 6313,
+   "vx_data": 416
+  },
+  {
+   "bench": "233_coop_yield",
+   "vx_text": 7449,
+   "vx_data": 1992
+  },
+  {
+   "bench": "234_sync_contention",
+   "vx_text": 7632,
+   "vx_data": 1992
+  },
+  {
+   "bench": "235_fiber_swapctx",
+   "vx_text": 836,
+   "vx_data": 8696
+  },
+  {
+   "bench": "235_unique_wraps_gc",
+   "vx_text": 69984,
+   "vx_rodata": 1120,
+   "vx_data": 16
+  },
+  {
+   "bench": "236_fiber_stackful",
+   "vx_text": 1167,
+   "vx_data": 12976
+  },
+  {
+   "bench": "236_shared_wraps_gc",
+   "vx_text": 70272,
+   "vx_rodata": 1120,
+   "vx_data": 48
+  },
+  {
+   "bench": "237_gc_campo_y_ptr_wrapper",
+   "vx_text": 5829,
+   "vx_data": 416
+  },
+  {
+   "bench": "237_sync_general_contention",
+   "vx_text": 8520,
+   "vx_data": 2000
+  },
+  {
+   "bench": "238_move_from_field_nofree",
+   "vx_text": 5951,
+   "vx_data": 424
+  },
+  {
+   "bench": "238_real_threads",
+   "vx_text": 6603,
+   "vx_data": 4544
+  },
+  {
+   "bench": "239_borrow_sobre_owned",
+   "vx_text": 333,
+   "vx_data": 32
+  },
+  {
+   "bench": "239_spawn_threads",
+   "vx_text": 6338,
+   "vx_data": 6600
+  },
+  {
+   "bench": "240_spawn_captures",
+   "vx_text": 7085,
+   "vx_data": 6600
+  },
+  {
+   "bench": "240_unique_wraps_owned",
+   "vx_text": 356,
+   "vx_data": 32
+  },
+  {
+   "bench": "241_pool_workstealing",
+   "vx_text": 9337,
+   "vx_data": 1051128
+  },
+  {
+   "bench": "241_unique_wraps_rawptr",
+   "vx_text": 5096,
+   "vx_data": 416
+  },
+  {
+   "bench": "242_move_into_field",
+   "vx_text": 5957,
+   "vx_data": 424
+  },
+  {
+   "bench": "242_pool_fibers_yield",
+   "vx_text": 9747,
+   "vx_data": 1051128
+  },
+  {
+   "bench": "243_atomics",
+   "vx_text": 982,
+   "vx_data": 24
+  },
+  {
+   "bench": "243_move_custom_deleter",
+   "vx_text": 179,
+   "vx_data": 8
+  },
+  {
+   "bench": "244_channels",
+   "vx_text": 12281,
+   "vx_data": 1051128
+  },
+  {
+   "bench": "244_gc_owned_field_aot",
+   "vx_text": 75984,
+   "vx_rodata": 1120,
+   "vx_data": 432
+  },
+  {
+   "bench": "245_atomic_builtins",
+   "vx_text": 248,
+   "vx_data": 16
+  },
+  {
+   "bench": "245_gc_nested_generic",
+   "vx_text": 76016,
+   "vx_rodata": 1120,
+   "vx_data": 448
+  },
+  {
+   "bench": "246_gc_finalize_escape",
+   "vx_text": 70144,
+   "vx_rodata": 1120,
+   "vx_data": 32
+  },
+  {
+   "bench": "247_gc_class_dtor_finalize",
+   "vx_text": 70096,
+   "vx_rodata": 1120,
+   "vx_data": 32
+  },
+  {
+   "bench": "248_gc_unique_shared_finalize",
+   "vx_text": 70016,
+   "vx_rodata": 1120,
+   "vx_data": 32
+  },
+  {
+   "bench": "249_gc_aot_precise_scan",
+   "vx_text": 70208,
+   "vx_rodata": 1120,
+   "vx_data": 16
+  },
+  {
+   "bench": "24_try_catch",
+   "vx_text": 5623,
+   "vx_data": 416
+  },
+  {
+   "bench": "250_chan_close",
+   "vx_text": 12927,
+   "vx_data": 1051136
+  },
+  {
+   "bench": "250_gc_compact",
+   "vx_text": 75488,
+   "vx_rodata": 1120,
+   "vx_data": 432
+  },
+  {
+   "bench": "251_chan_try",
+   "vx_text": 8345,
+   "vx_data": 1050552
+  },
+  {
+   "bench": "251_gc_compact_aot",
+   "vx_text": 70560,
+   "vx_rodata": 1120,
+   "vx_data": 16
+  },
+  {
+   "bench": "252_gc_ref_field",
+   "vx_text": 70464,
+   "vx_rodata": 1120,
+   "vx_data": 16
+  },
+  {
+   "bench": "252_select",
+   "vx_text": 15044,
+   "vx_data": 1051144
+  },
+  {
+   "bench": "253_gc_nursery_precise",
+   "vx_text": 75456,
+   "vx_rodata": 1120,
+   "vx_data": 432
+  },
+  {
+   "bench": "253_select_send",
+   "vx_text": 15345,
+   "vx_data": 1051152
+  },
+  {
+   "bench": "254_select_mixed",
+   "vx_text": 16512,
+   "vx_data": 1051128
+  },
+  {
+   "bench": "254_syncimpl_hook",
+   "vx_text": 6349,
+   "vx_data": 432
+  },
+  {
+   "bench": "255_host_ptr_null_branch",
+   "vx_text": 1483,
+   "vx_rodata": 7,
+   "vx_data": 12344
+  },
+  {
+   "bench": "255_mutex",
+   "vx_text": 10611,
+   "vx_data": 1051120
+  },
+  {
+   "bench": "257_str_build_char_fmt",
+   "vx_text": 8498,
+   "vx_rodata": 1,
+   "vx_data": 12760
+  },
+  {
+   "bench": "258_struct_defaults",
+   "vx_text": 2179,
+   "vx_rodata": 80,
+   "vx_data": 12312
+  },
+  {
+   "bench": "259_compound_literals",
+   "vx_text": 1690,
+   "vx_rodata": 34,
+   "vx_data": 12312
+  },
+  {
+   "bench": "25_try_multi_finally",
+   "vx_text": 5689,
+   "vx_data": 416
+  },
+  {
+   "bench": "260_class_defaults",
+   "vx_text": 7541,
+   "vx_rodata": 66,
+   "vx_data": 12728
+  },
+  {
+   "bench": "261_overlay_basics",
+   "vx_text": 1684,
+   "vx_rodata": 49,
+   "vx_data": 12344
+  },
+  {
+   "bench": "262_overlay_dynamic",
+   "vx_text": 1817,
+   "vx_rodata": 65,
+   "vx_data": 12344
+  },
+  {
+   "bench": "263_overlay_block",
+   "vx_text": 7324,
+   "vx_rodata": 48,
+   "vx_data": 12728
+  },
+  {
+   "bench": "264_overlay_block_if",
+   "vx_text": 7469,
+   "vx_rodata": 41,
+   "vx_data": 12728
+  },
+  {
+   "bench": "265_overlay_scan",
+   "vx_text": 7366,
+   "vx_rodata": 37,
+   "vx_data": 12728
+  },
+  {
+   "bench": "266_match_int",
+   "vx_text": 1682,
+   "vx_rodata": 32,
+   "vx_data": 12312
+  },
+  {
+   "bench": "267_match_string",
+   "vx_text": 5425,
+   "vx_rodata": 68,
+   "vx_data": 12720
+  },
+  {
+   "bench": "268_match_string_runtime",
+   "vx_text": 10046,
+   "vx_rodata": 32,
+   "vx_data": 12760
+  },
+  {
+   "bench": "269_match_range",
+   "vx_text": 2133,
+   "vx_rodata": 14,
+   "vx_data": 12312
+  },
+  {
+   "bench": "26_foreach",
+   "vx_text": 642
+  },
+  {
+   "bench": "270_overlay_array",
+   "vx_text": 1902,
+   "vx_rodata": 36,
+   "vx_data": 12344
+  },
+  {
+   "bench": "271_overlay_pe_sections",
+   "vx_text": 7982,
+   "vx_rodata": 37,
+   "vx_data": 12728
+  },
+  {
+   "bench": "272_overlay_elf_parser",
+   "vx_text": 10996,
+   "vx_rodata": 352,
+   "vx_data": 12736
+  },
+  {
+   "bench": "273_overlay_pe_parser",
+   "vx_text": 14483,
+   "vx_rodata": 610,
+   "vx_data": 12736
+  },
+  {
+   "bench": "274_overlay_checked",
+   "vx_text": 7623,
+   "vx_rodata": 45,
+   "vx_data": 12728
+  },
+  {
+   "bench": "275_overlay_rva_resolver",
+   "vx_text": 7337,
+   "vx_rodata": 11,
+   "vx_data": 12728
+  },
+  {
+   "bench": "276_overlay_parent_walk",
+   "vx_text": 8094,
+   "vx_rodata": 21,
+   "vx_data": 12728
+  },
+  {
+   "bench": "277_overlay_element_tlv",
+   "vx_text": 7898,
+   "vx_rodata": 25,
+   "vx_data": 12728
+  },
+  {
+   "bench": "278_overlay_extent",
+   "vx_text": 2041,
+   "vx_rodata": 41,
+   "vx_data": 12344
+  },
+  {
+   "bench": "279_overlay_assembler",
+   "vx_text": 33887,
+   "vx_rodata": 23,
+   "vx_data": 12760
+  },
+  {
+   "bench": "27_generics_box",
+   "vx_text": 26
+  },
+  {
+   "bench": "280_overlay_endian",
+   "vx_text": 2602,
+   "vx_rodata": 75,
+   "vx_data": 12344
+  },
+  {
+   "bench": "281_overlay_endian_ctx",
+   "vx_text": 8370,
+   "vx_rodata": 77,
+   "vx_data": 12728
+  },
+  {
+   "bench": "282_overlay_peb",
+   "vx_text": 7563,
+   "vx_rodata": 1240,
+   "vx_data": 12312
+  },
+  {
+   "bench": "283_valued_enums",
+   "vx_text": 10331,
+   "vx_rodata": 47,
+   "vx_data": 12760
+  },
+  {
+   "bench": "284_enum_concepts",
+   "vx_text": 1798,
+   "vx_rodata": 10,
+   "vx_data": 12328
+  },
+  {
+   "bench": "286_concept_predicate",
+   "vx_text": 26
+  },
+  {
+   "bench": "287_comptime_vars",
+   "vx_text": 26
+  },
+  {
+   "bench": "288_comptime_asm",
+   "vx_text": 26
+  },
+  {
+   "bench": "289_comptime_asm_const",
+   "vx_text": 26
+  },
+  {
+   "bench": "28_generics_avanzado",
+   "vx_text": 26
+  },
+  {
+   "bench": "290_comptime_asm_naked",
+   "vx_text": 34
+  },
+  {
+   "bench": "291_comptime_asm_block_assert",
+   "vx_text": 26
+  },
+  {
+   "bench": "293_comptime_arnes",
+   "vx_text": 6397,
+   "vx_data": 12728
+  },
+  {
+   "bench": "294_c_typedefs",
+   "vx_text": 114
+  },
+  {
+   "bench": "295_c_func_ptr",
+   "vx_text": 114
+  },
+  {
+   "bench": "296_const_correct",
+   "vx_text": 26
+  },
+  {
+   "bench": "297_comptime_expr_capture",
+   "vx_text": 3593,
+   "vx_rodata": 69,
+   "vx_data": 12728
+  },
+  {
+   "bench": "298_only_import_partial_ns",
+   "vx_text": 1264,
+   "vx_rodata": 16,
+   "vx_data": 12312
+  },
+  {
+   "bench": "299_cross_module_expr",
+   "vx_text": 3246,
+   "vx_rodata": 68,
+   "vx_data": 12728
+  },
+  {
+   "bench": "29_optional",
+   "vx_text": 73
+  },
+  {
+   "bench": "300_stdlib_comptime_source",
+   "vx_text": 2944,
+   "vx_rodata": 16,
+   "vx_data": 12728
+  },
+  {
+   "bench": "301_macro_codegen_helper",
+   "vx_text": 2026,
+   "vx_rodata": 5,
+   "vx_data": 12344
+  },
+  {
+   "bench": "302_c_enum_valued",
+   "vx_text": 1004,
+   "vx_rodata": 5,
+   "vx_data": 32
+  },
+  {
+   "bench": "303_c_struct_fields",
+   "vx_text": 179
+  },
+  {
+   "bench": "304_comptime_typedef_import",
+   "vx_text": 26
+  },
+  {
+   "bench": "305_adt_enum_field",
+   "vx_text": 149
+  },
+  {
+   "bench": "306_align_struct",
+   "vx_text": 26
+  },
+  {
+   "bench": "307_nested_expr_capture",
+   "vx_text": 2130,
+   "vx_rodata": 40,
+   "vx_data": 416
+  },
+  {
+   "bench": "308_naked_raw_variadic",
+   "vx_text": 70
+  },
+  {
+   "bench": "309_opaque_struct_ptr",
+   "vx_text": 26
+  },
+  {
+   "bench": "30_unwrap_null",
+   "vx_text": 7039,
+   "vx_rodata": 59,
+   "vx_data": 12728
+  },
+  {
+   "bench": "310_macro_nested_expr",
+   "vx_text": 1325,
+   "vx_rodata": 5,
+   "vx_data": 12312
+  },
+  {
+   "bench": "311_bf_comptime",
+   "vx_text": 7682,
+   "vx_rodata": 370,
+   "vx_data": 12760
+  },
+  {
+   "bench": "312_global_compound_assign",
+   "vx_text": 1422,
+   "vx_data": 32
+  },
+  {
+   "bench": "313_globals_cross_module",
+   "vx_text": 1876,
+   "vx_rodata": 4,
+   "vx_data": 12352
+  },
+  {
+   "bench": "314_operadores_sobrecargados",
+   "vx_text": 26
+  },
+  {
+   "bench": "315_bounds_check_elim",
+   "vx_text": 629
+  },
+  {
+   "bench": "315_operadores_llamada_deref",
+   "vx_text": 1471,
+   "vx_rodata": 51,
+   "vx_data": 12312
+  },
+  {
+   "bench": "317_rmw_fusion",
+   "vx_text": 1446,
+   "vx_rodata": 25,
+   "vx_data": 12312
+  },
+  {
+   "bench": "318_atomic_tipo",
+   "vx_text": 2591,
+   "vx_rodata": 94,
+   "vx_data": 12312
+  },
+  {
+   "bench": "319_atomic_global",
+   "vx_text": 1549,
+   "vx_rodata": 55,
+   "vx_data": 12336
+  },
+  {
+   "bench": "31_nonnull_bangbang",
+   "vx_text": 26
+  },
+  {
+   "bench": "320_newtype_tipos_usuario",
+   "vx_text": 1426,
+   "vx_rodata": 49,
+   "vx_data": 12312
+  },
+  {
+   "bench": "322_herencia_self",
+   "vx_text": 26
+  },
+  {
+   "bench": "323_struct_copy_return",
+   "vx_text": 78
+  },
+  {
+   "bench": "325_interfaz_vs_abstract",
+   "vx_text": 26
+  },
+  {
+   "bench": "327_abstract_cadena_iface",
+   "vx_text": 26
+  },
+  {
+   "bench": "328_virtual_dispatch",
+   "vx_text": 267
+  },
+  {
+   "bench": "32_bangbang_decl",
+   "vx_text": 532,
+   "vx_data": 12312
+  },
+  {
+   "bench": "330_regalloc_pressure_udivmod",
+   "vx_text": 1141
+  },
+  {
+   "bench": "331_wideint_import",
+   "vx_text": 3185,
+   "vx_data": 12352
+  },
+  {
+   "bench": "332_struct_static_methods",
+   "vx_text": 26
+  },
+  {
+   "bench": "333_wideint_signed",
+   "vx_text": 3801,
+   "vx_data": 12352
+  },
+  {
+   "bench": "334_struct_static_fields",
+   "vx_text": 78,
+   "vx_data": 8
+  },
+  {
+   "bench": "335_struct_constructors",
+   "vx_text": 26
+  },
+  {
+   "bench": "337_comptime_ctor_literal",
+   "vx_text": 567,
+   "vx_data": 24
+  },
+  {
+   "bench": "338_comptime_parse_literal",
+   "vx_text": 624,
+   "vx_data": 24
+  },
+  {
+   "bench": "339_string_conformance",
+   "vx_text": 14165,
+   "vx_rodata": 58,
+   "vx_data": 12795
+  },
+  {
+   "bench": "33_optional_result_builtin",
+   "vx_text": 1423,
+   "vx_rodata": 59,
+   "vx_data": 12312
+  },
+  {
+   "bench": "340_spill_opcodes",
+   "vx_text": 10864,
+   "vx_rodata": 126,
+   "vx_data": 12800
+  },
+  {
+   "bench": "342_syscalls_os",
+   "vx_text": 9223,
+   "vx_rodata": 118,
+   "vx_data": 12946
+  },
+  {
+   "bench": "343_array_local_reduccion",
+   "vx_text": 717,
+   "vx_data": 32
+  },
+  {
+   "bench": "344_wideint_mul_fuzz",
+   "vx_text": 2099,
+   "vx_data": 12352
+  },
+  {
+   "bench": "345_panic_modulo_importado",
+   "vx_text": 2443,
+   "vx_data": 12360
+  },
+  {
+   "bench": "346_optional_struct",
+   "vx_text": 2623,
+   "vx_rodata": 59,
+   "vx_data": 12312
+  },
+  {
+   "bench": "347_div_cero_detiene",
+   "vx_text": 749,
+   "vx_data": 8
+  },
+  {
+   "bench": "348_comptime_literal_import",
+   "vx_text": 1060,
+   "vx_data": 12336
+  },
+  {
+   "bench": "349_wideint_256",
+   "vx_text": 9667,
+   "vx_data": 12344
+  },
+  {
+   "bench": "34_optional_result_avanzado",
+   "vx_text": 1765,
+   "vx_rodata": 59,
+   "vx_data": 12312
+  },
+  {
+   "bench": "350_wideint_256_signed",
+   "vx_text": 8499,
+   "vx_data": 12344
+  },
+  {
+   "bench": "351_wideint_carry",
+   "vx_text": 4294,
+   "vx_data": 12344
+  },
+  {
+   "bench": "352_wideint_256_mul",
+   "vx_text": 8442,
+   "vx_data": 12344
+  },
+  {
+   "bench": "353_wideint_256_div",
+   "vx_text": 16678,
+   "vx_data": 12352
+  },
+  {
+   "bench": "354_wideint_512",
+   "vx_text": 24552,
+   "vx_data": 12352
+  },
+  {
+   "bench": "355_wideint_512_signed",
+   "vx_text": 22020,
+   "vx_data": 12352
+  },
+  {
+   "bench": "356_generica_desde_metodo",
+   "vx_text": 26
+  },
+  {
+   "bench": "357_herencia_interpolacion",
+   "vx_text": 8941,
+   "vx_rodata": 21,
+   "vx_data": 12760
+  },
+  {
+   "bench": "358_wideint_completo",
+   "vx_text": 75930,
+   "vx_rodata": 1056,
+   "vx_data": 12768
+  },
+  {
+   "bench": "359_enum_valor_importado",
+   "vx_text": 1813,
+   "vx_rodata": 41,
+   "vx_data": 12344
+  },
+  {
+   "bench": "35_synchronized_basico",
+   "vx_text": 6958,
+   "vx_data": 2488
+  },
+  {
+   "bench": "35b_sync_tiny",
+   "vx_text": 6742,
+   "vx_data": 2488
+  },
+  {
+   "bench": "361_ctor_comptime",
+   "vx_text": 2267,
+   "vx_rodata": 8,
+   "vx_data": 12336
+  },
+  {
+   "bench": "362_ctor_importado",
+   "vx_text": 108
+  },
+  {
+   "bench": "363_ctor_comptime_modulo",
+   "vx_text": 1210,
+   "vx_data": 12336
+  },
+  {
+   "bench": "364_wideint_literales",
+   "vx_text": 2143,
+   "vx_data": 12344
+  },
+  {
+   "bench": "365_literal_bases",
+   "vx_text": 1819,
+   "vx_data": 12344
+  },
+  {
+   "bench": "366_import_std_memory",
+   "vx_text": 13116,
+   "vx_data": 12360
+  },
+  {
+   "bench": "367_std_memory_variantes",
+   "vx_text": 18787,
+   "vx_data": 45128
+  },
+  {
+   "bench": "368_static_assert_capturado",
+   "vx_text": 640,
+   "vx_data": 12312
+  },
+  {
+   "bench": "369_fallo_del_sistema_capturado",
+   "vx_text": 2892,
+   "vx_rodata": 59,
+   "vx_data": 12344
+  },
+  {
+   "bench": "369_fallo_division_cero",
+   "vx_text": 1008,
+   "vx_rodata": 17,
+   "vx_data": 12312
+  },
+  {
+   "bench": "36_synchronized_exception",
+   "vx_text": 7047,
+   "vx_data": 2488
+  },
+  {
+   "bench": "36b_sync_throw_simple",
+   "vx_text": 6890,
+   "vx_data": 2488
+  },
+  {
+   "bench": "370_fallo_panic",
+   "vx_text": 1285,
+   "vx_rodata": 44,
+   "vx_data": 12312
+  },
+  {
+   "bench": "370_instruccion_no_soportada",
+   "vx_text": 2522,
+   "vx_rodata": 20,
+   "vx_data": 12888
+  },
+  {
+   "bench": "371_asm_elevado_equivale",
+   "vx_text": 62,
+   "vx_data": 8
+  },
+  {
+   "bench": "371_campo_por_puntero",
+   "vx_text": 144
+  },
+  {
+   "bench": "372_asm_destruye_registro",
+   "vx_text": 217
+  },
+  {
+   "bench": "372_asm_dse",
+   "vx_text": 120
+  },
+  {
+   "bench": "373_optional_overlay",
+   "vx_text": 7538,
+   "vx_rodata": 28,
+   "vx_data": 12728
+  },
+  {
+   "bench": "374_fuera_de_region",
+   "vx_text": 1389,
+   "vx_rodata": 5,
+   "vx_data": 12312
+  },
+  {
+   "bench": "377_rango_ok",
+   "vx_text": 1487,
+   "vx_rodata": 3,
+   "vx_data": 12344
+  },
+  {
+   "bench": "37_synchronized_return",
+   "vx_text": 6895,
+   "vx_data": 2488
+  },
+  {
+   "bench": "38_spawn_basico",
+   "vx_text": 410,
+   "vx_data": 2056
+  },
+  {
+   "bench": "39_spawn_pingpong",
+   "vx_text": 1236,
+   "vx_data": 32824
+  },
+  {
+   "bench": "39b_spawn_recv_only",
+   "vx_text": 1206,
+   "vx_data": 32824
+  },
+  {
+   "bench": "40_future_basico",
+   "vx_text": 2222,
+   "vx_data": 36936
+  },
+  {
+   "bench": "40_operator_overload",
+   "vx_text": 26
+  },
+  {
+   "bench": "41_struct_methods",
+   "vx_text": 26
+  },
+  {
+   "bench": "42_propiedades_basico",
+   "vx_text": 26
+  },
+  {
+   "bench": "42_struct_operator",
+   "vx_text": 26
+  },
+  {
+   "bench": "43_paralelismo_real",
+   "vx_text": 2043,
+   "vx_data": 32824
+  },
+  {
+   "bench": "44_operator_overload2",
+   "vx_text": 136
+  },
+  {
+   "bench": "44_paralelismo_heavy",
+   "vx_text": 2043,
+   "vx_data": 32824
+  },
+  {
+   "bench": "45_spawn_placement",
+   "vx_text": 1523,
+   "vx_data": 32824
+  },
+  {
+   "bench": "45_string_op_override",
+   "vx_text": 3791,
+   "vx_data": 12720
+  },
+  {
+   "bench": "46_spawn_here_observable",
+   "vx_text": 479,
+   "vx_data": 2056
+  },
+  {
+   "bench": "474_try_assign_en_init",
+   "vx_text": 2715,
+   "vx_rodata": 74,
+   "vx_data": 12344
+  },
+  {
+   "bench": "476_return_en_spawn",
+   "vx_text": 7280,
+   "vx_rodata": 3,
+   "vx_data": 14784
+  },
+  {
+   "bench": "478_clases_finales",
+   "vx_text": 1433,
+   "vx_rodata": 24,
+   "vx_data": 12312
+  },
+  {
+   "bench": "480_params_metodo",
+   "vx_text": 7128,
+   "vx_rodata": 30,
+   "vx_data": 12728
+  },
+  {
+   "bench": "481_variadicos_todos",
+   "vx_text": 8825,
+   "vx_rodata": 68,
+   "vx_data": 12728
+  },
+  {
+   "bench": "482_matriz_parametros",
+   "vx_text": 13268,
+   "vx_rodata": 83,
+   "vx_data": 12760
+  },
+  {
+   "bench": "483_params_limite_por_modo",
+   "vx_text": 8511,
+   "vx_rodata": 9,
+   "vx_data": 12760
+  },
+  {
+   "bench": "485_nombres_de_registro",
+   "vx_text": 26
+  },
+  {
+   "bench": "486_payload_variante",
+   "vx_text": 1585,
+   "vx_rodata": 43,
+   "vx_data": 12312
+  },
+  {
+   "bench": "487_comptime_anchos",
+   "vx_text": 1455,
+   "vx_rodata": 21,
+   "vx_data": 12312
+  },
+  {
+   "bench": "488_impl_metodos",
+   "vx_text": 1537,
+   "vx_rodata": 37,
+   "vx_data": 12312
+  },
+  {
+   "bench": "489_argumentos_uniformes",
+   "vx_text": 7401,
+   "vx_rodata": 29,
+   "vx_data": 12728
+  },
+  {
+   "bench": "48_loadmodule_plugin",
+   "vx_text": 26
+  },
+  {
+   "bench": "492_vectorizador_completo",
+   "vx_text": 8633,
+   "vx_rodata": 31,
+   "vx_data": 12728
+  },
+  {
+   "bench": "493_std_numeric",
+   "vx_text": 34259,
+   "vx_rodata": 46,
+   "vx_data": 12728
+  },
+  {
+   "bench": "494_asignar_subclase",
+   "vx_text": 7436,
+   "vx_rodata": 16,
+   "vx_data": 12728
+  },
+  {
+   "bench": "495_interfaz_y_herencia",
+   "vx_text": 6737,
+   "vx_rodata": 20,
+   "vx_data": 12728
+  },
+  {
+   "bench": "496_interfaces_encadenadas",
+   "vx_text": 7293,
+   "vx_rodata": 27,
+   "vx_data": 12728
+  },
+  {
+   "bench": "497_typedef_struct_completo",
+   "vx_text": 1388,
+   "vx_rodata": 22,
+   "vx_data": 12320
+  },
+  {
+   "bench": "498_typename_completo",
+   "vx_text": 11023,
+   "vx_rodata": 138,
+   "vx_data": 12728
+  },
+  {
+   "bench": "499_alineacion_campos",
+   "vx_text": 1433,
+   "vx_rodata": 46,
+   "vx_data": 12312
+  },
+  {
+   "bench": "500_estaticos_retorno_buffer",
+   "vx_text": 4241,
+   "vx_rodata": 96,
+   "vx_data": 12720
+  },
+  {
+   "bench": "501_estaticos_lambda_y_unique",
+   "vx_text": 2067,
+   "vx_rodata": 38,
+   "vx_data": 12344
+  },
+  {
+   "bench": "502_metodo_devuelve_struct",
+   "vx_text": 1375,
+   "vx_rodata": 17,
+   "vx_data": 12312
+  },
+  {
+   "bench": "503_optional_de_puntero",
+   "vx_text": 2095,
+   "vx_rodata": 102,
+   "vx_data": 12312
+  },
+  {
+   "bench": "504_optional_sin_marca",
+   "vx_text": 7828,
+   "vx_rodata": 92,
+   "vx_data": 12728
+  },
+  {
+   "bench": "505_nonnull_se_cumple",
+   "vx_text": 1426,
+   "vx_rodata": 30,
+   "vx_data": 12312
+  },
+  {
+   "bench": "506_unwrap_fallido_es_fatal",
+   "vx_text": 2500,
+   "vx_rodata": 150,
+   "vx_data": 12344
+  },
+  {
+   "bench": "507_ayudantes_optional",
+   "vx_text": 1936,
+   "vx_rodata": 125,
+   "vx_data": 12312
+  },
+  {
+   "bench": "508_expect_falla",
+   "vx_text": 1651,
+   "vx_rodata": 144,
+   "vx_data": 12312
+  },
+  {
+   "bench": "50_lambda_simple",
+   "vx_text": 75
+  },
+  {
+   "bench": "50b_lambda_no_capture",
+   "vx_text": 90
+  },
+  {
+   "bench": "512_sufijos_de_tipo",
+   "vx_text": 3134,
+   "vx_rodata": 158,
+   "vx_data": 12312
+  },
+  {
+   "bench": "516_result_payload_grande",
+   "vx_text": 1989,
+   "vx_rodata": 31,
+   "vx_data": 12312
+  },
+  {
+   "bench": "517_unique_una_palabra",
+   "vx_text": 7555,
+   "vx_rodata": 29,
+   "vx_data": 12744
+  },
+  {
+   "bench": "518_unique_campo_sin_rodeo",
+   "vx_text": 7712,
+   "vx_rodata": 17,
+   "vx_data": 12744
+  },
+  {
+   "bench": "519_excepcion_sin_capturar",
+   "vx_text": 7132,
+   "vx_rodata": 59,
+   "vx_data": 12760
+  },
+  {
+   "bench": "51_lambda_captura",
+   "vx_text": 92
+  },
+  {
+   "bench": "520_target_tier",
+   "vx_text": 26
+  },
+  {
+   "bench": "521_direccion_parametros",
+   "vx_text": 5884,
+   "vx_data": 416
+  },
+  {
+   "bench": "522_efectos_extern_target",
+   "vx_text": 183
+  },
+  {
+   "bench": "523_direccion_campos",
+   "vx_text": 73
+  },
+  {
+   "bench": "524_parametros_salida",
+   "vx_text": 26
+  },
+  {
+   "bench": "525_direccion_y_borrow",
+   "vx_text": 26
+  },
+  {
+   "bench": "526_escritura_por_puntero_indirecto",
+   "vx_text": 189,
+   "vx_data": 8
+  },
+  {
+   "bench": "527_direccion_en_el_tipo",
+   "vx_text": 1547,
+   "vx_rodata": 151,
+   "vx_data": 12312
+  },
+  {
+   "bench": "529_out_por_todos_los_caminos",
+   "vx_text": 7660,
+   "vx_rodata": 147,
+   "vx_data": 12728
+  },
+  {
+   "bench": "52_lambda_hof",
+   "vx_text": 75
+  },
+  {
+   "bench": "531_literal_flotante_hex",
+   "vx_text": 2364,
+   "vx_rodata": 38,
+   "vx_data": 12312
+  },
+  {
+   "bench": "532_ternario_en_interpolacion",
+   "vx_text": 15041,
+   "vx_rodata": 226,
+   "vx_data": 12760
+  },
+  {
+   "bench": "533_const_flotante_global",
+   "vx_text": 2350,
+   "vx_rodata": 56,
+   "vx_data": 12312
+  },
+  {
+   "bench": "534_goto_valores",
+   "vx_text": 2513,
+   "vx_rodata": 195,
+   "vx_data": 12312
+  },
+  {
+   "bench": "536_auto_literal_cadena",
+   "vx_text": 10281,
+   "vx_rodata": 103,
+   "vx_data": 12760
+  },
+  {
+   "bench": "537_desbordamiento_entero",
+   "vx_text": 1386,
+   "vx_rodata": 20,
+   "vx_data": 12312
+  },
+  {
+   "bench": "539_entero_estrecho_normalizado",
+   "vx_text": 1410,
+   "vx_rodata": 26,
+   "vx_data": 12312
+  },
+  {
+   "bench": "53_enum_simple",
+   "vx_text": 53
+  },
+  {
+   "bench": "540_overlay_solape",
+   "vx_text": 2122,
+   "vx_rodata": 45,
+   "vx_data": 12344
+  },
+  {
+   "bench": "542_overlay_solape_declarado_falso",
+   "vx_text": 267,
+   "vx_data": 32
+  },
+  {
+   "bench": "543_hook_instrumentacion",
+   "vx_text": 7766,
+   "vx_rodata": 58,
+   "vx_data": 12760
+  },
+  {
+   "bench": "543_overlay_campos_anchos",
+   "vx_text": 9299,
+   "vx_rodata": 98,
+   "vx_data": 12728
+  },
+  {
+   "bench": "544_hook_nombres",
+   "vx_text": 8746,
+   "vx_rodata": 92,
+   "vx_data": 12760
+  },
+  {
+   "bench": "54_enum_payload",
+   "vx_text": 227
+  },
+  {
+   "bench": "55_linkedlist_basico",
+   "vx_text": 5988,
+   "vx_data": 416
+  },
+  {
+   "bench": "56_linkedlist_hof",
+   "vx_text": 6109,
+   "vx_data": 416
+  },
+  {
+   "bench": "57_linkedlist_option",
+   "vx_text": 6119,
+   "vx_data": 416
+  },
+  {
+   "bench": "58_quicksort",
+   "vx_text": 1923
+  },
+  {
+   "bench": "59_arraylist",
+   "vx_text": 6739,
+   "vx_data": 416
+  },
+  {
+   "bench": "60_stack_iface",
+   "vx_text": 6906,
+   "vx_data": 416
+  },
+  {
+   "bench": "61_rpn_calc",
+   "vx_text": 895
+  },
+  {
+   "bench": "62_compose_curry",
+   "vx_text": 1450
+  },
+  {
+   "bench": "63_topfn_as_fnvalue",
+   "vx_text": 1951
+  },
+  {
+   "bench": "64_curry_returning_closures",
+   "vx_text": 644
+  },
+  {
+   "bench": "65_io_format",
+   "vx_text": 1800,
+   "vx_rodata": 65,
+   "vx_data": 12312
+  },
+  {
+   "bench": "66_io_colors",
+   "vx_text": 1784,
+   "vx_rodata": 136,
+   "vx_data": 12312
+  },
+  {
+   "bench": "67_fatal_isolation",
+   "vx_text": 2516,
+   "vx_rodata": 44,
+   "vx_data": 12344
+  },
+  {
+   "bench": "68_panic_capture",
+   "vx_text": 8487,
+   "vx_rodata": 122,
+   "vx_data": 12760
+  },
+  {
+   "bench": "69_string_basico",
+   "vx_text": 9790,
+   "vx_rodata": 55,
+   "vx_data": 12760
+  },
+  {
+   "bench": "70_string_ops_native",
+   "vx_text": 9950,
+   "vx_rodata": 14,
+   "vx_data": 12760
+  },
+  {
+   "bench": "71_bit_fields",
+   "vx_text": 26
+  },
+  {
+   "bench": "72_typedef_cstyle",
+   "vx_text": 26
+  },
+  {
+   "bench": "73_init_lists",
+   "vx_text": 26
+  },
+  {
+   "bench": "74_bf_init",
+   "vx_text": 26
+  },
+  {
+   "bench": "75_string_methods",
+   "vx_text": 9505,
+   "vx_rodata": 14,
+   "vx_data": 12760
+  },
+  {
+   "bench": "76_string_exhaustive",
+   "vx_text": 17734,
+   "vx_rodata": 655,
+   "vx_data": 12760
+  },
+  {
+   "bench": "77_float_arith",
+   "vx_text": 3401,
+   "vx_rodata": 150,
+   "vx_data": 12312
+  },
+  {
+   "bench": "78_f32_full",
+   "vx_text": 2712,
+   "vx_rodata": 42,
+   "vx_data": 12312
+  },
+  {
+   "bench": "79_compound_assign",
+   "vx_text": 1717,
+   "vx_rodata": 29,
+   "vx_data": 12312
+  },
+  {
+   "bench": "80_triple_quoted",
+   "vx_text": 2274,
+   "vx_rodata": 42,
+   "vx_data": 12336
+  },
+  {
+   "bench": "82_host_ptr_addr_taken",
+   "vx_text": 328,
+   "vx_data": 32
+  },
+  {
+   "bench": "83_host_ptr_indirect",
+   "vx_text": 313,
+   "vx_data": 32
+  },
+  {
+   "bench": "84_static_fields",
+   "vx_text": 60,
+   "vx_data": 16
+  },
+  {
+   "bench": "85_extern_winapi",
+   "vx_text": 117
+  },
+  {
+   "bench": "86_ffi_runtime",
+   "vx_text": 233,
+   "vx_rodata": 46
+  },
+  {
+   "bench": "87_collections_hashmap",
+   "vx_text": 28288,
+   "vx_rodata": 128,
+   "vx_data": 16
+  },
+  {
+   "bench": "88_collections_queue_deque_tree",
+   "vx_text": 28816,
+   "vx_rodata": 128,
+   "vx_data": 16
+  },
+  {
+   "bench": "89_string_array_ops",
+   "vx_text": 8105,
+   "vx_data": 440
+  },
+  {
+   "bench": "90_match_repro",
+   "vx_text": 53
+  },
+  {
+   "bench": "91_str_split",
+   "vx_text": 28848,
+   "vx_rodata": 128,
+   "vx_data": 48
+  },
+  {
+   "bench": "92_collections_primitive",
+   "vx_text": 28672,
+   "vx_rodata": 128,
+   "vx_data": 16
+  },
+  {
+   "bench": "93_dispose_explicit",
+   "vx_text": 27968,
+   "vx_rodata": 128,
+   "vx_data": 16
+  },
+  {
+   "bench": "94_escape_detection",
+   "vx_text": 27920,
+   "vx_rodata": 128,
+   "vx_data": 16
+  },
+  {
+   "bench": "95_destructor_raii",
+   "vx_text": 6032,
+   "vx_data": 424
+  },
+  {
+   "bench": "95_unique_ptr_basico",
+   "vx_text": 254,
+   "vx_data": 32
+  },
+  {
+   "bench": "96_destructor_escape_rules",
+   "vx_text": 5934,
+   "vx_data": 424
+  },
+  {
+   "bench": "96_unique_move",
+   "vx_text": 5789,
+   "vx_data": 416
+  },
+  {
+   "bench": "97_gc_writebarrier",
+   "vx_text": 28080,
+   "vx_rodata": 128,
+   "vx_data": 2096
+  },
+  {
+   "bench": "97_shared_basico",
+   "vx_text": 340,
+   "vx_data": 32
+  },
+  {
+   "bench": "98_arraylist_string_natural",
+   "vx_text": 28560,
+   "vx_rodata": 128,
+   "vx_data": 16
+  },
+  {
+   "bench": "99_dtor_recursive_fields",
+   "vx_text": 6325,
+   "vx_data": 424
+  },
+  {
+   "bench": "_dbg_test",
+   "vx_text": 26
+  },
+  {
+   "bench": "analyze_contracts",
+   "vx_text": 424
+  },
+  {
+   "bench": "analyze_cost_examples",
+   "vx_text": 842
+  },
+  {
+   "bench": "analyze_cost_four_dims",
+   "vx_text": 618
+  },
+  {
+   "bench": "analyze_cost_interproc",
+   "vx_text": 494
+  },
+  {
+   "bench": "analyze_type_contracts",
+   "vx_text": 171
+  },
+  {
+   "bench": "aot_01_call",
+   "vx_text": 26
+  },
+  {
+   "bench": "aot_02_call_chain",
+   "vx_text": 26
+  },
+  {
+   "bench": "aot_03_recursion",
+   "vx_text": 120
+  },
+  {
+   "bench": "aot_04_tail_call_tco",
+   "vx_text": 121
+  },
+  {
+   "bench": "aot_05_rodata",
+   "vx_text": 38,
+   "vx_rodata": 4
+  },
+  {
+   "bench": "aot_06_call_rodata",
+   "vx_text": 35,
+   "vx_rodata": 3
+  },
+  {
+   "bench": "aot_07_section_devos",
+   "vx_text": 46
+  },
+  {
+   "bench": "aot_08_section_symbols",
+   "vx_text": 66
+  },
+  {
+   "bench": "aot_11_bytes_block",
+   "vx_text": 26,
+   "vx_rodata": 22
+  },
+  {
+   "bench": "aot_12_flat_bin",
+   "vx_text": 26,
+   "vx_rodata": 9
+  },
+  {
+   "bench": "aot_13_bytes_symref",
+   "vx_text": 34,
+   "vx_rodata": 24
+  },
+  {
+   "bench": "aot_14_bytes_comptime",
+   "vx_text": 26,
+   "vx_rodata": 18
+  },
+  {
+   "bench": "aot_19_heap_native",
+   "vx_text": 257,
+   "vx_data": 32
+  },
+  {
+   "bench": "aot_20_class_native",
+   "vx_text": 26
+  },
+  {
+   "bench": "aot_21_devirt_native",
+   "vx_text": 26
+  },
+  {
+   "bench": "aot_22_float_f64_arith",
+   "vx_text": 280
+  },
+  {
+   "bench": "aot_22_poly_native",
+   "vx_text": 5996,
+   "vx_data": 416
+  },
+  {
+   "bench": "aot_23_float_cmp_conv",
+   "vx_text": 359
+  },
+  {
+   "bench": "aot_23_interface_native",
+   "vx_text": 5888,
+   "vx_data": 416
+  },
+  {
+   "bench": "aot_24_float_spill",
+   "vx_text": 803
+  },
+  {
+   "bench": "aot_24_freestanding",
+   "vx_text": 26
+  },
+  {
+   "bench": "aot_25_alloc_override",
+   "vx_text": 105
+  },
+  {
+   "bench": "aot_26_dtor_polimorfico",
+   "vx_text": 5871,
+   "vx_data": 416
+  },
+  {
+   "bench": "aot_27_pe_exec_libc",
+   "vx_text": 5763,
+   "vx_data": 416
+  },
+  {
+   "bench": "aot_28_elf_exec_libc",
+   "vx_text": 5763,
+   "vx_data": 416
+  },
+  {
+   "bench": "aot_30_x86_32_elf_exec",
+   "vx_text": 139
+  },
+  {
+   "bench": "aot_32_x86_32_pe_exec",
+   "vx_text": 139
+  },
+  {
+   "bench": "aot_33_x86_32_pe_libc",
+   "vx_text": 53
+  },
+  {
+   "bench": "aot_34_x86_32_elf_libc",
+   "vx_text": 53
+  },
+  {
+   "bench": "aot_35_float_fabs",
+   "vx_text": 246
+  },
+  {
+   "bench": "aot_36_string_inc0",
+   "vx_text": 1913,
+   "vx_data": 408
+  },
+  {
+   "bench": "aot_37_string_concat",
+   "vx_text": 9612,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_38_char_arith",
+   "vx_text": 26
+  },
+  {
+   "bench": "aot_39_char_to_string",
+   "vx_text": 7372,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_46_string_return",
+   "vx_text": 8162,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_47_string_override_aot",
+   "vx_text": 2086,
+   "vx_data": 408
+  },
+  {
+   "bench": "aot_48_string_mutate",
+   "vx_text": 8220,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_49_string_interp",
+   "vx_text": 21911,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_50_string_slice",
+   "vx_text": 5133,
+   "vx_data": 416
+  },
+  {
+   "bench": "aot_51_string_compare",
+   "vx_text": 2656,
+   "vx_rodata": 19,
+   "vx_data": 24
+  },
+  {
+   "bench": "aot_52_if_merge",
+   "vx_text": 294
+  },
+  {
+   "bench": "aot_53_string_sso",
+   "vx_text": 13966,
+   "vx_rodata": 24,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_54_index_set",
+   "vx_text": 7572,
+   "vx_rodata": 31,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_55_cpu_features",
+   "vx_text": 249,
+   "vx_data": 8
+  },
+  {
+   "bench": "aot_56_memcpy_dispatch",
+   "vx_text": 9247,
+   "vx_rodata": 37,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_57_helper_override",
+   "vx_text": 8155,
+   "vx_rodata": 5,
+   "vx_data": 448
+  },
+  {
+   "bench": "aot_58_strcmp_dispatch",
+   "vx_text": 3997,
+   "vx_data": 24
+  },
+  {
+   "bench": "aot_59_string_utf8",
+   "vx_text": 6621,
+   "vx_data": 440
+  },
+  {
+   "bench": "aot_60_naked_isr",
+   "vx_text": 74
+  },
+  {
+   "bench": "aot_61_exceptions",
+   "vx_text": 5914,
+   "vx_data": 416
+  },
+  {
+   "bench": "aot_62_exc_typematch",
+   "vx_text": 6507,
+   "vx_data": 416
+  },
+  {
+   "bench": "aot_64_thread_local_basico",
+   "vx_text": 52
+  },
+  {
+   "bench": "aot_65_thread_local_multi",
+   "vx_text": 128
+  },
+  {
+   "bench": "aot_66_thread_local_fn_loop",
+   "vx_text": 225
+  },
+  {
+   "bench": "aot_67_thread_local_hilos",
+   "vx_text": 204,
+   "vx_data": 8
+  },
+  {
+   "bench": "aot_68_thread_local_float",
+   "vx_text": 110
+  },
+  {
+   "bench": "aot_69_thread_local_puntero",
+   "vx_text": 86
+  },
+  {
+   "bench": "aot_71_collections",
+   "vx_text": 28048,
+   "vx_rodata": 128,
+   "vx_data": 16
+  },
+  {
+   "bench": "aot_inc5b_main5b",
+   "vx_text": 2468,
+   "vx_data": 24
+  },
+  {
+   "bench": "aot_inc5c_main5c",
+   "vx_text": 10141,
+   "vx_rodata": 217,
+   "vx_data": 408
+  },
+  {
+   "bench": "aot_inc5c_validate_variants",
+   "vx_text": 9706,
+   "vx_data": 8
+  },
+  {
+   "bench": "aot_xmod_strlen_m2",
+   "vx_text": 841,
+   "vx_data": 24
+  },
+  {
+   "bench": "asm_01_popcount",
+   "vx_text": 43
+  },
+  {
+   "bench": "asm_02_byteswap",
+   "vx_text": 32
+  },
+  {
+   "bench": "asm_03_clobber_callee_saved",
+   "vx_text": 64
+  },
+  {
+   "bench": "asm_04_rdtsc",
+   "vx_text": 35
+  },
+  {
+   "bench": "asm_05_cpuid_maxleaf",
+   "vx_text": 30
+  },
+  {
+   "bench": "asm_06_sse2_paddd",
+   "vx_text": 5211,
+   "vx_data": 416
+  },
+  {
+   "bench": "asm_07_avx2_paddd",
+   "vx_text": 6241,
+   "vx_data": 416
+  },
+  {
+   "bench": "asm_08_bmi_pext",
+   "vx_text": 55
+  },
+  {
+   "bench": "asm_09_comptime_mask",
+   "vx_text": 32
+  },
+  {
+   "bench": "asm_10_operandos_reg_auto",
+   "vx_text": 42
+  },
+  {
+   "bench": "asm_11_operandos_concretos",
+   "vx_text": 36
+  },
+  {
+   "bench": "asm_12_scratch_y_labels",
+   "vx_text": 43
+  },
+  {
+   "bench": "asm_13_inout_xadd_memoria",
+   "vx_text": 5829,
+   "vx_data": 416
+  },
+  {
+   "bench": "asm_14_three_levels",
+   "vx_text": 101
+  },
+  {
+   "bench": "asm_15_reschedule",
+   "vx_text": 83
+  },
+  {
+   "bench": "asm_16_atomic_lift",
+   "vx_text": 358,
+   "vx_data": 16
+  },
+  {
+   "bench": "asm_17_atomic_lift_multi",
+   "vx_text": 208,
+   "vx_data": 8
+  },
+  {
+   "bench": "asm_18_asm_micro_barrier",
+   "vx_text": 35
+  },
+  {
+   "bench": "asm_19_asm_micro_popcnt",
+   "vx_text": 39
+  },
+  {
+   "bench": "asm_20_align_demostrada",
+   "vx_text": 5807,
+   "vx_data": 416
+  },
+  {
+   "bench": "asm_21_asm_no_ejecutable",
+   "vx_text": 539
+  },
+  {
+   "bench": "asm_21_dos_vars_mismo_registro",
+   "vx_text": 47
+  },
+  {
+   "bench": "asm_adc_sbb",
+   "vx_text": 187
+  },
+  {
+   "bench": "asm_bitops",
+   "vx_text": 303
+  },
+  {
+   "bench": "asm_branch",
+   "vx_text": 330
+  },
+  {
+   "bench": "asm_cdqe",
+   "vx_text": 85
+  },
+  {
+   "bench": "asm_cmp_cmov",
+   "vx_text": 341
+  },
+  {
+   "bench": "asm_cmp_nonadj",
+   "vx_text": 323
+  },
+  {
+   "bench": "asm_cmp_setcc",
+   "vx_text": 478
+  },
+  {
+   "bench": "asm_divmod",
+   "vx_text": 349
+  },
+  {
+   "bench": "asm_imul3_xchg",
+   "vx_text": 107
+  },
+  {
+   "bench": "asm_jc",
+   "vx_text": 247
+  },
+  {
+   "bench": "asm_js",
+   "vx_text": 255
+  },
+  {
+   "bench": "asm_lift_widths",
+   "vx_text": 384
+  },
+  {
+   "bench": "asm_loop",
+   "vx_text": 302
+  },
+  {
+   "bench": "asm_loop_dec",
+   "vx_text": 142
+  },
+  {
+   "bench": "asm_mem_disp",
+   "vx_text": 335,
+   "vx_data": 32
+  },
+  {
+   "bench": "asm_movext",
+   "vx_text": 247
+  },
+  {
+   "bench": "asm_mul",
+   "vx_text": 200
+  },
+  {
+   "bench": "asm_naked_stack_switch",
+   "vx_text": 62
+  },
+  {
+   "bench": "asm_normal_stack_warn",
+   "vx_text": 38
+  },
+  {
+   "bench": "asm_pin_rbp_warn",
+   "vx_text": 58
+  },
+  {
+   "bench": "asm_rotate",
+   "vx_text": 310
+  },
+  {
+   "bench": "asm_stack_manip",
+   "vx_text": 73
+  },
+  {
+   "bench": "asm_sub_jcc",
+   "vx_text": 252
+  },
+  {
+   "bench": "beep_bepp",
+   "vx_text": 1601,
+   "vx_rodata": 44,
+   "vx_data": 12312
+  },
+  {
+   "bench": "benchmark_alloc_huge",
+   "vx_text": 6514,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_alloc_large",
+   "vx_text": 6531,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_alloc_medium",
+   "vx_text": 6571,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_alloc_small",
+   "vx_text": 6562,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_array_sum",
+   "vx_text": 6317,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_bench_alloc",
+   "vx_text": 116
+  },
+  {
+   "bench": "benchmark_bench_bitops_jit",
+   "vx_text": 6169,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_bench_branch_unpredict",
+   "vx_text": 809
+  },
+  {
+   "bench": "benchmark_bench_callvirt",
+   "vx_text": 168
+  },
+  {
+   "bench": "benchmark_bench_callvirt_hot",
+   "vx_text": 398,
+   "vx_data": 32
+  },
+  {
+   "bench": "benchmark_bench_cmp_fusion",
+   "vx_text": 5909,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_bench_fib_recursive",
+   "vx_text": 139
+  },
+  {
+   "bench": "benchmark_bench_fp_jit",
+   "vx_text": 6570,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_bench_hash_lookup",
+   "vx_text": 318
+  },
+  {
+   "bench": "benchmark_bench_int_mixed",
+   "vx_text": 324
+  },
+  {
+   "bench": "benchmark_bench_intops_jit",
+   "vx_text": 6441,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_bench_jit_method",
+   "vx_text": 422
+  },
+  {
+   "bench": "benchmark_bench_macro_exponential",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "benchmark_bench_macro_heavy_loop",
+   "vx_text": 26
+  },
+  {
+   "bench": "benchmark_bench_macro_pyramid",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "benchmark_bench_macro_stress",
+   "vx_text": 740,
+   "vx_data": 32
+  },
+  {
+   "bench": "benchmark_bench_mem_class",
+   "vx_text": 171
+  },
+  {
+   "bench": "benchmark_bench_mem_malloc_free",
+   "vx_text": 171
+  },
+  {
+   "bench": "benchmark_bench_mem_struct",
+   "vx_text": 451,
+   "vx_data": 32
+  },
+  {
+   "bench": "benchmark_bench_memcpy_loop",
+   "vx_text": 6391,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_bench_native_callback",
+   "vx_text": 857
+  },
+  {
+   "bench": "benchmark_bench_nested_loops",
+   "vx_text": 251
+  },
+  {
+   "bench": "benchmark_bench_pic_real",
+   "vx_text": 6308,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_bench_polymorphic",
+   "vx_text": 468
+  },
+  {
+   "bench": "benchmark_bench_rotops_jit",
+   "vx_text": 6055,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_bench_shared_contention",
+   "vx_text": 7917,
+   "vx_data": 6600
+  },
+  {
+   "bench": "benchmark_bench_state_machine",
+   "vx_text": 1046
+  },
+  {
+   "bench": "benchmark_bench_string_hot",
+   "vx_text": 7571,
+   "vx_rodata": 7,
+   "vx_data": 448
+  },
+  {
+   "bench": "benchmark_bench_struct_field",
+   "vx_text": 234
+  },
+  {
+   "bench": "benchmark_bench_tight_loop",
+   "vx_text": 298
+  },
+  {
+   "bench": "benchmark_bitops",
+   "vx_text": 604
+  },
+  {
+   "bench": "benchmark_branch_unpredict",
+   "vx_text": 809
+  },
+  {
+   "bench": "benchmark_callvirt",
+   "vx_text": 718,
+   "vx_data": 32
+  },
+  {
+   "bench": "benchmark_callvirt_hot",
+   "vx_text": 398,
+   "vx_data": 32
+  },
+  {
+   "bench": "benchmark_cmp_fusion",
+   "vx_text": 591
+  },
+  {
+   "bench": "benchmark_fib_recursive",
+   "vx_text": 150
+  },
+  {
+   "bench": "benchmark_fp_jit",
+   "vx_text": 518
+  },
+  {
+   "bench": "benchmark_hash_lookup",
+   "vx_text": 472
+  },
+  {
+   "bench": "benchmark_int_mixed",
+   "vx_text": 324
+  },
+  {
+   "bench": "benchmark_intops_jit",
+   "vx_text": 6441,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_jit_method",
+   "vx_text": 422
+  },
+  {
+   "bench": "benchmark_mem_class",
+   "vx_text": 5637,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_mem_malloc_free",
+   "vx_text": 6762,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_mem_struct",
+   "vx_text": 6639,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_memcpy_loop",
+   "vx_text": 6391,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_nested_loops",
+   "vx_text": 318
+  },
+  {
+   "bench": "benchmark_obj_accum",
+   "vx_text": 6405,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_pic_real",
+   "vx_text": 6308,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_polymorphic",
+   "vx_text": 468
+  },
+  {
+   "bench": "benchmark_quicksort",
+   "vx_text": 6547,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_rotops_jit",
+   "vx_text": 6055,
+   "vx_data": 416
+  },
+  {
+   "bench": "benchmark_state_machine",
+   "vx_text": 1046
+  },
+  {
+   "bench": "benchmark_string_hot",
+   "vx_text": 7571,
+   "vx_rodata": 7,
+   "vx_data": 448
+  },
+  {
+   "bench": "benchmark_string_workout",
+   "vx_text": 10117,
+   "vx_data": 448
+  },
+  {
+   "bench": "benchmark_struct_field",
+   "vx_text": 234
+  },
+  {
+   "bench": "benchmark_test_vptr_loop",
+   "vx_text": 1456,
+   "vx_rodata": 26,
+   "vx_data": 12312
+  },
+  {
+   "bench": "benchmark_tight_loop",
+   "vx_text": 201
+  },
+  {
+   "bench": "benchmark_vec_axpy",
+   "vx_text": 7019,
+   "vx_data": 416
+  },
+  {
+   "bench": "bug3",
+   "vx_text": 1554,
+   "vx_rodata": 10,
+   "vx_data": 12344
+  },
+  {
+   "bench": "bug3_class",
+   "vx_text": 5160,
+   "vx_data": 416
+  },
+  {
+   "bench": "bug3_struct",
+   "vx_text": 7296,
+   "vx_rodata": 13,
+   "vx_data": 12728
+  },
+  {
+   "bench": "bug4",
+   "vx_text": 6681,
+   "vx_rodata": 4,
+   "vx_data": 432
+  },
+  {
+   "bench": "check_chain",
+   "vx_text": 254,
+   "vx_data": 32
+  },
+  {
+   "bench": "check_multi",
+   "vx_text": 77,
+   "vx_data": 8
+  },
+  {
+   "bench": "check_return_unique",
+   "vx_text": 254,
+   "vx_data": 32
+  },
+  {
+   "bench": "check_with_return",
+   "vx_text": 60,
+   "vx_data": 8
+  },
+  {
+   "bench": "fp_rounding",
+   "vx_text": 26
+  },
+  {
+   "bench": "generic_fn_infer",
+   "vx_text": 1315,
+   "vx_rodata": 5,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_comptime",
+   "vx_text": 1400,
+   "vx_rodata": 18,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_concept",
+   "vx_text": 1390,
+   "vx_rodata": 11,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_cross_types",
+   "vx_text": 1437,
+   "vx_rodata": 15,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_impl",
+   "vx_text": 1315,
+   "vx_rodata": 5,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_impl_inherente",
+   "vx_text": 1327,
+   "vx_rodata": 5,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_import_by_namespace",
+   "vx_text": 1397,
+   "vx_rodata": 12,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_import_selectivo",
+   "vx_text": 1327,
+   "vx_rodata": 40,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_internal",
+   "vx_text": 1364,
+   "vx_rodata": 8,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_interpolation",
+   "vx_text": 1456,
+   "vx_rodata": 22,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_stdlib",
+   "vx_text": 9246,
+   "vx_rodata": 32,
+   "vx_data": 12760
+  },
+  {
+   "bench": "ns_xmod_comptime",
+   "vx_text": 1397,
+   "vx_rodata": 11,
+   "vx_data": 12312
+  },
+  {
+   "bench": "ns_xmod_concept",
+   "vx_text": 1318,
+   "vx_rodata": 5,
+   "vx_data": 12312
+  },
+  {
+   "bench": "shift_variable",
+   "vx_text": 26
+  },
+  {
+   "bench": "stdlib_atomic",
+   "vx_text": 703
+  },
+  {
+   "bench": "test_av_catch",
+   "vx_text": 3334,
+   "vx_rodata": 236,
+   "vx_data": 12344
+  },
+  {
+   "bench": "test_av_mixed",
+   "vx_text": 3514,
+   "vx_rodata": 239,
+   "vx_data": 12344
+  },
+  {
+   "bench": "test_fmt_spec",
+   "vx_text": 8750,
+   "vx_rodata": 183,
+   "vx_data": 12728
+  },
+  {
+   "bench": "test_print_formats",
+   "vx_text": 8442,
+   "vx_rodata": 169,
+   "vx_data": 12728
+  },
+  {
+   "bench": "vxed_tests_run_all",
+   "vx_text": 22626,
+   "vx_rodata": 264,
+   "vx_data": 12760
+  }
+ ]
+}

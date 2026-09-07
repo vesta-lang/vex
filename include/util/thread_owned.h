@@ -19,7 +19,7 @@
  *
  *  - En MinGW la TLS es EMULADA: cada acceso es una llamada a
  *    `__emutls_get_address`, 10,83 ns frente a los 0,85 de leer el TEB.  Ver
- *    `util/thread_slot.h`, que trae la medicion.
+ *    `util/os/thread_slot.h`, que trae la medicion.
  *  - Una variable de hilo con inicializador DINaMICO -- que es justo lo que es
  *    un `vector` o una `string` -- genera una variable de guarda, y esa guarda
  *    se bloquea en MinGW cuando hay hilos que nacen y mueren.  El compilador
@@ -44,7 +44,7 @@
 #ifndef VESTA_UTIL_THREAD_OWNED_H
 #define VESTA_UTIL_THREAD_OWNED_H
 
-#include "util/thread_slot.h"
+#include "util/os/thread_slot.h"
 
 #include <memory>
 #include <mutex>

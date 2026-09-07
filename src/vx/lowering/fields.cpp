@@ -22,7 +22,7 @@
  * hasta donde llega, y voltear los bytes cuando toque.
  */
 #include "vx/lowering.h"
-#include "util/thread_slot.h" // el estado por hilo NO va en thread_local
+#include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>

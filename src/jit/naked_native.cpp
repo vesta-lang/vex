@@ -245,6 +245,27 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
         return 0;
     }
 
+    /* ANTES de reservar: decirle al cache DONDE conviene poner el codigo.
+     *
+     * Lo que se emite alcanza los globales del modulo con desplazamientos
+     * relativos a RIP de 32 bits, o sea +-2 GB.  El primer `gdata.s_*` de la
+     * tabla de simbolos del cargador es una direccion representativa de esa
+     * zona, y esta disponible ya -- no hay que compilar nada para saberla --,
+     * asi que sirve de ancla.  Sin esto el sistema elegia y la distancia era
+     * cosa del azar: funciono mientras codigo y datos salian del mismo
+     * asignador, y dejo de funcionar en cuanto se separaron. */
+    for (auto &exe : vm->scheduler.vm_reference.loader_public.executables) {
+        if (!exe) continue;
+        bool puesto = false;
+        for (const auto &s : exe->symbol_table) {
+            if (s.first.rfind("gdata.s_", 0) != 0) continue;
+            st.cc.set_anchor(static_cast<uintptr_t>(s.second));
+            puesto = true;
+            break;
+        }
+        if (puesto) break;
+    }
+
     // Colocar en el code cache (direccion estable).
     uint8_t *code = st.cc.alloc(bytes.size(), 16);
     if (code == nullptr) return 0;
@@ -446,13 +467,36 @@ extern "C" uint64_t vrt_naked_fnaddr(uint64_t proc, uint64_t name_hash) {
             if (!target_name.empty()) break;
         }
     }
-    if (target_name.empty()) return 0;
+    if (target_name.empty()) {
+        /* No es "devuelvo cero y ya": un cero se usa DESPUES como direccion de
+         * una funcion -- de hecho como punto de entrada de un hilo --, asi que
+         * callarlo convierte un fallo de compilacion en un salto a la direccion
+         * cero, tres capas mas abajo y sin ninguna pista.  Eso es exactamente lo
+         * que paso: un `vx_thread_spawn` arrancaba un hilo en 0 y el proceso
+         * moria con una traza vacia. */
+        runtime::throw_fatalf(vm, runtime::FATAL_INVALID_SYSCALL,
+                     "(cfn) sobre una funcion que no existe: ninguna funcion "
+                     "cargada tiene la huella 0x%llx",
+                     (unsigned long long)name_hash);
+        return 0;
+    }
     NakedState &st = state();
     std::lock_guard<std::mutex> lk(st.mtx);
     uint64_t entry = compile_native_fn(vm, target_name, debug);
     if (debug)
         std::fprintf(stderr, "[naked] fnaddr '%s' -> 0x%llx\n",
                      target_name.c_str(), (unsigned long long)entry);
+    if (entry == 0) {
+        /* Lo mismo por el otro lado: si la compilacion nativa no sale, hay que
+         * DECIRLO aqui.  `compile_native_fn` ya explica el motivo por
+         * `VESTA_NAKED_DEBUG`, pero sin la bandera puesta -- que es el caso
+         * normal -- devolver cero dejaba el fallo mudo. */
+        runtime::throw_fatalf(vm, runtime::FATAL_INVALID_SYSCALL,
+                     "no se pudo compilar '%s' a codigo nativo, que es lo que "
+                     "exige tomar su direccion con (cfn).  Con "
+                     "VESTA_NAKED_DEBUG=1 se dice por que",
+                     target_name.c_str());
+    }
     return entry;
 }
 

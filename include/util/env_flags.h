@@ -56,6 +56,7 @@
 #define VESTA_UTIL_ENV_FLAGS_H
 
 #include <cstdint>
+#include <iosfwd>
 #include <string>
 
 namespace util {
@@ -170,6 +171,25 @@ constexpr size_t kFlagCount = static_cast<size_t>(FlagId::Count_);
 
 /// @brief Lo declarado sobre @p id.
 const FlagInfo &flag_info(FlagId id);
+
+/// @brief El nombre legible de cada eje, para ensenarlos.
+const char *flag_scope_name(FlagScope s);
+const char *flag_domain_name(FlagDomain d);
+const char *flag_kind_name(FlagKind k);
+
+/**
+ * @brief Escribe TODOS los mandos declarados, agrupados por dominio.
+ *
+ * POR QUE GENERADO Y NO ESCRITO A MANO.  Habia una lista en la ayuda, escrita
+ * aparte, y se habia quedado en 13 mandos de 186.  Una lista que se mantiene a
+ * mano al lado de la tabla que la define se desincroniza siempre, y entonces el
+ * que la lee cree que lo que no sale no existe.  Esta sale de la MISMA linea
+ * que declara el mando, asi que no puede faltar ninguno.
+ *
+ * Marca los que estan PUESTOS ahora mismo, que es la otra pregunta que se hace
+ * quien mira esto: no "que se puede tocar" sino "que hay tocado".
+ */
+void print_env_flags(std::ostream &out);
 
 /**
  * @brief Valor de un mando de tipo @c Bool.

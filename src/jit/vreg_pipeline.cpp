@@ -26,6 +26,7 @@
 #include "jit/jit_registry.h"
 #include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
+#include "jit/mfunction_unwind.h" // como deshacer el marco, sin codificar
 #include "jit/peephole.h"
 #include "vx/asm/asm_effects.h" // isa_host: para quien se genera este codigo
 #include "jit/regalloc_rewrite.h"
@@ -820,11 +821,12 @@ std::vector<uint8_t> vreg_compile_native_target(
     std::vector<NativeReloc> *relocs_out,
     std::vector<LineMapEntry> *line_map_out,
     std::vector<std::pair<uint32_t, std::string>> *asm_labels_out,
-    std::vector<Stackmap> *stackmaps_out) {
+    std::vector<Stackmap> *stackmaps_out, codegen::FrameUnwind *unwind_out) {
     if (relocs_out) relocs_out->clear();
     if (line_map_out) line_map_out->clear();
     if (asm_labels_out) asm_labels_out->clear();
     if (stackmaps_out) stackmaps_out->clear();
+    if (unwind_out) *unwind_out = codegen::FrameUnwind{};
 
     /* El codigo NATIVO no lleva NUNCA polls de safepoint del watchdog CTPE.
      *
@@ -875,6 +877,10 @@ std::vector<uint8_t> vreg_compile_native_target(
      * funcion + slots GcHandle), poblados por rewrite_to_physical en cada
      * safepoint/CALL.  El encoder ya fijo pc_offset al byte real del call. */
     if (stackmaps_out) *stackmaps_out = std::move(pf.stackmaps);
+    /* Como deshacer el marco.  Se lee DESPUES de encode porque es el
+     * codificador quien mide `prologue_bytes` -- el emisor solo cuenta
+     * instrucciones --, y sin esa medida no hay descripcion que dar. */
+    if (unwind_out) *unwind_out = frame_unwind_of(pf);
 
     /* AOT: traducir las MReloc del encoder (sym_idx -> reloc_symbols) a
      * NativeReloc con el NOMBRE del simbolo resuelto, para que el driver
@@ -927,7 +933,8 @@ std::vector<uint8_t> vreg_compile_native(
     bool pic, bool target_sysv, bool mode32, FloatIsa fisa, bool emit_line_map,
     std::vector<LineMapEntry> *line_map_out,
     std::vector<std::pair<uint32_t, std::string>> *asm_labels_out,
-    std::vector<Stackmap> *stackmaps_out, const std::string &cpu) {
+    std::vector<Stackmap> *stackmaps_out, const std::string &cpu,
+    codegen::FrameUnwind *unwind_out) {
     /* Ruta AOT x86: construye el X86Target y delega en el orquestador comun.
      * Reserva VEC_ACC demand-driven (misma politica que el JIT).
      *
@@ -941,7 +948,8 @@ std::vector<uint8_t> vreg_compile_native(
         fn_can_use_wide512(fn, resolve_backend_caps(cpu,
                                                     /*jit_host=*/false, fisa)));
     return vreg_compile_native_target(fn, target, relocs_out, line_map_out,
-                                      asm_labels_out, stackmaps_out);
+                                      asm_labels_out, stackmaps_out,
+                                      unwind_out);
 }
 
 uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,

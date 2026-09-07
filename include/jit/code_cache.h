@@ -178,6 +178,32 @@ class CodeCache {
     /// Reserva un nuevo chunk del SO con permisos RWX (o RW si W^X).
     bool reserve_chunk();
 
+    /**
+     * @brief Direccion cerca de la cual conviene reservar el codigo (0 = da
+     *        igual).
+     *
+     * El codigo emitido alcanza los datos del anfitrion con desplazamientos
+     * relativos a RIP de 32 bits, o sea +-2 GB.  Mientras codigo y datos salian
+     * del mismo asignador caian cerca solos; desde que no, la distancia es
+     * arbitraria y hay que PEDIRLA.  Ver `reserve_chunk`.
+     */
+    uintptr_t anchor_ = 0;
+
+  public:
+    /**
+     * @brief Fija el ancla: reserva el codigo cerca de @p addr.
+     *
+     * Solo afecta a los chunks que se reserven DESPUES; los ya reservados no se
+     * mueven.  Se llama en cuanto se conoce una direccion representativa de los
+     * datos que el codigo va a referenciar -- el primer global que se resuelve
+     * --, que es lo antes que se puede saber.
+     */
+    void set_anchor(uintptr_t addr) {
+        if (anchor_ == 0) anchor_ = addr;
+    }
+
+  private:
+
     /// Activa permisos de ejecucion para una pagina (no-op en modo RWX).
     void transition_to_executable(uint8_t *ptr, size_t size);
 

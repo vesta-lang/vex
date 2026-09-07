@@ -87,6 +87,16 @@ static int coff_obj_impl(const char *path, const AotSection *secs, int num_secs,
         return 0;
     }
     for (int r = 0; r < num_relocs; ++r) {
+        if (relocs[r].target_is_imagebase) {
+            /* La base de la imagen NO existe todavia en un objeto suelto: la
+             * fija quien enlaza.  Se dice aqui en vez de emitir un cero, que es
+             * la clase de valor por defecto que convierte un error en otro
+             * resultado. */
+            set_err(err, err_cap,
+                    "aot_emit_coff_obj: __ImageBase no se puede resolver en un "
+                    ".obj -- la base la fija el enlace final");
+            return 0;
+        }
         if (relocs[r].target_is_size || relocs[r].target_is_end) {
             set_err(err, err_cap,
                     "aot_emit_coff_obj: SIZE/END no soportado en .obj (v1)");
@@ -488,7 +498,9 @@ int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
         }
         uint64_t site_image_off = sec_off[rl->site_section] + rl->site_off;
         uint64_t target_value;
-        if (rl->target_is_size) {
+        if (rl->target_is_imagebase) {
+            target_value = base; // en un binario plano, la base ES la imagen
+        } else if (rl->target_is_size) {
             target_value = aot_sec_size(&secs[rl->target_section]);
         } else if (rl->target_is_end) {
             target_value = base + sec_off[rl->target_section] +
@@ -505,7 +517,7 @@ int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
             goto fail;
         }
         if (!apply_reloc(out.p + site_image_off, base + site_image_off,
-                         target_value, rl->kind)) {
+                         target_value, rl->kind, base)) {
             set_err(err, err_cap,
                     "aot_emit_flat_bin: kind de reloc no soportado");
             goto fail;

@@ -162,6 +162,8 @@ struct RelocTarget {
     uint64_t offset = 0;     ///< offset dentro de la seccion (modo ADDR).
     bool is_size = false;    ///< true => el valor es el TAMANO de la seccion.
     bool is_end = false;     ///< true => el valor es VA(seccion)+tamano (fin).
+    /// true => el valor es la BASE DE LA IMAGEN (`__ImageBase` en PE).
+    bool is_imagebase = false;
     std::string extern_name; ///< no vacio => simbolo EXTERNO (libc); resuelve
                              ///< el linker.
 
@@ -169,6 +171,18 @@ struct RelocTarget {
         RelocTarget t;
         t.section = sec;
         t.offset = off;
+        return t;
+    }
+    /**
+     * @brief La base de la imagen -- el simbolo `__ImageBase` de PE.
+     *
+     * No es una seccion: la base es donde empiezan las CABECERAS, antes de
+     * cualquier seccion, asi que no se puede expresar como seccion+offset.  Lo
+     * resuelve el emisor, que es quien la escribe en la cabecera.
+     */
+    static RelocTarget image_base() {
+        RelocTarget t;
+        t.is_imagebase = true;
         return t;
     }
     static RelocTarget size(int sec) {

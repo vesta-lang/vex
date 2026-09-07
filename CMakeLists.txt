@@ -408,7 +408,12 @@ add_subdirectory(src/vx)
 # Sources del ejecutable principal.  Se EXCLUYEN los .cpp de src/vx/
 # porque ya se compilan dentro de vx_lib (incluirlos en ambos lados
 # causaria definicion multiple de simbolos en el linker).
-file(GLOB_RECURSE VM_SOURCES
+#
+# CONFIGURE_DEPENDS: el generador vuelve a mirar el comodin en cada build.  Sin
+# el, un fichero NUEVO no entra hasta que alguien reconfigure a mano, y hasta
+# entonces todo "compila bien" ignorandolo -- que es la peor forma de fallar,
+# porque no falla.  Cuesta una comprobacion de directorios por build.
+file(GLOB_RECURSE VM_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein_c.c
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
@@ -1049,6 +1054,20 @@ add_library(vesta_gc STATIC
         src/arena/TLB.cpp
         src/jit/jit_registry.cpp
         src/jit/stack_scan.cpp
+        # Las primitivas del sistema (`util::os_alloc` / `os_free`).  Desde que
+        # el asignador salio a su propio repositorio, `arena.h` las llama en vez
+        # de hablar con el sistema, asi que este archivo las necesita -- y un
+        # archivo estatico NO se queja de lo que le falta: el fallo aparecia
+        # mucho despues, al enlazar un binario AOT que usara `gc<T>`.
+        #
+        # Se usa EL fichero del asignador, no una copia: reimplementar aqui
+        # `os_alloc`/`os_free` seria un segundo camino a la memoria del sistema
+        # -- y dos implementaciones del mismo contrato acaban divergiendo sin
+        # que nadie lo note --.  Lo que este fichero traiga de mas (la base del
+        # modulo, por ejemplo) es asunto de quien lo consuma: el informe de
+        # reservas lo pide quien lo quiere, no lo hace el asignador por su
+        # cuenta.
+        ${VESTA_ALLOC_OS_MEMORY_SRC}
 )
 target_include_directories(vesta_gc PUBLIC ${VM_INCLUDES})
 # Freestanding-ish: reducir las dependencias de libstdc++ para que el .a se
@@ -1063,6 +1082,38 @@ target_compile_options(vesta_gc PRIVATE
         -g1)
 target_compile_definitions(vesta_gc PRIVATE
         VESTA_GC_DEBUG_DISABLE=1 VESTA_GC_FREESTANDING=1)
+
+# --- Que el archivo CUMPLA su contrato, y que se note al construirlo -------
+#
+# `libvesta_gc.a` promete una cosa: dependencias SOLO de libc, para que nuestro
+# enlazador pueda producir un binario AOT con `gc<T>` sin g++ ni libstdc++.
+# Esa promesa no la comprobaba nadie, y no por descuido: un archivo estatico es
+# una bolsa de objetos y tener referencias sin resolver dentro es LEGAL.  Se
+# construia verde con simbolos que no existian.
+#
+# El precio de no comprobarlo se pago entero: al sacar el asignador a su propio
+# repositorio, `arena.h` paso a llamar a `util::os_alloc`, el archivo se quedo
+# sin esa definicion, y el build siguio en verde.  El fallo aparecia mucho mas
+# tarde y en otro sitio -- al enlazar un `.vx` que usara `gc<T>` --, dicho por
+# el enlazador y con nombres descompuestos, que es donde mas cuesta verlo.
+#
+# Aqui se mira lo que el archivo pide de fuera y se compara con lo que se le
+# permite pedir.  Un simbolo nuevo fuera de la lista para el build DICIENDO cual
+# es, en vez de dejarlo para el usuario que compile con `gc<T>` dentro de un mes.
+find_program(VESTA_NM nm)
+if (VESTA_NM)
+    add_custom_command(TARGET vesta_gc POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                    -DNM=${VESTA_NM}
+                    -DARCHIVO=$<TARGET_FILE:vesta_gc>
+                    -P ${CMAKE_SOURCE_DIR}/cmake/VestaGcSelfContained.cmake
+            COMMENT "vesta_gc: comprobando que solo dependa de libc")
+else ()
+    message(WARNING
+            "vesta_gc: sin `nm` no se puede comprobar que el archivo solo "
+            "dependa de libc.  Un simbolo que falte no se vera hasta que "
+            "alguien enlace un binario AOT con gc<T>.")
+endif ()
 
 # ---------------------------------------------------------------------------
 # Variantes ESTATICAS de los plugins de stdlib (colecciones / math) para AOT
@@ -1157,7 +1208,7 @@ add_executable(test_analysis_manager tests/analysis/test_manager.cpp
                                      src/util/name_pool.cpp
                                      # Lo que ESTE hilo tiene cogido vive en
                                      # una ranura, no en un `thread_local`.
-                                     libs/SourceCode/vesta_alloc/src/thread_slot.cpp
+                                     ${VESTA_ALLOC_THREAD_SLOT_SRC}
                                      # Y el cerrojo del gestor es el nuestro,
                                      # no el de la emulacion de pthreads.
                                      src/util/shared_mutex.cpp)
@@ -1387,6 +1438,24 @@ endif ()
 add_executable(test_recorrer_arbol tests/util/test_recorrer_arbol.cpp)
 target_include_directories(test_recorrer_arbol PRIVATE ${VM_INCLUDES})
 
+# El pool de hilos.  Los dos tests compilan `ThreadPool.cpp` directamente en vez
+# de enlazar `vmcore`: es lo unico que prueban, y arrastrar el runtime entero
+# para eso haria que un fallo de otro sitio los rompiera a ellos.
+#
+# `test_threadpool_rafaga` ESTABA SIN REGISTRAR: el fichero existia desde que se
+# arreglo el bloqueo con 0% de CPU que documenta, pero no lo construia ni lo
+# ejecutaba nadie.  Es exactamente la trampa que este proyecto ya se ha comido
+# dos veces -- una prueba que no se ejecuta no es una prueba --.
+foreach(_tp IN ITEMS test_threadpool_rafaga test_threadpool_tag)
+    add_executable(${_tp} tests/util/${_tp}.cpp src/util/ThreadPool.cpp)
+    target_include_directories(${_tp} PRIVATE ${VM_INCLUDES})
+    target_link_libraries(${_tp} PRIVATE vesta_alloc)
+    if (WIN32)
+        # WakeByAddressSingle / WaitOnAddress
+        target_link_libraries(${_tp} PRIVATE synchronization)
+    endif ()
+endforeach()
+
 # La huella de lo que un consumidor VE de un modulo importado.
 add_executable(test_vxi_hash_simbolos tests/vx/test_vxi_hash_simbolos.cpp)
 target_include_directories(test_vxi_hash_simbolos PRIVATE ${VM_INCLUDES})
@@ -1570,7 +1639,7 @@ add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/util/env_flags.cpp
                                 # `env_flags` guarda su buffer relido en una
                                 # ranura por hilo (nada de `thread_local`).
-                                libs/SourceCode/vesta_alloc/src/thread_slot.cpp
+                                ${VESTA_ALLOC_THREAD_SLOT_SRC}
                                 src/vxdbg/store.cpp
                                 src/vxdbg/pack_store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
@@ -1989,7 +2058,7 @@ add_executable(test_crono_precision tests/util/test_crono_precision.cpp
                                     src/util/crono_tramo.cpp
                                     # El acumulador de cada hilo vive en una
                                     # ranura, no en un `thread_local`.
-                                    libs/SourceCode/vesta_alloc/src/thread_slot.cpp
+                                    ${VESTA_ALLOC_THREAD_SLOT_SRC}
                                     src/util/reloj.cpp)
 target_include_directories(test_crono_precision PRIVATE ${VM_INCLUDES})
 if (NOT WIN32)
@@ -2008,7 +2077,7 @@ add_executable(test_asa_fact_file_lnx tests/analysis/test_asa_fact_file_lnx.cpp
                                       src/util/env_flags.cpp
                                       # `env_flags` guarda su buffer relido en
                                       # una ranura por hilo.
-                                      libs/SourceCode/vesta_alloc/src/thread_slot.cpp
+                                      ${VESTA_ALLOC_THREAD_SLOT_SRC}
                                       src/util/serialize.cpp)
 target_include_directories(test_asa_fact_file_lnx PRIVATE ${VM_INCLUDES})
 
@@ -2254,6 +2323,15 @@ set(VESTA_RT_SOURCES
 
         # Util compartido necesario por runtime
         ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ThreadPool.cpp
+        # MIRARSE A UNO MISMO -- encontrar las secciones del propio binario,
+        # leer su tabla de simbolos y su informacion de depuracion -- se MUDO
+        # a `vesta_alloc`.  No tenia nada de un compilador: cualquier programa
+        # que quiera poner nombres a sus propias direcciones necesita
+        # exactamente eso, y es lo que le faltaba a esa libreria para contestar
+        # sola de donde viene una reserva.  Aqui se queda lo que SI es de este
+        # proyecto: como se escribe un nombre de C++ para que lo lea una
+        # persona, y de que modulo nuestro es cada fichero.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/util/alloc_report.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/util/sqlite_singleton.cpp
 
         # Controller TLS (usado por VDP)
@@ -2330,6 +2408,14 @@ target_compile_options(vesta_rt PRIVATE
 add_executable(test_util_env_flags tests/util/test_env_flags.cpp)
 target_include_directories(test_util_env_flags PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_util_env_flags PRIVATE vmcore sqlite3 capstone keystone)
+
+# La cadena de funciones inlineadas.  Lo que contesta depende del binario donde
+# corre, asi que lo que se comprueba es la ESTRUCTURA de la respuesta y su
+# acuerdo con la tabla de simbolos, que es una fuente independiente.  Sin DWARF
+# el test SALTA (77) en vez de fallar: Release no lo lleva y es legitimo.
+add_executable(test_util_self_dwarf tests/util/test_self_dwarf.cpp)
+target_include_directories(test_util_self_dwarf PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_util_self_dwarf PRIVATE vmcore sqlite3 capstone keystone)
 
 # ---------------------------------------------------------------------------
 # Los .cpp de `tests/` que ESTE fichero ya declara.

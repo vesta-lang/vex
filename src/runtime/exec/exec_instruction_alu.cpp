@@ -1062,8 +1062,12 @@ using SIBFn = void (*)(ProcessVM *, uint64_t, uint64_t, bool, int);
 // MOV [sib] variants (not arithmetic -- no flags involved)
 
 /** @brief SIB MOV direction=0: load from VM memory into a general register. */
+/* `always_inline` y no `inline` a secas: `inline` es una SUGERENCIA y el
+ * perfil demostro que se ignoraba -- estas salian como funciones propias
+ * en el camino caliente --.  Ahora se puede exigir porque ya nadie toma su
+ * direccion: la tabla de punteros que lo impedia esta retirada. */
 template <typename T>
-static void sib_mov_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool,
+[[gnu::always_inline]] static inline void sib_mov_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool,
                            int dst_reg) {
     T val = vm->vm_mem.read_any<T>(addr);  // read T-width value from VM memory
     auto &d = vm->registers.regs[dst_reg]; // referencia al registro destino
@@ -1079,8 +1083,12 @@ static void sib_mov_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool,
 
 /** @brief SIB MOV direction=1: store a general register value into VM memory.
  */
+/* `always_inline` y no `inline` a secas: `inline` es una SUGERENCIA y el
+ * perfil demostro que se ignoraba -- estas salian como funciones propias
+ * en el camino caliente --.  Ahora se puede exigir porque ya nadie toma su
+ * direccion: la tabla de punteros que lo impedia esta retirada. */
 template <typename T>
-static void sib_mov_to_mem(ProcessVM *vm, uint64_t addr, uint64_t reg_val, bool,
+[[gnu::always_inline]] static inline void sib_mov_to_mem(ProcessVM *vm, uint64_t addr, uint64_t reg_val, bool,
                            int) {
     vm->vm_mem.write_any<T>(
         addr, (T)reg_val); // write truncated register value to VM memory
@@ -1088,8 +1096,12 @@ static void sib_mov_to_mem(ProcessVM *vm, uint64_t addr, uint64_t reg_val, bool,
 
 /** @brief MOVH direction=0: load from host (native) memory into a general
  * register. */
+/* `always_inline` y no `inline` a secas: `inline` es una SUGERENCIA y el
+ * perfil demostro que se ignoraba -- estas salian como funciones propias
+ * en el camino caliente --.  Ahora se puede exigir porque ya nadie toma su
+ * direccion: la tabla de punteros que lo impedia esta retirada. */
 template <typename T>
-static void movh_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool,
+[[gnu::always_inline]] static inline void movh_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool,
                         int dst_reg) {
     T val = *reinterpret_cast<const T *>(
         addr); // dereference native pointer -- bypasses VM memory
@@ -1106,51 +1118,81 @@ static void movh_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool,
 
 /** @brief MOVH direction=1: store a register value into host (native) memory.
  */
+/* `always_inline` y no `inline` a secas: `inline` es una SUGERENCIA y el
+ * perfil demostro que se ignoraba -- estas salian como funciones propias
+ * en el camino caliente --.  Ahora se puede exigir porque ya nadie toma su
+ * direccion: la tabla de punteros que lo impedia esta retirada. */
 template <typename T>
-static void movh_to_mem(ProcessVM *, uint64_t addr, uint64_t reg_val, bool,
+[[gnu::always_inline]] static inline void movh_to_mem(ProcessVM *, uint64_t addr, uint64_t reg_val, bool,
                         int) {
     *reinterpret_cast<T *>(addr) =
         static_cast<T>(reg_val); // write to native address
 }
 
-// SIB dispatch tables for MOV and MOVH
-static constexpr SIBFn mov_sib_to_reg_table[] = {
-    &sib_mov_to_reg<uint8_t>, &sib_mov_to_reg<uint16_t>,
-    &sib_mov_to_reg<uint32_t>, &sib_mov_to_reg<uint64_t>};
-static constexpr SIBFn mov_sib_to_mem_table[] = {
-    &sib_mov_to_mem<uint8_t>, &sib_mov_to_mem<uint16_t>,
-    &sib_mov_to_mem<uint32_t>, &sib_mov_to_mem<uint64_t>};
-static constexpr SIBFn movh_to_reg_table[] = {
-    &movh_to_reg<uint8_t>, &movh_to_reg<uint16_t>, &movh_to_reg<uint32_t>,
-    &movh_to_reg<uint64_t>};
-static constexpr SIBFn movh_to_mem_table[] = {
-    &movh_to_mem<uint8_t>, &movh_to_mem<uint16_t>, &movh_to_mem<uint32_t>,
-    &movh_to_mem<uint64_t>};
+/* RETIRADAS: las cuatro tablas de punteros que despachaban MOV/MOVH por ancho.
+ *
+ * Tomar la direccion de una funcion la vuelve NO INLINABLE por definicion, asi
+ * que cada instruccion SIB pagaba una llamada indirecta -- justo lo que los
+ * paquetes existen para quitar --.  Y se veia: perfilado con contadores sobre
+ * la mezcla `memoria`, `exec_instr_mov_sib` y sus ayudantes salian como cuatro
+ * funciones distintas y sumaban el 37% del tiempo.
+ *
+ * Con un `switch` por ancho, el compilador ve la instanciacion concreta y la
+ * mete dentro; ademas el ancho sale de un campo de dos bits, asi que la rama es
+ * de las que el predictor acierta siempre.  Ver @ref VM_SIB_BY_WIDTH. */
 
 /**
- * @brief Generic SIB execution helper shared by all arithmetic SIB
- * instructions.
+ * @brief Despacha @p fn segun el ancho, sin pasar por ningun puntero.
  *
- * Reads direction from the decoded instruction to choose between:
+ * Macro y no plantilla porque lo que varia es el NOMBRE de una plantilla, y
+ * pasar eso como parametro exigiria envolver las cuatro en structs con un
+ * metodo estatico -- mas codigo para el mismo resultado --.  Se deshace justo
+ * despues de su ultimo uso para que no escape de aqui.
+ */
+#define VM_SIB_BY_WIDTH(fn)                                                    \
+    switch (mode) {                                                            \
+    case 0: fn<uint8_t>(vm, addr, rval, false, dst); break;                    \
+    case 1: fn<uint16_t>(vm, addr, rval, false, dst); break;                   \
+    case 2: fn<uint32_t>(vm, addr, rval, false, dst); break;                   \
+    default: fn<uint64_t>(vm, addr, rval, false, dst); break;                  \
+    }
+
+/**
+ * @brief Cuerpo comun de todas las instrucciones ALU con operando SIB.
+ *
+ * Segun el bit de direccion:
  *   direction=0 -> reg = Op(reg, mem[sib])
- *   direction=1 -> mem[sib] = Op(mem[sib], reg)
+ *   direction=1 -> mem[sib] = Op(mem[sib], reg)     (leer-modificar-escribir)
  *
- * @tparam Op     Operation struct (not used directly here; embedded in the
- * table).
- * @param  vm     Pointer to the virtual machine.
- * @param  instr  Decoded instruction.
- * @param  reg_dst Table for direction=0 (reg destination).
- * @param  mem_dst Table for direction=1 (memory destination).
+ * CON TABLA DE PUNTEROS, y a sabiendas de que eso impide meterlo en linea.
+ * Se probo lo contrario -- un `switch` por ancho, como en el camino MOV -- y
+ * la medida lo tumbo, no por velocidad sino por lo que el compilador SABE: la
+ * base de efectos deriva lo que toca cada opcode leyendo el codigo maquina del
+ * manejador, y tiene un paso que RESUELVE estas tablas constexpr (281 en la
+ * ultima corrida).  Metido todo en linea se rinde, y el resultado fue perder
+ * el bit de "escribe banderas" en las ONCE formas SIB en vez de en las dos que
+ * ya lo perdian.
+ *
+ * Que una tabla diga que un opcode no toca las banderas cuando si las toca no
+ * da un error: deja que el reordenador mueva un salto condicional por encima
+ * de quien acababa de cambiarselas.  Asi que aqui gana lo que el sistema sabe,
+ * no lo que corre un poco mas rapido.
+ *
+ * @tparam Op      Estructura de operacion (AddOp, AndOp, ShlOp...).
+ * @param  vm      Proceso que ejecuta.
+ * @param  instr   Instruccion descodificada.
+ * @param  reg_dst Tabla para direction=0 (destino registro).
+ * @param  mem_dst Tabla para direction=1 (destino memoria).
  */
 template <typename Op>
 static void exec_sib_generic(ProcessVM *vm, const DecodedInstr &instr,
                              const SIBFn reg_dst[4], const SIBFn mem_dst[4]) {
     const int dst = instr.data_instruction.mem_data
-                        .reg_final; // final (non-SIB) register index
-    uint64_t addr = sib_effective_addr(vm, instr); // compute effective address
-    uint64_t rval = vm->registers.regs[dst].raw(); // current register value
-    bool sign = instr.flags_info._signed_instruct; // signed/unsigned selector
-    int mode = instr.flags_info.mode; // selector de ancho de operando
+                        .reg_final; // registro que NO es el operando de memoria
+    uint64_t addr = sib_effective_addr(vm, instr); // direccion efectiva
+    uint64_t rval = vm->registers.regs[dst].raw(); // valor actual del registro
+    bool sign = instr.flags_info._signed_instruct; // con o sin signo
+    int mode = instr.flags_info.mode;              // ancho del operando
     if (instr.flags_info.direction == 0)
         reg_dst[mode](vm, addr, rval, sign, dst); // reg = Op(reg, mem)
     else
@@ -1158,18 +1200,16 @@ static void exec_sib_generic(ProcessVM *vm, const DecodedInstr &instr,
 }
 
 // =========================================================================
-// DEFINE_SIB_EXEC macro
-// Declares both SIB dispatch tables and the exec function in one shot.
+// DEFINE_SIB_EXEC
 // =========================================================================
 
 /**
- * @brief Declares SIB tables and the exec function for a binary ALU
- * instruction.
+ * @brief Declara las dos tablas SIB y el ejecutor de una ALU binaria.
  *
- * Expands to:
- *   - static constexpr SIBFn <name>_sib_reg_dst[4]  (direction=0 table)
- *   - static constexpr SIBFn <name>_sib_mem_dst[4]  (direction=1 table)
- *   - void exec_instr_<name>_sib(ProcessVM*, const DecodedInstr&)
+ * Expande a:
+ *   - static constexpr SIBFn <nombre>_sib_reg_dst[4]  (direction=0)
+ *   - static constexpr SIBFn <nombre>_sib_mem_dst[4]  (direction=1)
+ *   - void exec_instr_<nombre>_sib(ProcessVM*, const DecodedInstr&)
  */
 #define DEFINE_SIB_EXEC(name, Op)                                              \
     static constexpr SIBFn name##_sib_reg_dst[] = {                            \
@@ -1191,7 +1231,22 @@ DEFINE_SIB_EXEC(mul, MulOp)
 DEFINE_SIB_EXEC(div, DivOp)
 DEFINE_SIB_EXEC(cmp, CmpOp)
 
-#undef DEFINE_SIB_EXEC
+/* Las seis de logica y desplazamiento, que hasta ahora solo tenian forma
+ * registro-registro.  No es una decision de diseno que faltaran: la aritmetica
+ * podia operar contra memoria desde el principio y la logica no, asi que
+ * aplicar una mascara leida de memoria costaba dos instrucciones donde sumar
+ * costaba una.
+ *
+ * Salen las DOS direcciones de una vez, porque `exec_sib_generic` ya las
+ * distingue: con `direction=0` el destino es el registro (`rd = rd & [mem]`) y
+ * con `direction=1` es la memoria (`[mem] &= rs`), que es leer-modificar-
+ * escribir en una sola instruccion. */
+DEFINE_SIB_EXEC(and, AndOp)
+DEFINE_SIB_EXEC(or, OrOp)
+DEFINE_SIB_EXEC(xor, XorOp)
+DEFINE_SIB_EXEC(shl, ShlOp)
+DEFINE_SIB_EXEC(shr, ShrOp)
+DEFINE_SIB_EXEC(sar, SarOp)
 
 // =========================================================================
 // MOV SIB (special: s=1 means MOVH -- access host/native memory)
@@ -1216,23 +1271,23 @@ void exec_instr_mov_sib(ProcessVM *vm, const DecodedInstr &instr) {
         instr.flags_info._signed_instruct; // s=1 selects MOVH (host memory)
 
     if (!host) {
-        // MOVC: access virtual machine memory
-        if (instr.flags_info.direction == 0)
-            mov_sib_to_reg_table[mode](vm, addr, rval, false,
-                                       dst); // load from VM mem
-        else
-            mov_sib_to_mem_table[mode](vm, addr, rval, false,
-                                       dst); // store to VM mem
+        // MOVC: memoria de la MAQUINA VIRTUAL
+        if (instr.flags_info.direction == 0) {
+            VM_SIB_BY_WIDTH(sib_mov_to_reg) // cargar de la memoria de la VM
+        } else {
+            VM_SIB_BY_WIDTH(sib_mov_to_mem) // guardar en la memoria de la VM
+        }
     } else {
-        // MOVH: access host native memory
-        if (instr.flags_info.direction == 0)
-            movh_to_reg_table[mode](vm, addr, rval, false,
-                                    dst); // load from host mem
-        else
-            movh_to_mem_table[mode](vm, addr, rval, false,
-                                    dst); // store to host mem
+        // MOVH: memoria nativa del ANFITRION
+        if (instr.flags_info.direction == 0) {
+            VM_SIB_BY_WIDTH(movh_to_reg) // cargar de la memoria del anfitrion
+        } else {
+            VM_SIB_BY_WIDTH(movh_to_mem) // guardar en la del anfitrion
+        }
     }
 }
+
+#undef VM_SIB_BY_WIDTH
 
 // =========================================================================
 // MOVC / MOVCH -- conditional move based on a flag
@@ -1419,19 +1474,6 @@ struct ModOp {
         uint64_t addr = vm->registers.regs[rdst].raw();                        \
         mem_tbl[instr.flags_info.mode](vm, addr, imm,                          \
                                        instr.flags_info._signed_instruct);     \
-    }
-
-#define DEFINE_SIB_EXEC(n, Op)                                                 \
-    static constexpr SIBFn n##_sib_reg_dst[] = {                               \
-        &sib_reg_dst_wrapper<uint8_t, Op>, &sib_reg_dst_wrapper<uint16_t, Op>, \
-        &sib_reg_dst_wrapper<uint32_t, Op>,                                    \
-        &sib_reg_dst_wrapper<uint64_t, Op>};                                   \
-    static constexpr SIBFn n##_sib_mem_dst[] = {                               \
-        &sib_mem_dst_wrapper<uint8_t, Op>, &sib_mem_dst_wrapper<uint16_t, Op>, \
-        &sib_mem_dst_wrapper<uint32_t, Op>,                                    \
-        &sib_mem_dst_wrapper<uint64_t, Op>};                                   \
-    void exec_instr_##n##_sib(ProcessVM *vm, const DecodedInstr &instr) {      \
-        exec_sib_generic<Op>(vm, instr, n##_sib_reg_dst, n##_sib_mem_dst);     \
     }
 
 DECL_BIN_TABLE(mod, ModOp);

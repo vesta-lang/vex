@@ -146,6 +146,30 @@ function(vesta_setup_ccache)
         return()
     endif()
     message(STATUS "[ccache] cache de compilador activa: ${_cc}")
-    set(CMAKE_C_COMPILER_LAUNCHER   "${_cc}" CACHE STRING "" FORCE)
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${_cc}" CACHE STRING "" FORCE)
+
+    # Modo DEPEND, y por que se fuerza aqui.
+    #
+    # En el modo por defecto la cache preprocesa, compara y, al acertar,
+    # restaura el objeto Y su fichero de dependencias.  Si esa restauracion no
+    # ocurre -- entrada vieja, otra version de la cache --, el generador lee un
+    # fichero de dependencias vacio y anota que ese objeto NO DEPENDE DE NINGUNA
+    # CABECERA.  A partir de ahi ningun cambio de cabecera lo recompila, y se
+    # enlaza contra codigo viejo sin que nada lo diga.  Aparecio con cinco
+    # objetos en ese estado.
+    #
+    # En modo depend la cache usa el fichero de dependencias como parte de la
+    # clave, asi que dejarlo de lado no es una opcion para ella.  No esta
+    # demostrado que fuera LA causa; se pone porque cierra ese camino y ademas
+    # es mas rapido (no preprocesa dos veces).  Quien lo vigila de verdad es
+    # `tools/check_build_deps.py`.
+    #
+    # Se pasa por el entorno de CADA compilacion, y no con `--set-config`, para
+    # no escribir en la configuracion global de quien compila: un proyecto no
+    # debe cambiarle los ajustes a los demas que tenga esa persona.
+    #
+    # Aviso: cambiar de modo invalida lo cacheado, asi que la primera
+    # compilacion despues de esto es completa.
+    set(_launcher "${CMAKE_COMMAND}" -E env CCACHE_DEPEND=1 "${_cc}")
+    set(CMAKE_C_COMPILER_LAUNCHER   "${_launcher}" CACHE STRING "" FORCE)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${_launcher}" CACHE STRING "" FORCE)
 endfunction()

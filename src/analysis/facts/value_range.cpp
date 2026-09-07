@@ -31,9 +31,9 @@
 
 #include "util/fnv.h"
 #include "util/reloj.h"
-#include "util/small_vector.h"  // el estado casi siempre es diminuto
+#include "util/alloc/small_vector.h"  // el estado casi siempre es diminuto
 #include "util/thread_owned.h"  // por hilo, sin `thread_local`
-#include "util/thread_slot.h"   // lo que cabe en un puntero, sin reservar
+#include "util/os/thread_slot.h"   // lo que cabe en un puntero, sin reservar
 
 #include <cstring> // memcmp: comparar dos estados de una vez
 
@@ -237,7 +237,7 @@ static const bool g_no_range_cache = util::flag_on(util::FlagId::NoRangeCache);
  *
  * Y no hacia falta: estos vectores son diminutos (mediana 0 entradas,
  * percentil 90 igual a 9), o sea un millon de reservas PEQUENAS, que es
- * justo lo que sirve bien el asignador por clases de `util/host_allocator.h`
+ * justo lo que sirve bien el asignador por clases de `util/alloc/host_allocator.h`
  * -- donde al crecer el bufer viejo SI se devuelve y se reaprovecha.
  */
 struct Estado {

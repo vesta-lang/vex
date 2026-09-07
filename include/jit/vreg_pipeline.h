@@ -29,6 +29,10 @@ namespace ir {
 struct IrFunction;
 }
 
+namespace codegen {
+struct FrameUnwind;
+}
+
 namespace jit {
 
 class CodeCache;
@@ -201,7 +205,22 @@ std::vector<uint8_t> vreg_compile_native(
      * base de datos de instrucciones, que se permite emitir el generador -- y
      * lo hace sin depender de la maquina que compila, que es lo que la hace
      * util al compilar para otra. */
-    const std::string &cpu = std::string());
+    const std::string &cpu = std::string(),
+    /* Como deshacer el marco de esta funcion.  Se entrega SIN CODIFICAR, a
+     * proposito.
+     *
+     * No es que el formato dependa del contenedor: son ejes distintos.  Una PE
+     * puede llevar `UNWIND_INFO` -- lo unico que el desenrollador del sistema
+     * sabe leer en Windows x64 -- y ADEMAS `.eh_frame` de DWARF, que es lo que
+     * usan para excepciones los objetos compilados con MinGW y con los que este
+     * enlazador tiene que convivir.  Por eso se entrega UNA descripcion y no
+     * unos bytes: quien emite decide cuantos codificadores corre, y puede
+     * correr los dos.
+     *
+     * Sin nada de esto el binario nativo se queda sin desenrollado, y en
+     * Windows x64 una funcion sin entrada en la tabla se da por hoja: se lee
+     * como direccion de retorno lo que hubiera en la pila. */
+    codegen::FrameUnwind *unwind_out = nullptr);
 
 class CodegenTarget; // include/jit/codegen_target.h
 
@@ -216,7 +235,8 @@ std::vector<uint8_t> vreg_compile_native_target(
     std::vector<NativeReloc> *relocs_out = nullptr,
     std::vector<LineMapEntry> *line_map_out = nullptr,
     std::vector<std::pair<uint32_t, std::string>> *asm_labels_out = nullptr,
-    std::vector<Stackmap> *stackmaps_out = nullptr);
+    std::vector<Stackmap> *stackmaps_out = nullptr,
+    codegen::FrameUnwind *unwind_out = nullptr);
 
 /**
  * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

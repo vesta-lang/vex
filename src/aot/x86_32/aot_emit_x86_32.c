@@ -359,11 +359,14 @@ int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
             ok = 0;
             break;
         }
-        uint64_t tv = IMGBASE + sec_rva[rl->target_section] + rl->target_off;
+        uint64_t tv = rl->target_is_imagebase
+                          ? (uint64_t)IMGBASE // `__ImageBase`: la base, tal cual
+                          : (IMGBASE + sec_rva[rl->target_section] +
+                             rl->target_off);
         tv = (uint64_t)((int64_t)tv + rl->addend);
         uint64_t site_va = IMGBASE + sec_rva[rl->site_section] + rl->site_off;
         if (!apply_reloc(img + sec_foff[rl->site_section] + rl->site_off,
-                         site_va, tv, rl->kind)) {
+                         site_va, tv, rl->kind, (uint64_t)IMGBASE)) {
             set_err(err, err_cap, "pe32: reloc kind invalido");
             ok = 0;
             break;
@@ -539,7 +542,9 @@ int aot_emit_elf32(const char *path, const AotLayoutCfg *cfg,
             break;
         }
         uint64_t tv;
-        if (rl->target_is_size)
+        if (rl->target_is_imagebase)
+            tv = base; // la direccion de CARGA; ver el emisor de 64 bits
+        else if (rl->target_is_size)
             tv = aot_sec_size(&secs[rl->target_section]);
         else {
             tv = sec_va[rl->target_section];
@@ -549,7 +554,7 @@ int aot_emit_elf32(const char *path, const AotLayoutCfg *cfg,
         tv = (uint64_t)((int64_t)tv + rl->addend);
         uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
         if (!apply_reloc(img + sec_fo[rl->site_section] + rl->site_off, site_va,
-                         tv, rl->kind)) {
+                         tv, rl->kind, AOT_NO_IMAGE_BASE)) {
             set_err(err, err_cap, "elf32: reloc kind invalido");
             ok = 0;
             break;
@@ -927,7 +932,9 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
             break;
         }
         uint64_t tv;
-        if (rl->target_is_size)
+        if (rl->target_is_imagebase)
+            tv = BASE; // la direccion de CARGA; ver el emisor de 64 bits
+        else if (rl->target_is_size)
             tv = aot_sec_size(&secs[rl->target_section]);
         else {
             tv = sec_va[rl->target_section];
@@ -936,7 +943,8 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
         }
         tv = (uint64_t)((int64_t)tv + rl->addend);
         uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
-        if (!apply_reloc(img + site_va, site_va, tv, rl->kind)) {
+        if (!apply_reloc(img + site_va, site_va, tv, rl->kind,
+                         AOT_NO_IMAGE_BASE)) {
             set_err(err, err_cap, "elf32_dynexec: reloc kind invalido");
             ok = 0;
             break;
@@ -1013,6 +1021,14 @@ int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
         return 0;
     }
     for (int r = 0; r < num_relocs; ++r) {
+        if (relocs[r].target_is_imagebase) {
+            /* La base no existe todavia en un objeto suelto: la fija quien
+             * enlaza.  Se dice, en vez de emitir un cero. */
+            set_err(err, err_cap,
+                    "aot_emit_elf32_obj: __ImageBase no se puede resolver en "
+                    "un .o -- la base la fija el enlace final");
+            return 0;
+        }
         if (relocs[r].target_is_size || relocs[r].target_is_end) {
             set_err(err, err_cap, "aot_emit_elf32_obj: SIZE/END no soportado");
             return 0;

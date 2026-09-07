@@ -374,7 +374,11 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 return 0;
             }
             uint64_t target_value;
-            if (rl->target_is_size) {
+            if (rl->target_is_imagebase) {
+                /* `__ImageBase`: la base, tal cual.  Aqui es trivial porque es
+                 * este mismo emisor quien la escribe en la cabecera. */
+                target_value = image_base;
+            } else if (rl->target_is_size) {
                 target_value = aot_sec_size(&secs[rl->target_section]);
             } else {
                 target_value =
@@ -401,7 +405,7 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 return 0;
             }
             if (!apply_reloc(pe.sectionData[rl->site_section] + rl->site_off,
-                             site_va, target_value, rl->kind)) {
+                             site_va, target_value, rl->kind, image_base)) {
                 set_err(err, err_cap, "aot_emit_pe: reloc kind invalido");
                 freePE64File(&pe);
                 return 0;
@@ -810,7 +814,13 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                 return 0;
             }
             uint64_t target_value;
-            if (rl->target_is_size) {
+            if (rl->target_is_imagebase) {
+                /* En ELF no existe `__ImageBase`, pero la nocion si: es la
+                 * direccion de CARGA, la misma que va en el primer segmento.
+                 * Se contesta con ella para que la marca signifique lo mismo en
+                 * los dos formatos y el emisor no tenga un caso sin cubrir. */
+                target_value = base;
+            } else if (rl->target_is_size) {
                 target_value = aot_sec_size(&secs[rl->target_section]);
             } else {
                 target_value = sec_va[rl->target_section];
@@ -835,7 +845,8 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                 return 0;
             }
             if (!apply_reloc(b->mem + sec_foff[rl->site_section] + rl->site_off,
-                             site_va, target_value, rl->kind)) {
+                             site_va, target_value, rl->kind,
+                             AOT_NO_IMAGE_BASE)) {
                 free(sec_va);
                 free(sec_foff);
                 free(sec_seen);
@@ -1449,7 +1460,8 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
             e->r_addend = (int64_t)tv;
             continue;
         }
-        if (!apply_reloc(img + site_va, site_va, tv, rl->kind)) {
+        if (!apply_reloc(img + site_va, site_va, tv, rl->kind,
+                         AOT_NO_IMAGE_BASE)) {
             set_err(err, err_cap, "elf_dynexec: reloc kind invalido");
             ok = 0;
             break;
@@ -1857,7 +1869,7 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
                 return 0;
             }
             apply_reloc(pe.sectionData[rl->site_section] + rl->site_off,
-                        site_va, target_value, rl->kind);
+                        site_va, target_value, rl->kind, image_base);
         }
     }
 

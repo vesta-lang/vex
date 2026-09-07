@@ -48,7 +48,7 @@ void ThreadPool::shutdown() {
     /* despertar a todos los workers para que noten stopping_==true */
     wake_flag_.fetch_add(1, std::memory_order_release);
 
-#ifdef WIN32
+#ifdef _WIN32
     WakeByAddressAll(&wake_flag_); /* Windows: despertar todos */
 #else
     futex_wake(&wake_flag_, workers_.size()); /* Linux: despertar N hilos */
@@ -67,7 +67,7 @@ bool ThreadPool::idle() {
 
 void ThreadPool::worker_loop() {
     while (true) {
-        std::function<void()> task;
+        QueuedTask task;
 
         /* bucle de espera: bloquear hasta que haya tarea o se deba parar */
         while (true) {
@@ -92,7 +92,7 @@ void ThreadPool::worker_loop() {
                     return; /* pool parando: terminar el hilo */
             }
 
-#ifdef WIN32
+#ifdef _WIN32
             WaitOnAddress(&wake_flag_, &expected, sizeof(int), INFINITE);
 #else
             futex_wait(&wake_flag_, expected);
@@ -108,8 +108,15 @@ void ThreadPool::worker_loop() {
             }
         }
 
-        if (task)
-            task(); /* ejecutar la tarea; las excepciones se capturan si usa
-                       packaged_task */
+        if (task.fn) {
+            /* La etiqueta de quien encolo, mientras dura la tarea.  Sin esto,
+             * una fase etiquetada cuyo trabajo se reparta contaria como "no se"
+             * todo lo que reserven los trabajadores: un dato falso, no un dato
+             * que falta.  Cuesta dos escrituras a la linea de cache que el
+             * camino de reserva ya carga de todas formas. */
+            const util::AllocScope inherited(task.tag);
+            task.fn(); /* ejecutar la tarea; las excepciones se capturan si usa
+                          packaged_task */
+        }
     }
 }

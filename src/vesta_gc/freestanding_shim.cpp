@@ -40,6 +40,41 @@ void operator delete[](void *p, std::size_t) noexcept {
     std::free(p);
 }
 
+/* --- Las variantes `nothrow`, y el objeto `std::nothrow` ------------------
+ *
+ * Las referencia el asignador desde que las primitivas del sistema salieron a
+ * `vesta_alloc`: ahi una reserva que falla DEVUELVE nulo en vez de lanzar, que
+ * es lo que un asignador tiene que hacer.  Sin ellas el enlazado de un binario
+ * AOT que use `gc<T>` muere con `_ZnwyRKSt9nothrow_t` sin resolver -- y no lo
+ * decia el GC, lo decia el enlazador, que es donde cuesta mas verlo.
+ *
+ * `std::nothrow` es un OBJETO, no una funcion, asi que no basta con declararlo:
+ * hay que DEFINIRLO o `_ZSt7nothrow` se queda igual de suelto.  Por eso se
+ * incluye `<new>` -- cabecera freestanding, disponible sin biblioteca estandar
+ * completa -- en vez de declarar el tipo a mano: con un tipo incompleto las
+ * sobrecargas manglan igual, pero el objeto no se puede definir.
+ *
+ * Va aqui y no en el asignador porque este fichero es justo el sitio donde se
+ * paga lo que libstdc++ daria y aqui no hay. */
+#include <new>
+
+namespace std {
+const nothrow_t nothrow{}; // `<new>` solo lo declara `extern`
+} // namespace std
+
+void *operator new(std::size_t n, const std::nothrow_t &) noexcept {
+    return std::malloc(n ? n : 1); // nulo si no hay; NO se aborta
+}
+void *operator new[](std::size_t n, const std::nothrow_t &tag) noexcept {
+    return operator new(n, tag);
+}
+void operator delete(void *p, const std::nothrow_t &) noexcept {
+    std::free(p);
+}
+void operator delete[](void *p, const std::nothrow_t &) noexcept {
+    std::free(p);
+}
+
 // --- helpers de excepcion de libstdc++ -> abort ---------------------------
 // Sin excepciones (-fno-exceptions) estos no se invocan en flujo normal, pero
 // las plantillas STL los referencian.  Definidos en @c namespace std para que
@@ -90,5 +125,6 @@ void *__dso_handle = nullptr;
 extern "C" int atexit(void (*)(void)) {
     return 0;
 }
+
 
 #endif // VESTA_GC_FREESTANDING

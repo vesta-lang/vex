@@ -1,0 +1,1584 @@
+{
+ "results": [
+  {
+   "bench": "00_aritmetica",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "01_factorial",
+   "vx_ciclos_main": 339
+  },
+  {
+   "bench": "02_hola_mundo",
+   "vx_ciclos_main": 432
+  },
+  {
+   "bench": "03_contador",
+   "vx_ciclos_main": 947
+  },
+  {
+   "bench": "05_struct_punto",
+   "vx_ciclos_main": 267
+  },
+  {
+   "bench": "06_struct_multi",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "07_punteros",
+   "vx_ciclos_main": 272
+  },
+  {
+   "bench": "08_punteros_loop",
+   "vx_ciclos_main": 303
+  },
+  {
+   "bench": "09_punteros_arith",
+   "vx_ciclos_main": 285
+  },
+  {
+   "bench": "102_closure_env_gc",
+   "vx_ciclos_main": 16550
+  },
+  {
+   "bench": "104_hot_loop_bench",
+   "vx_ciclos_main": 3399904
+  },
+  {
+   "bench": "105_decjnz_bench",
+   "vx_ciclos_main": 4954448
+  },
+  {
+   "bench": "105_unique_with_vesta",
+   "vx_ciclos_main": 269
+  },
+  {
+   "bench": "105b_decjnz_simple",
+   "vx_ciclos_main": 406
+  },
+  {
+   "bench": "106_virtualalloc_unique",
+   "vx_ciclos_main": 25442
+  },
+  {
+   "bench": "107_unique_lifo_move_chain",
+   "vx_ciclos_main": 340
+  },
+  {
+   "bench": "108_shared_use_count",
+   "vx_ciclos_main": 14863
+  },
+  {
+   "bench": "109_unique_comprehensive",
+   "vx_ciclos_main": 277
+  },
+  {
+   "bench": "10_heap_malloc",
+   "vx_ciclos_main": 391
+  },
+  {
+   "bench": "110_unique_return_from_fn",
+   "vx_ciclos_main": 265
+  },
+  {
+   "bench": "111_borrow_shared_ok",
+   "vx_ciclos_main": 247
+  },
+  {
+   "bench": "112_borrow_mut_ok",
+   "vx_ciclos_main": 269
+  },
+  {
+   "bench": "117_borrow_param_elision",
+   "vx_ciclos_main": 338
+  },
+  {
+   "bench": "118_borrow_nll",
+   "vx_ciclos_main": 13267
+  },
+  {
+   "bench": "119_borrow_reborrow",
+   "vx_ciclos_main": 275
+  },
+  {
+   "bench": "11_arrays_nativos",
+   "vx_ciclos_main": 588
+  },
+  {
+   "bench": "120_borrow_reborrow_mut",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "121_borrow_shared_reborrow_of_mut",
+   "vx_ciclos_main": 294
+  },
+  {
+   "bench": "122_borrow_reborrow_chain",
+   "vx_ciclos_main": 267
+  },
+  {
+   "bench": "123_borrow_helper_mutation",
+   "vx_ciclos_main": 218
+  },
+  {
+   "bench": "124_borrow_aggregator",
+   "vx_ciclos_main": 275
+  },
+  {
+   "bench": "125_borrow_nll_realistic",
+   "vx_ciclos_main": 14070
+  },
+  {
+   "bench": "126_borrow_reborrow_helper",
+   "vx_ciclos_main": 263
+  },
+  {
+   "bench": "127_borrow_state_machine",
+   "vx_ciclos_main": 13861
+  },
+  {
+   "bench": "128_borrow_factory_chain",
+   "vx_ciclos_main": 279
+  },
+  {
+   "bench": "12_clases_basico",
+   "vx_ciclos_main": 251
+  },
+  {
+   "bench": "131_borrow_combined_real",
+   "vx_ciclos_main": 13990
+  },
+  {
+   "bench": "132_comptime_introspect",
+   "vx_ciclos_main": 650
+  },
+  {
+   "bench": "133_comptime_introspect2",
+   "vx_ciclos_main": 835
+  },
+  {
+   "bench": "134_comptime_introspect3",
+   "vx_ciclos_main": 619
+  },
+  {
+   "bench": "135_introspect_runtime",
+   "vx_ciclos_main": 1029
+  },
+  {
+   "bench": "136_ternary_comptime_const",
+   "vx_ciclos_main": 269
+  },
+  {
+   "bench": "138_metaprog_completa",
+   "vx_ciclos_main": 277
+  },
+  {
+   "bench": "139_comptime_imperativo",
+   "vx_ciclos_main": 285
+  },
+  {
+   "bench": "13_clases_modificadores",
+   "vx_ciclos_main": 259
+  },
+  {
+   "bench": "140_metaprog_avanzada",
+   "vx_ciclos_main": 290
+  },
+  {
+   "bench": "141_metaprog_nested",
+   "vx_ciclos_main": 793
+  },
+  {
+   "bench": "142_type_first_class",
+   "vx_ciclos_main": 283
+  },
+  {
+   "bench": "143_type_composable",
+   "vx_ciclos_main": 265
+  },
+  {
+   "bench": "144_method_enum_introspect",
+   "vx_ciclos_main": 287
+  },
+  {
+   "bench": "145_auto_inference",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "148_macros_emit_splice",
+   "vx_ciclos_main": 275
+  },
+  {
+   "bench": "149_macros_hygenic_gensym",
+   "vx_ciclos_main": 261
+  },
+  {
+   "bench": "14_clases_visibilidad",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "150_macros_pattern_template",
+   "vx_ciclos_main": 261
+  },
+  {
+   "bench": "151_sugar_aliases_block",
+   "vx_ciclos_main": 267
+  },
+  {
+   "bench": "152_macros_inject_at_macro",
+   "vx_ciclos_main": 247
+  },
+  {
+   "bench": "153_macros_compose_recurse_global",
+   "vx_ciclos_main": 239
+  },
+  {
+   "bench": "154_macros_zero_runtime_overhead",
+   "vx_ciclos_main": 247
+  },
+  {
+   "bench": "155_concat_loop_optimized",
+   "vx_ciclos_main": 249
+  },
+  {
+   "bench": "156_macros_pure_memoization",
+   "vx_ciclos_main": 247
+  },
+  {
+   "bench": "157_concat_multichunk",
+   "vx_ciclos_main": 247
+  },
+  {
+   "bench": "158_macros_lowered_to_ir",
+   "vx_ciclos_main": 267
+  },
+  {
+   "bench": "159_macro_expr_capture",
+   "vx_ciclos_main": 12765
+  },
+  {
+   "bench": "15_herencia_basica",
+   "vx_ciclos_main": 239
+  },
+  {
+   "bench": "160_macro_walk_pchase",
+   "vx_ciclos_main": 269
+  },
+  {
+   "bench": "161_macro_ffi_compile_time",
+   "vx_ciclos_main": 265
+  },
+  {
+   "bench": "162_macro_comptime_data",
+   "vx_ciclos_main": 247
+  },
+  {
+   "bench": "163_try_operator",
+   "vx_ciclos_main": 615
+  },
+  {
+   "bench": "164_enum_f64_payload",
+   "vx_ciclos_main": 364
+  },
+  {
+   "bench": "165_unique_dtor",
+   "vx_ciclos_main": 13116
+  },
+  {
+   "bench": "168_newtypes",
+   "vx_ciclos_main": 1020
+  },
+  {
+   "bench": "169_newtype_advanced",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "175_generics_deep_nesting",
+   "vx_ciclos_main": 14448
+  },
+  {
+   "bench": "176_adt_complex_payloads",
+   "vx_ciclos_main": 2862
+  },
+  {
+   "bench": "178_escape_scalar_repl",
+   "vx_ciclos_main": 14699
+  },
+  {
+   "bench": "179_spec_devirt_inherit",
+   "vx_ciclos_main": 22668
+  },
+  {
+   "bench": "17_ecs_basico",
+   "vx_ciclos_main": 431
+  },
+  {
+   "bench": "180_vreg_obj_loop_callvirt",
+   "vx_ciclos_main": 298
+  },
+  {
+   "bench": "181_truecolor",
+   "vx_ciclos_main": 3048
+  },
+  {
+   "bench": "181_vreg_alloca_vm_escape",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "182_vectorize_elementwise",
+   "vx_ciclos_main": 17794
+  },
+  {
+   "bench": "183_memcpy_idiom",
+   "vx_ciclos_main": 657
+  },
+  {
+   "bench": "184_vectorize_reduction",
+   "vx_ciclos_main": 18088
+  },
+  {
+   "bench": "185_vectorize_int",
+   "vx_ciclos_main": 20964
+  },
+  {
+   "bench": "186_float_params_loop",
+   "vx_ciclos_main": 18510
+  },
+  {
+   "bench": "187_vectorize_unary",
+   "vx_ciclos_main": 2800
+  },
+  {
+   "bench": "188_vectorize_f32",
+   "vx_ciclos_main": 17628
+  },
+  {
+   "bench": "189_vectorize_while",
+   "vx_ciclos_main": 1064
+  },
+  {
+   "bench": "190_vectorize_fma",
+   "vx_ciclos_main": 18389
+  },
+  {
+   "bench": "191_vectorize_compound",
+   "vx_ciclos_main": 1670
+  },
+  {
+   "bench": "192_vectorize_scalar",
+   "vx_ciclos_main": 1471
+  },
+  {
+   "bench": "193_vectorize_int_widths",
+   "vx_ciclos_main": 1966
+  },
+  {
+   "bench": "194_vectorize_scalar_int",
+   "vx_ciclos_main": 2710
+  },
+  {
+   "bench": "195_vectorize_axpy",
+   "vx_ciclos_main": 3368
+  },
+  {
+   "bench": "196_first_class_functions",
+   "vx_ciclos_main": 289
+  },
+  {
+   "bench": "197_variadics",
+   "vx_ciclos_main": 475
+  },
+  {
+   "bench": "198_inline_asm_symbols",
+   "vx_ciclos_main": 364
+  },
+  {
+   "bench": "199_cfn_vs_lambda",
+   "vx_ciclos_main": 17294
+  },
+  {
+   "bench": "19_tco_basico",
+   "vx_ciclos_main": 279
+  },
+  {
+   "bench": "200_closure_en_campo",
+   "vx_ciclos_main": 14366
+  },
+  {
+   "bench": "200_vectorize_fmsub",
+   "vx_ciclos_main": 17663
+  },
+  {
+   "bench": "201_metodo_ligado",
+   "vx_ciclos_main": 17037
+  },
+  {
+   "bench": "201_vectorize_f32_scalar",
+   "vx_ciclos_main": 613
+  },
+  {
+   "bench": "202_closure_reasignacion",
+   "vx_ciclos_main": 14147
+  },
+  {
+   "bench": "202_f32_param_coercion",
+   "vx_ciclos_main": 285
+  },
+  {
+   "bench": "203_metodo_ligado_compuesto",
+   "vx_ciclos_main": 14556
+  },
+  {
+   "bench": "203_vectorize_scalar_factor",
+   "vx_ciclos_main": 617
+  },
+  {
+   "bench": "204_struct_closure_escape_err",
+   "vx_ciclos_main": 13571
+  },
+  {
+   "bench": "204_vectorize_two_scaled",
+   "vx_ciclos_main": 868
+  },
+  {
+   "bench": "206_struct_dtor",
+   "vx_ciclos_main": 15196
+  },
+  {
+   "bench": "207_struct_dtor_store_err",
+   "vx_ciclos_main": 15100
+  },
+  {
+   "bench": "208_struct_composition",
+   "vx_ciclos_main": 289
+  },
+  {
+   "bench": "210_unique_en_campo",
+   "vx_ciclos_main": 13550
+  },
+  {
+   "bench": "211_unique_reassign",
+   "vx_ciclos_main": 13678
+  },
+  {
+   "bench": "212_shared_en_campo",
+   "vx_ciclos_main": 14054
+  },
+  {
+   "bench": "213_copy_hook_refcount",
+   "vx_ciclos_main": 13350
+  },
+  {
+   "bench": "214_copy_hook_en_campo",
+   "vx_ciclos_main": 15630
+  },
+  {
+   "bench": "216_copy_hook_por_valor",
+   "vx_ciclos_main": 14159
+  },
+  {
+   "bench": "217_shared_refcount_nogc",
+   "vx_ciclos_main": 330
+  },
+  {
+   "bench": "218_structs_genericos",
+   "vx_ciclos_main": 279
+  },
+  {
+   "bench": "219_genericos_tipos_usuario",
+   "vx_ciclos_main": 14076
+  },
+  {
+   "bench": "220_funciones_genericas",
+   "vx_ciclos_main": 287
+  },
+  {
+   "bench": "221_inferencia_generica",
+   "vx_ciclos_main": 285
+  },
+  {
+   "bench": "222_metodos_genericos",
+   "vx_ciclos_main": 277
+  },
+  {
+   "bench": "223_conceptos_genericos",
+   "vx_ciclos_main": 1092
+  },
+  {
+   "bench": "225_especializacion",
+   "vx_ciclos_main": 880
+  },
+  {
+   "bench": "226_especializacion_avanzada",
+   "vx_ciclos_main": 17448
+  },
+  {
+   "bench": "227_concepts_avanzado",
+   "vx_ciclos_main": 876
+  },
+  {
+   "bench": "229_typedef_genericos",
+   "vx_ciclos_main": 722
+  },
+  {
+   "bench": "22_iface_polimorfismo",
+   "vx_ciclos_main": 259
+  },
+  {
+   "bench": "230_fiber_pingpong",
+   "vx_ciclos_main": 35283
+  },
+  {
+   "bench": "231_naked_call_from_normal",
+   "vx_ciclos_main": 269
+  },
+  {
+   "bench": "235_fiber_swapctx",
+   "vx_ciclos_main": 10243
+  },
+  {
+   "bench": "235_unique_wraps_gc",
+   "vx_ciclos_main": 28810
+  },
+  {
+   "bench": "236_fiber_stackful",
+   "vx_ciclos_main": 18853
+  },
+  {
+   "bench": "236_shared_wraps_gc",
+   "vx_ciclos_main": 28514
+  },
+  {
+   "bench": "237_gc_campo_y_ptr_wrapper",
+   "vx_ciclos_main": 14096
+  },
+  {
+   "bench": "238_move_from_field_nofree",
+   "vx_ciclos_main": 14073
+  },
+  {
+   "bench": "239_borrow_sobre_owned",
+   "vx_ciclos_main": 295
+  },
+  {
+   "bench": "240_unique_wraps_owned",
+   "vx_ciclos_main": 314
+  },
+  {
+   "bench": "241_unique_wraps_rawptr",
+   "vx_ciclos_main": 12691
+  },
+  {
+   "bench": "242_move_into_field",
+   "vx_ciclos_main": 15302
+  },
+  {
+   "bench": "243_move_custom_deleter",
+   "vx_ciclos_main": 295
+  },
+  {
+   "bench": "244_gc_owned_field_aot",
+   "vx_ciclos_main": 39662
+  },
+  {
+   "bench": "245_atomic_builtins",
+   "vx_ciclos_main": 331
+  },
+  {
+   "bench": "245_gc_nested_generic",
+   "vx_ciclos_main": 39684
+  },
+  {
+   "bench": "246_gc_finalize_escape",
+   "vx_ciclos_main": 36964
+  },
+  {
+   "bench": "247_gc_class_dtor_finalize",
+   "vx_ciclos_main": 33646
+  },
+  {
+   "bench": "248_gc_unique_shared_finalize",
+   "vx_ciclos_main": 31603
+  },
+  {
+   "bench": "249_gc_aot_precise_scan",
+   "vx_ciclos_main": 148276
+  },
+  {
+   "bench": "24_try_catch",
+   "vx_ciclos_main": 19764
+  },
+  {
+   "bench": "250_chan_close",
+   "vx_ciclos_main": 482068
+  },
+  {
+   "bench": "250_gc_compact",
+   "vx_ciclos_main": 2978690
+  },
+  {
+   "bench": "251_gc_compact_aot",
+   "vx_ciclos_main": 568941
+  },
+  {
+   "bench": "252_gc_ref_field",
+   "vx_ciclos_main": 597210
+  },
+  {
+   "bench": "253_gc_nursery_precise",
+   "vx_ciclos_main": 28780132
+  },
+  {
+   "bench": "254_syncimpl_hook",
+   "vx_ciclos_main": 26209
+  },
+  {
+   "bench": "255_host_ptr_null_branch",
+   "vx_ciclos_main": 487
+  },
+  {
+   "bench": "257_str_build_char_fmt",
+   "vx_ciclos_main": 669
+  },
+  {
+   "bench": "258_struct_defaults",
+   "vx_ciclos_main": 2471
+  },
+  {
+   "bench": "259_compound_literals",
+   "vx_ciclos_main": 1155
+  },
+  {
+   "bench": "25_try_multi_finally",
+   "vx_ciclos_main": 23189
+  },
+  {
+   "bench": "260_class_defaults",
+   "vx_ciclos_main": 16356
+  },
+  {
+   "bench": "261_overlay_basics",
+   "vx_ciclos_main": 1026
+  },
+  {
+   "bench": "262_overlay_dynamic",
+   "vx_ciclos_main": 1416
+  },
+  {
+   "bench": "263_overlay_block",
+   "vx_ciclos_main": 16439
+  },
+  {
+   "bench": "264_overlay_block_if",
+   "vx_ciclos_main": 16285
+  },
+  {
+   "bench": "265_overlay_scan",
+   "vx_ciclos_main": 15782
+  },
+  {
+   "bench": "266_match_int",
+   "vx_ciclos_main": 1066
+  },
+  {
+   "bench": "267_match_string",
+   "vx_ciclos_main": 4177
+  },
+  {
+   "bench": "268_match_string_runtime",
+   "vx_ciclos_main": 5718
+  },
+  {
+   "bench": "269_match_range",
+   "vx_ciclos_main": 2088
+  },
+  {
+   "bench": "26_foreach",
+   "vx_ciclos_main": 362
+  },
+  {
+   "bench": "270_overlay_array",
+   "vx_ciclos_main": 1426
+  },
+  {
+   "bench": "271_overlay_pe_sections",
+   "vx_ciclos_main": 18580
+  },
+  {
+   "bench": "274_overlay_checked",
+   "vx_ciclos_main": 14356
+  },
+  {
+   "bench": "275_overlay_rva_resolver",
+   "vx_ciclos_main": 15778
+  },
+  {
+   "bench": "277_overlay_element_tlv",
+   "vx_ciclos_main": 20104
+  },
+  {
+   "bench": "278_overlay_extent",
+   "vx_ciclos_main": 1216
+  },
+  {
+   "bench": "279_overlay_assembler",
+   "vx_ciclos_main": 53464
+  },
+  {
+   "bench": "27_generics_box",
+   "vx_ciclos_main": 279
+  },
+  {
+   "bench": "280_overlay_endian",
+   "vx_ciclos_main": 3086
+  },
+  {
+   "bench": "281_overlay_endian_ctx",
+   "vx_ciclos_main": 21724
+  },
+  {
+   "bench": "284_enum_concepts",
+   "vx_ciclos_main": 560
+  },
+  {
+   "bench": "286_concept_predicate",
+   "vx_ciclos_main": 279
+  },
+  {
+   "bench": "287_comptime_vars",
+   "vx_ciclos_main": 255
+  },
+  {
+   "bench": "288_comptime_asm",
+   "vx_ciclos_main": 287
+  },
+  {
+   "bench": "289_comptime_asm_const",
+   "vx_ciclos_main": 267
+  },
+  {
+   "bench": "28_generics_avanzado",
+   "vx_ciclos_main": 282
+  },
+  {
+   "bench": "290_comptime_asm_naked",
+   "vx_ciclos_main": 261
+  },
+  {
+   "bench": "291_comptime_asm_block_assert",
+   "vx_ciclos_main": 279
+  },
+  {
+   "bench": "293_comptime_arnes",
+   "vx_ciclos_main": 14962
+  },
+  {
+   "bench": "295_c_func_ptr",
+   "vx_ciclos_main": 297
+  },
+  {
+   "bench": "296_const_correct",
+   "vx_ciclos_main": 285
+  },
+  {
+   "bench": "297_comptime_expr_capture",
+   "vx_ciclos_main": 2169
+  },
+  {
+   "bench": "29_optional",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "301_macro_codegen_helper",
+   "vx_ciclos_main": 461
+  },
+  {
+   "bench": "302_c_enum_valued",
+   "vx_ciclos_main": 457
+  },
+  {
+   "bench": "303_c_struct_fields",
+   "vx_ciclos_main": 184
+  },
+  {
+   "bench": "305_adt_enum_field",
+   "vx_ciclos_main": 291
+  },
+  {
+   "bench": "306_align_struct",
+   "vx_ciclos_main": 279
+  },
+  {
+   "bench": "307_nested_expr_capture",
+   "vx_ciclos_main": 856
+  },
+  {
+   "bench": "308_naked_raw_variadic",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "309_opaque_struct_ptr",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "30_unwrap_null",
+   "vx_ciclos_main": 15532
+  },
+  {
+   "bench": "310_macro_nested_expr",
+   "vx_ciclos_main": 441
+  },
+  {
+   "bench": "312_global_compound_assign",
+   "vx_ciclos_main": 657
+  },
+  {
+   "bench": "314_operadores_sobrecargados",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "315_bounds_check_elim",
+   "vx_ciclos_main": 352
+  },
+  {
+   "bench": "315_operadores_llamada_deref",
+   "vx_ciclos_main": 1133
+  },
+  {
+   "bench": "31_nonnull_bangbang",
+   "vx_ciclos_main": 280
+  },
+  {
+   "bench": "320_newtype_tipos_usuario",
+   "vx_ciclos_main": 941
+  },
+  {
+   "bench": "322_herencia_self",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "323_struct_copy_return",
+   "vx_ciclos_main": 293
+  },
+  {
+   "bench": "325_interfaz_vs_abstract",
+   "vx_ciclos_main": 289
+  },
+  {
+   "bench": "327_abstract_cadena_iface",
+   "vx_ciclos_main": 269
+  },
+  {
+   "bench": "328_virtual_dispatch",
+   "vx_ciclos_main": 3275
+  },
+  {
+   "bench": "32_bangbang_decl",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "330_regalloc_pressure_udivmod",
+   "vx_ciclos_main": 1460
+  },
+  {
+   "bench": "332_struct_static_methods",
+   "vx_ciclos_main": 287
+  },
+  {
+   "bench": "334_struct_static_fields",
+   "vx_ciclos_main": 275
+  },
+  {
+   "bench": "335_struct_constructors",
+   "vx_ciclos_main": 285
+  },
+  {
+   "bench": "337_comptime_ctor_literal",
+   "vx_ciclos_main": 255
+  },
+  {
+   "bench": "338_comptime_parse_literal",
+   "vx_ciclos_main": 265
+  },
+  {
+   "bench": "339_string_conformance",
+   "vx_ciclos_main": 13793
+  },
+  {
+   "bench": "33_optional_result_builtin",
+   "vx_ciclos_main": 337
+  },
+  {
+   "bench": "340_spill_opcodes",
+   "vx_ciclos_main": 31254
+  },
+  {
+   "bench": "343_array_local_reduccion",
+   "vx_ciclos_main": 332
+  },
+  {
+   "bench": "346_optional_struct",
+   "vx_ciclos_main": 609
+  },
+  {
+   "bench": "34_optional_result_avanzado",
+   "vx_ciclos_main": 451
+  },
+  {
+   "bench": "356_generica_desde_metodo",
+   "vx_ciclos_main": 267
+  },
+  {
+   "bench": "357_herencia_interpolacion",
+   "vx_ciclos_main": 1074
+  },
+  {
+   "bench": "35_synchronized_basico",
+   "vx_ciclos_main": 24560
+  },
+  {
+   "bench": "35b_sync_tiny",
+   "vx_ciclos_main": 23699
+  },
+  {
+   "bench": "368_static_assert_capturado",
+   "vx_ciclos_main": 265
+  },
+  {
+   "bench": "36_synchronized_exception",
+   "vx_ciclos_main": 24320
+  },
+  {
+   "bench": "36b_sync_throw_simple",
+   "vx_ciclos_main": 26713
+  },
+  {
+   "bench": "371_asm_elevado_equivale",
+   "vx_ciclos_main": 326
+  },
+  {
+   "bench": "371_campo_por_puntero",
+   "vx_ciclos_main": 340
+  },
+  {
+   "bench": "372_asm_destruye_registro",
+   "vx_ciclos_main": 253
+  },
+  {
+   "bench": "372_asm_dse",
+   "vx_ciclos_main": 273
+  },
+  {
+   "bench": "373_optional_overlay",
+   "vx_ciclos_main": 15986
+  },
+  {
+   "bench": "374_fuera_de_region",
+   "vx_ciclos_main": 436
+  },
+  {
+   "bench": "377_rango_ok",
+   "vx_ciclos_main": 449
+  },
+  {
+   "bench": "37_synchronized_return",
+   "vx_ciclos_main": 27471
+  },
+  {
+   "bench": "38_spawn_basico",
+   "vx_ciclos_main": 253757
+  },
+  {
+   "bench": "39_spawn_pingpong",
+   "vx_ciclos_main": 22673
+  },
+  {
+   "bench": "39b_spawn_recv_only",
+   "vx_ciclos_main": 22304
+  },
+  {
+   "bench": "40_future_basico",
+   "vx_ciclos_main": 35315
+  },
+  {
+   "bench": "40_operator_overload",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "41_struct_methods",
+   "vx_ciclos_main": 304
+  },
+  {
+   "bench": "42_propiedades_basico",
+   "vx_ciclos_main": 291
+  },
+  {
+   "bench": "42_struct_operator",
+   "vx_ciclos_main": 275
+  },
+  {
+   "bench": "43_paralelismo_real",
+   "vx_ciclos_main": 21704
+  },
+  {
+   "bench": "44_operator_overload2",
+   "vx_ciclos_main": 283
+  },
+  {
+   "bench": "44_paralelismo_heavy",
+   "vx_ciclos_main": 21445
+  },
+  {
+   "bench": "45_spawn_placement",
+   "vx_ciclos_main": 18777
+  },
+  {
+   "bench": "45_string_op_override",
+   "vx_ciclos_main": 1716
+  },
+  {
+   "bench": "46_spawn_here_observable",
+   "vx_ciclos_main": 256868
+  },
+  {
+   "bench": "476_return_en_spawn",
+   "vx_ciclos_main": 75096
+  },
+  {
+   "bench": "478_clases_finales",
+   "vx_ciclos_main": 837
+  },
+  {
+   "bench": "480_params_metodo",
+   "vx_ciclos_main": 14295
+  },
+  {
+   "bench": "481_variadicos_todos",
+   "vx_ciclos_main": 19274
+  },
+  {
+   "bench": "482_matriz_parametros",
+   "vx_ciclos_main": 27725
+  },
+  {
+   "bench": "483_params_limite_por_modo",
+   "vx_ciclos_main": 17711
+  },
+  {
+   "bench": "485_nombres_de_registro",
+   "vx_ciclos_main": 277
+  },
+  {
+   "bench": "486_payload_variante",
+   "vx_ciclos_main": 1163
+  },
+  {
+   "bench": "487_comptime_anchos",
+   "vx_ciclos_main": 1031
+  },
+  {
+   "bench": "488_impl_metodos",
+   "vx_ciclos_main": 1014
+  },
+  {
+   "bench": "489_argumentos_uniformes",
+   "vx_ciclos_main": 15250
+  },
+  {
+   "bench": "48_loadmodule_plugin",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "492_vectorizador_completo",
+   "vx_ciclos_main": 18508
+  },
+  {
+   "bench": "494_asignar_subclase",
+   "vx_ciclos_main": 22155
+  },
+  {
+   "bench": "495_interfaz_y_herencia",
+   "vx_ciclos_main": 18741
+  },
+  {
+   "bench": "496_interfaces_encadenadas",
+   "vx_ciclos_main": 17477
+  },
+  {
+   "bench": "497_typedef_struct_completo",
+   "vx_ciclos_main": 605
+  },
+  {
+   "bench": "498_typename_completo",
+   "vx_ciclos_main": 8542
+  },
+  {
+   "bench": "499_alineacion_campos",
+   "vx_ciclos_main": 989
+  },
+  {
+   "bench": "500_estaticos_retorno_buffer",
+   "vx_ciclos_main": 1744
+  },
+  {
+   "bench": "501_estaticos_lambda_y_unique",
+   "vx_ciclos_main": 1299
+  },
+  {
+   "bench": "502_metodo_devuelve_struct",
+   "vx_ciclos_main": 605
+  },
+  {
+   "bench": "503_optional_de_puntero",
+   "vx_ciclos_main": 1085
+  },
+  {
+   "bench": "504_optional_sin_marca",
+   "vx_ciclos_main": 17915
+  },
+  {
+   "bench": "505_nonnull_se_cumple",
+   "vx_ciclos_main": 971
+  },
+  {
+   "bench": "507_ayudantes_optional",
+   "vx_ciclos_main": 1782
+  },
+  {
+   "bench": "50_lambda_simple",
+   "vx_ciclos_main": 288
+  },
+  {
+   "bench": "50b_lambda_no_capture",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "512_sufijos_de_tipo",
+   "vx_ciclos_main": 3202
+  },
+  {
+   "bench": "516_result_payload_grande",
+   "vx_ciclos_main": 1155
+  },
+  {
+   "bench": "517_unique_una_palabra",
+   "vx_ciclos_main": 15310
+  },
+  {
+   "bench": "518_unique_campo_sin_rodeo",
+   "vx_ciclos_main": 15140
+  },
+  {
+   "bench": "51_lambda_captura",
+   "vx_ciclos_main": 229
+  },
+  {
+   "bench": "520_target_tier",
+   "vx_ciclos_main": 279
+  },
+  {
+   "bench": "521_direccion_parametros",
+   "vx_ciclos_main": 13789
+  },
+  {
+   "bench": "523_direccion_campos",
+   "vx_ciclos_main": 263
+  },
+  {
+   "bench": "524_parametros_salida",
+   "vx_ciclos_main": 283
+  },
+  {
+   "bench": "525_direccion_y_borrow",
+   "vx_ciclos_main": 285
+  },
+  {
+   "bench": "526_escritura_por_puntero_indirecto",
+   "vx_ciclos_main": 312
+  },
+  {
+   "bench": "527_direccion_en_el_tipo",
+   "vx_ciclos_main": 1349
+  },
+  {
+   "bench": "529_out_por_todos_los_caminos",
+   "vx_ciclos_main": 16190
+  },
+  {
+   "bench": "52_lambda_hof",
+   "vx_ciclos_main": 244
+  },
+  {
+   "bench": "531_literal_flotante_hex",
+   "vx_ciclos_main": 1030
+  },
+  {
+   "bench": "532_ternario_en_interpolacion",
+   "vx_ciclos_main": 8394
+  },
+  {
+   "bench": "533_const_flotante_global",
+   "vx_ciclos_main": 1471
+  },
+  {
+   "bench": "534_goto_valores",
+   "vx_ciclos_main": 1440
+  },
+  {
+   "bench": "536_auto_literal_cadena",
+   "vx_ciclos_main": 4921
+  },
+  {
+   "bench": "537_desbordamiento_entero",
+   "vx_ciclos_main": 1121
+  },
+  {
+   "bench": "539_entero_estrecho_normalizado",
+   "vx_ciclos_main": 926
+  },
+  {
+   "bench": "53_enum_simple",
+   "vx_ciclos_main": 225
+  },
+  {
+   "bench": "540_overlay_solape",
+   "vx_ciclos_main": 1252
+  },
+  {
+   "bench": "542_overlay_solape_declarado_falso",
+   "vx_ciclos_main": 261
+  },
+  {
+   "bench": "543_hook_instrumentacion",
+   "vx_ciclos_main": 25754
+  },
+  {
+   "bench": "543_overlay_campos_anchos",
+   "vx_ciclos_main": 23533
+  },
+  {
+   "bench": "544_hook_nombres",
+   "vx_ciclos_main": 22687
+  },
+  {
+   "bench": "54_enum_payload",
+   "vx_ciclos_main": 347
+  },
+  {
+   "bench": "55_linkedlist_basico",
+   "vx_ciclos_main": 13983
+  },
+  {
+   "bench": "56_linkedlist_hof",
+   "vx_ciclos_main": 15375
+  },
+  {
+   "bench": "57_linkedlist_option",
+   "vx_ciclos_main": 14353
+  },
+  {
+   "bench": "58_quicksort",
+   "vx_ciclos_main": 1246
+  },
+  {
+   "bench": "59_arraylist",
+   "vx_ciclos_main": 16461
+  },
+  {
+   "bench": "60_stack_iface",
+   "vx_ciclos_main": 19309
+  },
+  {
+   "bench": "61_rpn_calc",
+   "vx_ciclos_main": 722
+  },
+  {
+   "bench": "62_compose_curry",
+   "vx_ciclos_main": 1104
+  },
+  {
+   "bench": "63_topfn_as_fnvalue",
+   "vx_ciclos_main": 793
+  },
+  {
+   "bench": "64_curry_returning_closures",
+   "vx_ciclos_main": 498
+  },
+  {
+   "bench": "65_io_format",
+   "vx_ciclos_main": 294730
+  },
+  {
+   "bench": "66_io_colors",
+   "vx_ciclos_main": 32046
+  },
+  {
+   "bench": "69_string_basico",
+   "vx_ciclos_main": 37482
+  },
+  {
+   "bench": "70_string_ops_native",
+   "vx_ciclos_main": 51419
+  },
+  {
+   "bench": "71_bit_fields",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "72_typedef_cstyle",
+   "vx_ciclos_main": 284
+  },
+  {
+   "bench": "73_init_lists",
+   "vx_ciclos_main": 267
+  },
+  {
+   "bench": "74_bf_init",
+   "vx_ciclos_main": 242
+  },
+  {
+   "bench": "75_string_methods",
+   "vx_ciclos_main": 36704
+  },
+  {
+   "bench": "76_string_exhaustive",
+   "vx_ciclos_main": 58105
+  },
+  {
+   "bench": "77_float_arith",
+   "vx_ciclos_main": 38253
+  },
+  {
+   "bench": "78_f32_full",
+   "vx_ciclos_main": 2152
+  },
+  {
+   "bench": "79_compound_assign",
+   "vx_ciclos_main": 1179
+  },
+  {
+   "bench": "80_triple_quoted",
+   "vx_ciclos_main": 1406
+  },
+  {
+   "bench": "82_host_ptr_addr_taken",
+   "vx_ciclos_main": 275
+  },
+  {
+   "bench": "83_host_ptr_indirect",
+   "vx_ciclos_main": 267
+  },
+  {
+   "bench": "84_static_fields",
+   "vx_ciclos_main": 257
+  },
+  {
+   "bench": "85_extern_winapi",
+   "vx_ciclos_main": 1304
+  },
+  {
+   "bench": "86_ffi_runtime",
+   "vx_ciclos_main": 18629
+  },
+  {
+   "bench": "87_collections_hashmap",
+   "vx_ciclos_main": 15215
+  },
+  {
+   "bench": "88_collections_queue_deque_tree",
+   "vx_ciclos_main": 18677
+  },
+  {
+   "bench": "90_match_repro",
+   "vx_ciclos_main": 286
+  },
+  {
+   "bench": "91_str_split",
+   "vx_ciclos_main": 12694
+  },
+  {
+   "bench": "92_collections_primitive",
+   "vx_ciclos_main": 17183
+  },
+  {
+   "bench": "93_dispose_explicit",
+   "vx_ciclos_main": 8289
+  },
+  {
+   "bench": "94_escape_detection",
+   "vx_ciclos_main": 5953
+  },
+  {
+   "bench": "95_destructor_raii",
+   "vx_ciclos_main": 13077
+  },
+  {
+   "bench": "95_unique_ptr_basico",
+   "vx_ciclos_main": 265
+  },
+  {
+   "bench": "96_destructor_escape_rules",
+   "vx_ciclos_main": 13629
+  },
+  {
+   "bench": "96_unique_move",
+   "vx_ciclos_main": 11786
+  },
+  {
+   "bench": "97_gc_writebarrier",
+   "vx_ciclos_main": 14561
+  },
+  {
+   "bench": "97_shared_basico",
+   "vx_ciclos_main": 287
+  },
+  {
+   "bench": "98_arraylist_string_natural",
+   "vx_ciclos_main": 7152
+  },
+  {
+   "bench": "99_dtor_recursive_fields",
+   "vx_ciclos_main": 16063
+  },
+  {
+   "bench": "_dbg_test",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "asm_adc_sbb",
+   "vx_ciclos_main": 252
+  },
+  {
+   "bench": "asm_bitops",
+   "vx_ciclos_main": 293
+  },
+  {
+   "bench": "asm_branch",
+   "vx_ciclos_main": 356
+  },
+  {
+   "bench": "asm_cdqe",
+   "vx_ciclos_main": 229
+  },
+  {
+   "bench": "asm_cmp_cmov",
+   "vx_ciclos_main": 281
+  },
+  {
+   "bench": "asm_cmp_nonadj",
+   "vx_ciclos_main": 300
+  },
+  {
+   "bench": "asm_cmp_setcc",
+   "vx_ciclos_main": 305
+  },
+  {
+   "bench": "asm_divmod",
+   "vx_ciclos_main": 271
+  },
+  {
+   "bench": "asm_imul3_xchg",
+   "vx_ciclos_main": 247
+  },
+  {
+   "bench": "asm_jc",
+   "vx_ciclos_main": 308
+  },
+  {
+   "bench": "asm_js",
+   "vx_ciclos_main": 306
+  },
+  {
+   "bench": "asm_lift_widths",
+   "vx_ciclos_main": 286
+  },
+  {
+   "bench": "asm_loop",
+   "vx_ciclos_main": 445
+  },
+  {
+   "bench": "asm_loop_dec",
+   "vx_ciclos_main": 346
+  },
+  {
+   "bench": "asm_mem_disp",
+   "vx_ciclos_main": 287
+  },
+  {
+   "bench": "asm_movext",
+   "vx_ciclos_main": 309
+  },
+  {
+   "bench": "asm_mul",
+   "vx_ciclos_main": 278
+  },
+  {
+   "bench": "asm_naked_stack_switch",
+   "vx_ciclos_main": 240
+  },
+  {
+   "bench": "asm_normal_stack_warn",
+   "vx_ciclos_main": 253
+  },
+  {
+   "bench": "asm_rotate",
+   "vx_ciclos_main": 303
+  },
+  {
+   "bench": "asm_stack_manip",
+   "vx_ciclos_main": 249
+  },
+  {
+   "bench": "asm_sub_jcc",
+   "vx_ciclos_main": 293
+  },
+  {
+   "bench": "beep_bepp",
+   "vx_ciclos_main": 18557391790
+  },
+  {
+   "bench": "bug3",
+   "vx_ciclos_main": 445
+  },
+  {
+   "bench": "bug3_class",
+   "vx_ciclos_main": 283
+  },
+  {
+   "bench": "bug3_struct",
+   "vx_ciclos_main": 14845
+  },
+  {
+   "bench": "bug4",
+   "vx_ciclos_main": 13200
+  },
+  {
+   "bench": "check_chain",
+   "vx_ciclos_main": 243
+  },
+  {
+   "bench": "check_multi",
+   "vx_ciclos_main": 237
+  },
+  {
+   "bench": "check_return_unique",
+   "vx_ciclos_main": 245
+  },
+  {
+   "bench": "check_with_return",
+   "vx_ciclos_main": 249
+  },
+  {
+   "bench": "fp_rounding",
+   "vx_ciclos_main": 283
+  },
+  {
+   "bench": "shift_variable",
+   "vx_ciclos_main": 255
+  },
+  {
+   "bench": "test_fmt_spec",
+   "vx_ciclos_main": 20757
+  }
+ ]
+}

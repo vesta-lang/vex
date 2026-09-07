@@ -16,7 +16,7 @@
  */
 
 #include "vx/lowering.h"
-#include "util/thread_slot.h" // el estado por hilo NO va en thread_local
+#include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "lowering/lowering_internal.h" // helpers que comparten las unidades del lowering
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 
@@ -232,7 +232,7 @@ std::string macro_body_unsupported_reason(const TypeChecker &tc,
                                           const ast::Stmt *s);
 
 /* El estado por hilo del bajado de macros va en las ranuras propias del
- * proyecto (util/thread_slot.h) y no en `thread_local`.
+ * proyecto (util/os/thread_slot.h) y no en `thread_local`.
  *
  * No es una preferencia: declararlas `extern thread_local` para que otra
  * unidad las alcanzara las hacia pasar por la capa emulada de este toolchain,

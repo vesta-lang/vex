@@ -57,7 +57,7 @@
 #include "analysis/asa/fact.h" // UnknownReason: por que no se pudo afirmar mas
 #include "analysis/facts/ir_facts.h"
 #include "util/fnv.h"          // huella de las opciones, campo a campo
-#include "util/small_vector.h" // el estado de un punto casi siempre es diminuto
+#include "util/alloc/small_vector.h" // el estado de un punto casi siempre es diminuto
 
 #include <cstddef> // offsetof: las aserciones que fijan el layout de RangeEntry
 #include <cstdint>

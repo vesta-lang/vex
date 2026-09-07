@@ -671,7 +671,10 @@ static void parse_sib_expr(const vm::ASTNode *expr, uint8_t &base,
 // =========================================================================
 
 /**
- * @brief Emite cuatro bytes para una instruccion con direccionamiento SIB.
+ * @brief Emite los bytes de datos de una instruccion con direccionamiento SIB.
+ *
+ * Cuatro en la tabla extendida (el ultimo es relleno) y TRES en la primaria,
+ * donde el opcode ya ocupa el hueco que el relleno cubria.
  *
  * Disposicion de bytes:
  *   byte2 (ctrl):    mode(2) | signed(1) | dir(1) | scale(2) | has_index(1) | 0
@@ -746,7 +749,11 @@ void emit_instr_sib(const vm::Instruction *instruction_parser,
 
     code_final.emit8((dst_reg << 4) | (base & 0xF)); // emit reg/base byte
     code_final.emit8(index & 0xF); // emit index register byte (low nibble)
-    code_final.emit8(0x00);        // emit padding byte
+    /* El relleno SOLO en la extendida.  Esta ahi para que el descodificador
+     * pueda leer los tres campos de un tiron sin salirse de la instruccion; en
+     * la primaria el opcode ocupa ese sitio y el bloque de cuatro bytes ya
+     * cuadra sin ayuda. */
+    if (now_instr->opcode1 == 0x00) code_final.emit8(0x00);
 }
 
 // =========================================================================

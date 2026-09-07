@@ -37,7 +37,7 @@
 #ifndef VESTA_TESTS_UTIL_MEM_STATS_H
 #define VESTA_TESTS_UTIL_MEM_STATS_H
 
-#include "util/host_allocator.h"
+#include "util/alloc/host_allocator.h"
 
 #include <iostream>
 

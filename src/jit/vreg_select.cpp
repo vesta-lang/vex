@@ -24,7 +24,7 @@
 
 #include "util/env_flags.h"
 #include "util/thread_owned.h" // estado por hilo, sin `thread_local`
-#include "util/thread_slot.h"  // lo que cabe en un puntero, sin reservar
+#include "util/os/thread_slot.h"  // lo que cabe en un puntero, sin reservar
 #include "jit/vreg_select.h"
 #include "jit/jit_branch_prof.h" // auto-PGO: contadores de branch por linea
 

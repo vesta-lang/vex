@@ -408,6 +408,23 @@ void exec_instr_cmp_sib(ProcessVM *vm, const DecodedInstr &instr);
 /** @brief Ejecuta MOV con acceso a memoria SIB. */
 void exec_instr_mov_sib(ProcessVM *vm, const DecodedInstr &instr);
 
+/* Formas con memoria de la logica y los desplazamientos.  Viven en la tabla
+ * PRIMARIA (0x60-0x65), no en la extendida: alli ocuparian seis bytes y aqui
+ * ocupan cuatro, y la extendida ya solo tiene 35 ranuras libres contra las 240
+ * de la primaria.  Ver `decode_table.cpp`. */
+/** @brief Ejecuta AND con acceso a memoria SIB. */
+void exec_instr_and_sib(ProcessVM *vm, const DecodedInstr &instr);
+/** @brief Ejecuta OR con acceso a memoria SIB. */
+void exec_instr_or_sib(ProcessVM *vm, const DecodedInstr &instr);
+/** @brief Ejecuta XOR con acceso a memoria SIB. */
+void exec_instr_xor_sib(ProcessVM *vm, const DecodedInstr &instr);
+/** @brief Ejecuta SHL con acceso a memoria SIB. */
+void exec_instr_shl_sib(ProcessVM *vm, const DecodedInstr &instr);
+/** @brief Ejecuta SHR con acceso a memoria SIB. */
+void exec_instr_shr_sib(ProcessVM *vm, const DecodedInstr &instr);
+/** @brief Ejecuta SAR con acceso a memoria SIB. */
+void exec_instr_sar_sib(ProcessVM *vm, const DecodedInstr &instr);
+
 /**
  * @brief Direccion efectiva de un operando de memoria codificado SIB.
  *
@@ -424,7 +441,10 @@ void exec_instr_mov_sib(ProcessVM *vm, const DecodedInstr &instr);
  * @param instr Instruccion descodificada, con sus campos `mem_data`.
  * @return      La direccion efectiva, de 64 bits.
  */
-inline uint64_t sib_effective_addr(ProcessVM *vm, const DecodedInstr &instr) {
+/* `always_inline`: es una suma de tres campos y una lectura de registro, y
+ * salia como llamada propia en el perfil de la mezcla `memoria`. */
+[[gnu::always_inline]] inline uint64_t
+sib_effective_addr(ProcessVM *vm, const DecodedInstr &instr) {
     const uint64_t base =
         vm->registers.regs[instr.data_instruction.mem_data.reg_base].raw();
     // bit 2 del campo `scale` dice si hay registro de indice

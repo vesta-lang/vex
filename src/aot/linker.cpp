@@ -1287,8 +1287,18 @@ bool aot_link(const std::vector<std::string> &inputs,
     if (can_import) {
         std::vector<std::string> cand;
         if (fmt_pe) {
-            // Windows: el CRT + kernel32 del sistema.
-            for (const char *d : {"kernel32.dll", "ucrtbase.dll", "msvcrt.dll"})
+            // Windows: el CRT + kernel32 del sistema, mas ntdll.
+            //
+            // `ntdll` esta porque nuestro propio codigo BAJA a la capa NT a
+            // proposito -- el asignador reserva con `NtAllocateVirtualMemory`
+            // en vez de `VirtualAlloc`, que es esa misma llamada con Win32 por
+            // encima --.  Sin ella en las candidatas, un binario AOT que use
+            // `gc<T>` no enlazaba: el archivo del GC pedia cinco simbolos `Nt*`
+            // que ninguna DLL de la lista exporta.  Y no es una excepcion
+            // nuestra: ntdll esta cargada en TODO proceso de Windows antes que
+            // kernel32, que de hecho la usa por debajo.
+            for (const char *d :
+                 {"kernel32.dll", "ntdll.dll", "ucrtbase.dll", "msvcrt.dll"})
                 cand.push_back(system_dll_path(d));
         } else {
             // Linux: libc.so.6 (busqueda por defecto, como el -lc implicito;
@@ -1313,6 +1323,31 @@ bool aot_link(const std::vector<std::string> &inputs,
     }
     // Resuelve el nombre real de un simbolo a su DLL (strip __imp_ de los
     // dllimport de MinGW).  Devuelve "" si ninguna DLL candidata lo exporta.
+    /**
+     * @brief Es @p n el simbolo de la BASE DE LA IMAGEN?
+     *
+     * `__ImageBase` no lo define ningun fichero fuente: lo publica el
+     * ENLAZADOR, y su direccion es el primer byte de la imagen cargada -- la
+     * cabecera `MZ` --.  `link.exe` y `ld` lo sintetizan, y el codigo lo usa
+     * como forma barata de saber donde esta cargado su modulo sin llamar a
+     * `GetModuleHandle`; el simbolizador lo necesita para restarselo a una
+     * direccion y quedarse con el desplazamiento dentro del modulo.
+     *
+     * Aqui faltaba, y el modo de fallar era el peor posible: no lo define
+     * ningun objeto y no lo exporta ninguna DLL, asi que salia como "simbolo no
+     * resuelto" a muchas capas del sitio donde se referenciaba.  Con un archivo
+     * `.a` por medio ni siquiera hacia falta usar la funcion que lo menciona:
+     * la unidad de enlace es el OBJETO entero, asi que traerse `os_alloc` se
+     * traia tambien esta referencia.
+     *
+     * Se aceptan los tres nombres que usan las herramientas: el de PE con y sin
+     * subrayado de mas (i386 decora con `_`), y el equivalente de ELF.
+     */
+    auto es_base_de_imagen = [](const std::string &n) {
+        return n == "__ImageBase" || n == "___ImageBase" ||
+               n == "__executable_start";
+    };
+
     auto dll_of = [&sym2dll](const std::string &n) -> std::string {
         const std::string real = (n.rfind("__imp_", 0) == 0) ? n.substr(6) : n;
         auto it = sym2dll.find(real);
@@ -1339,6 +1374,11 @@ bool aot_link(const std::vector<std::string> &inputs,
         uint64_t def_off = 0;
         std::string ext_name;
         bool is_tls_const = false; // entrada IE: contiene un TPOFF constante
+        /* La entrada vale la BASE DE LA IMAGEN.  Un acceso a `__ImageBase` por
+         * GOT no lo emite hoy nuestro backend, pero SI otro compilador -- es
+         * lo normal en codigo independiente de posicion --, y sin esto ese
+         * objeto no enlaza.  Compatibilidad, no una via nuestra. */
+        bool is_imagebase = false;
         int64_t tls_const = 0;
     };
     std::unordered_map<std::string, GotEntry> got_entries;
@@ -1407,6 +1447,14 @@ bool aot_link(const std::vector<std::string> &inputs,
                         key = "D" + std::to_string(ge.def_wsec) + ":" +
                               std::to_string(ge.def_off);
                         gok = true;
+                    } else if (es_base_de_imagen(sy.name)) {
+                        /* La misma respuesta que en la ruta directa, por la
+                         * misma razon: lo publica el enlazador.  Una sola
+                         * entrada para todos los sitios -- la base es una --,
+                         * de ahi que la clave sea constante. */
+                        ge.is_imagebase = true;
+                        key = "B";
+                        gok = true;
                     } else if (can_import && !dll_of(sy.name).empty()) {
                         ge.is_ext = true;
                         ge.ext_name = sy.name;
@@ -1445,6 +1493,11 @@ bool aot_link(const std::vector<std::string> &inputs,
                 auto it = globals.find(sy.name);
                 if (it != globals.end() && it->second.defined) {
                     tgt = RelocTarget::addr(it->second.wsec, it->second.off);
+                    ok = true;
+                } else if (es_base_de_imagen(sy.name)) {
+                    /* Lo pone EL ENLAZADOR, no un fichero fuente.  Ver
+                     * `es_base_de_imagen`. */
+                    tgt = RelocTarget::image_base();
                     ok = true;
                 } else if (can_import && !dll_of(sy.name).empty()) {
                     // Una DLL candidata EXPORTA este simbolo -> import por IAT
@@ -1559,10 +1612,13 @@ bool aot_link(const std::vector<std::string> &inputs,
                 const GotEntry &ge = kv.second;
                 if (ge.is_tls_const) continue; // IE: valor constante, sin reloc
                 const uint64_t eoff = got_entry_off[kv.first];
-                RelocTarget t =
-                    ge.is_ext
-                        ? RelocTarget::addr(thunk_sec, thunk_off[ge.ext_name])
-                        : RelocTarget::addr(ge.def_wsec, ge.def_off);
+                RelocTarget t;
+                if (ge.is_imagebase)
+                    t = RelocTarget::image_base();
+                else if (ge.is_ext)
+                    t = RelocTarget::addr(thunk_sec, thunk_off[ge.ext_name]);
+                else
+                    t = RelocTarget::addr(ge.def_wsec, ge.def_off);
                 w.add_reloc(got_sec, eoff, t, RelocKind::ABS64);
             }
             // Resolver cada sitio GOTPCREL -> REL32 a su entrada GOT.

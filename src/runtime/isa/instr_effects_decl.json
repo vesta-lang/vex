@@ -33,7 +33,14 @@
     "           descodificado al formar.  Exacto y gratis: no hay que especular.",
     "           `regla` dice cual.",
     "  fixed    Efectos declarados a mano; `escribe`/`lee` son mascaras sobre los",
-    "           campos [banderas, pila, marco, pc].",
+    "           campos [banderas, pila, marco, pc].  Opcionalmente tambien",
+    "           `form_read`/`form_write` (y sus variantes `_vec`), que son la",
+    "           FORMA: que campos del operando indexan el banco de registros.",
+    "           Los dos se pierden por el mismo motivo -- el derivador no pudo",
+    "           seguir el puntero al proceso hasta el acceso --, asi que",
+    "           corregir solo los primeros deja la instruccion diciendo que no",
+    "           escribe ningun registro, y eso permite mover por encima a quien",
+    "           lo leia.",
     "",
     "REGLAS de narrow:",
     "  special_reg  El campo afectado sale del codigo de registro especial",
@@ -380,8 +387,11 @@
       "tabla": "extended",
       "indice": 174,
       "nombre": "callitf",
-      "clase": "runtime",
-      "motivo": "jmp rax"
+      "clase": "fixed",
+      "runtime": true,
+      "motivo": "DOS cosas a la vez.  (1) `runtime`: el destino sale de un registro (`jmp rax`), asi que no se sabe TODAVIA -- se resuelve al formar el paquete observandolo --.  (2) `fixed`: ademas, el derivador perdio el rastro del puntero al proceso y con el las LECTURAS, dejandola leyendo solo memoria cuando para apilar la direccion de retorno lee la pila y el contador de programa.  Se restaura lo que derivaba antes (pila, pc y memoria); lo que escribe ya lo deriva bien y se declara igual para que la fila entera venga del mismo sitio.",
+      "escribe": 26,
+      "lee": 26
     },
     {
       "tabla": "extended",
@@ -494,6 +504,22 @@
     { "tabla": "extended", "indice": 61,  "nombre": "msgrecv",
       "clase": "foreign", "motivo": "sin sitio: 400.000 instrucciones sin ver el final (entra en el runtime distribuido y su TLS)" },
     { "tabla": "extended", "indice": 211, "nombre": "throw",
-      "clase": "foreign", "motivo": "sin sitio: 400.000 instrucciones sin ver el final (entra en la maquinaria de excepciones)" }
+      "clase": "foreign", "motivo": "sin sitio: 400.000 instrucciones sin ver el final (entra en la maquinaria de excepciones)" },
+
+    { "tabla": "primary", "indice": 98, "nombre": "xor",
+      "clase": "fixed",
+      "motivo": "El manejador es BYTE A BYTE identico al de `and` y `or` -- misma plantilla, mismas tablas, solo cambia la reubicacion --, pero el compilador dejo el puntero al proceso en RBX en vez de en RSI, y por ahi el rastro del derivador no llega: cuenta 66 accesos en el rango de un campo SIN procedencia, el primero `mov byte ptr [rbx + 0x58], al  (campo flags)`.  Al no poder atribuirlos, la instruccion salia declarando que NO toca las banderas y que no escribe ningun registro del operando, cuando hace las dos cosas.  Lo declarado no se inventa: son los valores que sus CINCO hermanas (and, or, shl, shr, sar) derivan solas del mismo codigo -- escribe banderas, lee reg1/reg2/reg3, escribe reg3 --.  El bit de memoria no va aqui: ese si lo deriva bien.",
+      "escribe": 1, "lee": 0,
+      "form_read": 73, "form_write": 64 },
+
+    { "tabla": "extended", "indice": 112, "nombre": "fastpush",
+      "clase": "fixed",
+      "motivo": "Mismo fallo de rastro que `xor` (primary 98): el compilador dejo el puntero al proceso en RBX y el derivador no lo sigue hasta ahi -- cuenta 167 accesos en el rango de un campo SIN procedencia, el primero `mov r12, qword ptr [rbx + 0x40]  (campo pila)` --.  Sin atribuirlos, un PUSH salia declarando que no toca la pila NI la memoria, y con eso el reordenador puede cruzar un `fastpop` por encima.  Lo declarado es lo que el propio derivador producia antes de que la asignacion de registros se moviera: escribe y lee la pila, y toca memoria.",
+      "escribe": 18, "lee": 18 },
+
+    { "tabla": "extended", "indice": 113, "nombre": "fastpop",
+      "clase": "fixed",
+      "motivo": "Ver `fastpush` (extended 112): identico fallo de rastro, identica correccion.",
+      "escribe": 18, "lee": 18 }
   ]
 }

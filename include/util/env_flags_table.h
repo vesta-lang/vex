@@ -317,6 +317,24 @@ VESTA_ENV_FLAG(GcInterpTrace, "VESTA_GC_INTERP_TRACE", Report, Gc, Bool, Any)
 VESTA_ENV_FLAG(McGcInterval, "VESTA_MC_GC_INTERVAL", Runtime, Gc, Int, Any)
 VESTA_ENV_FLAG(McGcTrace, "VESTA_MC_GC_TRACE", Report, Gc, Bool, Any)
 VESTA_ENV_FLAG(HostAllocStats, "VESTA_HOST_ALLOC_STATS", Report, Gc, Bool, Any)
+/* Los sitios que mas reservan, CON NOMBRE.  El asignador solo puede dar
+ * direcciones -- es una libreria aparte y no sabe leer simbolos, ni debe --;
+ * quien las convierte en nombres es el compilador, que ya lee tablas de
+ * simbolos para enlazar.  Implica `VESTA_HOST_ALLOC_STATS`: sin apuntar no hay
+ * nada que resolver. */
+VESTA_ENV_FLAG(HostAllocSites, "VESTA_HOST_ALLOC_SITES", Report, Gc, Bool, Any)
+/* La CARPETA donde volcar lo mismo en CSV, para mirarlo con una herramienta en
+ * vez de con los ojos.  Implica `VESTA_HOST_ALLOC_SITES`: sin apuntar de donde
+ * viene cada reserva no hay arbol que exportar.
+ *
+ * Son varios ficheros y no uno: los sitios y sus marcos son una relacion de uno
+ * a muchos, y meterlos en la misma tabla obligaria a repetir cada sitio tantas
+ * veces como marcos tenga -- que es justo el texto repetido que se quito del
+ * informe --.  Se juntan por `site_id`.
+ *
+ * Lo lee `tools/alloc_tree.py`, que arma el arbol de donde nacen las reservas.
+ */
+VESTA_ENV_FLAG(HostAllocCsv, "VESTA_HOST_ALLOC_CSV", Report, Gc, Text, Any)
 
 /* -- Reparto por hilos.  Cambia el COMO, no el QUE ------------------------ */
 VESTA_ENV_FLAG(Paralelo, "VESTA_PARALELO", Speed, Parallel, BoolOn, Any)

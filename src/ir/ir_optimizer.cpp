@@ -20,7 +20,7 @@
 #include "util/crono_tramo.h"
 #include "util/fnv.h"         // dispersion de las claves de la CSE
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
-#include "util/thread_slot.h"  // los vectores de trabajo, uno por hilo
+#include "util/os/thread_slot.h"  // los vectores de trabajo, uno por hilo
 
 #include "util/reloj.h"
 

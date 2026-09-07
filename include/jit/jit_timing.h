@@ -38,7 +38,7 @@
 #define VESTA_JIT_JIT_TIMING_H
 
 #include "util/env_flags.h"
-#include "util/thread_slot.h" // la profundidad por hilo, sin `thread_local`
+#include "util/os/thread_slot.h" // la profundidad por hilo, sin `thread_local`
 
 #include <algorithm>
 #include <atomic>
@@ -203,7 +203,7 @@ class ScopedJitTimer {
      *
      * En una RANURA y no en `thread_local`: en MinGW la TLS es emulada y cada
      * acceso es una llamada.  El contador cabe en el propio puntero, asi que
-     * no hay nada que reservar.  Ver `util/thread_slot.h`. */
+     * no hay nada que reservar.  Ver `util/os/thread_slot.h`. */
     static util::ThreadSlot &depth_slot() noexcept {
         static util::ThreadSlot s;
         return s;

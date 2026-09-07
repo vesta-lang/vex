@@ -24,7 +24,7 @@
 
 #include "vx/generics/generic_clone.h"
 
-#include "util/thread_slot.h" // el mapa activo, sin `thread_local`
+#include "util/os/thread_slot.h" // el mapa activo, sin `thread_local`
 
 namespace vx {
 namespace vxgen {

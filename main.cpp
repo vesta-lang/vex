@@ -1120,6 +1120,18 @@ int main(int argc, char *argv[]) {
             "binario). Nota: un binario avx/avx512f FIJO da SIGILL en una CPU "
             "sin ese soporte; usa auto para portabilidad.",
             cxxopts::value<std::string>()->default_value("sse2"))(
+            "unwind",
+            "AOT: que descripcion del marco se emite, para poder desenrollar "
+            "la pila.  Son DOS mecanismos, no dos plataformas -- una PE puede "
+            "llevar los dos --: auto (default: lo que pida el contenedor, PE "
+            "-> table, ELF -> cfi) | none (nada) | table (.pdata/.xdata: lo "
+            "UNICO que el desenrollador del sistema lee en Windows x64; en ELF "
+            "es un error) | cfi (.eh_frame: gdb, libunwind y el runtime de "
+            "excepciones de MinGW; vale en PE y en ELF) | both.  No es info de "
+            "depuracion y no cuelga de --debug-info: sin esto un fallo del "
+            "procesador mata el binario sin decir nada, y ningun perfilador "
+            "puede sacar una pila.",
+            cxxopts::value<std::string>()->default_value("auto"))(
             "ffp-contract",
             "Politica de contraccion de coma flotante: fast (default -- "
             "contrae "
@@ -4659,6 +4671,34 @@ int main(int argc, char *argv[]) {
             aopt.no_mem = aot_no_mem;
             aopt.arch = result["aot-arch"].as<std::string>();
             aopt.float_isa = result["float-isa"].as<std::string>();
+            {
+                /* Se valida AQUI, contra un valor mal escrito, y no mas
+                 * adelante: quien pone `--unwind tabla` y no `table` quiere
+                 * tablas, y seguir en silencio con el defecto le daria un
+                 * binario sin ellas creyendo que las pidio. */
+                const std::string u = result["unwind"].as<std::string>();
+                using vesta::tc::UnwindEmit;
+                if (u == "auto")
+                    aopt.unwind = UnwindEmit::AUTO;
+                else if (u == "none" || u == "0")
+                    aopt.unwind = UnwindEmit::NONE;
+                else if (u == "table")
+                    aopt.unwind = UnwindEmit::TABLE;
+                else if (u == "cfi")
+                    aopt.unwind = UnwindEmit::CFI;
+                else if (u == "both")
+                    aopt.unwind = UnwindEmit::BOTH;
+                else {
+                    /* Por el catalogo y no con el texto pegado aqui: un error
+                     * lo lee quien compila, y este proyecto ya sabe decirlo en
+                     * su idioma.  El codigo (VX9248) es lo permanente -- lo
+                     * referencian la documentacion y las herramientas --; la
+                     * redaccion puede cambiar sin romper nada. */
+                    std::cerr << "error: "
+                              << vx::diag::format("VX9248", {u}) << "\n";
+                    return 1;
+                }
+            }
             {
                 /* Un eje por MECANISMO, separados por punto.  Se parte la
                  * CADENA y no se lee como numero en coma flotante: 0.1 y 2.1

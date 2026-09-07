@@ -26,7 +26,7 @@
 
 #include "arena_manager.h"
 #include "TLB.h"
-#include "util/vesta_memcpy.h" // copia por bloques que SI despacha por CPU
+#include "util/mem/vesta_memcpy.h" // copia por bloques que SI despacha por CPU
 
 namespace vm {
 

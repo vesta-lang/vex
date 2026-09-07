@@ -28,7 +28,7 @@
 
 #include "vx/generics/generic_clone.h"
 
-#include "util/thread_slot.h" // el contador de recursion, sin `thread_local`
+#include "util/os/thread_slot.h" // el contador de recursion, sin `thread_local`
 
 namespace vx {
 
@@ -134,7 +134,7 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
      *
      * En una RANURA y no en `thread_local`: en MinGW la TLS es emulada y cada
      * acceso es una llamada.  Un contador cabe en el propio puntero, asi que
-     * no hay nada que reservar.  Ver `util/thread_slot.h`. */
+     * no hay nada que reservar.  Ver `util/os/thread_slot.h`. */
     static util::ThreadSlot depth_slot;
     depth_slot.ensure();
     const auto read_depth = [&]() -> uintptr_t {

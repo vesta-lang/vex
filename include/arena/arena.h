@@ -24,7 +24,7 @@
 #include <cstddef>
 
 #include "util/gc_diag.h"   // VGC_CERR/COUT (neutralizable en freestanding)
-#include "util/os_memory.h" // apalabrar, entregar y permisos; sin cabeceras del sistema
+#include "util/os/os_memory.h" // apalabrar, entregar y permisos; sin cabeceras del sistema
 
 /* AQUI YA NO SE INCLUYE `windows.h` NI `sys/mman.h`, y es un alivio: esta
  * cabecera la incluye media docena de subsistemas, y `windows.h` define `VOID`
@@ -33,7 +33,7 @@
  * `ThreadPool` en su propio `.cpp`.
  *
  * Lo unico que las necesitaba era reservar memoria, y eso lo hace ahora
- * `util/os_memory.h`, cuya cabecera no incluye nada del sistema: la traduccion
+ * `util/os/os_memory.h`, cuya cabecera no incluye nada del sistema: la traduccion
  * de permisos a `PAGE_*` o `PROT_*` vive en su `.cpp`. */
 
 #include "net/net.h"

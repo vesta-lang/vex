@@ -32,8 +32,40 @@ namespace tc {
  * parser de la CLI.  Las cadenas vacias significan "no especificado" (se aplica
  * el valor por defecto por host/tier).
  */
+/**
+ * @brief Que descripcion de desenrollado se emite en el artefacto nativo.
+ *
+ * SON DOS MECANISMOS, no dos plataformas, y por eso se piden por separado.  Una
+ * PE puede llevar los dos a la vez: las TABLAS son lo unico que el
+ * desenrollador del sistema sabe leer en Windows x64, y el CFI de DWARF es lo
+ * que usan gdb, libunwind y el runtime de excepciones de MinGW -- con el que
+ * este enlazador tiene que convivir, porque acepta sus objetos --.
+ *
+ * NO ES INFORMACION DE DEPURACION y no cuelga de `--debug-info`.  Lo parece, y
+ * ahi esta la trampa: si colgara, el binario de release seria justo el que no
+ * se puede diagnosticar cuando falla, que es el que le llega a la gente.
+ *
+ * AQUI NO SE OBLIGA.  La ABI de x64 de Microsoft exige estos datos en toda
+ * funcion que no sea hoja, y MSVC no da forma de quitarlos; aqui el defecto los
+ * pone y cualquiera puede quitarlos.  Un kernel que lleve su propio
+ * desenrollador es un caso legitimo, y `--freestanding` no decide por el.
+ */
+enum class UnwindEmit {
+    /// Lo que pida el contenedor: PE -> tablas, ELF -> CFI.  Es el defecto por
+    /// el mismo motivo que en gcc y clang, donde las tablas van encendidas
+    /// incluso en C sin excepciones: sin ellas no se puede desenrollar desde
+    /// un punto cualquiera, que es lo que hacen un perfilador y un depurador.
+    AUTO = 0,
+    NONE,  ///< nada.  Explicito, y motivado por tamano.
+    TABLE, ///< `.pdata` / `.xdata`.  Solo PE; en ELF no hay donde ponerlas.
+    CFI,   ///< `.eh_frame`.  Vale en PE y en ELF.
+    BOTH,  ///< las dos, donde el contenedor lo permita.
+};
+
 struct AotOptions {
     aot::Tier tier = aot::Tier::BARE; ///< bare|embed|full.
+    /// --unwind: como se describe el marco.  Ver @ref UnwindEmit.
+    UnwindEmit unwind = UnwindEmit::AUTO;
     bool freestanding = false;        ///< --freestanding (sin libc).
     bool no_exceptions = false;       ///< --no-exceptions.
     bool no_io = false;               ///< --no-io.

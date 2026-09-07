@@ -84,15 +84,28 @@ static inline void wr64le(uint8_t *p, uint64_t v) {
         p[i] = (uint8_t)(v >> (i * 8));
 }
 
+/* "Aqui no hay base de imagen", para los emisores de ELF y de objetos.
+ *
+ * No vale pasar 0: en un binario plano la base 0 es legitima, asi que un cero
+ * no distingue "carga en 0" de "no aplica".  Con el centinela, una RVA32 que
+ * llegue a un emisor que no puede resolverla FALLA -- que es lo correcto: son
+ * relocs de PE y no tienen sentido en un ELF --, en vez de escribir la
+ * direccion entera creyendo que es un desplazamiento. */
+#define AOT_NO_IMAGE_BASE UINT64_MAX
+
 /* Aplica UNA relocation ya resuelta: @p target_value es la direccion (ADDR) o
  * el tamano (SIZE) del objetivo + addend; @p site_va es la VA del sitio (para
- * el rel32 PC-relativo); @p site escribe en el buffer de la seccion del sitio
- * en su offset.  Devuelve 0 en error de tamano/kind.  ARCH-NEUTRAL: escribe el
- * valor crudo (rel32/abs64/imm); el encoding de instruccion especifico de cada
- * ISA para relocs de CODIGO no se aplica aqui (esas se emiten como registros o
- * las resuelve el ensamblado whole-program). */
+ * el rel32 PC-relativo); @p image_base es la base de carga, que solo mira
+ * @c AOT_RELOC_RVA32 -- se pasa aqui, y no se resta antes de llamar, para que
+ * como se calcula un RVA este escrito en UN sitio y no en los ocho que llaman;
+ * @p site escribe en el buffer de la seccion del sitio en su offset.  Devuelve
+ * 0 en error de tamano/kind.  ARCH-NEUTRAL: escribe el valor crudo
+ * (rel32/abs64/imm); el encoding de instruccion especifico de cada ISA para
+ * relocs de CODIGO no se aplica aqui (esas se emiten como registros o las
+ * resuelve el ensamblado whole-program). */
 static inline int apply_reloc(uint8_t *site, uint64_t site_va,
-                              uint64_t target_value, int kind) {
+                              uint64_t target_value, int kind,
+                              uint64_t image_base) {
     switch (kind) {
     case AOT_RELOC_REL32: {
         int64_t rel = (int64_t)target_value - (int64_t)(site_va + 4);
@@ -100,6 +113,18 @@ static inline int apply_reloc(uint8_t *site, uint64_t site_va,
         return 1;
     }
     case AOT_RELOC_IMM32: wr32le(site, (uint32_t)target_value); return 1;
+    case AOT_RELOC_RVA32: {
+        /* Se RECHAZA en vez de truncar.  Un objetivo por debajo de la base, o a
+         * mas de 4 GiB de ella, no tiene RVA; escribir los 32 bits bajos daria
+         * una tabla bien formada que apunta a cualquier sitio, y el sistema la
+         * seguiria.  Fallar aqui es lo unico util que se puede hacer. */
+        if (image_base == AOT_NO_IMAGE_BASE) return 0; // no aplica a este formato
+        if (target_value < image_base) return 0;
+        const uint64_t rva = target_value - image_base;
+        if (rva > 0xFFFFFFFFull) return 0;
+        wr32le(site, (uint32_t)rva);
+        return 1;
+    }
     case AOT_RELOC_ABS64:
     case AOT_RELOC_IMM64: wr64le(site, target_value); return 1;
     case AOT_RELOC_ARM64_CALL26: {

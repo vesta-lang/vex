@@ -31,9 +31,10 @@
  */
 
 #include "util/env_flags.h"
-#include "util/thread_slot.h" // buffer por hilo sin pasar por la TLS emulada
+#include "util/os/thread_slot.h" // buffer por hilo sin pasar por la TLS emulada
 #include "vx/type_checker.h"
 
+#include "ir/ssa_ir.h" // kAsmBodyPendingMark, la marca vive en UN sitio
 #include "vx/diag/diag_catalog.h"
 #include "vx/ansi_names.h"      // los nombres de color que el lenguaje conoce
 #include "vx/asm/asm_effects.h" // asm_canonical_reg ( AS inc.4)
@@ -78,7 +79,7 @@ namespace vx {
  * puntero.  Single-thread compile -> sin contencion. */
 /* En una RANURA propia, no en `thread_local`: en MinGW la TLS es emulada y cada
  * acceso es una llamada.  Lo que se guarda es un puntero, asi que cabe en la
- * ranura tal cual y no hay nada que reservar.  Ver `util/thread_slot.h`. */
+ * ranura tal cual y no hay nada que reservar.  Ver `util/os/thread_slot.h`. */
 util::ThreadSlot g_typechecker_slot;
 /// El comprobador activo en ESTE hilo, o nulo si no hay ninguno.
 inline TypeChecker *active_typechecker() {

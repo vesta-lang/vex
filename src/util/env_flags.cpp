@@ -13,6 +13,9 @@
 
 #include "util/env_flags.h"
 
+#include <cstdio>
+#include <ostream>
+
 #include "util/fnv.h"
 #include "util/thread_owned.h" // el buffer por hilo, sin `thread_local`
 
@@ -221,6 +224,88 @@ std::string emitted_flags_summary() {
 
 void reload_flags_for_testing() {
     table().load();
+}
+
+const char *flag_scope_name(FlagScope s) {
+    switch (s) {
+    case FlagScope::Emitted: return "emitido";
+    case FlagScope::Speed: return "velocidad";
+    case FlagScope::Report: return "informe";
+    case FlagScope::Runtime: return "ejecucion";
+    case FlagScope::Location: return "ruta";
+    case FlagScope::System: return "sistema";
+    }
+    return "?";
+}
+
+const char *flag_domain_name(FlagDomain d) {
+    switch (d) {
+    case FlagDomain::None: return "general";
+    case FlagDomain::Optimizer: return "optimizador";
+    case FlagDomain::Range: return "rangos";
+    case FlagDomain::Alias: return "alias";
+    case FlagDomain::Escape: return "escape";
+    case FlagDomain::Loop: return "bucles";
+    case FlagDomain::Vector: return "vectorizacion";
+    case FlagDomain::Branch: return "saltos";
+    case FlagDomain::Asm: return "ensamblador";
+    case FlagDomain::Comptime: return "comptime";
+    case FlagDomain::Scheduler: return "planificador";
+    case FlagDomain::RegAlloc: return "registros";
+    case FlagDomain::Codegen: return "generacion";
+    case FlagDomain::Jit: return "jit";
+    case FlagDomain::Gc: return "memoria";
+    case FlagDomain::Parallel: return "paralelo";
+    case FlagDomain::Asa: return "asa";
+    case FlagDomain::Cache: return "cache";
+    case FlagDomain::Paths: return "rutas";
+    case FlagDomain::Count_: break;
+    }
+    return "?";
+}
+
+const char *flag_kind_name(FlagKind k) {
+    switch (k) {
+    case FlagKind::Bool: return "0/1";
+    case FlagKind::BoolOn: return "0/1 (por defecto SI)";
+    case FlagKind::Int: return "entero";
+    case FlagKind::Text: return "texto";
+    case FlagKind::TextLive: return "texto (se relee)";
+    }
+    return "?";
+}
+
+void print_env_flags(std::ostream &out) {
+    out << "Variables de entorno declaradas: " << kFlagCount << "\n"
+        << "  [*] = puesta ahora mismo.  El ALCANCE dice que cambia: "
+           "'emitido' entra en la\n"
+           "  huella de lo compilado -- dos valores distintos son dos "
+           "artefactos distintos --;\n"
+           "  el resto no.\n";
+
+    for (unsigned d = 0; d < static_cast<unsigned>(FlagDomain::Count_); ++d) {
+        const FlagDomain dom = static_cast<FlagDomain>(d);
+        bool titled = false;
+        for (size_t i = 0; i < kFlagCount; ++i) {
+            const FlagInfo &f = kFlags[i];
+            if (f.domain != dom) continue;
+            /* Las que no existen en este sistema se dicen igual, marcadas: que
+             * no salgan haria pensar que no existen, y quien lea la ayuda en
+             * Windows para usarla en Linux se quedaria sin saberlo. */
+            const bool here = flag_applies_here(f.os);
+            const bool set = flag_present(static_cast<FlagId>(i));
+            if (!titled) {
+                out << "\n  " << flag_domain_name(dom) << ":\n";
+                titled = true;
+            }
+            char line[256];
+            std::snprintf(line, sizeof(line), "    %s %-34s %-10s %-22s%s",
+                          set ? "[*]" : "   ", f.name,
+                          flag_kind_name(f.kind), flag_scope_name(f.scope),
+                          here ? "" : "  (no en este sistema)");
+            out << line << "\n";
+        }
+    }
 }
 
 } // namespace util

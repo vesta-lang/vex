@@ -1239,27 +1239,52 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          }},
 
         /* --- Logica bit a bit --- */
+
+        /* Cada una con DOS variantes: registro-registro en la tabla extendida,
+         * como siempre, y memoria SIB en la PRIMARIA (0x60-0x65).
+         *
+         * La forma con memoria cubre las dos direcciones con el mismo opcode,
+         * porque el bit 4 del ctrl las distingue y `emit_instr_sib` lo pone
+         * segun cual de los dos operandos sea la memoria:
+         *
+         *     and r1, [r2 + r3*4]      ->  r1 &= [mem]      (direction = 0)
+         *     and [r2 + r3*4], r1      ->  [mem] &= r1      (direction = 1)
+         *
+         * La segunda es leer-modificar-escribir en UNA instruccion: hoy son
+         * tres (cargar, operar, guardar). */
         {"and",
          {{0x00, 0x17, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_reg}}},
+           emit_instr_reg},
+          {0x60, 0x00, InstrSizeMode::FIXED_4, AddressingMode::SIB,
+           emit_instr_sib}}},
         {"or",
          {{0x00, 0x18, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_reg}}},
+           emit_instr_reg},
+          {0x61, 0x00, InstrSizeMode::FIXED_4, AddressingMode::SIB,
+           emit_instr_sib}}},
         {"xor",
          {{0x00, 0x19, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_reg}}},
+           emit_instr_reg},
+          {0x62, 0x00, InstrSizeMode::FIXED_4, AddressingMode::SIB,
+           emit_instr_sib}}},
         {"not",
          {{0x00, 0x1A, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_one_reg}}},
         {"shl",
          {{0x00, 0x1B, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_reg}}},
+           emit_instr_reg},
+          {0x63, 0x00, InstrSizeMode::FIXED_4, AddressingMode::SIB,
+           emit_instr_sib}}},
         {"shr",
          {{0x00, 0x1C, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_reg}}},
+           emit_instr_reg},
+          {0x64, 0x00, InstrSizeMode::FIXED_4, AddressingMode::SIB,
+           emit_instr_sib}}},
         {"sar",
          {{0x00, 0x1D, InstrSizeMode::FIXED_4, AddressingMode::REG,
-           emit_instr_reg}}},
+           emit_instr_reg},
+          {0x65, 0x00, InstrSizeMode::FIXED_4, AddressingMode::SIB,
+           emit_instr_sib}}},
 
         /* loop <label>  - decrementa contador y salta si != 0. */
         {

@@ -1,0 +1,141 @@
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
+ */
+
+// Formas con MEMORIA de la logica y los desplazamientos: `and`, `or`, `xor`,
+// `shl`, `shr` y `sar` contra un operando SIB.
+//
+// Hasta ahora la aritmetica podia operar contra memoria (`adds r1, [r2+r3*8]`)
+// y la logica no.  No era una decision de diseno, era una simetria a medio
+// hacer: aplicar una mascara leida de memoria costaba dos instrucciones donde
+// sumar costaba una.
+//
+// Se prueban las DOS direcciones, porque el mismo opcode cubre ambas segun el
+// bit 4 del byte de control:
+//
+//     and r1, [r14 + r13*8]     ->  r1 &= [mem]        (destino = registro)
+//     and [r14 + r13*8], r1     ->  [mem] &= r1        (destino = memoria)
+//
+// La segunda es leer-modificar-escribir en UNA instruccion; hoy son tres.
+//
+// Las seis viven en la tabla PRIMARIA (0x60-0x65), asi que cada una mide 4
+// bytes y no 6 como sus hermanas de la extendida.
+//
+// R00 = numero de comprobaciones FALLIDAS.  Se espera 0.
+
+@Format("velb")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous"),
+    @Align(0x1000)
+}
+
+@Module(test_logica_sib)
+@Export(main)
+
+code:
+main:
+    enter 0
+
+    // Datos: 0x3000 = 0xF0F0, 0x3008 = 0x0FF0, 0x3010 = 4, 0x3018 = 2.
+    mov r14, 0x3000
+    mov r15, 0xF0F0
+    mov [r14], r15
+    mov r15, 0x3008
+    mov r8, 0x0FF0
+    mov [r15], r8
+    mov r15, 0x3010
+    mov r8, 4
+    mov [r15], r8
+    mov r15, 0x3018
+    mov r8, 2
+    mov [r15], r8
+
+    // Indices para el SIB, con escala 8.
+    mov r13, 0
+    mov r12, 1
+    mov r11, 2
+    mov r10, 3
+
+    mov r9, 0                       // contador de fallos
+
+    // --- destino = REGISTRO -------------------------------------------
+
+    // and: 0xFFFF & 0xF0F0 = 0xF0F0
+    mov r1, 0xFFFF
+    and r1, [r14 + r13*8]
+    cmps r1, 0xF0F0
+    jmp.je t2
+    adds r9, 1
+t2:
+    // or: 0x000F | 0x0FF0 = 0x0FFF
+    mov r2, 0x000F
+    or r2, [r14 + r12*8]
+    cmps r2, 0x0FFF
+    jmp.je t3
+    adds r9, 1
+t3:
+    // xor: 0xFFFF ^ 0xF0F0 = 0x0F0F
+    mov r3, 0xFFFF
+    xor r3, [r14 + r13*8]
+    cmps r3, 0x0F0F
+    jmp.je t4
+    adds r9, 1
+t4:
+    // shl: 1 << 4 = 16.  El CUANTO se lee de memoria, que es el caso que la
+    // forma registro-registro obligaba a cargar antes.
+    mov r4, 1
+    shl r4, [r14 + r11*8]
+    cmps r4, 16
+    jmp.je t5
+    adds r9, 1
+t5:
+    // shr: 0xF0F0 >> 2 = 0x3C3C
+    mov r5, 0xF0F0
+    shr r5, [r14 + r10*8]
+    cmps r5, 0x3C3C
+    jmp.je t6
+    adds r9, 1
+t6:
+    // sar sobre un NEGATIVO: -64 >> 2 = -16.  Con `shr` daria un numero
+    // enorme, asi que esto distingue las dos de verdad.
+    mov r6, 0
+    subs r6, 64
+    sar r6, [r14 + r10*8]
+    mov r7, 0
+    subs r7, 16
+    cmps r6, r7
+    jmp.je t7
+    adds r9, 1
+t7:
+    // --- destino = MEMORIA (leer-modificar-escribir) -------------------
+
+    // and [0x3008], 0x00F0  ->  0x0FF0 & 0x00F0 = 0x00F0
+    mov r7, 0x00F0
+    and [r14 + r12*8], r7
+    mov r7, [r14 + r12*8]
+    cmps r7, 0x00F0
+    jmp.je t8
+    adds r9, 1
+t8:
+    // xor [0x3000], 0xFFFF  ->  0xF0F0 ^ 0xFFFF = 0x0F0F
+    mov r8, 0xFFFF
+    xor [r14 + r13*8], r8
+    mov r8, [r14 + r13*8]
+    cmps r8, 0x0F0F
+    jmp.je fin
+    adds r9, 1
+fin:
+    mov r0, r9
+    leave
+    hlt

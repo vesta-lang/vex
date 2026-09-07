@@ -24,7 +24,7 @@
 #include "vx/lowering.h"
 #include "vx/comptime/comptime_introspect.h"
 #include "ffi/virtual_lib_registry.h"
-#include "util/thread_slot.h" // el estado por hilo NO va en thread_local
+#include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>

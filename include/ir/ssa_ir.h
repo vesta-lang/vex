@@ -51,7 +51,7 @@
 
 #include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
 #include "util/name_pool.h"    // nombres internados: la clave sin copiar
-#include "util/small_vector.h" // los operandos casi siempre son uno o dos
+#include "util/alloc/small_vector.h" // los operandos casi siempre son uno o dos
 #include <cstring>
 #include <string>
 #include <utility>

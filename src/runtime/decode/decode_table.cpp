@@ -553,36 +553,57 @@ InstrFormat decode_table_primary[0X100] = {
      "", Assembly::Bytecode::AddressingMode::COUNT,
      Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
 
+    /* Formas con memoria de la logica y los desplazamientos, 0x60-0x65.
+     *
+     * En la tabla PRIMARIA a proposito, y no con sus hermanas de la extendida.
+     * Dos razones, las dos medibles:
+     *
+     *   - TAMANO.  Aqui la instruccion mide 4 bytes (`[op][ctrl][regs][index]`)
+     *     y alli 6 (`[0x00][op2][ctrl][regs][index][pad]`).  La icache se
+     *     indexa por pc EN BYTES, asi que un tercio menos de bytes es un tercio
+     *     mas de alcance para el mismo numero de conjuntos.
+     *   - SITIO.  La extendida tiene 221 ranuras cogidas y 35 libres; la
+     *     primaria, 11 y 240.  Meter aqui lo que quepa deja la extendida para
+     *     lo que de verdad no quepa.
+     *
+     * El descodificador es EL MISMO (`decode_instr_sib`): mira
+     * `is_not_extended` y ajusta de donde arranca el bloque de campos. */
     /* 0x60 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    {// and reg, [sib]  ||  and [sib], reg
+     "and", Assembly::Bytecode::AddressingMode::SIB,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_and_sib,
+     decode_instr_sib},
 
     /* 0x61 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    {// or reg, [sib]  ||  or [sib], reg
+     "or", Assembly::Bytecode::AddressingMode::SIB,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_or_sib,
+     decode_instr_sib},
 
     /* 0x62 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    {// xor reg, [sib]  ||  xor [sib], reg
+     "xor", Assembly::Bytecode::AddressingMode::SIB,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_xor_sib,
+     decode_instr_sib},
 
     /* 0x63 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    {// shl reg, [sib]  ||  shl [sib], reg
+     "shl", Assembly::Bytecode::AddressingMode::SIB,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_shl_sib,
+     decode_instr_sib},
 
     /* 0x64 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    {// shr reg, [sib]  ||  shr [sib], reg
+     "shr", Assembly::Bytecode::AddressingMode::SIB,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_shr_sib,
+     decode_instr_sib},
 
     /* 0x65 */
-    {//
-     "", Assembly::Bytecode::AddressingMode::COUNT,
-     Assembly::Bytecode::InstrSizeMode::FIXED_1, nullptr, nullptr},
+    {// sar reg, [sib]  ||  sar [sib], reg
+     "sar", Assembly::Bytecode::AddressingMode::SIB,
+     Assembly::Bytecode::InstrSizeMode::FIXED_4, exec_instr_sar_sib,
 
+     decode_instr_sib},
     /* 0x66 */
     {//
      "", Assembly::Bytecode::AddressingMode::COUNT,

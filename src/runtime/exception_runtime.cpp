@@ -6,7 +6,7 @@
 #include "util/env_flags.h"
 #include "runtime/exception_runtime.h"
 
-#include "util/thread_slot.h" // ranura por hilo propia (sin la TLS emulada)
+#include "util/os/thread_slot.h" // ranura por hilo propia (sin la TLS emulada)
 #include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
 #include "runtime/decode_instruction.h"
 #include "runtime/proceso_runtime.h"

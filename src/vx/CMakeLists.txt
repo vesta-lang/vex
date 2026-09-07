@@ -35,7 +35,14 @@
 # relocs, @sym) no invalidaba nada y el `.vpc` seguia sirviendo un `.velb`
 # emitido por el linker viejo.  Ante la duda, sobre-invalidar: reemitir es
 # barato y estas fuentes cambian poco; servir un artefacto stale no lo es.
-file(GLOB_RECURSE VX_CODEGEN_SRCS
+#
+# CONFIGURE_DEPENDS aqui es mas importante que en los otros comodines, y por un
+# motivo que se muerde la cola: sin el, un fichero NUEVO de codegen no entra en
+# la lista, luego no entra en el hash, luego el hash no cambia, luego el cache
+# no se invalida -- o sea que el mecanismo que existe para no servir artefactos
+# viejos se queda viejo el mismo --.  Y el sintoma seria el del parrafo de
+# arriba, otra vez.
+file(GLOB_RECURSE VX_CODEGEN_SRCS CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/src/vx/*.cpp     ${CMAKE_SOURCE_DIR}/src/vx/*.h
     ${CMAKE_SOURCE_DIR}/include/vx/*.h
     ${CMAKE_SOURCE_DIR}/src/ir/*.cpp      ${CMAKE_SOURCE_DIR}/include/ir/*.h

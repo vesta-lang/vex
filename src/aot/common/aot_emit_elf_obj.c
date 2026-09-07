@@ -46,6 +46,16 @@ int aot_emit_elf_obj_arch(const char *path, const AotSection *secs,
     /* v1: solo refs ADDR (datos/llamadas).  SIZE/END (simbolos de seccion)
      * no se soportan en .o todavia. */
     for (int r = 0; r < num_relocs; ++r) {
+        if (relocs[r].target_is_imagebase) {
+            /* La base de la imagen NO existe todavia en un objeto suelto: la
+             * fija quien enlaza.  Se dice aqui en vez de emitir un cero, que es
+             * la clase de valor por defecto que convierte un error en otro
+             * resultado. */
+            set_err(err, err_cap,
+                    "aot_emit_elf_obj: __ImageBase no se puede resolver en un "
+                    ".o -- la base la fija el enlace final");
+            return 0;
+        }
         if (relocs[r].target_is_size || relocs[r].target_is_end) {
             set_err(err, err_cap,
                     "aot_emit_elf_obj: SIZE/END no soportado en .o (v1)");

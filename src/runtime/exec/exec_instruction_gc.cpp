@@ -25,7 +25,7 @@
 #include <cstdlib>
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
-#include "util/vesta_memcpy.h"
+#include "util/mem/vesta_memcpy.h"
 #include "runtime/profile.h"
 
 namespace runtime {
