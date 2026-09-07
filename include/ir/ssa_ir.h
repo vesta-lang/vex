@@ -1563,6 +1563,21 @@ struct IrParamLevel {
     uint64_t denied = 0;
     /// @c IrParamClaim -> lo afirmado (valga o no) esta DEMOSTRADO.
     uint64_t proven = 0;
+    /**
+     * @brief @c IrParamClaim -> lo afirma el PROGRAMADOR, no el compilador.
+     *
+     * Eje distinto de @c proven, y hacen falta los dos: uno dice CUANTO se fia
+     * uno de la afirmacion y el otro DE QUIEN sale.  No son la misma pregunta.
+     * `borrow_mut<T>` promete exclusividad porque lo dice el TIPO -- lo deriva
+     * el compilador leyendo el programa --, y sin embargo no esta demostrada
+     * mientras nadie la exija cruzando la llamada: derivada y sin demostrar a
+     * la vez.  Un `out T*` es lo contrario, declarado y por comprobar.
+     *
+     * Con un solo bit para las dos cosas, ese `borrow_mut` salia publicado como
+     * "de declared, por param.declared_by_caller", que manda al verificador de
+     * contratos a comprobar en cada llamada una declaracion QUE NADIE ESCRIBIO.
+     */
+    uint64_t declared = 0;
     /// Bytes validos desde el puntero.  Negativo = no se dijo.  Es lo que
     /// separa "se donde escribe" de "se si se SALE", que es la mitad que le
     /// falta al analisis de regiones cuando el desplazamiento es de ejecucion.
@@ -1592,15 +1607,26 @@ struct IrParamLevel {
     bool denies_proven(IrParamClaim c) const noexcept {
         return (denied & proven & ir_param_claim_bit(c)) != 0u;
     }
-    /// @brief Afirma @p c.  @p is_proven distingue demostrado de declarado.
-    void set(IrParamClaim c, bool is_proven) noexcept {
+    /// @brief Lo afirma el programador (y por tanto hay que comprobarselo)?
+    bool is_declared(IrParamClaim c) const noexcept {
+        return (declared & ir_param_claim_bit(c)) != 0;
+    }
+    /// @brief Afirma @p c.
+    /// @param c          La promesa.
+    /// @param is_proven  Si esta DEMOSTRADA (certeza).
+    /// @param by_author  Si la afirma el PROGRAMADOR (procedencia).  Por
+    ///                   defecto no: lo normal es que salga del tipo, o sea que
+    ///                   la derive el compilador.
+    void set(IrParamClaim c, bool is_proven, bool by_author = false) noexcept {
         holds |= ir_param_claim_bit(c);
         if (is_proven) proven |= ir_param_claim_bit(c);
+        if (by_author) declared |= ir_param_claim_bit(c);
     }
-    /// @brief NIEGA @p c: se afirma que no vale.
-    void deny(IrParamClaim c, bool is_proven) noexcept {
+    /// @brief NIEGA @p c: se afirma que no vale.  Mismos dos ejes.
+    void deny(IrParamClaim c, bool is_proven, bool by_author = false) noexcept {
         denied |= ir_param_claim_bit(c);
         if (is_proven) proven |= ir_param_claim_bit(c);
+        if (by_author) declared |= ir_param_claim_bit(c);
     }
     /// @brief Ningun campo dice nada -> no hace falta guardarlo.
     bool empty() const noexcept {

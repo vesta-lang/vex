@@ -2225,8 +2225,8 @@ es = "esta alineado a {0} bytes"
 # escribir para recuperarlo.  Sin esto, el programador no tenia forma de saber
 # que una palabra suya cambia el codigo que sale de su funcion.
 ["param.regions_not_provably_distinct"]
-en = "{2} pointer parameters do not say whether their region is their own, so none of them can be taken as distinct from another: inside this function no read may move ahead of a write, and a field-by-field copy cannot be reduced to a block operation. Declaring the direction (`out` / `in` / `inout`), or using a type that already guarantees it (`borrow_mut<T>`, `unique<T>`), recovers it"
-es = "{2} parametros puntero no dicen si su region es suya, asi que ninguno se puede dar por distinto de otro: dentro de esta funcion ninguna lectura puede adelantar a una escritura, y una copia campo a campo no se reduce a una operacion de bloque.  Declarar la direccion (`out` / `in` / `inout`), o usar un tipo que ya lo garantice (`borrow_mut<T>`, `unique<T>`), lo recupera"
+en = "{2} pointer parameters do not say whether their region is their own, so none of them can be taken as distinct from another: inside this function no read may move ahead of a write, and a field-by-field copy cannot be reduced to a block operation. Declaring the direction (`out` / `in` / `inout`), or using a type that already guarantees it (`unique<T>`), recovers it"
+es = "{2} parametros puntero no dicen si su region es suya, asi que ninguno se puede dar por distinto de otro: dentro de esta funcion ninguna lectura puede adelantar a una escritura, y una copia campo a campo no se reduce a una operacion de bloque.  Declarar la direccion (`out` / `in` / `inout`), o usar un tipo que ya lo garantice (`unique<T>`), lo recupera"
 
 # --- lo que se sabe MIRANDO LAS LLAMADAS ---
 # Pedirle al programador que declare sin haber mirado los sitios de llamada es
@@ -2244,8 +2244,8 @@ en = "in every call SEEN, parameters {0} and {1} receive disjoint regions -- but
 es = "en todas las llamadas QUE SE VEN, los parametros {0} y {1} reciben regiones disjuntas -- pero la funcion es publica, asi que puede haber otras.  Declarar la direccion lo hace valer para todas"
 
 ["param.call_site_undecidable"]
-en = "it could not be decided whether parameters {2} receive overlapping regions: some call passes an address whose root is not resolved. Declaring the direction (`out` / `in` / `inout`), or a type that guarantees it (`borrow_mut<T>`, `unique<T>`), settles it without looking at the calls"
-es = "no se pudo decidir si los parametros {2} reciben regiones que se solapen: alguna llamada pasa una direccion cuya raiz no se resuelve.  Declarar la direccion (`out` / `in` / `inout`), o un tipo que lo garantice (`borrow_mut<T>`, `unique<T>`), lo zanja sin mirar las llamadas"
+en = "it could not be decided whether parameters {2} receive overlapping regions: some call passes an address whose root is not resolved. Declaring the direction (`out` / `in` / `inout`), or a type that guarantees it (`unique<T>`), settles it without looking at the calls"
+es = "no se pudo decidir si los parametros {2} reciben regiones que se solapen: alguna llamada pasa una direccion cuya raiz no se resuelve.  Declarar la direccion (`out` / `in` / `inout`), o un tipo que lo garantice (`unique<T>`), lo zanja sin mirar las llamadas"
 
 # Que un puntero SOBREVIVA a la llamada tambien es una respuesta, y accionable:
 # es lo que impide que su reserva viva en la pila y lo que obliga a mantener la

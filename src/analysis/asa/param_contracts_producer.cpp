@@ -70,6 +70,7 @@ uint64_t param_contracts_inputs(const ir::IrModule &mod) {
                 mix(l.holds);
                 mix(l.denied);
                 mix(l.proven);
+                mix(l.declared);
                 mix(static_cast<uint64_t>(l.extent_bytes));
                 mix(l.extent_from_param);
                 mix(l.align_bytes);
@@ -332,8 +333,13 @@ void produce_param_contracts(Production &p) {
                      * necesita separar para saber si puede quitar una
                      * comprobacion o solo especular. */
                     if (!holds && !denied) continue;
+                    /* Los DOS ejes, por separado.  Cuanto me fio y quien lo
+                     * dice no son la misma pregunta: el tipo puede derivar algo
+                     * que aun no esta demostrado, y el programador puede
+                     * declarar algo que si lo esta. */
                     const bool proven =
                         denied ? l.denies_proven(cl) : l.has_proven(cl);
+                    const bool by_author = l.is_declared(cl);
                     Fact f;
                     f.what.domain = kProducerParamContracts;
                     const char *code = level_claim_code(cl, lvl, denied);
@@ -366,12 +372,23 @@ void produce_param_contracts(Production &p) {
                      * Lo declarado lo afirma el programador y se VERIFICA, no
                      * se cree; lo demostrado sale de leer el programa.  Sin
                      * esta distincion, quien tenga que comprobar contratos no
-                     * sabria cuales le tocan. */
+                     * sabria cuales le tocan.
+                     *
+                     * Sale de SU PROPIO eje, no del de la certeza.  Sacar los
+                     * dos del mismo bit publicaba como "declarada por quien
+                     * llama" lo que el compilador habia DERIVADO del tipo, y
+                     * con eso el verificador de contratos se iba a comprobar en
+                     * cada llamada una declaracion que nadie escribio. */
                     f.seal.origin.source =
-                        proven ? Source::Static : Source::Declared;
+                        by_author ? Source::Declared : Source::Static;
                     f.seal.origin.producer = kProducerParamContracts;
-                    f.proof.rule = proven ? "param.checked_by_compiler"
-                                          : "param.declared_by_caller";
+                    /* Y la REGLA separa los TRES casos, que piden cosas
+                     * distintas de quien la lea: comprobarsela al que llama,
+                     * fiarse porque la hace cumplir el compilador, o saber que
+                     * sale del tipo pero que todavia no la exige nadie. */
+                    f.proof.rule = by_author ? "param.declared_by_caller"
+                                   : proven  ? "param.checked_by_compiler"
+                                             : "param.implied_by_type";
                     p.assert_fact(f);
                 }
                 /* Y los que son un NUMERO.  Van aparte porque no son promesas

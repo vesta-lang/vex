@@ -476,10 +476,11 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
          * puntero, y son cosas distintas. */
         write_u32(out, static_cast<uint32_t>(c.levels.size()));
         for (const IrParamLevel &l : c.levels) {
-            write_u32(out, 40u); // bytes del cuerpo: 8 + 8 + 8 + 8 + 4 + 4
+            write_u32(out, 48u); // bytes del cuerpo: 8*5 + 4 + 4
             write_u64(out, l.holds);
             write_u64(out, l.denied);
             write_u64(out, l.proven);
+            write_u64(out, l.declared);
             write_u64(out, static_cast<uint64_t>(l.extent_bytes));
             write_u32(out, l.extent_from_param);
             write_u32(out, l.align_bytes);
@@ -664,6 +665,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
             if (!read_u64(in, off, l.holds)) return false;
             if (!read_u64(in, off, l.denied)) return false;
             if (!read_u64(in, off, l.proven)) return false;
+            if (!read_u64(in, off, l.declared)) return false;
             if (!read_u64(in, off, ext)) return false;
             if (!read_u32(in, off, l.extent_from_param)) return false;
             if (!read_u32(in, off, l.align_bytes)) return false;

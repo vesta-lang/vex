@@ -1181,22 +1181,26 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
              * llamada, y avisar si se incumple.  Y habla de lo APUNTADO, que
              * es lo que dice su propia definicion. */
             switch (d.decl->dir) {
+            /* Las tres van con `by_author`: la escribio el programador, asi que
+             * hay que COMPROBARSELA en cada sitio de llamada.  Es lo que separa
+             * esto de lo que el compilador deriva del tipo, y sin ese eje las
+             * dos cosas se publicaban igual. */
             case ParamDir::In:
-                pointee.set(Claim::MayRead, false);
+                pointee.set(Claim::MayRead, false, /*by_author=*/true);
                 /* `in` no solo dice que se lee: dice que SOLO se lee.  Negar la
                  * escritura es la mitad util -- sin ella, "no consta que
                  * escriba" y "declarado que no escribe" serian el mismo bit
                  * ausente. */
-                pointee.deny(Claim::MayWrite, false);
+                pointee.deny(Claim::MayWrite, false, /*by_author=*/true);
                 break;
             case ParamDir::Out:
-                pointee.set(Claim::MayWrite, false);
-                pointee.set(Claim::ExclusiveCall, false);
+                pointee.set(Claim::MayWrite, false, /*by_author=*/true);
+                pointee.set(Claim::ExclusiveCall, false, /*by_author=*/true);
                 break;
             case ParamDir::InOut:
-                pointee.set(Claim::MayRead, false);
-                pointee.set(Claim::MayWrite, false);
-                pointee.set(Claim::ExclusiveCall, false);
+                pointee.set(Claim::MayRead, false, /*by_author=*/true);
+                pointee.set(Claim::MayWrite, false, /*by_author=*/true);
+                pointee.set(Claim::ExclusiveCall, false, /*by_author=*/true);
                 break;
             case ParamDir::None: break;
             }
@@ -1226,26 +1230,60 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                     pointee.set(Claim::ImmutableDuringCall, false);
                     break;
                 case PrimitiveKind::BORROW_MUT:
+                    /* Leer y escribir SI: eso lo hace cumplir el comprobador de
+                     * prestamos dentro de la funcion, que es donde vale. */
+                    pointee.set(Claim::MayRead, true);
+                    pointee.set(Claim::MayWrite, true);
+                    /* Y la exclusividad en la llamada NO se afirma todavia,
+                     * aunque el tipo parezca darla.
+                     *
+                     * El comprobador lleva sus prestamos por NOMBRE de variable
+                     * (`owners_` va indexado por cadena), asi que dos nombres de
+                     * la misma region no chocan y un prestamo tomado DENTRO del
+                     * llamado es otra entrada distinta.  Pasar el dueno a otra
+                     * funcion que lo vuelve a prestar no lo ve nadie, y entonces
+                     * dos `borrow_mut` de la MISMA region llegan a la misma
+                     * llamada.
+                     *
+                     * Que el agujero existe esta COMPROBADO: los dos programas
+                     * de arriba compilan sin una queja.  Que hoy produzca un
+                     * resultado equivocado NO se ha conseguido reproducir --
+                     * con la promesa puesta y con ella quitada, incluso sin
+                     * inline, el mismo caso da lo correcto --, asi que esto no
+                     * es el arreglo de un fallo medido.
+                     *
+                     * Asi que se DICE, pero sin demostrar.  El mecanismo sigue
+                     * entero -- quien quiera afinar con ella puede -- y el hecho
+                     * no miente: sale `inferred`, que en el ASA significa "la
+                     * evidencia apunta ahi pero pudo quedar algo sin ver".  Lo
+                     * que no se hace es venderla como garantia.
+                     *
+                     * Y sin `by_author`, que es la otra mitad: esto lo DERIVA el
+                     * compilador del tipo, no lo escribio nadie, asi que no hay
+                     * ninguna declaracion que ir a comprobar a los sitios de
+                     * llamada.
+                     *
+                     * Pasa a demostrada en cuanto exista quien la verifique: el
+                     * prestamo indexado por localizacion abstracta en vez de por
+                     * nombre, mas la comprobacion en el sitio de llamada. */
+                    pointee.set(Claim::ExclusiveCall, /*is_proven=*/false);
+                    break;
                 case PrimitiveKind::UNIQUE_PTR:
                     pointee.set(Claim::MayRead, true);
                     pointee.set(Claim::MayWrite, true);
+                    /* Aqui SI, y por una razon que no vale para el prestamo:
+                     * pasar un `unique<T>` exige moverlo, y mover un dueno
+                     * prestado ya lo rechaza el comprobador (VX2034).  El
+                     * agujero de arriba es de los duenos que se COPIAN, y este
+                     * no se copia. */
                     pointee.set(Claim::ExclusiveCall, true);
-                    /* Las DOS exclusividades, que no son la misma promesa y por
-                     * eso no llevan la misma certeza:
-                     *
-                     *   - en la LLAMADA no la alcanza otro parametro: eso lo
-                     *     demuestra el comprobador, que ve todos los nombres de
-                     *     la funcion.  Va DEMOSTRADA (arriba).
-                     *   - en la EJECUCION no la alcanza nadie mas -- ni otro
-                     *     hilo, ni un puntero guardado antes --: eso el
-                     *     comprobador NO lo mira, porque no razona sobre hilos.
-                     *     Va sin demostrar.
-                     *
-                     * Es la que responde a si dos escrituras pueden ser una
-                     * carrera y a si dos regiones comparten linea de cache, asi
-                     * que hacia falta poder decirla aunque hoy llegue con menos
-                     * certeza que su hermana. */
-                    pointee.set(Claim::ExclusiveRun, false);
+                    /* La exclusividad en la EJECUCION -- que no la alcance otro
+                     * hilo ni un puntero guardado antes -- no se afirma: nadie
+                     * la hace cumplir, y `ptr_of` entrega el puntero crudo sin
+                     * consumir el dueno.  Inferirla seria creerla, porque no hay
+                     * guarda posible en ejecucion para "nadie mas la alcanza".
+                     * Se emitira cuando la alcanzabilidad por hilos sea un hecho
+                     * del ASA y la pueda DEMOSTRAR. */
                     break;
                 default: break;
                 }

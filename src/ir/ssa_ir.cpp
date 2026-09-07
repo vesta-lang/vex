@@ -1361,8 +1361,16 @@ void ir_print(const IrModule &mod, std::ostream &o) {
                             o << stars;
                             if (niega) o << '-';
                             o << kNames[k];
+                            /* TRES estados, tres marcas: `!` demostrada, `?` la
+                             * afirma el programador y hay que comprobarsela en
+                             * cada llamada, y sin marca sale del tipo pero
+                             * todavia no la exige nadie.  Con dos marcas, un
+                             * `out T*` y un `borrow_mut<T>` se volcaban igual
+                             * aunque respondan por ellas personas distintas. */
                             if (niega ? l.denies_proven(cl) : l.has_proven(cl))
                                 o << '!';
+                            else if (l.is_declared(cl))
+                                o << '?';
                         }
                         if (l.extent_bytes >= 0) {
                             if (sep) o << ' ';

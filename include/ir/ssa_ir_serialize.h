@@ -108,7 +108,13 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    16; // v16: el contrato de un parametro es POR NIVEL de indireccion, y cada
+    17; // v17: cada nivel dice ademas QUIEN afirma cada promesa, aparte de si
+        // esta demostrada.  Son dos ejes y no uno: `borrow_mut<T>` la DERIVA el
+        // compilador del tipo sin que este demostrada, y un `out T*` la declara
+        // el programador y hay que comprobarsela.  Con un solo bit, lo primero
+        // se publicaba como lo segundo y el verificador de contratos se iba a
+        // comprobar declaraciones que nadie habia escrito.
+        // v16: el contrato de un parametro es POR NIVEL de indireccion, y cada
         // nivel lleva ademas lo que se NIEGA.  Hacian falta las dos cosas:
         // `const T*` habla de lo apuntado y `T* const` del puntero, asi que con
         // un solo registro las dos se guardaban igual; y sin la negacion, "no
@@ -191,7 +197,9 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    16; // v16: el contrato de cada parametro, por NIVEL y con la cara negativa.
+    17; // v17: cada promesa dice ademas QUIEN la afirma, aparte de si esta
+        // demostrada.
+        // v16: el contrato de cada parametro, por NIVEL y con la cara negativa.
         // v15: + el contrato de cada parametro.  Sube A LA VEZ que
         // IR_SECTION_VERSION porque las dos comparten `serialize_function`:
         // olvidarla no da un error de version -- la comprobacion pasa -- sino un
