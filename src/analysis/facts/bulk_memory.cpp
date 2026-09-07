@@ -266,6 +266,7 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn) {
                 case ir::IrOp::MUL:
                 case ir::IrOp::SHL:
                 case ir::IrOp::BITCAST:
+                case ir::IrOp::BORROW: // copia del puntero, no toca memoria
                 case ir::IrOp::MOV:
                 case ir::IrOp::CONST:
                 case ir::IrOp::CMP_LT:

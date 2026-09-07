@@ -74,6 +74,7 @@ bool as_const(const IrFunction &fn, IrValueId vid, uint64_t &out) {
 int op_cost(IrOp op) {
     switch (op) {
     case IrOp::CONST:
+    case IrOp::BORROW: // copia del puntero: barata y sin efectos
     case IrOp::MOV:
     case IrOp::SEXT:
     case IrOp::ZEXT:

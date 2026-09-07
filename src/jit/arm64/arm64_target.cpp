@@ -203,6 +203,14 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(fn, in.dst), imm));
                 break;
             }
+            /* El prestamo copia su PRIMER operando; el segundo es el dueno,
+             * que se nombra y no se copia.  De ahi que no comparta caso con
+             * `mov`, donde un segundo operando seria algo mal formado. */
+            case ir::IrOp::BORROW:
+                if (in.operands.empty()) return false;
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(fn, in.dst),
+                                               vr(fn, in.operands[0])));
+                break;
             case ir::IrOp::MOV:
                 if (in.operands.size() != 1) return false;
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(fn, in.dst),

@@ -774,7 +774,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         b.value = static_cast<IrValueId>(v);
         b.owner = static_cast<IrValueId>(o);
         b.mutable_ = (mut != 0);
-        b.owner_kind = static_cast<IrFunction::BorrowOwnerKind>(kind);
+        b.owner_kind = static_cast<BorrowOwnerKind>(kind);
         out.borrow_facts.push_back(std::move(b));
     }
     // ASA: instrucciones ASM_MICRO (asm opaco liftado).

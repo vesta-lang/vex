@@ -191,6 +191,18 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                     os << "    mov x9, x30\n";
                 emit_st(os, "x9", in.dst);
                 break;
+            /* Un prestamo copia su PRIMER operando -- el puntero prestado --;
+             * el segundo es el dueno, que se nombra y no se copia.  Por eso no
+             * cae en el caso de `mov`: alli un segundo operando significaria
+             * algo mal formado, y aqui es lo normal. */
+            case ir::IrOp::BORROW:
+                if (in.operands.empty()) {
+                    out_unsupported = true;
+                    return "";
+                }
+                emit_ld(os, "x9", in.operands[0]);
+                emit_st(os, "x9", in.dst);
+                break;
             case ir::IrOp::MOV:
                 if (in.operands.size() != 1) {
                     out_unsupported = true;

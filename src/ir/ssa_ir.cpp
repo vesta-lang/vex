@@ -97,6 +97,7 @@ static const OpEntry OP_TABLE[] = {
     {"const", IrOp::CONST},
     {"mov", IrOp::MOV},
     {"nop", IrOp::NOP},
+    {"borrow", IrOp::BORROW},
     {"str_lit_addr", IrOp::STR_LIT_ADDR},
     // aritmetica entera
     {"add", IrOp::ADD},

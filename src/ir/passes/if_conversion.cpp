@@ -56,6 +56,7 @@ constexpr int kMaxChainInstrs = 12;
 bool is_speculable(IrOp op) {
     switch (op) {
     case IrOp::CONST:
+    case IrOp::BORROW: // copia del puntero: sin efectos, especulable
     case IrOp::MOV:
     case IrOp::ADD:
     case IrOp::SUB:

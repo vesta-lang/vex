@@ -48,6 +48,10 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     // STR_LIT_ADDR y LABEL_ADDR bajan a una relocacion contra .rodata
     // o un simbolo (resuelta por el linker AOT): nativas.
     case IrOp::CONST:
+    // Un prestamo es una copia del puntero: lo que anade lo miran los
+    // analisis, y al codigo nativo no le llega nada.  Va con el movimiento
+    // porque eso es lo que emite.
+    case IrOp::BORROW:
     case IrOp::MOV:
     case IrOp::NOP:
     case IrOp::STR_LIT_ADDR:

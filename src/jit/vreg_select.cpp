@@ -3489,6 +3489,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MOp::MOV, vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
                 break;
             }
+            /* Un prestamo es una COPIA del puntero.  Lo que anade -- de donde
+             * salio y con que exclusividad -- lo miran los analisis; al codigo
+             * generado no le llega nada, igual que en el emisor de bytecode.
+             * El segundo operando es el dueno, y aqui no se toca: no se copia,
+             * se nombra. */
+            case ir::IrOp::BORROW: {
+                flush_pending();
+                if (in.operands.empty())
+                    return vreg_bail(fn.name.c_str(), __LINE__);
+                O.push_back(MInstr::make_unary(MOp::MOV, vrt(in.dst),
+                                               vrt(in.operands[0])));
+                break;
+            }
+
             case ir::IrOp::BITCAST: {
                 flush_pending();
                 if (in.operands.size() != 1)

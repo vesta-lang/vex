@@ -56,9 +56,11 @@ std::string seguir(const ir::IrFunction &fn, const IrFacts &facts,
     case IrOp::LABEL_ADDR:
         // Aqui se toma la direccion: es el unico sitio donde nace un destino.
         return d->func_name;
+    case IrOp::BORROW:
     case IrOp::MOV:
     case IrOp::BITCAST:
-        // Copias y reinterpretaciones no cambian a donde apunta.
+        // Copias y reinterpretaciones no cambian a donde apunta.  Un prestamo
+        // tampoco: ES el mismo puntero.
         return d->operands.empty()
                    ? give_up(why, asa::UnknownReason::ShapeNotRecognized,
                              "target.copy_without_source")

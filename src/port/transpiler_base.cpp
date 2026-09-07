@@ -237,6 +237,7 @@ static bool is_inlinable_expr_op(ir::IrOp op) {
     using ir::IrOp;
     switch (op) {
     case IrOp::CONST:
+    case IrOp::BORROW: // copia del puntero
     case IrOp::MOV:
     case IrOp::ADD:
     case IrOp::SUB:
@@ -674,6 +675,9 @@ void Transpiler::emit_instr(EmitContext &ctx, const ir::IrInstr &ins) {
         backend_.emit_const(ctx, ins.dst, ins.imm, ins.type);
         return;
 
+    // El prestamo se traduce como la copia que es; su segundo operando -- el
+    // dueno -- no se copia, se nombra.
+    case IrOp::BORROW:
     case IrOp::MOV:
         if (!ins.operands.empty()) {
             backend_.emit_mov(ctx, ins.dst, ins.operands[0], ins.type);
@@ -1039,6 +1043,7 @@ static bool block_is_clean_loop_header(const ir::IrBlock &bb) {
         switch (ins.op) {
         case IrOp::PHI:
         case IrOp::CONST:
+        case IrOp::BORROW:
         case IrOp::MOV:
         case IrOp::ADD:
         case IrOp::SUB:

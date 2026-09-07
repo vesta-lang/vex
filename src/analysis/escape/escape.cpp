@@ -69,6 +69,10 @@ bool is_derivation(IrOp op) {
     case IrOp::SUB:
     case IrOp::BITCAST:
     case IrOp::CAST:
+    // Un prestamo REENVIA el puntero, asi que si el prestamo se escapa, se
+    // escapa lo que se presto.  Su segundo operando es el dueno, y por eso
+    // tambien queda alcanzado: es justo lo que hay que saber.
+    case IrOp::BORROW:
     case IrOp::MOV:
     case IrOp::GCDEREF_IR:
     case IrOp::GC_DEREF_HOST:

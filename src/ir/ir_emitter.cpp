@@ -2413,6 +2413,11 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
 
     // --- MOV ---
+    /* Un prestamo es una COPIA del puntero, ni mas ni menos: lo que anade --
+     * de donde salio y con que exclusividad -- lo miran los analisis, y al
+     * codigo emitido no le llega nada.  Su segundo operando es el dueno y aqui
+     * no se toca: no se copia, se nombra. */
+    case IrOp::BORROW:
     case IrOp::MOV:
         if (!ins.operands.empty()) {
             Reg rs = ctx.load_src(ins.operands[0], 0);

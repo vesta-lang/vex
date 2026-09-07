@@ -260,6 +260,9 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                     nuevo_resto = r->retorno.resto;
                     break;
                 }
+                // Prestar no mueve la direccion, asi que conserva su
+                // alineacion.
+                case ir::IrOp::BORROW:
                 case ir::IrOp::MOV:
                 case ir::IrOp::BITCAST:
                 case ir::IrOp::CAST:

@@ -249,6 +249,8 @@ std::string CBackend::build_inline_expr(EmitContext &ctx,
     switch (ins.op) {
     case IrOp::CONST: return format_const_literal(ins.imm, ins.type);
 
+    // Un prestamo ES su puntero: se traduce a la misma expresion.
+    case IrOp::BORROW:
     case IrOp::MOV: return value_expr(ctx, ins.operands[0]);
 
     case IrOp::ADD:
@@ -570,9 +572,11 @@ void CBackend::analyze_escapes(const ir::IrFunction &fn) {
                     }
                 }
                 break;
+            case IrOp::BORROW:
             case IrOp::MOV:
-                // MOV es alias; el dst hereda. Si dst aparece despues
-                // en un escape, lo perdimos -> conservativo: escapa.
+                // MOV y el prestamo son alias; el dst hereda.  Si dst
+                // aparece despues en un escape, lo perdimos ->
+                // conservativo: escapa.
                 if (!ins.operands.empty() && cand_set.count(ins.operands[0])) {
                     escaped.insert(ins.operands[0]);
                 }
@@ -622,8 +626,9 @@ void CBackend::infer_concrete_types(const ir::IrFunction &fn) {
                         // return type es PTR, no podemos inferir con
                         // certeza sin firma.  Skip por ahora.
                     }
-                } else if (ins.op == ir::IrOp::MOV) {
-                    // MOV propaga el tipo.
+                } else if (ins.op == ir::IrOp::MOV ||
+                           ins.op == ir::IrOp::BORROW) {
+                    // MOV y el prestamo propagan el tipo.
                     if (!ins.operands.empty()) {
                         auto it = concrete_type_.find(ins.operands[0]);
                         if (it != concrete_type_.end()) new_type = it->second;

@@ -302,11 +302,11 @@ static void print_fuera_de_region(std::ostream &os, const ir::IrModule &mod,
  */
 static void print_prestamos(std::ostream &os, const ir::IrFunction &fn) {
     if (fn.borrow_facts.empty()) return;
-    auto nat = [](ir::IrFunction::BorrowOwnerKind k) {
+    auto nat = [](ir::BorrowOwnerKind k) {
         switch (k) {
-        case ir::IrFunction::BorrowOwnerKind::Unique: return "unique";
-        case ir::IrFunction::BorrowOwnerKind::Shared: return "shared";
-        case ir::IrFunction::BorrowOwnerKind::Reborrow: return "represtamo";
+        case ir::BorrowOwnerKind::Unique: return "unique";
+        case ir::BorrowOwnerKind::Shared: return "shared";
+        case ir::BorrowOwnerKind::Reborrow: return "represtamo";
         default: return "local";
         }
     };

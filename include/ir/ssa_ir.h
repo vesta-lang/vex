@@ -147,11 +147,61 @@ bool ir_type_parse(const char *name, IrType &out);
  *   0xE0..0xEF  Sincronizacion / monitores
  *   0xF0..0xFF  Intrinsics VM (proceso, scheduler, etc.)
  */
+/**
+ * @brief De que clase es el DUENO del que sale un prestamo.
+ *
+ * Va con el prestamo para que ningun consumidor extrapole: la exclusividad de un
+ * `borrow_mut` NO se puede trasladar a un puntero crudo sacado del mismo objeto
+ * ni al interior de un `unique`.
+ *
+ * Y separa lo que de verdad se comporta distinto: los duenos que se COPIAN
+ * (@c Plain, @c Shared) se le pueden pasar a otra funcion que los vuelva a
+ * prestar, y @c Unique no -- pasarlo exige moverlo, y mover un dueno prestado ya
+ * se rechaza --.
+ */
+enum class BorrowOwnerKind : uint8_t {
+    Plain = 0, ///< Local corriente cuya direccion se tomo.
+    Unique,    ///< `unique<T>`: propiedad, no prestamo.
+    Shared,    ///< `shared<T>`: propiedad compartida con recuento.
+    Reborrow,  ///< Otro prestamo (cadena de represtamos).
+};
+
 enum class IrOp : uint16_t {
     // ---- constantes y movimiento (0x00-0x0F) ----
     CONST = 0x00, ///< %dst = const.T  imm64
     MOV = 0x01,   ///< %dst = mov.T   %src   (copia; eliminada en lowering)
     NOP = 0x02,   ///< nop
+    /**
+     * @brief %dst = borrow.ptr %owner   -- un PRESTAMO de lo que apunta.
+     *
+     * Copia, como @c MOV: el valor prestado ES el mismo puntero.  Lo que anade
+     * es DE DONDE se presto y con que exclusividad, y por eso es una operacion
+     * y no una tabla al margen: el dueno viaja como OPERANDO, con lo que el
+     * inliner lo remapea solo, morir el prestamo es que muera su valor, y sale
+     * en el volcado sin que nadie tenga que acordarse de imprimirlo.
+     *
+     * Antes esto vivia en `IrFunction::borrow_facts`, con el dueno guardado
+     * como id de valor SSA que NINGUN pase mantenia: al inlinar o renumerar
+     * apuntaba a lo que fuera.  No mordio porque su unico consumidor imprimia
+     * el nombre y la linea sin resolver los ids nunca.
+     *
+     * @c imm lleva lo que no es un valor: bit 0 = exclusivo (`lend_mut`) frente
+     * a compartido (`lend`), bits 8-15 = de que clase es el dueno
+     * (@c IrFunction::BorrowOwnerKind).  El NOMBRE del dueno no se guarda: ya
+     * esta en `values[operands[0]].name`, y dos copias de un nombre acaban
+     * discrepando.
+     */
+    BORROW = 0x06,
+    // (el `imm` de BORROW se arma y se lee con las tres funciones de mas
+    //  abajo: `borrow_imm`, `borrow_is_exclusive` y `borrow_owner_kind`)
+    //
+    // OJO al elegir numero: 0x05 lo tiene SECTION_REF, que lo declara en la
+    // linea siguiente a su nombre y por eso no salta a la vista.  Repetir un
+    // valor aqui NO da error de compilacion -- C++ admite dos nombres para el
+    // mismo -- y lo que sale es que una operacion se emite como OTRA: puesto en
+    // 0x05, este `borrow` se emitia como una referencia de seccion sin
+    // resolver, o sea `mov dst, 0`, y el programa devolvia un puntero en vez
+    // del valor prestado.  Sin un solo aviso por el camino.
     STR_LIT_ADDR =
         0x03, ///< %dst = str_lit_addr.ptr  imm=indice en IrModule::static_data
               ///<   El emisor genera "mov rDst, @Absolute(\"code.s_<imm>\")"
@@ -801,6 +851,32 @@ enum class IrOp : uint16_t {
  * @return Nombre de texto del opcode.
  */
 const char *ir_op_name(IrOp op);
+
+/* --- El `imm` de @c IrOp::BORROW ---------------------------------------
+ *
+ * Las tres van juntas y son las UNICAS que conocen el reparto de bits: quien
+ * lea un prestamo pregunta aqui.  Un desempaquetado escrito a mano en el sitio
+ * de uso es la forma habitual de que dos consumidores acaben leyendo campos
+ * distintos del mismo numero.
+ */
+
+/// @brief Arma el @c imm de un `borrow`.
+/// @param exclusive @c true para `lend_mut`, @c false para `lend`.
+/// @param kind      De que clase es el dueno.
+inline uint64_t borrow_imm(bool exclusive, BorrowOwnerKind kind) noexcept {
+    return (exclusive ? 1ull : 0ull) |
+           (static_cast<uint64_t>(static_cast<uint8_t>(kind)) << 8);
+}
+
+/// @brief Es un prestamo EXCLUSIVO (`lend_mut`)?
+inline bool borrow_is_exclusive(uint64_t imm) noexcept {
+    return (imm & 1ull) != 0;
+}
+
+/// @brief De que clase es el dueno del que salio.
+inline BorrowOwnerKind borrow_owner_kind(uint64_t imm) noexcept {
+    return static_cast<BorrowOwnerKind>(static_cast<uint8_t>((imm >> 8) & 0xFF));
+}
 
 /**
  * @brief Parsea el nombre de un opcode del formato de texto.
@@ -1911,13 +1987,6 @@ struct IrFunction {
      * un `borrow_mut` NO se puede trasladar a un puntero crudo sacado del mismo
      * objeto ni al interior de un `unique`.
      */
-    enum class BorrowOwnerKind : uint8_t {
-        Plain = 0, ///< Local corriente cuya direccion se tomo.
-        Unique,    ///< `unique<T>`: propiedad, no prestamo.
-        Shared,    ///< `shared<T>`: propiedad compartida con recuento.
-        Reborrow,  ///< Otro prestamo (cadena de represtamos).
-    };
-
     struct BorrowFact {
         IrValueId value = IR_NO_VALUE; ///< El puntero que ES el prestamo.
         IrValueId owner = IR_NO_VALUE; ///< De donde se presto (su valor SSA).

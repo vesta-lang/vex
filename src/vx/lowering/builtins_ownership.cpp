@@ -1002,8 +1002,25 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
      * quedaba dentro del type checker.  Se apunta como HECHO del IR, con su
      * procedencia, para que el analisis pueda componerlo con regiones y
      * efectos.  Anotar no cambia el codigo generado. */
-    auto anota_prestamo = [&](ir::IrValueId v_pres, ir::IrValueId v_owner) {
-        if (v_pres == ir::IR_NO_VALUE || !fn_) return;
+    /**
+     * @brief Emite el `borrow` y devuelve el valor prestado.
+     *
+     * El prestamo ES el mismo puntero -- por eso durante mucho tiempo no dejo
+     * rastro ninguno --, pero eso no quiere decir que no haya nada que decir:
+     * hay que decir DE DONDE salio y con que exclusividad.  Va como operacion y
+     * no como tabla al margen porque asi el dueno es un OPERANDO, y un operando
+     * lo remapea el inliner solo, muere cuando muere su valor y sale en el
+     * volcado.  Guardado aparte hacia falta que cada pase se acordara, y ninguno
+     * se acordaba.
+     *
+     * @param v_pres El puntero que se presta.
+     * @param v_owner De donde sale.
+     * @return El valor que representa el prestamo, o @p v_pres si no se pudo
+     *         emitir (sin funcion en curso no hay donde ponerlo).
+     */
+    auto anota_prestamo = [&](ir::IrValueId v_pres,
+                              ir::IrValueId v_owner) -> ir::IrValueId {
+        if (v_pres == ir::IR_NO_VALUE || !fn_) return v_pres;
         ir::IrFunction::BorrowFact bf;
         bf.value = v_pres;
         bf.owner = v_owner;
@@ -1012,7 +1029,7 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
          * `unique` no es lo mismo que prestar un local, y nadie debe
          * confundirlos despues. */
         const Type &ot = e->args[0]->result_type;
-        using OK = ir::IrFunction::BorrowOwnerKind;
+        using OK = ir::BorrowOwnerKind;
         bf.owner_kind = (ot.kind == PrimitiveKind::UNIQUE_PTR)   ? OK::Unique
                         : (ot.kind == PrimitiveKind::SHARED_PTR) ? OK::Shared
                         : (ot.kind == PrimitiveKind::BORROW ||
@@ -1023,7 +1040,51 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
         if (e->args[0]->kind == ast::NodeKind::IdentExpr)
             bf.owner_name =
                 static_cast<ast::IdentExpr *>(e->args[0].get())->name;
+        const ir::BorrowOwnerKind kind = bf.owner_kind;
         fn_->borrow_facts.push_back(std::move(bf));
+
+        /* Y la operacion, que es lo que de verdad sobrevive a los pases.  El
+         * tipo es el del prestamo -- un puntero --, y la naturaleza de la
+         * memoria (anfitrion o maquina) se hereda del operando, como en
+         * cualquier otra copia. */
+        const ir::IrValueId v_new = fn_->new_value(ir::IrType::PTR);
+        if (v_pres < fn_->values.size() && v_new < fn_->values.size()) {
+            const ir::IrValue &src = fn_->values[v_pres];
+            ir::IrValue &dst = fn_->values[v_new];
+            dst.is_host_ptr = src.is_host_ptr;
+            dst.pointee_is_host_ptr = src.pointee_is_host_ptr;
+            dst.is_gc_object = src.is_gc_object;
+            /* Y la naturaleza de la memoria, que NO siempre esta en el valor de
+             * origen: un parametro `borrow_mut<T>` llega sin la marca, porque
+             * quien decidia entre `mov` y `movh` era el tipo semantico y no el
+             * bit.  Mientras el prestamo se devolvia tal cual daba igual; ahora
+             * que es un valor propio, sin esto el `store` de un represtamo
+             * escribia en la memoria de la MAQUINA en vez de en la del
+             * anfitrion, y el cambio se perdia sin un solo aviso.
+             *
+             * Todos los duenos menos el LOCAL CORRIENTE dan un puntero del
+             * anfitrion: un `unique`/`shared` guardan ahi su carga, una clase es
+             * un objeto del anfitrion, y represtar es represtar uno de esos.  El
+             * local vive en la pila de la maquina, y ese se queda como venga. */
+            if (kind != ir::BorrowOwnerKind::Plain) dst.is_host_ptr = true;
+        }
+        /* DOS operandos, y los dos hacen falta: el primero es lo que se copia
+         * -- el puntero prestado, que es el valor que sale --, y el segundo es
+         * de DONDE se presto.  No siempre son el mismo (prestar un `shared<T>`
+         * devuelve el payload, a dieciseis bytes del bloque de control), y
+         * ademas los dos tienen que ser operandos para que el inliner los
+         * remapee: un id guardado fuera de la lista de operandos no lo remapea
+         * nadie. */
+        ir::IrInstr is{};
+        is.op = ir::IrOp::BORROW;
+        is.type = ir::IrType::PTR;
+        is.dst = v_new;
+        is.operands.push_back(v_pres);
+        is.operands.push_back(v_owner);
+        is.imm = ir::borrow_imm(is_lend_mut, kind);
+        is.source_line = e->loc.line;
+        emit(current_block_, std::move(is));
+        return v_new;
     };
     // Si el owner es unique<T>/shared<T>, equivale a ptr_of(owner)
     // que carga slot+0.  Si es una variable plain, devolvemos
@@ -1045,8 +1106,8 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
         if (v != ir::IR_NO_VALUE) {
             // El borrow_var ya es host_ptr; lo devolvemos tal cual.
             // (read_borrow/write_borrow lo usaran con movh.)
-            anota_prestamo(v, v); // represtamo: el owner ES otro prestamo
-            out_value = v;
+            // represtamo: el owner ES otro prestamo
+            out_value = anota_prestamo(v, v);
             return true;
         }
     }
@@ -1071,8 +1132,7 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
                 // asi que NO marcamos is_host_ptr aqui: los LOAD/
                 // STORE de read/write_borrow ya consultan eso del
                 // SSA value y emiten mov (no movh) si es slot VM.
-                anota_prestamo(v, v);
-                out_value = v;
+                out_value = anota_prestamo(v, v);
                 return true;
             }
         }
@@ -1093,18 +1153,15 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
                 emit_const(ir::IrType::I64, 16, e->loc.line);
             const ir::IrValueId v_pay =
                 emit_ptr_add(v_ptr, v_sixteen, e->loc.line);
-            anota_prestamo(v_pay, v_arg);
-            out_value = v_pay;
+            out_value = anota_prestamo(v_pay, v_arg);
             return true;
         }
-        anota_prestamo(v_ptr, v_arg);
-        out_value = v_ptr;
+        out_value = anota_prestamo(v_ptr, v_arg);
         return true;
     }
     // owner plain: el SSA value ya es la direccion (address-taken).
     // Lo devolvemos tal cual.
-    anota_prestamo(v_arg, v_arg);
-    out_value = v_arg;
+    out_value = anota_prestamo(v_arg, v_arg);
     return true;
     return true;
 }

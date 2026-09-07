@@ -605,6 +605,8 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     switch (ins.op) {
     // ---- Computacion pura (sin efectos observables) ----
     case IrOp::CONST:
+    // Un prestamo no toca memoria: es una copia del puntero.
+    case IrOp::BORROW:
     case IrOp::MOV:
     case IrOp::NOP:
     case IrOp::ADD:

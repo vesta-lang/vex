@@ -292,6 +292,7 @@ LoopStructure detect_loop_structure(const ir::IrFunction &fn,
         auto pure_compute = [](IrOp op) {
             switch (op) {
             case IrOp::CONST:
+            case IrOp::BORROW: // copia del puntero: computo puro
             case IrOp::MOV:
             case IrOp::ADD:
             case IrOp::SUB:

@@ -917,7 +917,8 @@ struct Motor : Contexto {
             const ValueRange rb = valor(e, b);
             ir::IrValueId sigue = ir::IR_NO_VALUE;
             switch (d->op) {
-            case IrOp::MOV: // v = a  =>  a = v
+            case IrOp::BORROW: // el prestamo ES el puntero: mismo rango
+            case IrOp::MOV:    // v = a  =>  a = v
                 if (refinar(a, rv)) sigue = a;
                 break;
             case IrOp::ADD: { // v = a + b  =>  a = v - b,  b = v - a
@@ -1508,6 +1509,7 @@ static ValueRange evaluate_op(const Contexto &cx, const ir::IrInstr &in,
         nuevo = piso.acotada() ? ValueRange::constante(piso.t, in.imm)
                                : ValueRange::top();
         break;
+    case IrOp::BORROW: // reenvia su primer operando, como una copia
     case IrOp::MOV: nuevo = arg(0); break;
     case IrOp::ADD: nuevo = arg(0).sumar(arg(1)); break;
     case IrOp::SUB: nuevo = arg(0).restar(arg(1)); break;
