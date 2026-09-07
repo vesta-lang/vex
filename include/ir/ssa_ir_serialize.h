@@ -108,7 +108,12 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    17; // v17: cada nivel dice ademas QUIEN afirma cada promesa, aparte de si
+    18; // v18: los prestamos dejan de ir en una tabla aparte -- ahora son
+        // instrucciones `borrow` del cuerpo --, asi que su bloque desaparece
+        // del formato.  Leer un artefacto v17 con este lector desalinearia el
+        // resto del cuerpo, que es por lo que sube la version y no por lo que
+        // se quito.
+        // v17: cada nivel dice ademas QUIEN afirma cada promesa, aparte de si
         // esta demostrada.  Son dos ejes y no uno: `borrow_mut<T>` la DERIVA el
         // compilador del tipo sin que este demostrada, y un `out T*` la declara
         // el programador y hay que comprobarsela.  Con un solo bit, lo primero
@@ -197,7 +202,8 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    17; // v17: cada promesa dice ademas QUIEN la afirma, aparte de si esta
+    18; // v18: fuera el bloque de prestamos (ahora son instrucciones).
+        // v17: cada promesa dice ademas QUIEN la afirma, aparte de si esta
         // demostrada.
         // v16: el contrato de cada parametro, por NIVEL y con la cara negativa.
         // v15: + el contrato de cada parametro.  Sube A LA VEZ que

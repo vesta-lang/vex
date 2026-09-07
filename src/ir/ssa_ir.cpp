@@ -770,6 +770,25 @@ void print_instr(std::ostream &o, const IrFunction &fn, const IrInstr &ins) {
         o << ")";
         break;
 
+    case IrOp::BORROW: {
+        /* Los operandos ya salen por el camino comun -- lo prestado y el dueno
+         * --, pero sin esto no se veria lo que el prestamo PROMETE, que es la
+         * mitad util: si es exclusivo, y de que clase de dueno sale.  Un
+         * volcado donde dos prestamos con reglas distintas se leen igual no
+         * sirve para entender por que dos accesos no se reordenaron. */
+        // Los operandos primero -- lo prestado y el dueno --, que aqui hay que
+        // imprimirlos a mano: tener caso propio se salta el camino comun.
+        for (size_t i = 0; i < ins.operands.size(); i++) {
+            o << (i == 0 ? " " : ", ");
+            print_val(o, fn, ins.operands[i]);
+        }
+        static const char *kOwner[] = {"plain", "unique", "shared", "reborrow"};
+        const uint8_t k = static_cast<uint8_t>(borrow_owner_kind(ins.imm));
+        o << ", excl=" << (borrow_is_exclusive(ins.imm) ? "true" : "false")
+          << ", owner=" << (k < 4 ? kOwner[k] : "?");
+        break;
+    }
+
     case IrOp::MAKE_CLOSURE: {
         // B.1 marker: make_closure @helper, env_kind=K, mutable_mask=M,
         //                          captures=[%c0, %c1, ...]

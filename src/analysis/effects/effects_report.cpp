@@ -301,7 +301,6 @@ static void print_fuera_de_region(std::ostream &os, const ir::IrModule &mod,
  * reglas en absoluto.
  */
 static void print_prestamos(std::ostream &os, const ir::IrFunction &fn) {
-    if (fn.borrow_facts.empty()) return;
     auto nat = [](ir::BorrowOwnerKind k) {
         switch (k) {
         case ir::BorrowOwnerKind::Unique: return "unique";
@@ -310,11 +309,31 @@ static void print_prestamos(std::ostream &os, const ir::IrFunction &fn) {
         default: return "local";
         }
     };
-    os << "  Prestamos:\n";
-    for (const ir::IrFunction::BorrowFact &b : fn.borrow_facts) {
-        os << "    " << (b.mutable_ ? "exclusivo" : "compartido") << " de "
-           << (b.owner_name.empty() ? "?" : b.owner_name) << " ("
-           << nat(b.owner_kind) << ") en linea " << b.line << "\n";
+    /* Se leen las INSTRUCCIONES, no una tabla al margen.  La tabla guardaba el
+     * dueno como id de valor SSA y ningun pase la mantenia, asi que despues de
+     * inlinar o renumerar apuntaba a lo que fuera; no se notaba porque aqui
+     * solo se imprimia el nombre.  Ahora el dueno es un operando y lo que se
+     * lee es lo que de verdad hay en la funcion. */
+    bool alguno = false;
+    for (const ir::IrBlock &b : fn.blocks) {
+        for (const ir::IrInstr &in : b.instrs) {
+            if (in.op != ir::IrOp::BORROW) continue;
+            if (!alguno) {
+                os << "  Prestamos:\n";
+                alguno = true;
+            }
+            const ir::IrValueId owner =
+                in.operands.size() > 1 ? in.operands[1] : ir::IR_NO_VALUE;
+            const std::string nombre =
+                (owner < fn.values.size() && !fn.values[owner].name.empty())
+                    ? fn.values[owner].name
+                    : std::string("?");
+            os << "    "
+               << (ir::borrow_is_exclusive(in.imm) ? "exclusivo" : "compartido")
+               << " de " << nombre << " ("
+               << nat(ir::borrow_owner_kind(in.imm)) << ") en linea "
+               << in.source_line << "\n";
+        }
     }
 }
 

@@ -1021,27 +1021,18 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
     auto anota_prestamo = [&](ir::IrValueId v_pres,
                               ir::IrValueId v_owner) -> ir::IrValueId {
         if (v_pres == ir::IR_NO_VALUE || !fn_) return v_pres;
-        ir::IrFunction::BorrowFact bf;
-        bf.value = v_pres;
-        bf.owner = v_owner;
-        bf.mutable_ = is_lend_mut;
-        /* La naturaleza de lo prestado viaja con el hecho: prestar un
-         * `unique` no es lo mismo que prestar un local, y nadie debe
-         * confundirlos despues. */
+        /* De que NATURALEZA es el dueno.  Viaja con el prestamo para que nadie
+         * extrapole: prestar un `unique` no es prestar un local, y la
+         * exclusividad de uno no se traslada al otro. */
         const Type &ot = e->args[0]->result_type;
         using OK = ir::BorrowOwnerKind;
-        bf.owner_kind = (ot.kind == PrimitiveKind::UNIQUE_PTR)   ? OK::Unique
-                        : (ot.kind == PrimitiveKind::SHARED_PTR) ? OK::Shared
-                        : (ot.kind == PrimitiveKind::BORROW ||
-                           ot.kind == PrimitiveKind::BORROW_MUT)
-                            ? OK::Reborrow
-                            : OK::Plain;
-        bf.line = e->loc.line;
-        if (e->args[0]->kind == ast::NodeKind::IdentExpr)
-            bf.owner_name =
-                static_cast<ast::IdentExpr *>(e->args[0].get())->name;
-        const ir::BorrowOwnerKind kind = bf.owner_kind;
-        fn_->borrow_facts.push_back(std::move(bf));
+        const ir::BorrowOwnerKind kind =
+            (ot.kind == PrimitiveKind::UNIQUE_PTR)   ? OK::Unique
+            : (ot.kind == PrimitiveKind::SHARED_PTR) ? OK::Shared
+            : (ot.kind == PrimitiveKind::BORROW ||
+               ot.kind == PrimitiveKind::BORROW_MUT)
+                ? OK::Reborrow
+                : OK::Plain;
 
         /* Y la operacion, que es lo que de verdad sobrevive a los pases.  El
          * tipo es el del prestamo -- un puntero --, y la naturaleza de la

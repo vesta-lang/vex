@@ -1957,45 +1957,13 @@ struct IrFunction {
      */
     std::vector<AsmRegBinding> asm_reg_bindings;
 
-    /**
-     * @brief Prestamos vivos en esta funcion, como HECHOS del IR.
-     *
-     * Un `borrow<T>` / `borrow_mut<T>` no deja rastro en el IR: `lend` no emite
-     * instruccion, devuelve el mismo puntero.  Asi que lo que el borrow checker
-     * demuestra -- y en particular que un prestamo MUTABLE es EXCLUSIVO -- se
-     * queda hoy dentro del type checker y no cruza al analisis, que es justo lo
-     * que impide componerlo con regiones, rangos y efectos.
-     *
-     * Esta tabla lateral (misma forma que @c asm_reg_bindings: vacia en las
-     * funciones que no prestan) lo hace cruzar.  Lleva la PROCEDENCIA --
-     * fichero y linea del `lend`, y el nombre que el usuario escribio -- porque
-     * un veredicto sin su origen no se puede explicar: al bajar la comprobacion
-     * al IR se pierden los nombres, y el diagnostico no debe perderse con
-     * ellos.
-     */
-    /**
-     * @brief De que NATURALEZA es lo que se presto.
-     *
-     * No se mezclan: cada una tiene su regimen y su grado de libertad.  Un
-     * `borrow` esta sujeto a las reglas del borrow checker; un puntero crudo al
-     * estilo C es LIBRE de ellas a proposito, y un `unique`/`shared` responde a
-     * propiedad y movimiento, no a prestamo.  Lo que ASA aporta es que ser
-     * libre no signifique quedar sin analizar: sobre los tres se razona igual
-     * en regiones y lifetime -- seguridad SIN perder libertad.
-     *
-     * Va en el hecho para que ningun consumidor extrapole: la exclusividad de
-     * un `borrow_mut` NO se puede trasladar a un puntero crudo sacado del mismo
-     * objeto ni al interior de un `unique`.
-     */
-    struct BorrowFact {
-        IrValueId value = IR_NO_VALUE; ///< El puntero que ES el prestamo.
-        IrValueId owner = IR_NO_VALUE; ///< De donde se presto (su valor SSA).
-        bool mutable_ = false;         ///< `lend_mut` (exclusivo) vs `lend`.
-        BorrowOwnerKind owner_kind = BorrowOwnerKind::Plain;
-        uint32_t line = 0;      ///< Linea del `lend` (procedencia).
-        std::string owner_name; ///< Nombre escrito por el usuario.
-    };
-    std::vector<BorrowFact> borrow_facts;
+    /* Los prestamos NO viven en una tabla lateral: son instrucciones
+     * `IrOp::BORROW` del cuerpo.  Estuvieron aqui, con el dueno guardado
+     * como id de valor SSA, y ningun pase mantenia esos ids -- al inlinar o
+     * renumerar apuntaban a lo que fuera --.  No mordio porque el unico
+     * consumidor imprimia el nombre sin resolverlos nunca.  Como operacion,
+     * el dueno es un OPERANDO: lo remapea el inliner solo, muere cuando
+     * muere su valor, viaja con el cuerpo y sale en el volcado. */
 
     /**
      * @brief  AS inc.3: listas de clobbers EXPLICITOS por bloque

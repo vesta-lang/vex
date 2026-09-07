@@ -534,18 +534,10 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
         for (const auto &s : lst)
             write_str(out, s);
     }
-    /* Prestamos (v12).  Lo que el borrow checker demuestra tiene que cruzar
-     * esta frontera o no lo ve nadie: `--analyze`, el JIT y el AOT leen el IR
-     * de la cache, no el de memoria.  Vacio en casi todas las funciones. */
-    write_u32(out, static_cast<uint32_t>(fn.borrow_facts.size()));
-    for (const auto &b : fn.borrow_facts) {
-        write_u32(out, static_cast<uint32_t>(b.value));
-        write_u32(out, static_cast<uint32_t>(b.owner));
-        write_u8(out, b.mutable_ ? 1u : 0u);
-        write_u8(out, static_cast<uint8_t>(b.owner_kind));
-        write_u32(out, b.line);
-        write_str(out, b.owner_name);
-    }
+    /* Los prestamos ya NO viajan aparte: son instrucciones `borrow` del cuerpo,
+     * asi que cruzan esta frontera con el resto del codigo y sin poder quedarse
+     * atras.  Antes iban en una tabla propia cuyos ids de valor no mantenia
+     * ningun pase. */
     // ASA: instrucciones ASM_MICRO (asm opaco liftado).  El @c imm de cada
     // IrInstr ASM_MICRO indexa esta tabla; necesaria para que JIT/AOT (que
     // compilan desde el @ir del .velb/.vxir) reconstruyan la plantilla + los
@@ -756,27 +748,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         }
         out.asm_clobber_lists.push_back(std::move(lst));
     }
-    /* Prestamos (v12): ver la nota del emisor. */
-    uint32_t n_pres = 0;
-    if (!read_u32(in, off, n_pres)) return false;
-    out.borrow_facts.clear();
-    out.borrow_facts.reserve(n_pres);
-    for (uint32_t k = 0; k < n_pres; ++k) {
-        IrFunction::BorrowFact b;
-        uint32_t v = 0, o = 0;
-        uint8_t mut = 0, kind = 0;
-        if (!read_u32(in, off, v)) return false;
-        if (!read_u32(in, off, o)) return false;
-        if (!read_u8(in, off, mut)) return false;
-        if (!read_u8(in, off, kind)) return false;
-        if (!read_u32(in, off, b.line)) return false;
-        if (!read_str(in, off, b.owner_name)) return false;
-        b.value = static_cast<IrValueId>(v);
-        b.owner = static_cast<IrValueId>(o);
-        b.mutable_ = (mut != 0);
-        b.owner_kind = static_cast<BorrowOwnerKind>(kind);
-        out.borrow_facts.push_back(std::move(b));
-    }
+    /* (los prestamos ya no van aparte: ver la nota del emisor) */
     // ASA: instrucciones ASM_MICRO (asm opaco liftado).
     uint32_t n_micro = 0;
     if (!read_u32(in, off, n_micro)) return false;
