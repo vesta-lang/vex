@@ -959,14 +959,17 @@ recheck:
         // continue, NO debemos re-pausar -- ejecutamos la instruccion
         // y limpiamos el flag.  Sin esto, "continue" tras hit de bp
         // causaria loop infinito.
+        /* Se MIRA, no se consume.  Consumirlo aqui lo gastaba tambien en las
+         * visitas que vuelven a pausar sin ejecutar nada, y entonces un `step`
+         * tras un impacto no avanzaba NUNCA: la pausa por paso se comia el
+         * salto del punto de ruptura, a la vuelta el punto de ruptura volvia a
+         * disparar, y los dos se alternaban en el mismo pc.  El salto se gasta
+         * abajo, donde ya se sabe que la instruccion va a correr. */
         uint64_t skip_pc = UINT64_MAX;
         {
             std::lock_guard<std::mutex> lk2(proc_mutex_);
             auto it = proc_ctx_.find(pid);
-            if (it != proc_ctx_.end()) {
-                skip_pc = it->second.last_bp_pc;
-                it->second.last_bp_pc = UINT64_MAX; // consumir
-            }
+            if (it != proc_ctx_.end()) skip_pc = it->second.last_bp_pc;
         }
         std::lock_guard<std::mutex> lk(bp_mutex_);
         Breakpoint *bp = (pc == skip_pc) ? nullptr : find_breakpoint(pc, pid);
@@ -1060,8 +1063,8 @@ recheck:
         // y limpiamos el flag.  Sin esto, "step" tras stepped causa
         // bucle: pausa-stepped -> wake -> pausa-stepped -> ...
         // siempre en el mismo PC (la instruccion nunca corre).
-        uint64_t skip_step_pc = ctx.last_step_pc;
-        ctx.last_step_pc = UINT64_MAX; // consumir el flag
+        // Se MIRA, no se consume: ver la nota del salto del punto de ruptura.
+        const uint64_t skip_step_pc = ctx.last_step_pc;
         if (ctx.step_mode && pc != skip_step_pc) {
             should_pause = true;
             pause_reason = "stepped";
@@ -1078,7 +1081,28 @@ recheck:
         }
     }
 
-    if (!should_pause) return;
+    if (!should_pause) {
+        /* La instruccion va a correr, asi que los saltos ya han hecho su
+         * trabajo y se gastan AQUI.  Gastarlos donde se miran los dejaba
+         * consumidos por visitas que volvian a pausar, y el proceso se quedaba
+         * clavado en el mismo pc alternando entre las dos razones. */
+        std::lock_guard<std::mutex> lk(proc_mutex_);
+        auto it = proc_ctx_.find(pid);
+        if (it != proc_ctx_.end()) {
+            it->second.last_bp_pc = UINT64_MAX;
+            it->second.last_step_pc = UINT64_MAX;
+        }
+        return;
+    }
+    /* Y si se pausa, el pc queda apuntado en LOS DOS: quien reanude -- sea con
+     * `continue` o con `step` -- tiene que pasar de largo por aqui una vez, no
+     * volver a pararse por la otra razon. */
+    {
+        std::lock_guard<std::mutex> lk(proc_mutex_);
+        DbgProcCtx &ctx = get_or_create_ctx(pid);
+        ctx.last_bp_pc = pc;
+        ctx.last_step_pc = pc;
+    }
 
     // pausar el proceso hasta que el depurador emita continue/step
     if (_bp_trace) {

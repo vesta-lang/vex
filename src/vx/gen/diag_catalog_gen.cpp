@@ -365,6 +365,7 @@ const CatEntry kEntries[] = {
     {"bulk.unknown_width", {"how many bytes each access moves cannot be stated", "no se puede afirmar cuantos bytes mueve cada acceso"}},
     {"bulk.width_mismatch", {"the read and the write do not move the same number of bytes", "la lectura y la escritura no mueven el mismo numero de bytes"}},
     {"bulk.would_be_a_copy_needs_no_overlap", {"these adjacent accesses ARE a block copy, but turning them into one needs proof that the two regions do not overlap -- with two pointers arriving as parameters that is not known here, and assuming it would give a different result when they do overlap", "estos accesos seguidos SI son una copia de bloque, pero convertirlos en una exige demostrar que las dos regiones no se solapan -- con dos punteros que llegan como parametros eso no se sabe aqui, y suponerlo daria otro resultado cuando de verdad se solapen"}},
+    {"debug.jit_off", {"the JIT is off while the debugger is attached: compiled code does not go through its hook, so a breakpoint inside a compiled function would never fire. Execution is interpreted and therefore slower", "el JIT queda apagado mientras el depurador este conectado: el codigo compilado no pasa por su gancho, asi que un punto de ruptura dentro de una funcion compilada no saltaria nunca.  La ejecucion va interpretada y por tanto mas lenta"}},
     {"definite_store.always", {"'{2}' is written on every path that returns", "'{2}' se escribe en todos los caminos que retornan"}},
     {"definite_store.escapes", {"the pointer is handed to something else, so it cannot be told whether it gets written", "el puntero se le pasa a otro, asi que no se puede decir si se escribe"}},
     {"definite_store.missing", {"'{2}' is not written on the path that returns at line {0}", "'{2}' no se escribe en el camino que retorna en la linea {0}"}},
@@ -445,7 +446,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 424;
+const int kEntryCount = 425;
 
 } // namespace
 

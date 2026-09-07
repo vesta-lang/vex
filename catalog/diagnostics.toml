@@ -2151,6 +2151,14 @@ es = "el puntero no sobrevive a la llamada"
 # olvido su reparto.  Antes se dejaba un comentario y un `NOP`, que no es lo
 # conservador: la instruccion tenia que PRODUCIR un valor y el `NOP` no produce
 # ninguno, asi que lo que salia no era un error sino OTRO RESULTADO.
+# El depurador solo ve lo que INTERPRETA: el codigo que el JIT compila no pasa
+# por su gancho, asi que un punto de ruptura dentro de una funcion compilada no
+# saltaria NUNCA y sin decir nada.  Se apaga el JIT y se dice, en vez de dejar
+# que el usuario crea que su punto de ruptura no se cumple.
+["debug.jit_off"]
+en = "the JIT is off while the debugger is attached: compiled code does not go through its hook, so a breakpoint inside a compiled function would never fire. Execution is interpreted and therefore slower"
+es = "el JIT queda apagado mientras el depurador este conectado: el codigo compilado no pasa por su gancho, asi que un punto de ruptura dentro de una funcion compilada no saltaria nunca.  La ejecucion va interpretada y por tanto mas lenta"
+
 ["emit.unsupported_op"]
 en = "the bytecode emitter does not know how to emit '{2}' (function '{0}', line {1})"
 es = "el emisor de bytecode no sabe emitir '{2}' (funcion '{0}', linea {1})"

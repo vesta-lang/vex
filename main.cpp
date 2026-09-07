@@ -10,6 +10,7 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
+#include "util/alloc_report.h"
 #include "util/env_flags.h"
 #include <cstdlib>
 #include <iostream>
@@ -51,6 +52,7 @@
 #include "jit/vec_isa.h"         // ancho SIMD del target (--float-isa)
 #include "jit/backend_caps.h"    // caps del target para el gate FMA (AOT)
 #include "jit/auto_jit.h"
+#include "vx/diag/diag_catalog.h" // los avisos salen del catalogo, por idioma
 #include "jit/jit_timing.h"
 #include "jit/jit_branch_prof.h"
 #include "jit/sched/cost_model.h" // --cpu: microarquitectura objetivo del scheduler
@@ -788,6 +790,12 @@ int main(int argc, char *argv[]) {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
+    /* El informe de QUIEN reserva, al final y salga por donde salga.  `main`
+     * tiene decenas de salidas, asi que ponerlo "al final" solo lo cubriria
+     * una; registrado aqui, lo cubre todas.  No hace nada si nadie lo pidio con
+     * VESTA_HOST_ALLOC_SITES.  Ver `util/alloc_report.h`. */
+    std::atexit([] { util::report_alloc_sites(); });
+
     runtime_ensure_vx_callback_registered();
     // i18n: seleccionar el idioma de los diagnosticos desde el entorno
     // (VESTA_LANG > LC_ALL > LANG; fallback al primer idioma del catalogo).
@@ -888,6 +896,9 @@ int main(int argc, char *argv[]) {
     cxxopts::Options options("VMProject", "Virtual Machine Example");
 
     options.add_options()("h,help", "Mostrar ayuda")(
+        "env-flags",
+        "Listar TODAS las variables de entorno declaradas, con lo que cambia "
+        "cada una y cuales estan puestas")(
         "o,output", "Archivo de salida (sin extensión o completo)",
         cxxopts::value<std::string>())(
         "driver", "Compilar un directorio completo en paralelo",
@@ -1445,13 +1456,27 @@ int main(int argc, char *argv[]) {
         result["ffp-contract"].as<std::string>() == "off")
         ir::ir_set_fma_contract_allowed(false);
 
-    if (result.count("jit-threshold")) {
+    /* Pedir el depurador APAGA el JIT, y aqui -- antes de cargar nada --
+     * porque la compilacion con ansia la hace el CARGADOR mirando el umbral.
+     * Apagarlo mas tarde, al abrir el servidor, llegaba con el modulo ya
+     * compilado.
+     *
+     * El motivo esta en el catalogo: el gancho del depurador lo llama el bucle
+     * del interprete, asi que un punto de ruptura dentro de una funcion que el
+     * JIT compilo no salta NUNCA -- y no saltaba callando, que es lo peor: uno
+     * cree que su condicion no se cumple. */
+    if (result.count("debug-port")) {
+        jit::set_jit_threshold(UINT32_MAX);
+        vesta::scout() << "[debugger] " << vx::diag::format("debug.jit_off", {})
+                       << "\n";
+    } else if (result.count("jit-threshold")) {
         jit::set_jit_threshold(result["jit-threshold"].as<uint32_t>());
     } else if (result.count("mode")) {
         const std::string m = result["mode"].as<std::string>();
         if (m == "jit") {
             jit::set_jit_threshold(1);
         } else if (m == "vm" || m == "interp") {
+            // (mismo efecto que pedir el depurador; ver mas abajo)
             jit::set_jit_threshold(UINT32_MAX);
         } else if (m == "aot") {
             // Modo AOT: no se ejecuta nada en la VM; el JIT runtime queda off.
@@ -1559,10 +1584,19 @@ int main(int argc, char *argv[]) {
         jit::g_jit_emit_instr_counter = true;
     }
 
+    /* La lista COMPLETA, generada de la tabla que las declara.  La seccion
+     * escrita a mano que hay mas abajo explica los grupos que hacen falta
+     * entender; esta dice cuales existen, que es otra pregunta -- y se habia
+     * quedado en 13 de 186 por mantenerse a mano. */
+    if (result.count("env-flags")) {
+        util::print_env_flags(std::cout);
+        return EXIT_SUCCESS;
+    }
+
     if (result.count("help")) {
         vesta::scout() << options.help() << std::endl;
         vesta::scout() <<
-            R"(Variables de entorno:
+            R"(Variables de entorno (las mas usadas; `--env-flags` las lista TODAS):
 
   CTPE (precomputo del programa completo en tiempo de compilacion):
     Ejecuta el main puro (sin I/O, FFI ni memoria cross-proceso) durante la
@@ -1598,6 +1632,18 @@ int main(int argc, char *argv[]) {
 
   Perfilado (PGO):
     VESTA_PROFILE_DUMP=ruta  Ruta del .vprof (o usa --profile).
+
+  Memoria -- rastrear las reservas del propio compilador:
+    VESTA_HOST_ALLOC_STATS=1 Cuenta las reservas: cuantas, de que tamano y con
+                             que proposito declarado.  Sale al terminar.
+    VESTA_HOST_ALLOC_SITES=1 Ademas, DE DONDE salen las que no declaran su
+                             proposito, ordenadas por volumen.  Implica la
+                             anterior.  Los nombres salen de la tabla de
+                             simbolos: en una construccion despojada -- Release
+                             lo es -- salen los desplazamientos y se dice, y se
+                             resuelven con `addr2line -f -C -e <binario>`.
+                             El informe va a la salida de ERRORES y despues de
+                             todo lo demas: `vesta ... > nul` para verlo solo.
 )" << std::endl;
         return 0;
     }
@@ -5600,6 +5646,9 @@ int main(int argc, char *argv[]) {
                     for (auto &sched : vm->schedulers) {
                         sched->has_hooks = true;
                     }
+                    /* (el JIT ya quedo apagado al procesar los argumentos: la
+                     *  compilacion con ansia la hace el cargador, asi que
+                     *  apagarlo aqui llegaria tarde) */
                     // Pausa el proceso main ANTES de su primera
                     // instruccion: sin esto, programas cortos podrian
                     // terminar antes de que el cliente conecte.  El
