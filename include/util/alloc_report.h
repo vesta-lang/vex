@@ -18,6 +18,8 @@
 #ifndef VESTA_UTIL_ALLOC_REPORT_H
 #define VESTA_UTIL_ALLOC_REPORT_H
 
+#include <string>
+
 namespace util {
 
 /**
@@ -36,6 +38,29 @@ namespace util {
  * hay nombres, en vez de dejar la columna vacia.
  */
 void report_alloc_sites();
+
+/**
+ * @brief Un nombre de C++ decorado, escrito para que lo lea una persona.
+ *
+ * Desdecora y ademas LIMPIA: quita los valores por defecto -- el mismo tipo
+ * escrito largo, que el lenguaje repone solo -- y los detalles de como esta
+ * hecha la biblioteca.  Un manglado desdecorado a secas es tecnicamente la
+ * respuesta y practicamente ninguna: cuatrocientos caracteres de los que
+ * trescientos no distinguen nada.
+ *
+ * No recorta NUNCA: el nombre que sale sigue nombrando exactamente lo mismo, y
+ * por eso se puede buscar en el codigo, pegar en `c++filt` o meter en un
+ * `grep`.  Un nombre con puntos suspensivos en medio no sirve para ninguna de
+ * las tres.
+ *
+ * Vive aqui, y no en la libreria del asignador, porque no es de ella: la
+ * libreria da direcciones y nombres tal como estan; como se escribe un nombre
+ * de C++ para que se lea es de este proyecto.
+ *
+ * @param mangled El nombre tal como sale de la tabla de simbolos.
+ * @return El nombre legible; el original si no habia nada que desdecorar.
+ */
+std::string readable_symbol(const char *mangled);
 
 } // namespace util
 

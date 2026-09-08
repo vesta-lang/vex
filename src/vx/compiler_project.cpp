@@ -25,6 +25,7 @@
  *   - Sin checks de colision de nombres cross-module todavia (M5).
  */
 
+#include "util/crash_report.h" // dejar dicho QUE modulo se esta compilando
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/file_read.h"
 
@@ -2194,6 +2195,14 @@ CompileResult compile_vx_project(
 
     auto compile_one_module = [&](size_t i) -> void {
         auto &pm = work[i];
+        /* Que fichero se esta compilando, para que una caida lo diga.
+         *
+         * Es el dato que mas tiempo ahorra de un informe de caida: una traza de
+         * pila dice donde reviento -- quince marcos de plantillas -- y esto
+         * dice sobre QUE.  Cuesta dos escrituras atomicas por modulo, y la
+         * cadena vive en `work`, que dura mas que esta llamada. */
+        const util::CrashContext crash_ctx("crash.stage.compiling",
+                                           pm.canonical_path.c_str());
         const bool is_root = (i + 1 == work.size());
         if (verbose_compile) {
             std::ostringstream ln;

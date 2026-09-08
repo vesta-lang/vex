@@ -336,6 +336,16 @@ VESTA_ENV_FLAG(HostAllocSites, "VESTA_HOST_ALLOC_SITES", Report, Gc, Bool, Any)
  */
 VESTA_ENV_FLAG(HostAllocCsv, "VESTA_HOST_ALLOC_CSV", Report, Gc, Text, Any)
 
+/* Provocar una caida A PROPOSITO, para poder comprobar que el informe de caidas
+ * funciona.  Un informe que solo se ve cuando algo se rompe de verdad no se
+ * puede probar, y lo que no se prueba se estropea sin que nadie lo note -- este
+ * proyecto ya tiene el caso: veintiseis pruebas que nadie ejecutaba y quince
+ * rotas.
+ *
+ * Valores: `segv` (leer por un puntero nulo), `abort`, `throw` (excepcion de
+ * C++ sin capturar), `div0`.  Sin valor no hace nada. */
+VESTA_ENV_FLAG(CrashTest, "VESTA_CRASH_TEST", Report, None, Text, Any)
+
 /* -- Reparto por hilos.  Cambia el COMO, no el QUE ------------------------ */
 VESTA_ENV_FLAG(Paralelo, "VESTA_PARALELO", Speed, Parallel, BoolOn, Any)
 VESTA_ENV_FLAG(ParaleloStats, "VESTA_PARALELO_STATS", Report, Parallel, Bool,

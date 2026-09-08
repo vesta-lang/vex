@@ -11,6 +11,7 @@
  */
 
 #include "util/alloc_report.h"
+#include "util/crash_report.h" // contar una caida del proceso antes de morir
 #include "util/env_flags.h"
 #include <cstdlib>
 #include <iostream>
@@ -787,6 +788,17 @@ static bool annotate_write_source(
 }
 
 int main(int argc, char *argv[]) {
+    /* Lo PRIMERO: una caida antes de esto no se cuenta.
+     *
+     * El manejador del programa Vesta no cubre esto -- se aparta expresamente
+     * cuando no hay un proceso Vesta corriendo, que es justo lo que pasa
+     * mientras se compila --, asi que hasta ahora una caida del compilador
+     * moria como decidiera el sistema: sin diagnostico, sin decir que fichero
+     * estaba compilando, y con los bufers perdidos.  Medido: cero bytes. */
+    util::install_crash_reporter();
+    /* Y, si se pide, una caida a proposito para comprobar que el informe de
+     * arriba funciona.  Sin `VESTA_CRASH_TEST` no hace nada. */
+    util::crash_test_if_asked();
 #if defined(_WIN32) && !defined(__CYGWIN__)
     /* Consola en UTF-8, para que la salida con acentos o simbolos no salga
      * rota en la consola de Windows.

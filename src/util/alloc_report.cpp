@@ -922,6 +922,15 @@ int popcount64(uint64_t v) {
 
 } // namespace
 
+/* La version publica.  Se saca del anonimo porque el informe de CAIDAS necesita
+ * lo mismo: un nombre decorado en una traza de pila es ilegible, y ahi dentro
+ * van los tipos de los argumentos.  Escribirlo dos veces seria tener dos ideas
+ * de que es un nombre legible, y la segunda se quedaria vieja sin que nadie lo
+ * notara. */
+std::string readable_symbol(const char *mangled) {
+    return readable(mangled);
+}
+
 /**
  * @brief El gancho de nombres que el asignador no puede tener todavia.
  *

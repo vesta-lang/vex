@@ -2332,6 +2332,10 @@ set(VESTA_RT_SOURCES
         # proyecto: como se escribe un nombre de C++ para que lo lea una
         # persona, y de que modulo nuestro es cada fichero.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/util/alloc_report.cpp
+        # Que hace el PROCESO al caerse: contarlo entero antes de morir.  No es
+        # el manejador del programa Vesta (ese se aparta cuando no hay proceso
+        # corriendo, o sea justo mientras se compila).
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/util/crash_report.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/util/sqlite_singleton.cpp
 
         # Controller TLS (usado por VDP)

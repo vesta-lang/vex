@@ -119,6 +119,13 @@ es = "no se le reconocio ningun operando"
 en = "it uses the operand '{0}', which the lift does not turn into IR yet"
 es = "usa el operando '{0}', que el elevado aun no pasa a IR"
 
+# Cabe en la ranura y aun asi no se puede mover: entre micro-operaciones el
+# valor pasa por un registro general, que son 64 bits.  Se dice el ancho porque
+# es el dato que explica por que este operando y no otro.
+[VXA072]
+en = "it uses the operand '{0}', of {1} bits, which does not travel whole between micro-operations (they carry 64)"
+es = "usa el operando '{0}', de {1} bits, que no viaja entero entre micro-operaciones (llevan 64)"
+
 [VXA024]
 en = "it touches a register bound to a variable, and that is still resolved by the opaque path"
 es = "toca un registro ligado a una variable, y eso todavia se resuelve por el camino opaco"
@@ -1553,6 +1560,34 @@ es = "`--unwind`: valor no reconocido '{0}'.  Usa auto|none|table|cfi|both."
 en = "`--unwind table` asks for `.pdata`/`.xdata`, which only exist in PE; the target format is ELF.  Use `cfi` there, or `auto`."
 es = "`--unwind table` pide `.pdata`/`.xdata`, que solo existen en PE; el formato del objetivo es ELF.  Ahi usa `cfi`, o `auto`."
 
+[VX9252]
+en = "the size of `.pdata` is not a multiple of 12: a RUNTIME_FUNCTION is three RVAs, so a half entry would be left at the end and the system would read it anyway."
+es = "el tamano de `.pdata` no es multiplo de 12: un RUNTIME_FUNCTION son tres RVA, asi que quedaria una entrada a medias al final y el sistema la leeria igual."
+
+[VX9253]
+en = "`.pdata` is larger than 4 GiB, which does not fit the field that announces it."
+es = "`.pdata` es mayor de 4 GiB, que no cabe en el campo que la anuncia."
+
+[VX9254]
+en = "a `.pdata` entry ends before it begins."
+es = "una entrada de `.pdata` acaba antes de empezar."
+
+[VX9255]
+en = "two `.pdata` entries begin at the same address: either the same table was linked twice, or a relocation was left unresolved."
+es = "dos entradas de `.pdata` empiezan en la misma direccion: o la misma tabla entro dos veces, o una relocation quedo sin resolver."
+
+[VX9256]
+en = "out of memory while writing the object's string table."
+es = "sin memoria al escribir la tabla de cadenas del objeto."
+
+[VX9251]
+en = "`--unwind table` cannot be honoured here: `.pdata`/`.xdata` in a relocatable object need the `ADDR32NB` relocation, which the COFF writer does not emit yet, and a flat binary has no place to put the table.  Use `auto` to build without it."
+es = "`--unwind table` no se puede cumplir aqui: `.pdata`/`.xdata` en un objeto relocatable necesitan la relocation `ADDR32NB`, que el escritor COFF todavia no emite, y un binario plano no tiene donde poner la tabla.  Usa `auto` para construir sin ella."
+
+[VX9250]
+en = "the frame of '{0}' cannot be described in `.xdata`: its prologue does not fit what `UNWIND_INFO` can express.  Build with `--unwind none` to leave the table out."
+es = "el marco de '{0}' no se puede describir en `.xdata`: su prologo no cabe en lo que `UNWIND_INFO` sabe expresar.  Compila con `--unwind none` para dejar la tabla fuera."
+
 # --- la ayuda del propio subcomando y las familias (VXW903-VXW911) ---
 #
 # El NOMBRE de una familia no se traduce nunca: es lo que se escribe en
@@ -2213,6 +2248,253 @@ es = "un argumento de '{0}' esta a su vez pendiente, asi que se difiere la llama
 # Una llamada a una funcion `comptime` dentro de un bloque de ensamblador.  El
 # mensaje nombra la funcion en vez de dar por hecho que se llama de una manera
 # concreta: cualquier `comptime` que devuelva `string` vale ahi.
+# El informe de una CAIDA DEL PROCESO.  Va entero por catalogo, y aqui importa
+# mas que en ningun otro sitio: es lo unico que quien se encuentra el fallo va a
+# poder leer, y con frecuencia lo unico que va a poder pegar en un informe.
+["crash.header"]
+en = "=== VestaVM: the process crashed ==="
+es = "=== VestaVM: el proceso se ha caido ==="
+["crash.end"]
+en = "=== end of report ==="
+es = "=== fin del informe ==="
+["crash.cause"]
+en = "  cause: {0}"
+es = "  causa: {0}"
+["crash.address"]
+en = "  address involved: {0}"
+es = "  direccion implicada: {0}"
+["crash.doing"]
+en = "  it was: {0}"
+es = "  estaba: {0}"
+["crash.doing_unknown"]
+en = "  it was: (nobody left a note of what was being done)"
+es = "  estaba: (nadie dejo dicho que se estaba haciendo)"
+["crash.access"]
+en = "  while trying to {0}"
+es = "  al {0}"
+["crash.access.read"]
+en = "READ"
+es = "LEER"
+["crash.access.write"]
+en = "WRITE"
+es = "ESCRIBIR"
+["crash.access.exec"]
+en = "EXECUTE"
+es = "EJECUTAR"
+["crash.registers"]
+en = "  registers:"
+es = "  registros:"
+["crash.where"]
+en = "  where:"
+es = "  donde:"
+["crash.code_around"]
+en = "  machine code around the fault:"
+es = "  codigo maquina alrededor del fallo:"
+["crash.stack"]
+en = "  stack:"
+es = "  pila:"
+["crash.no_symbols"]
+en = "(no name: this build carries no symbols)"
+es = "(sin nombre: la construccion no lleva simbolos)"
+["crash.inlined"]
+en = "[inlined]"
+es = "[inlinado]"
+["crash.at_file"]
+en = "at {0}:{1}"
+es = "en {0}:{1}"
+["crash.no_backwards"]
+en = "  (could not line up the disassembly backwards; only from the fault point on)"
+es = "  (no se pudo encajar el desensamblado hacia atras; solo desde el punto del fallo)"
+["crash.message"]
+en = "  message: {0}"
+es = "  mensaje: {0}"
+["crash.message_foreign"]
+en = "  message: (the exception does not derive from std::exception)"
+es = "  mensaje: (la excepcion no deriva de std::exception)"
+# Las causas, una por cada cosa distinta que puede matar al proceso.
+["crash.cause.access_violation"]
+en = "invalid memory access"
+es = "acceso invalido a memoria"
+["crash.cause.stack_overflow"]
+en = "stack overflow"
+es = "desbordamiento de pila"
+["crash.cause.illegal_instruction"]
+en = "illegal instruction"
+es = "instruccion ilegal"
+["crash.cause.int_divide_by_zero"]
+en = "integer division by zero"
+es = "division entera por cero"
+["crash.cause.int_overflow"]
+en = "integer overflow"
+es = "desbordamiento entero"
+["crash.cause.float_divide_by_zero"]
+en = "floating point division by zero"
+es = "division en coma flotante por cero"
+["crash.cause.privileged_instruction"]
+en = "privileged instruction"
+es = "instruccion privilegiada"
+["crash.cause.in_page_error"]
+en = "the page could not be brought in"
+es = "no se pudo traer la pagina"
+["crash.cause.misalignment"]
+en = "misaligned access"
+es = "acceso desalineado"
+["crash.cause.system"]
+en = "system exception"
+es = "excepcion del sistema"
+["crash.cause.heap_corruption"]
+en = "the heap found itself corrupted"
+es = "el monton se encontro corrompido a si mismo"
+["crash.cause.stack_buffer_overrun"]
+en = "a stack buffer was written past its end"
+es = "se escribio mas alla del final de un buffer de pila"
+["crash.cause.longjmp"]
+en = "a long jump back to a rescue point (the real fault was reported before this)"
+es = "un salto largo de vuelta a un punto de rescate (el fallo de verdad se conto antes de esto)"
+["crash.code"]
+en = "  code: {0}"
+es = "  codigo: {0}"
+# Las FASES que puede estar atravesando el proceso cuando se cae.  Van por
+# codigo y no como texto porque el informe se escribe en el idioma de quien lo
+# lee, y eso solo se decide al imprimirlo.
+# La ficha COMPLETA del manejador de excepciones.  El codigo solo se puede
+# buscar; con las banderas y los parametros se puede LEER.
+["crash.flags"]
+en = "  flags: {0} ({1})"
+es = "  banderas: {0} ({1})"
+["crash.flags.noncontinuable"]
+en = "cannot be resumed"
+es = "no se puede reanudar"
+["crash.flags.continuable"]
+en = "resumable"
+es = "reanudable"
+["crash.params"]
+en = "  parameters of the exception: {0}"
+es = "  parametros de la excepcion: {0}"
+["crash.nested"]
+en = "  it carries another exception inside, which is the one that caused it:"
+es = "  lleva dentro otra excepcion, que es la que la provoco:"
+["crash.in_module"]
+en = "in {0} {1}"
+es = "en {0} {1}"
+# Los cuatro primeros argumentos.  Se distingue de donde salen porque la certeza
+# no es la misma: en el marco de mas adentro estan en los registros y son los de
+# verdad; mas afuera se leen de la zona de reserva, donde estan solo si la
+# funcion los guardo.
+# Los argumentos EMPAREJADOS con la firma: el tipo sale de la decoracion del
+# nombre y el valor de donde la convencion lo pone.  Los dos avisos van en el
+# texto porque sin ellos esto engana: de donde se leyo, y que un metodo se lleva
+# la primera ranura para `this` -- y la decoracion no distingue un metodo de una
+# funcion libre de un namespace, asi que el emparejado puede ir corrido uno.
+["crash.args_from_regs"]
+en = "args (values from the registers; if this is a method, the first slot is `this` and everything shifts by one):"
+es = "args (valores de los registros; si es un metodo, la primera ranura es `this` y todo se corre uno):"
+["crash.args_from_home"]
+en = "args (values read from the home area, only there if the function spilled them; if this is a method, the first slot is `this` and everything shifts by one):"
+es = "args (valores leidos de la zona de reserva, ahi solo si la funcion los guardo; si es un metodo, la primera ranura es `this` y todo se corre uno):"
+["crash.arg_line"]
+en = "[{0}] {1} = {2}"
+es = "[{0}] {1} = {2}"
+["crash.args_only_innermost"]
+en = "  (only the innermost frame shows arguments: this ABI does not reserve room for them on the caller's stack, so further out the registers that carried them have already been reused)"
+es = "  (solo el marco de mas adentro ensena argumentos: esta convencion no reserva sitio para ellos en la pila del llamante, asi que mas afuera los registros que los llevaban ya se reusaron)"
+["crash.arg_in_float_bank"]
+en = "(travels in the float bank, not readable from here)"
+es = "(viaja por el banco de coma flotante, no se lee desde aqui)"
+["crash.args_regs"]
+en = "args (in registers): rcx={0} rdx={1} r8={2} r9={3}"
+es = "args (en registros): rcx={0} rdx={1} r8={2} r9={3}"
+["crash.args_home"]
+en = "args (read from the home area, only there if the function spilled them): {0} {1} {2} {3}"
+es = "args (leidos de la zona de reserva, ahi solo si la funcion los guardo): {0} {1} {2} {3}"
+["crash.stack_values"]
+en = "  stack contents (what is on it, not just how it got here):"
+es = "  contenido de la pila (con QUE, no solo por donde se llego):"
+# La ficha de la senal en POSIX.  El numero de senal dice la familia; el codigo
+# dice cual de sus casos, que es lo que decide donde mirar.
+["crash.si_code"]
+en = "  signal code: {0} ({1})"
+es = "  codigo de la senal: {0} ({1})"
+["crash.si_errno"]
+en = "  errno carried by the signal: {0}"
+es = "  errno que trae la senal: {0}"
+["crash.si.unknown"]
+en = "not on record"
+es = "sin registrar"
+["crash.si.segv_maperr"]
+en = "the page was not mapped"
+es = "la pagina no estaba mapeada"
+["crash.si.segv_accerr"]
+en = "the page was mapped, but not with that permission"
+es = "la pagina estaba mapeada, pero sin ese permiso"
+["crash.si.bus_adraln"]
+en = "misaligned address"
+es = "direccion desalineada"
+["crash.si.bus_adrerr"]
+en = "the address does not exist"
+es = "la direccion no existe"
+["crash.si.bus_objerr"]
+en = "hardware error on the object"
+es = "error del hardware sobre el objeto"
+["crash.si.fpe_intdiv"]
+en = "integer division by zero"
+es = "division entera por cero"
+["crash.si.fpe_intovf"]
+en = "integer overflow"
+es = "desbordamiento entero"
+["crash.si.fpe_fltdiv"]
+en = "floating point division by zero"
+es = "division en coma flotante por cero"
+["crash.si.fpe_fltovf"]
+en = "floating point overflow"
+es = "desbordamiento en coma flotante"
+["crash.si.fpe_fltinv"]
+en = "invalid floating point operation"
+es = "operacion invalida en coma flotante"
+["crash.si.ill_illopc"]
+en = "illegal opcode"
+es = "codigo de operacion ilegal"
+["crash.si.ill_illopn"]
+en = "illegal operand"
+es = "operando ilegal"
+["crash.si.ill_prvopc"]
+en = "privileged opcode"
+es = "codigo de operacion privilegiado"
+
+["crash.stage.crash_test"]
+en = "crashing on purpose to check this report, kind"
+es = "cayendose a proposito para comprobar este informe, de tipo"
+["crash.stage.compiling"]
+en = "compiling"
+es = "compilando"
+["crash.stage.linking"]
+en = "linking"
+es = "enlazando"
+["crash.stage.assembling"]
+en = "assembling"
+es = "ensamblando"
+["crash.stage.running"]
+en = "running"
+es = "ejecutando"
+["crash.stage.native"]
+en = "generating native code for"
+es = "generando codigo nativo para"
+["crash.cause.bus"]
+en = "misaligned access or absent page (SIGBUS)"
+es = "acceso desalineado o pagina ausente (SIGBUS)"
+["crash.cause.arithmetic"]
+en = "invalid arithmetic operation (SIGFPE)"
+es = "operacion aritmetica invalida (SIGFPE)"
+["crash.cause.aborted"]
+en = "the program aborted itself (SIGABRT)"
+es = "el propio programa aborto (SIGABRT)"
+["crash.cause.signal"]
+en = "fault signal"
+es = "senal de fallo"
+["crash.cause.cpp_uncaught"]
+en = "a C++ exception that nobody caught"
+es = "una excepcion de C++ que nadie capturo"
+
 ["asm.call_unclosed"]
 en = "asm: missing ')' closing the call to '{0}'"
 es = "asm: falta ')' al cerrar la llamada a '{0}'"
