@@ -425,10 +425,13 @@ wsl-asan/
 examples_codes_vx/reader_bmp/BUGS_LIMITACIONES.md
 examples_codes_vx/reader_bmp/*.bmp
 
-# Base de datos de instrucciones generada (regenerable desde el XML de uops.info)
-timings/x86/*.vxisa
-timings/x86/*.vxarch
-timings/x86/instr_form_ids.h
+# Base de datos de instrucciones generada (regenerable desde el XML de uops.info
+# y de los modelos de scheduling de LLVM).  El directorio ENTERO, y no solo los
+# tres patrones de x86 que habia antes: al traer los datos de arm y de riscv se
+# vio que quedaban fuera de la regla y a un `git add` de colarse.  Lo que vive
+# aqui es entrada del pipeline de `tools/import/`; lo que se versiona es lo que
+# ese pipeline PRODUCE, en `src/vx/gen/`.
+timings/
 tools/import/__pycache__/
 ANAMNESIS.txt
 examples_codes_vx/benchmark/vec_axpy/vec_axpy_rs.pdb
