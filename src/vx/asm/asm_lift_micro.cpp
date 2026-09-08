@@ -437,6 +437,14 @@ bool build_operands(
             if (b->is_vector && !vx::asm_cabe_en_ranura(ancho_declarado(*b)))
                 return AsmMotivoOpaco::anotar(motivo, insn, "VXA023",
                                               {toks[k]});
+            /* NO se deja opaco cuando el transporte de la via de
+             * micro-operaciones no puede mover el ancho entero
+             * (@ref vx::asm_micro_can_move).  Se probo y es un mal trato:
+             * arregla al interprete pagandolo con el JIT y el AOT, que pierden
+             * el modelado por instruccion y con el la exigencia de alineacion
+             * -- y en `movdqa`/`vmovdqa` una direccion torcida no va mas lenta,
+             * FALLA.  Lo que hay que arreglar es el TRANSPORTE, y eso entra con
+             * el IR vectorial/escalar. */
             op.width = ancho_declarado(*b);
             op.fixed_phys = -1; // lo elige el asignador
             op.value = b->alloca_value;

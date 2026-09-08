@@ -269,6 +269,29 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
     // Colocar en el code cache (direccion estable).
     uint8_t *code = st.cc.alloc(bytes.size(), 16);
     if (code == nullptr) return 0;
+    /* Donde acabo el codigo respecto al ancla.  Sin esto, "rel32 fuera de
+     * rango" dice QUE no alcanza pero no si el ancla se puso, si la reserva
+     * cercana se intento o si fallo -- que son tres arreglos distintos.  La
+     * distancia con signo es el dato: si sale menor de 2 GB, el problema no es
+     * la colocacion sino otro. */
+    if (debug) {
+        const int64_t dist = static_cast<int64_t>(reinterpret_cast<uint64_t>(
+                                 code)) -
+                             static_cast<int64_t>(st.cc.anchor());
+        std::fprintf(
+            stderr,
+            "[naked] ancla=0x%llx codigo=%p distancia=%lld (%lld MiB) %s\n",
+            (unsigned long long)st.cc.anchor(), (void *)code, (long long)dist,
+            (long long)(dist / (1024 * 1024)),
+            st.cc.anchored() ? "colocado cerca del ancla"
+                             : "SIN hueco cerca: lo eligio el sistema");
+        if (!st.cc.anchored())
+            std::fprintf(stderr,
+                         "[naked]   el barrido vio %zu regiones, hueco mayor "
+                         "%zu KiB\n",
+                         st.cc.scan_regions(),
+                         st.cc.scan_largest_free() / 1024);
+    }
     std::memcpy(code, bytes.data(), bytes.size());
     // Registrar YA en cache (por direccion) para cortar recursion de callees
     // que se llaman entre si.

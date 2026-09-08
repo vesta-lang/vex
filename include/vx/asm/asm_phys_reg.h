@@ -199,6 +199,32 @@ static constexpr uint32_t kAsmSlotBits = kAsmCtxVecQwords * 64;
 inline bool asm_cabe_en_ranura(unsigned bits) {
     return bits <= kAsmSlotBits;
 }
+
+/// Bits que la via de MICRO-OPERACIONES mueve de una vez: los de un registro
+/// general, porque es por ahi por donde pasa el valor entre una instruccion y
+/// la siguiente.
+///
+/// NO es lo mismo que lo que CABE en la ranura.  La ranura mide 512 bits y el
+/// transporte 64, y confundir las dos preguntas es lo que dejaba medio
+/// registro: el descriptor declaraba los 128 de un `xmm`, el emisor escribia
+/// 64, y quien leia se creia el descriptor.  Los 64 altos salian de pila sin
+/// inicializar -- una direccion del anfitrion -- y acababan dentro del buffer
+/// que el bloque copiaba.
+static constexpr uint32_t kAsmMicroTransportBits = 64;
+
+/**
+ * @brief Si la via de micro-operaciones puede mover un valor de @p bits ENTERO.
+ *
+ * Quien no quepa se queda OPACO y sale por la via de bloque entero, que si
+ * transporta el banco ancho de la maquina de punta a punta.  Preguntar cuesta
+ * que ese bloque no se eleve; no preguntar cuesta medio valor sin un aviso.
+ *
+ * @param bits Ancho declarado del operando.
+ * @return @c true si cabe entero en el transporte.
+ */
+inline bool asm_micro_can_move(unsigned bits) {
+    return bits <= kAsmMicroTransportBits;
+}
 /// Qwords totales del contexto.
 static constexpr uint32_t kAsmCtxQwords =
     kAsmCtxGpSlots + kAsmCtxVecSlots * kAsmCtxVecQwords;

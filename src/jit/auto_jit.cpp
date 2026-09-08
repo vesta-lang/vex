@@ -1808,6 +1808,14 @@ CompileResult eager_compile_function(
                      "sin codigo nativo (as_native_callback devolvera 0).\n"
                      "  motivo exacto: ejecuta con VESTA_JIT_VREGS_DEBUG=1\n",
                      ir_fn_sel.name.c_str());
+        /* Y se VUELCA en el acto.  Este aviso anuncia una muerte que ocurre
+         * fuera de nuestro alcance: quien invoca el callback es el sistema, y
+         * cuando salta con la direccion cero mata el proceso el mismo
+         * (`STATUS_FATAL_USER_CALLBACK_EXCEPTION`) sin darle a nadie la
+         * oportunidad de vaciar nada.  Sin este volcado el aviso se queda en el
+         * buffer y se pierde: el programa muere sin decir ni una palabra, que
+         * es justo lo que este mensaje existia para evitar. */
+        std::fflush(stderr);
     }
 
     /* Jubilacion slots (borrado): el selector-slots esta retirado.  El

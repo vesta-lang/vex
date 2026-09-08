@@ -161,22 +161,68 @@ bool CodeCache::reserve_chunk() {
     void *p = nullptr;
     if (anchor_ != 0) {
         // Alineado al grano de reserva de Windows (64 KiB).
-        constexpr uintptr_t kGrano = 64u * 1024u;
-        constexpr uintptr_t kAlcance = 1u << 31; // lo que cubre un rel32
-        const uintptr_t base = (anchor_ & ~(kGrano - 1));
-        for (uintptr_t off = kGrano; off < kAlcance && p == nullptr;
-             off <<= 1) {
-            // Por encima y por debajo del ancla: cual de los dos lados esta
-            // libre no se sabe de antemano.
-            for (int lado = 0; lado < 2 && p == nullptr; ++lado) {
-                const uintptr_t cand = lado ? (base + off) : (base - off);
-                if (cand < kGrano) continue; // por debajo del espacio util
-                p = ::VirtualAlloc(reinterpret_cast<void *>(cand), chunk_bytes_,
-                                   MEM_RESERVE | MEM_COMMIT,
-                                   PAGE_EXECUTE_READWRITE);
+        constexpr uintptr_t kGranularity = 64u * 1024u;
+        /* La mitad de lo que cubre un rel32, no el alcance entero: el
+         * desplazamiento se mide entre el CODIGO y el DATO, y el ancla es solo
+         * una direccion representativa de la zona de datos.  Dejando margen a
+         * los dos lados, cualquier dato de esa zona sigue alcanzando. */
+        /* Casi lo que alcanza un rel32, no la mitad.  El margen que se reserva
+         * es para que un dato que no sea el ancla exacta siga alcanzando; 128
+         * MiB dan de sobra para la zona de datos de un modulo, y quedarse en la
+         * mitad dejaba fuera huecos perfectamente validos cuando la arena del
+         * asignador ocupa varios gigas alrededor del dato. */
+        constexpr uintptr_t kWindow = (1u << 31) - (128u << 20);
+        const uintptr_t base = (anchor_ & ~(kGranularity - 1));
+        const uintptr_t low =
+            (base > kWindow) ? (base - kWindow) : kGranularity;
+        const uintptr_t high = base + kWindow;
+        /* Se le PREGUNTA al sistema donde hay hueco, en vez de adivinar
+         * direcciones.
+         *
+         * Antes se probaban `base +- 2^k`: treinta puntos sueltos de una
+         * ventana de dos gigas.  Basta con que el ancla caiga dentro de una
+         * reserva grande -- la arena del asignador, que es justo donde viven
+         * los datos que este codigo referencia -- para que los treinta esten
+         * ocupados; entonces se caia a la eleccion del sistema y el codigo
+         * acababa lejos.  Medido: 16 GB del dato, con el ancla a 8 bytes de el.
+         *
+         * Recorrer las regiones cuesta una consulta por region y solo al
+         * reservar un trozo nuevo, que es raro. */
+        MEMORY_BASIC_INFORMATION mbi;
+        scan_regions_ = 0;
+        scan_largest_free_ = 0;
+        for (uintptr_t probe = low; probe < high && p == nullptr;) {
+            if (::VirtualQuery(reinterpret_cast<void *>(probe), &mbi,
+                               sizeof(mbi)) == 0)
+                break;
+            ++scan_regions_;
+            const uintptr_t region_begin =
+                reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+            const uintptr_t region_end = region_begin + mbi.RegionSize;
+            if (mbi.State == MEM_FREE) {
+                // El primer sitio alineado dentro de la region y de la ventana.
+                const uintptr_t from =
+                    (region_begin < probe) ? probe : region_begin;
+                const uintptr_t at =
+                    (from + kGranularity - 1) & ~(kGranularity - 1);
+                if (region_end > at) {
+                    const size_t free_here =
+                        static_cast<size_t>(region_end - at);
+                    if (free_here > scan_largest_free_)
+                        scan_largest_free_ = free_here;
+                }
+                if (at < high && region_end > at &&
+                    (region_end - at) >= chunk_bytes_)
+                    p = ::VirtualAlloc(reinterpret_cast<void *>(at),
+                                       chunk_bytes_, MEM_RESERVE | MEM_COMMIT,
+                                       PAGE_EXECUTE_READWRITE);
             }
+            // Avanzar SIEMPRE, aunque la consulta devuelva una region rara: sin
+            // esto un tamano cero deja el bucle dando vueltas.
+            probe = (region_end > probe) ? region_end : (probe + kGranularity);
         }
     }
+    anchored_ = (p != nullptr);
     if (!p)
         p = ::VirtualAlloc(nullptr, chunk_bytes_, MEM_RESERVE | MEM_COMMIT,
                            PAGE_EXECUTE_READWRITE);

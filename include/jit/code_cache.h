@@ -189,6 +189,15 @@ class CodeCache {
      */
     uintptr_t anchor_ = 0;
 
+    /// @copydoc anchored
+    bool anchored_ = false;
+
+    /// Lo que vio el ultimo barrido alrededor del ancla: cuantas regiones
+    /// recorrio y cual fue el hueco libre mayor.  Sin esto, "no habia sitio" y
+    /// "no llegue a mirar" se leen igual, y son arreglos distintos.
+    size_t scan_regions_ = 0;
+    size_t scan_largest_free_ = 0;
+
   public:
     /**
      * @brief Fija el ancla: reserva el codigo cerca de @p addr.
@@ -201,6 +210,22 @@ class CodeCache {
     void set_anchor(uintptr_t addr) {
         if (anchor_ == 0) anchor_ = addr;
     }
+
+    /// @brief El ancla en vigor (0 = ninguna).  Para poder DECIR a que se
+    /// intento acercar el codigo cuando un desplazamiento no alcanza.
+    uintptr_t anchor() const noexcept { return anchor_; }
+
+    /// @brief Si el ULTIMO trozo se coloco de verdad cerca del ancla.
+    ///
+    /// Distingue los dos motivos por los que un desplazamiento no alcanza --
+    /// que no se pidiera la zona, o que se pidiera y no hubiera hueco --, que
+    /// llevan a arreglos distintos.  Sin esto los dos se veian igual.
+    bool anchored() const noexcept { return anchored_; }
+
+    /// @copydoc scan_regions_
+    size_t scan_regions() const noexcept { return scan_regions_; }
+    /// @copydoc scan_largest_free_
+    size_t scan_largest_free() const noexcept { return scan_largest_free_; }
 
   private:
 
