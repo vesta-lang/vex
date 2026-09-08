@@ -446,27 +446,58 @@ void host_cpuid(unsigned leaf, unsigned subleaf, unsigned regs[4]) {
 #endif
 }
 
-/// Nombre de microarquitectura x86 del host (mapeo vendor+family+model -> DB).
-std::string host_uarch_x86() {
+/// Lee de CPUID lo que decide la microarquitectura, en el core que ejecuta esto.
+HostCpuId read_host_cpuid() {
+    HostCpuId id;
     unsigned r[4] = {0, 0, 0, 0};
+
     host_cpuid(0, 0, r);
+    const unsigned max_leaf = r[0];
     char vendor[13] = {0};
     std::memcpy(vendor + 0, &r[1], 4); // EBX
     std::memcpy(vendor + 4, &r[3], 4); // EDX
     std::memcpy(vendor + 8, &r[2], 4); // ECX
+    id.vendor = vendor;
+
     host_cpuid(1, 0, r);
     const unsigned base_family = (r[0] >> 8) & 0xF;
     const unsigned base_model = (r[0] >> 4) & 0xF;
     const unsigned ext_model = (r[0] >> 16) & 0xF;
     const unsigned ext_family = (r[0] >> 20) & 0xFF;
-    const unsigned family =
-        base_family + ((base_family == 0xF) ? ext_family : 0);
-    const unsigned model =
+    id.family = base_family + ((base_family == 0xF) ? ext_family : 0);
+    id.model =
         base_model +
         (((base_family == 0x6) || (base_family == 0xF)) ? (ext_model << 4) : 0);
 
-    const bool intel = std::strcmp(vendor, "GenuineIntel") == 0;
-    const bool amd = std::strcmp(vendor, "AuthenticAMD") == 0;
+    // Hibrida: hoja 7, subhoja 0, EDX bit 15.  Se pregunta antes que la 0x1A
+    // porque es la que dice si la 0x1A significa algo.
+    if (max_leaf >= 7) {
+        host_cpuid(7, 0, r);
+        id.hybrid = ((r[3] >> 15) & 1u) != 0;
+    }
+    // Clase del core: hoja 0x1A, EAX[31:24].  Se consulta las DOS condiciones
+    // -- que la hoja exista Y que la pieza sea hibrida -- porque una hoja que no
+    // existe no devuelve un error, devuelve los registros de OTRA hoja, y eso
+    // daria una clase de core inventada con toda la pinta de ser buena.
+    if (id.hybrid && max_leaf >= 0x1A) {
+        host_cpuid(0x1A, 0, r);
+        id.core_type = (r[0] >> 24) & 0xFFu;
+    }
+    return id;
+}
+#endif // VX_HOST_X86
+
+} // namespace
+
+// El mapeo va FUERA del namespace anonimo y fuera de la guarda de host: es una
+// funcion PURA sobre lo que CPUID contesto, asi que se compila y se prueba en
+// cualquier maquina, incluida una que no sea x86.  Leer CPUID es lo unico que
+// depende de donde se corre, y eso se queda arriba.
+std::string uarch_from_cpuid(const HostCpuId &id) {
+    const unsigned family = id.family;
+    const unsigned model = id.model;
+    const bool intel = id.vendor == "GenuineIntel";
+    const bool amd = id.vendor == "AuthenticAMD";
 
     if (intel && family == 0x6) {
         switch (model) {
@@ -492,11 +523,17 @@ std::string host_uarch_x86() {
         case 0x6A:
         case 0x6C: return "intel-icelake";
         case 0xA7: return "intel-rocketlake";
+        // Alder Lake y Raptor Lake son HIBRIDAS: el mismo modelo describe un
+        // core P y uno E, que no comparten latencias ni puertos.  La DB trae las
+        // dos filas; elegir siempre la P costeaba con el modelo equivocado los
+        // 8 cores E de un i7-13700KF de 24 hilos.
         case 0x97:
         case 0x9A:
         case 0xBF:
         case 0xB7:
-        case 0xBA: return "intel-alderlake-p";
+        case 0xBA:
+            return (id.core_type == CORE_TYPE_ATOM) ? "intel-alderlake-e"
+                                                    : "intel-alderlake-p";
         default: return "intel-skylake"; // Intel moderno desconocido
         }
     }
@@ -508,7 +545,8 @@ std::string host_uarch_x86() {
     }
     return ""; // vendor desconocido -> generico
 }
-#endif // VX_HOST_X86
+
+namespace {
 
 #if defined(VX_HOST_ARM64)
 /// Nombre de microarquitectura arm64 del host via MIDR_EL1 (part number).
@@ -531,7 +569,7 @@ std::string host_uarch_arm64() {
 std::string host_uarch_name(SchedIsa isa) {
 #if defined(VX_HOST_X86)
     if (isa == SchedIsa::X86_64 || isa == SchedIsa::X86_32)
-        return host_uarch_x86();
+        return uarch_from_cpuid(read_host_cpuid());
 #endif
 #if defined(VX_HOST_ARM64)
     if (isa == SchedIsa::ARM64) return host_uarch_arm64();

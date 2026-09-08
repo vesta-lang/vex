@@ -114,6 +114,47 @@ enum class SchedMode : uint8_t { JIT_AUTO, AOT_GENERIC };
 std::unique_ptr<SchedCostModel>
 make_cost_model(SchedIsa isa, const std::string &cpu, SchedMode mode);
 
+/**
+ * @brief Lo que CPUID dice del core en el que se pregunta.
+ *
+ * Se pasa como DATO en vez de leerse dentro del mapeo, y no es un capricho de
+ * estilo: asi el mapeo -- que es donde estan las decisiones -- se puede probar
+ * describiendo una CPU que la maquina que corre el test no tiene.  Sin eso, la
+ * unica forma de comprobar que un Alder Lake hibrido elige bien seria tener uno
+ * delante, y la rama del core E no la ejercitaria nadie.
+ */
+struct HostCpuId {
+    /// "GenuineIntel" / "AuthenticAMD"; vacio = fabricante desconocido.
+    std::string vendor;
+    unsigned family = 0; ///< familia MOSTRADA (con la extendida ya sumada).
+    unsigned model = 0;  ///< modelo MOSTRADO (con el extendido ya compuesto).
+    /// @c CPUID.7.0:EDX[15]: la pieza mezcla cores de dos clases.
+    bool hybrid = false;
+    /// @c CPUID.1AH:EAX[31:24]: 0x20 = Atom (core E), 0x40 = Core (core P).
+    /// Cero = la pieza no lo dice (no es hibrida, o no tiene la hoja 0x1A).
+    unsigned core_type = 0;
+};
+
+/// @c core_type de @ref HostCpuId: las dos clases que define la hoja 0x1A.
+enum : unsigned { CORE_TYPE_ATOM = 0x20, CORE_TYPE_CORE = 0x40 };
+
+/**
+ * @brief Nombre de microarquitectura de la DB para lo que describe @p id.
+ *
+ * @param id lo que CPUID contesto.
+ * @return nombre de la DB (@c "intel-alderlake-e", @c "amd-zen4"...), o cadena
+ *         vacia si el fabricante no se reconoce -- que lleva al modelo
+ *         generico, nunca a uno inventado.
+ *
+ * EN UNA PIEZA HIBRIDA NO HAY UNA SOLA RESPUESTA.  Familia y modelo son los
+ * mismos se pregunte desde el core que se pregunte, asi que en un Alder Lake o
+ * un Raptor Lake hay que mirar ADEMAS @c core_type: la DB trae
+ * @c intel-alderlake-p e @c intel-alderlake-e como filas SEPARADAS, con otras
+ * latencias y otro juego de puertos.  Devolver siempre la P costeaba con el
+ * modelo equivocado un tercio de los cores de un i7-13700KF.
+ */
+std::string uarch_from_cpuid(const HostCpuId &id);
+
 /// Microarquitectura objetivo global (@c --cpu).  La fija @c main.cpp al
 /// arrancar; el scheduler la lee para el modelo de coste.  Vacio = auto (JIT) /
 /// generico (AOT).
