@@ -99,29 +99,17 @@ CodeCache::CodeCache(size_t chunk_bytes, size_t max_total_bytes)
 }
 
 /**
- * @brief Destructor: libera TODOS los chunks reservados.
+ * @brief Destructor: suelta la lista de trozos.
  *
- * Devolver la memoria al SO es importante porque las paginas RWX
- * estan contadas en el budget del proceso (en sistemas con limites
- * de mapas, p.ej. macOS con MAP_JIT).
+ * LA MEMORIA LA DEVUELVE LA ARENA, no esto.  Los trozos salen de ella, asi que
+ * soltarlos aqui uno a uno seria liberar dos veces lo mismo -- y ademas cada
+ * trozo no es una reserva del sistema: es un pedazo de un bloque suyo, del que
+ * puede haber varios por bloque.  Lo que queda aqui es tirar la lista.
+ *
+ * Devolver la memoria SIGUE importando, porque las paginas ejecutables cuentan
+ * en el presupuesto del proceso; lo que cambia es quien lo hace.
  */
-CodeCache::~CodeCache() {
-    for (auto &c : chunks_) {
-        // Defensa por si algun chunk quedo con base nula tras un fail
-        // de mmap intermedio (no deberia, pero el codigo es simetrico
-        // y barato).
-        if (!c.base) continue;
-#if defined(_WIN32)
-        // VirtualFree con size=0 + MEM_RELEASE libera TODA la region
-        // (el size original se infiere de la reserva).
-        ::VirtualFree(c.base, 0, MEM_RELEASE);
-#else
-        // munmap requiere el size explicito (lo guardamos en el Chunk).
-        ::munmap(c.base, c.size);
-#endif
-    }
-    chunks_.clear();
-}
+CodeCache::~CodeCache() { chunks_.clear(); }
 
 /**
  * @brief Reserva un nuevo chunk del SO y lo añade a la lista.
@@ -141,112 +129,39 @@ bool CodeCache::reserve_chunk() {
     if (total_reserved + chunk_bytes_ > max_total_) {
         return false;
     }
-#if defined(_WIN32)
-    /* La direccion NO da igual, y por eso hay un ancla.
+    /* LA MEMORIA SE LA PIDE AL ASIGNADOR, con los permisos y la zona que hacen
+     * falta.  No es un caso especial: el asignador es, por debajo, un repartidor
+     * de arenas con permisos, y una arena de codigo es una de ellas.
      *
-     * El codigo que se emite aqui referencia datos del anfitrion -- los globales
-     * del modulo, sobre todo -- con desplazamientos RELATIVOS A RIP de 32 bits.
-     * Eso solo alcanza +-2 GB.  Con `nullptr` la eleccion es del sistema, y
-     * mientras el codigo y los datos salian del mismo asignador caian cerca por
-     * pura casualidad: medido, a 18 MB.  Al sacar el asignador a su propio
-     * repositorio dejaron de compartir region, la distancia paso a ser
-     * arbitraria, y la compilacion nativa empezo a fallar por "rel32 fuera de
-     * rango" -- que no es un aviso: devolvia cero, y ese cero acababa siendo el
-     * punto de entrada de un hilo --.
+     * LA DIRECCION NO DA IGUAL, y por eso se le pasa el ancla.  El codigo que se
+     * emite aqui referencia datos del anfitrion -- los globales del modulo,
+     * sobre todo -- con desplazamientos RELATIVOS A RIP de 32 bits, que
+     * alcanzan +-2 GB.  Mientras codigo y datos salian del mismo sitio caian
+     * cerca por casualidad -- medido, a 18 MB --; al separarse, la distancia
+     * paso a ser arbitraria y la compilacion nativa empezo a fallar con "rel32
+     * fuera de rango", que no era un aviso: devolvia cero, y ese cero acababa
+     * siendo el punto de entrada de un hilo.
      *
-     * Con ancla se PIDE la zona: se prueba a reservar cerca, avanzando en saltos
-     * hasta agotar la ventana que el rel32 alcanza.  Si nada cuadra se cae a la
-     * eleccion del sistema, porque tener codigo lejos es peor que no tener
-     * codigo: el que necesite un rel32 fallara y ahora eso se DICE. */
-    void *p = nullptr;
-    if (anchor_ != 0) {
-        // Alineado al grano de reserva de Windows (64 KiB).
-        constexpr uintptr_t kGranularity = 64u * 1024u;
-        /* La mitad de lo que cubre un rel32, no el alcance entero: el
-         * desplazamiento se mide entre el CODIGO y el DATO, y el ancla es solo
-         * una direccion representativa de la zona de datos.  Dejando margen a
-         * los dos lados, cualquier dato de esa zona sigue alcanzando. */
-        /* Casi lo que alcanza un rel32, no la mitad.  El margen que se reserva
-         * es para que un dato que no sea el ancla exacta siga alcanzando; 128
-         * MiB dan de sobra para la zona de datos de un modulo, y quedarse en la
-         * mitad dejaba fuera huecos perfectamente validos cuando la arena del
-         * asignador ocupa varios gigas alrededor del dato. */
-        constexpr uintptr_t kWindow = (1u << 31) - (128u << 20);
-        const uintptr_t base = (anchor_ & ~(kGranularity - 1));
-        const uintptr_t low =
-            (base > kWindow) ? (base - kWindow) : kGranularity;
-        const uintptr_t high = base + kWindow;
-        /* Se le PREGUNTA al sistema donde hay hueco, en vez de adivinar
-         * direcciones.
-         *
-         * Antes se probaban `base +- 2^k`: treinta puntos sueltos de una
-         * ventana de dos gigas.  Basta con que el ancla caiga dentro de una
-         * reserva grande -- la arena del asignador, que es justo donde viven
-         * los datos que este codigo referencia -- para que los treinta esten
-         * ocupados; entonces se caia a la eleccion del sistema y el codigo
-         * acababa lejos.  Medido: 16 GB del dato, con el ancla a 8 bytes de el.
-         *
-         * Recorrer las regiones cuesta una consulta por region y solo al
-         * reservar un trozo nuevo, que es raro. */
-        MEMORY_BASIC_INFORMATION mbi;
-        scan_regions_ = 0;
-        scan_largest_free_ = 0;
-        for (uintptr_t probe = low; probe < high && p == nullptr;) {
-            if (::VirtualQuery(reinterpret_cast<void *>(probe), &mbi,
-                               sizeof(mbi)) == 0)
-                break;
-            ++scan_regions_;
-            const uintptr_t region_begin =
-                reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-            const uintptr_t region_end = region_begin + mbi.RegionSize;
-            if (mbi.State == MEM_FREE) {
-                // El primer sitio alineado dentro de la region y de la ventana.
-                const uintptr_t from =
-                    (region_begin < probe) ? probe : region_begin;
-                const uintptr_t at =
-                    (from + kGranularity - 1) & ~(kGranularity - 1);
-                if (region_end > at) {
-                    const size_t free_here =
-                        static_cast<size_t>(region_end - at);
-                    if (free_here > scan_largest_free_)
-                        scan_largest_free_ = free_here;
-                }
-                if (at < high && region_end > at &&
-                    (region_end - at) >= chunk_bytes_)
-                    p = ::VirtualAlloc(reinterpret_cast<void *>(at),
-                                       chunk_bytes_, MEM_RESERVE | MEM_COMMIT,
-                                       PAGE_EXECUTE_READWRITE);
-            }
-            // Avanzar SIEMPRE, aunque la consulta devuelva una region rara: sin
-            // esto un tamano cero deja el bucle dando vueltas.
-            probe = (region_end > probe) ? region_end : (probe + kGranularity);
-        }
+     * El barrido de regiones que habia aqui se fue a `os_alloc_near`, que es
+     * donde le toca: preguntar al mapa de memoria donde hay hueco no es trabajo
+     * de un generador de codigo, y ahi ademas se elige el hueco MAS CERCANO en
+     * vez del primero -- esto se quedaba en el borde de la ventana, a 1.920 MiB,
+     * y ahi no queda margen para los datos que no son el ancla exacta. */
+    if (arena_ == nullptr) {
+        /* Casi lo que alcanza un rel32, no la mitad: el desplazamiento se mide
+         * entre el CODIGO y CADA dato, y el ancla es una direccion
+         * representativa de la zona.  Los 128 MiB de margen dan de sobra para
+         * los globales de un modulo. */
+        constexpr size_t kWindow = (size_t(1) << 31) - (128u << 20);
+        arena_storage_ = util::ScratchArena(
+            util::kOsReadWriteExec,
+            anchor_ != 0 ? reinterpret_cast<const void *>(anchor_) : nullptr,
+            kWindow);
+        arena_ = &arena_storage_;
     }
-    anchored_ = (p != nullptr);
-    if (!p)
-        p = ::VirtualAlloc(nullptr, chunk_bytes_, MEM_RESERVE | MEM_COMMIT,
-                           PAGE_EXECUTE_READWRITE);
-    if (!p) return false;
-#else
-    /* Igual que en Windows: `mmap` admite una direccion PREFERIDA (sin
-     * MAP_FIXED, asi que si esta ocupada el nucleo elige otra y no se pisa
-     * nada).  Ver el comentario de arriba para el por que. */
-    void *p = nullptr;
-    if (anchor_ != 0) {
-        void *q = ::mmap(reinterpret_cast<void *>(anchor_ & ~(uintptr_t)0xFFFF),
-                         chunk_bytes_, PROT_READ | PROT_WRITE | PROT_EXEC,
-                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (q != MAP_FAILED) p = q;
-    }
-    if (p == nullptr) {
-        void *q = ::mmap(nullptr, chunk_bytes_,
-                         PROT_READ | PROT_WRITE | PROT_EXEC,
-                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        // mmap devuelve MAP_FAILED (cast de -1) en error, NO nullptr.
-        if (q == MAP_FAILED) return false;
-        p = q;
-    }
-#endif
+    void *p = arena_->allocate(chunk_bytes_, 4096);
+    if (p == nullptr) return false;
+    anchored_ = arena_->placed();
     // Registrar el chunk en la lista para tracking y cleanup posterior.
     Chunk c;
     c.base = static_cast<uint8_t *>(p);

@@ -12,6 +12,7 @@
  *        naked_native.h.
  */
 
+#include "util/alloc/host_allocator_layout.h" // in_region: de quien es el dato
 #include "util/env_flags.h"
 #include "jit/naked_native.h"
 
@@ -291,6 +292,24 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
                          "%zu KiB\n",
                          st.cc.scan_regions(),
                          st.cc.scan_largest_free() / 1024);
+        /* Y DE QUIEN es la memoria donde vive el dato, que es lo que dice si
+         * esto tiene arreglo por ahi o no.  Si el ancla cae en alguna region
+         * del asignador, el hueco no lo va a encontrar nadie barriendo -- esa
+         * reserva ocupa la ventana entera del rel32 -- pero el asignador SI
+         * puede servir el codigo ahi dentro, que es donde le sobra sitio.
+         *
+         * SON DOS REGIONES, no una: las clases pequenas y las grandes viven en
+         * reservas distintas.  Preguntar solo por la primera contesta "fuera"
+         * para un dato que si es suyo, y esa respuesta manda a arreglar otra
+         * cosa. */
+        const void *const anchor_p =
+            reinterpret_cast<const void *>(st.cc.anchor());
+        const char *donde = "de NADIE conocido";
+        if (util::in_region(anchor_p))
+            donde = "la region de clases PEQUENAS del asignador";
+        else if (util::in_big_region(anchor_p))
+            donde = "la region de clases GRANDES del asignador";
+        std::fprintf(stderr, "[naked]   el dato del ancla vive en %s\n", donde);
     }
     std::memcpy(code, bytes.data(), bytes.size());
     // Registrar YA en cache (por direccion) para cortar recursion de callees

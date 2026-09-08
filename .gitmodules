@@ -20,3 +20,6 @@
 [submodule "libs/SourceCode/vesta_alloc"]
 	path = libs/SourceCode/vesta_alloc
 	url = https://github.com/vesta-lang/vesta_alloc.git
+[submodule "profiler"]
+	path = profiler
+	url = https://github.com/vesta-lang/vesta_prof.git

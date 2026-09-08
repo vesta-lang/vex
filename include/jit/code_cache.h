@@ -54,6 +54,10 @@
 #ifndef VESTA_JIT_CODE_CACHE_H
 #define VESTA_JIT_CODE_CACHE_H
 
+/* La memoria de los trozos sale del asignador del proyecto: una arena con
+ * permisos, que es lo que por debajo hace falta aqui.  Ver `arena_storage_`. */
+#include "util/alloc/scratch_arena.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -192,11 +196,24 @@ class CodeCache {
     /// @copydoc anchored
     bool anchored_ = false;
 
-    /// Lo que vio el ultimo barrido alrededor del ancla: cuantas regiones
-    /// recorrio y cual fue el hueco libre mayor.  Sin esto, "no habia sitio" y
-    /// "no llegue a mirar" se leen igual, y son arreglos distintos.
-    size_t scan_regions_ = 0;
-    size_t scan_largest_free_ = 0;
+    /**
+     * @brief La arena de donde salen los trozos: paginas EJECUTABLES, y cerca
+     *        del ancla.
+     *
+     * Es el asignador del proyecto, no una reserva propia.  Por debajo es un
+     * repartidor de arenas con permisos, asi que una arena de codigo es una mas
+     * -- lo unico que la distingue son los permisos con que compromete sus
+     * paginas y que se le dice de que dato no alejarse --.  Antes esto pedia al
+     * sistema por su cuenta y recorria el mapa buscando hueco; ese recorrido
+     * vive ahora en `util::os_alloc_near`, que es su sitio.
+     *
+     * Se construye PEREZOSAMENTE, en el primer trozo, y no en el constructor:
+     * el ancla se pone despues de crear el cache -- la fija quien va a emitir,
+     * cuando sabe a que datos apunta --, asi que en el constructor todavia no
+     * hay a que acercarse.
+     */
+    util::ScratchArena arena_storage_;
+    util::ScratchArena *arena_ = nullptr;
 
   public:
     /**
@@ -222,10 +239,27 @@ class CodeCache {
     /// llevan a arreglos distintos.  Sin esto los dos se veian igual.
     bool anchored() const noexcept { return anchored_; }
 
-    /// @copydoc scan_regions_
-    size_t scan_regions() const noexcept { return scan_regions_; }
-    /// @copydoc scan_largest_free_
-    size_t scan_largest_free() const noexcept { return scan_largest_free_; }
+    /// @brief Lo que vio el ultimo intento de colocar un trozo cerca del ancla:
+    /// cuantas regiones recorrio.
+    ///
+    /// El recorrido lo hace ahora la capa de memoria (`util::os_alloc_near`),
+    /// que es su sitio, pero el dato se sigue pudiendo mirar desde aqui: sin
+    /// el, "no habia sitio" y "no llegue a mirar" se leen igual, y son arreglos
+    /// distintos.
+    size_t scan_regions() const noexcept {
+        return arena_ != nullptr ? arena_->last_scan().regions : 0;
+    }
+
+    /// @brief Y cual fue el hueco libre mayor que vio.  @copydetails scan_regions
+    size_t scan_largest_free() const noexcept {
+        return arena_ != nullptr ? arena_->last_scan().largest_free : 0;
+    }
+
+    /// @brief Cuanta memoria lleva pedida la arena de codigo.  Para poder DECIR
+    /// cuanto ocupa el codigo generado sin contarlo trozo a trozo.
+    size_t arena_reserved() const noexcept {
+        return arena_ != nullptr ? arena_->reserved_bytes() : 0;
+    }
 
   private:
 
