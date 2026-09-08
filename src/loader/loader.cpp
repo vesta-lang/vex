@@ -11,6 +11,9 @@
  */
 #include "util/env_flags.h"
 #include "util/file_read.h"
+/* El bloque de globales sale de la reserva del asignador para que el codigo
+ * nativo lo alcance con rel32.  Ver `materialize_gdata_host`. */
+#include "util/alloc/host_allocator.h"
 #include "loader/loader.h"
 #include <algorithm> // UCRT64: no transitivo
 
@@ -743,11 +746,14 @@ static_assert(kGdataAlign >= 8 && (kGdataAlign & (kGdataAlign - 1)) == 0,
 
 void Executable::BorrarAlineado::operator()(uint8_t *p) const noexcept {
     if (p == nullptr) return;
-#ifdef _WIN32
-    _aligned_free(p);
-#else
-    std::free(p);
-#endif
+    /* Por la puerta por la que entro.  Un bloque de la reserva propia no lleva
+     * cabecera de trozo, asi que el `free` normal leeria como tal lo que
+     * hubiera en sus primeros bytes -- y al reves, una reserva alineada no cae
+     * en la region y `host_free_pages` se la devolveria al sistema entera. */
+    if (de_la_region)
+        util::host_free_pages(p, bytes);
+    else
+        util::host_free_aligned(p);
 }
 
 runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
@@ -1288,23 +1294,51 @@ static void materialize_gdata_host(Executable &exe) {
      * redondea al multiplo, que es lo que exigen las reservas alineadas. */
     const size_t redondeado =
         (size + kGdataAlign - 1) & ~(size_t)(kGdataAlign - 1);
-    uint8_t *bloque = nullptr;
-#if defined(_WIN32)
-    bloque = static_cast<uint8_t *>(_aligned_malloc(redondeado, kGdataAlign));
-#else
-    /* `posix_memalign` y no `aligned_alloc`: el segundo es de C11 y falta en
-     * varias plataformas que si se soportan (Android viejo, macOS anterior a
-     * 10.15), mientras que el primero esta en cualquier sistema POSIX desde
-     * hace dos decadas.  La alternativa era compilar en unos sitios y no en
-     * otros por una reserva. */
-    void *tmp = nullptr;
-    if (posix_memalign(&tmp, kGdataAlign, redondeado) != 0) tmp = nullptr;
-    bloque = static_cast<uint8_t *>(tmp);
-#endif
+
+    /* DE LA RESERVA DEL ASIGNADOR, y no de una reserva cualquiera, porque el
+     * codigo nativo alcanza estos globales con desplazamientos de 32 bits: el
+     * `[rip+sym]` que emite el generador cubre +-2 GB y ni un byte mas.
+     *
+     * Perseguir el dato con el codigo -- que es lo que se hacia -- solo
+     * funciona si el dato esta en un sitio alcanzable de entrada, y una reserva
+     * normal no lo esta: cae dentro de la region de clases pequenas, que mide
+     * 256 GiB, asi que un bloque bien adentro tiene los DOS bordes mas lejos de
+     * lo que cubre el desplazamiento y no hay hueco al lado que encontrar.  Es
+     * geometria, no mala suerte, y en Linux se veia siempre: `rel32 fuera de
+     * rango`, con el codigo a 16.424 MiB de un dato que estaba a ocho bytes de
+     * su ancla.
+     *
+     * Saliendo de la misma reserva de la que salen los trozos de codigo, son
+     * vecinos POR CONSTRUCCION -- el cursor va justo detras de todo lo ya
+     * entregado -- y no hay nada que comprobar despues.  Sin permiso de
+     * ejecucion: esto son datos, y el codigo vive en sus propias paginas.
+     *
+     * Si la region no puede servirlo se cae a una reserva alineada normal.  Eso
+     * NO es un respaldo que tape nada: el programa sigue funcionando en los tres
+     * modos, y si el codigo nativo no alcanza sus datos el generador lo DICE
+     * (`VESTA_NAKED_DEBUG=1` cuenta por que) en vez de emitir un cero.
+     *
+     * LO QUE CUESTA, que hay que tenerlo presente aqui porque esto corre UNA VEZ
+     * POR MODULO CARGADO: la peticion se redondea a un trozo entero de un MiB y
+     * el cursor del que sale solo avanza, asi que soltar el bloque devuelve las
+     * paginas pero no el rango.  Cada modulo gasta un MiB del espacio de
+     * direcciones de la region para lo que queda de proceso.  Con 16 GiB
+     * apalabrados son 16.384 modulos, que sobran para compilar y ejecutar un
+     * programa -- son uno o unos pocos --, pero NO sobran para cargar modulos en
+     * bucle con `loadmodule`.  Si eso llega a pasar, lo que se agota es la
+     * region: el respaldo de aqui entra solo, y lo que se pierde es la cercania
+     * -- que el generador DICE --, no el programa. */
+    uint8_t *bloque = static_cast<uint8_t *>(
+        util::host_alloc_pages_in_region(redondeado, util::kOsReadWrite));
+    const bool de_la_region = bloque != nullptr;
+    if (bloque == nullptr)
+        bloque = static_cast<uint8_t *>(
+            util::host_alloc_aligned(redondeado, kGdataAlign));
     if (bloque == nullptr)
         return; // sin bloque no hay globales que materializar
     std::memset(bloque, 0, redondeado);
-    exe.gdata_host.reset(bloque);
+    exe.gdata_host = std::unique_ptr<uint8_t[], Executable::BorrarAlineado>(
+        bloque, Executable::BorrarAlineado{redondeado, de_la_region});
     exe.gdata_size = size;
     exe.gdata_va = va;
 

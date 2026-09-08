@@ -170,8 +170,38 @@ typedef struct Executable {
      * queda demostrablemente alineado, y la comprobacion pasa de avisar a
      * verificar.  El coste es unos pocos bytes de mas en UNA reserva por
      * programa.
+     *
+     * Y SALE DE LA RESERVA DEL ASIGNADOR, de la misma de la que salen los
+     * trozos de codigo nativo.  No es un detalle de reparto: el codigo alcanza
+     * estos globales con desplazamientos de 32 bits, que cubren +-2 GB, asi que
+     * si el bloque cae lejos la referencia no se puede ni emitir.  Saliendo del
+     * mismo sitio son vecinos por construccion.  Ver `materialize_gdata_host`.
+     */
+    /**
+     * @brief Suelta @ref gdata_host por la puerta por la que entro.
+     *
+     * Lleva por que hay DOS puertas y no se pueden confundir: el bloque sale de
+     * la reserva del asignador cuando esta puede servirlo -- para que el codigo
+     * nativo lo alcance con un desplazamiento de 32 bits -- y de una reserva
+     * alineada normal cuando no.  Soltar uno con la funcion del otro no falla
+     * al soltarlo: falla despues, en otro sitio.
+     *
+     * SIN INICIALIZADORES POR DEFECTO en los campos, y no es descuido.  Los de
+     * una clase ANIDADA se parsean en el contexto de clase completa de la que
+     * la contiene, asi que aqui dentro -- donde `Executable` todavia no esta
+     * cerrada -- su constructor por defecto no es utilizable, y entonces
+     * `std::unique_ptr` se queda sin el suyo: el error sale en la linea del
+     * `typedef struct Executable`, que no es donde esta la causa.  Sin ellos el
+     * constructor implicito es trivial, y un `unique_ptr` vacio INICIALIZA POR
+     * VALOR el borrador, o sea que los deja en cero -- que es lo que hacian los
+     * inicializadores --.  Un borrador con esos ceros no se llega a usar nunca,
+     * porque el puntero es nulo.
      */
     struct BorrarAlineado {
+        /// Bytes REDONDEADOS de la reserva; los pide la puerta de paginas.
+        size_t bytes;
+        /// Si salio de la reserva propia (paginas) o de una alineada normal.
+        bool de_la_region;
         void operator()(uint8_t *p) const noexcept;
     };
     std::unique_ptr<uint8_t[], BorrarAlineado> gdata_host;
