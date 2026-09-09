@@ -86,9 +86,13 @@ void produce_backend(Production &p) {
         f.about.kind = Subject::Kind::Function;
         f.about.function = p.store.intern(inc.fn_name);
 
-        /* La LINEA, que es lo unico que sobrevive al inline y a que el
-         * optimizador renumere los bloques. */
-        f.seal.origin.site = inc.source_line;
+        /* Una LINEA sin entidad del intermedio a la que colgarla: el informe de
+         * compatibilidad trae la suya y aqui ya no se tiene delante la
+         * instruccion que la produjo.  Es el ultimo recurso del ancla -- la
+         * unica clase que puede quedarse rancia al mover texto --, y se acepta
+         * porque no hay a que anclar; si algun dia el informe traiga tambien la
+         * posicion de la operacion, esto pasa a @c Anchor::Kind::Instruction. */
+        f.seal.origin.site = Anchor{Anchor::Kind::Line, inc.source_line};
         /* DEMOSTRADO: la clasificacion es un `switch` sobre la operacion, no
          * una estimacion.  O la operacion baja a maquina o necesita algo que en
          * este objetivo no hay. */
@@ -110,7 +114,14 @@ void produce_backend(Production &p) {
 } // namespace
 
 void register_backend_producer() {
-    register_producer(kProducerBackend, &produce_backend);
+    /* Que operaciones NO puede compilar un backend: se clasifica cada op del
+     * intermedio, asi que depende del codigo.
+     *
+     * OJO -- tambien depende del OBJETIVO, y eso no es una entrada del modulo
+     * sino de la configuracion: entra por la clave del fichero de hechos, que
+     * ya lleva `BuildConfig`.  Declararlo aqui seria mezclar los dos ejes. */
+    register_producer(kProducerBackend, &produce_backend,
+                      DomainInput::FunctionCode);
 }
 
 } // namespace asa

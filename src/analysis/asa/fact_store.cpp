@@ -59,6 +59,16 @@ const char *unknown_reason_code(UnknownReason r) {
     }
 }
 
+const char *anchor_kind_name(Anchor::Kind k) {
+    switch (k) {
+    case Anchor::Kind::Value: return "value";
+    case Anchor::Kind::Block: return "block";
+    case Anchor::Kind::Instruction: return "instr";
+    case Anchor::Kind::Line: return "line";
+    default: return "none";
+    }
+}
+
 const char *subject_kind_name(Subject::Kind k) {
     switch (k) {
     case Subject::Kind::Module: return "module";
@@ -287,6 +297,68 @@ bool FactStore::has_domain(const char *domain, const char *stage) const {
 void FactStore::mark_domain(const char *domain, const char *stage) {
     if (domain == nullptr || has_domain(domain, stage)) return;
     produced_.push_back(ProducedDomain{domain, stage != nullptr ? stage : ""});
+}
+
+namespace {
+
+/// Resume los tres nombres en 64 bits.  Solo para dar con el cubo: la
+/// coincidencia se confirma comparando las cadenas, porque un choque aqui no
+/// seria trabajo de mas sino un hecho que nadie produce.
+uint64_t triple_key(const char *domain, const char *stage,
+                    const char *function) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    auto eat = [&h](const char *s) {
+        for (const char *p = s != nullptr ? s : ""; *p != '\0'; ++p) {
+            h ^= static_cast<uint64_t>(static_cast<unsigned char>(*p));
+            h *= 0x100000001b3ULL;
+        }
+        h ^= 0xFFULL; // separador: "ab"+"c" y "a"+"bc" no son lo mismo.
+        h *= 0x100000001b3ULL;
+    };
+    eat(domain);
+    eat(stage);
+    eat(function);
+    return h;
+}
+
+/// Dos nombres iguales, tolerando que uno venga por puntero y otro por texto.
+bool same_name(const char *a, const char *b) {
+    const char *x = a != nullptr ? a : "";
+    const char *y = b != nullptr ? b : "";
+    return x == y || std::strcmp(x, y) == 0;
+}
+
+} // namespace
+
+void FactStore::mark_function(const char *domain, const char *stage,
+                              const char *function) {
+    if (domain == nullptr || function == nullptr) return;
+    const char *s = stage != nullptr ? stage : "";
+    std::vector<ProducedFunction> &bucket =
+        produced_fn_[triple_key(domain, s, function)];
+    for (const ProducedFunction &p : bucket)
+        if (same_name(p.domain, domain) && same_name(p.stage, s) &&
+            same_name(p.function, function))
+            return;
+    bucket.push_back(ProducedFunction{domain, s, function});
+    ++produced_fn_count_;
+}
+
+bool FactStore::has_function(const char *domain, const char *stage,
+                             const char *function) const {
+    /* El caso normal es que no haya nada marcado -- no hubo cache parcial --, y
+     * entonces esto se responde sin tocar el mapa.  Importa: lo pregunta cada
+     * productor por cada funcion. */
+    if (produced_fn_.empty() || domain == nullptr || function == nullptr)
+        return false;
+    const char *s = stage != nullptr ? stage : "";
+    auto it = produced_fn_.find(triple_key(domain, s, function));
+    if (it == produced_fn_.end()) return false;
+    for (const ProducedFunction &p : it->second)
+        if (same_name(p.domain, domain) && same_name(p.stage, s) &&
+            same_name(p.function, function))
+            return true;
+    return false;
 }
 
 std::vector<FactId> FactStore::never_queried() const {

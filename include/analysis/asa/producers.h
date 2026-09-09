@@ -123,6 +123,16 @@ struct ProductionSummary {
      * los motivos que si dicen algo.
      */
     uint32_t skipped = 0;
+    /**
+     * @brief Las que no se miraron porque YA VENIAN de la cache en disco.
+     *
+     * Aparte de @c skipped a proposito: aquellas se descartan porque no hay
+     * nada que mirar en ellas, estas porque el trabajo ya estaba hecho.  Son
+     * dos cosas opuestas y juntarlas dejaria sin medir lo unico que dice si la
+     * cache granular sirve de algo -- que es como este mecanismo estuvo roto
+     * sin que nadie lo notara.
+     */
+    uint32_t reused = 0;
     long micros = 0;
     /**
      * @brief Huella de LAS ENTRADAS que este dominio mira.  Cero = no sabe.
@@ -252,29 +262,42 @@ struct Production {
      * defecto permisivo esta prohibido en el resto del compilador: no falla,
      * contesta otra cosa.
      *
-     * @param site Linea de fuente a la que atribuirlo, o 0 si no se sabe.
+     * @param site A QUE se atribuye, tipado.  Vacio si no se sabe.
      *
-     * Va aqui y no la busca quien consume porque un identificador de BLOQUE
-     * solo vale dentro de su momento -- el optimizador los renumera --, y
-     * porque tras el inline el mismo bucle aparece en varias funciones: sin la
-     * linea, un aviso sale tantas veces como copias haya, y en funciones donde
-     * el usuario no escribio nada.  Una linea de fuente no la renumera nadie.
+     * Va aqui y no lo busca quien consume porque tras el inline el mismo bucle
+     * aparece en varias funciones: sin decir a que se refiere, un aviso sale
+     * tantas veces como copias haya y en funciones donde el usuario no escribio
+     * nada.
+     *
+     * Es un ANCLA y no una linea: la linea se saca al consultar, contra el
+     * intermedio que el consumidor tenga delante (@ref AnchorLines).  Guardarla
+     * aqui la convertia en un dato que caduca al reindentar -- y como el mismo
+     * campo valia tambien para value-ids y bloques segun el dominio, no habia
+     * forma de saber cual era cual para refrescarla.
      */
     void say_unknown(Subject about, UnknownReason reason, const char *code,
                      const char *domain, const char *detail, Scope scope,
-                     uint32_t site = 0);
+                     Anchor site = Anchor{});
 };
 
 /// Un dominio que sabe convertir su analisis en hechos.
 using Producer = void (*)(Production &);
 
-/**
- * @brief Da de alta un productor.
+/*
+ * NO HAY forma de dar de alta un productor SIN decir de que depende, y es a
+ * proposito.  Antes existia `register_producer(domain, p)`, y su efecto era el
+ * estado que este subsistema llama "ni sabe decirlo ni se puede comprobar":
+ * huella cero, que en el lector significa "acepta lo guardado sin mirar" -- y
+ * peor, IMPIDE caducar, porque la comprobacion solo actua si la huella no es
+ * cero.  Un dominio asi servia hechos de un programa que ya no existe.
  *
- * @param domain Nombre estable (el que aparece como procedencia).
- * @param p      Funcion que afirma sus hechos.
+ * Que sea un ERROR DE COMPILACIoN y no un aviso, ni un rojo de CI, es lo que lo
+ * hace imposible de olvidar: un productor nuevo no llega a enlazar hasta que
+ * dice que mira.  Y no hace falta una excepcion para el que de verdad no mire
+ * nada del programa -- ese declara @c DomainInput::None, que es una afirmacion
+ * explicita, comprobable, y da una huella constante siempre valida.
  */
-void register_producer(const char *domain, Producer p);
+
 
 /**
  * @brief Huella de las ENTRADAS de un dominio, sin producir nada.
@@ -290,12 +313,91 @@ void register_producer(const char *domain, Producer p);
 using DomainFingerprint = uint64_t (*)(const ir::IrModule &);
 
 /**
+ * @brief QUE MIRA un dominio para producir sus hechos.
+ *
+ * Es lo que decide cuando lo guardado deja de valer, y va como CONJUNTO y no
+ * como una clase ordinal porque las entradas se combinan: `param_contracts`
+ * mira el codigo Y lo que los parametros prometen, mientras que `layout` mira
+ * SOLO los datos estaticos -- y darle "el modulo entero" lo invalidaria con
+ * cambios de codigo que no le afectan, que es peor de lo que ya hacia.
+ *
+ * Un dominio que mira menos se invalida menos.  Declarar de mas no da un error:
+ * da trabajo rehecho sin motivo, que es la enfermedad que esto viene a curar.
+ *
+ * @par Como se declara uno nuevo
+ * Se pasa a @ref register_producer el OR de lo que de verdad lea.  Si lee algo
+ * que no esta en esta lista, se anade aqui una entrada y se calcula su huella en
+ * el motor -- una sola vez por modulo --, no en el productor.
+ *
+ * @par Y por que no se OBSERVA en vez de declararse
+ * Observar lo que cada uno pide seria imposible de desactualizar, pero hace la
+ * clave dependiente del ORDEN DE EJECUCIoN: un dominio que solo pregunta algo
+ * en ciertos programas cambiaria de forma entre compilaciones, y eso da
+ * invalidaciones que no se pueden explicar.  Se declara, y la observacion
+ * que el gestor ya hace sirve para COMPROBAR la declaracion en las
+ * construcciones de depuracion -- barato en produccion, detectable en CI --.
+ */
+enum class DomainInput : uint32_t {
+    /// Nada del programa: sus hechos no caducan por tocar el codigo.
+    None = 0,
+    /// Las instrucciones y los valores de las funciones.  La entrada mas
+    /// comun: rangos, memoria, bucles, bits demandados.
+    FunctionCode = 1u << 0,
+    /// Lo que los parametros PROMETEN (`in`/`out`, `borrow`, extension...).
+    /// Aparte del codigo a proposito: @c function_code_key NO los cubre, asi
+    /// que cambiar un `in` por un `out` no movería la huella del codigo.
+    ParamContracts = 1u << 1,
+    /// Los datos estaticos del modulo (`.data`, `.rodata`).
+    StaticData = 1u << 2,
+    /// Las variables globales.
+    Globals = 1u << 3,
+    /**
+     * @brief Lo que dice de UNA funcion depende de OTRAS.
+     *
+     * No es una entrada mas, es una advertencia sobre la FORMA de las demas:
+     * quien la declara no puede tener clave POR FUNCIoN, porque sus hechos
+     * sobre `f` cambian cuando cambia `g`.  El caso es @c kProducerBoundary --
+     * lo que le llega a un parametro solo se sabe mirando a todos los que
+     * llaman --, y con clave por funcion su registro sobreviviria a un cambio
+     * en el llamante: el compilador razonaria con fronteras de otro programa.
+     *
+     * Mientras no exista el plegado Merkle sobre el grafo de llamadas, un
+     * dominio asi vuelve a validarse ENTERO por su huella de dominio -- que si
+     * pliega sobre todas las funciones --.  Mas grueso, y correcto.
+     *
+     * Sigue habiendo que declarar lo que de verdad lee (@c FunctionCode y
+     * companyia): esto no sustituye a nada, avisa de su alcance.
+     */
+    CallGraph = 1u << 4,
+};
+
+inline DomainInput operator|(DomainInput a, DomainInput b) noexcept {
+    return static_cast<DomainInput>(static_cast<uint32_t>(a) |
+                                    static_cast<uint32_t>(b));
+}
+inline bool has_input(DomainInput set, DomainInput one) noexcept {
+    return (static_cast<uint32_t>(set) & static_cast<uint32_t>(one)) != 0;
+}
+
+/**
  * @brief Da de alta un dominio que ademas sabe decir de que depende.
  * @param domain Nombre estable.
  * @param p      Funcion que afirma sus hechos.
  * @param fp     Huella de sus entradas, para validar lo guardado.
  */
 void register_producer(const char *domain, Producer p, DomainFingerprint fp);
+
+/**
+ * @brief Da de alta un dominio declarando QUE MIRA.
+ *
+ * La forma preferida: el motor calcula cada entrada UNA vez por modulo y pliega
+ * solo las declaradas, asi que anadir un dominio no anade un recorrido.
+ *
+ * @param domain Nombre estable.
+ * @param p      Funcion que afirma sus hechos.
+ * @param inputs El OR de lo que lee.  @see DomainInput
+ */
+void register_producer(const char *domain, Producer p, DomainInput inputs);
 
 /**
  * @brief Lo que HOY depende cada dominio, para validar el fichero de hechos.
@@ -308,6 +410,33 @@ void register_producer(const char *domain, Producer p, DomainFingerprint fp);
  * consumidores es como se acaba con dos que invalidan distinto.
  */
 std::vector<DomainCost> current_inputs(const ir::IrModule &mod);
+
+/**
+ * @brief Las claves VIGENTES de un dominio, FUNCIoN A FUNCIoN.
+ *
+ * La granularidad fina de la cache en disco.  Con la clave por dominio, tocar
+ * una linea de una funcion tira los hechos de TODAS: la huella del dominio se
+ * pliega sobre el modulo entero.  Con esta, cada funcion tiene la suya y solo
+ * caducan los hechos que hablan de la que cambio.
+ *
+ * @param mod    El modulo que se esta compilando.
+ * @param domain El dominio por el que se pregunta.
+ * @return Una entrada por funcion: hash de su NOMBRE (que es como el fichero la
+ *         referencia, sin depender de indices que el optimizador mueve) y su
+ *         clave.  Vacio si ese dominio no declara de que depende.
+ *
+ * @par Por que por nombre y no por posicion
+ * El fichero se lee en OTRA compilacion, donde el modulo se construyo de nuevo:
+ * el indice de una funcion dentro del modulo no tiene por que ser el mismo, el
+ * nombre si.
+ */
+std::vector<std::pair<uint64_t, uint64_t>>
+current_inputs_per_function(const ir::IrModule &mod, const char *domain);
+
+// @c function_name_hash -- con la que se referencia una funcion dentro del
+// fichero de hechos -- vive en `fact_file.h`, que es donde esta el FORMATO:
+// escritor y lector tienen que usar exactamente la misma, y tenerla aqui la
+// ponia del lado de los productores, que es solo uno de los dos.
 
 /// Los dominios dados de alta, en orden de registro.
 std::vector<const char *> registered_producers();

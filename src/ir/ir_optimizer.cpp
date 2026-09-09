@@ -7360,7 +7360,9 @@ bool ir_pass_valuefacts_consumers(IrFunction &fn) {
          * variable de un bucle vale todo su tipo.  Medir contra la via corta
          * comparaba con un ASA mas debil que el que el compilador usa de
          * verdad, y eso no mide el ASA: mide el atajo. */
-        analysis::asa::FactBase asa_base;
+        /* EN MEDIO de optimizar, que es donde esto corre: el codigo ya no es el
+         * que entro y todavia no es el que sale. */
+        analysis::asa::FactBase asa_base(analysis::asa::kStageDuringOpt);
         const analysis::IrFacts &ir_facts = asa_base.structure(fn);
         const analysis::RangeFacts &asa_ranges = asa_base.ranges(fn);
         for (IrValueId v = 0; v < static_cast<IrValueId>(fn.values.size());

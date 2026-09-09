@@ -683,7 +683,7 @@ static void test_resumen_siembra_parametro() {
     const IrModule mod = modulo_con_llamada(/*usada_publica=*/false);
     const analysis::AlignmentSummaries s =
         analysis::compute_alignment_summaries(mod, /*programa_cerrado=*/false);
-    const analysis::AlignmentSummaries::Resumen *r = s.buscar("usada");
+    const analysis::AlignmentSummaries::Resumen *r = s.lookup("usada");
     CHECK(r != nullptr && r->params.size() == 1,
           "el resumen de `usada` describe su unico parametro");
     if (r == nullptr || r->params.empty()) return;

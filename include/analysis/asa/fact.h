@@ -174,6 +174,64 @@ enum class Source : uint8_t {
 const char *source_name(Source s);
 
 /**
+ * @brief DoNDE miro un productor, diciendo A QUE apunta.
+ *
+ * Antes esto era un `uint32_t site` documentado como "value-id, bloque o linea,
+ * SEGUN EL DOMINIO", y esa ambiguedad era un fallo de fondo, no una comodidad:
+ *
+ * - **Rompia el invariante 3 del ASA.**  La semantica del conocimiento es
+ *   COMUN; ningun dominio inventa la suya.  Un consumidor que no conociera al
+ *   productor no podia interpretar el numero, asi que el campo solo servia a
+ *   quien ya sabia de quien venia -- o sea, no era conocimiento compartido.
+ *   Y no era teorico: en el MISMO fichero, `producers.cpp` guardaba ahi una
+ *   posicion lineal de instruccion en un sitio y una linea de fuente en otro.
+ * - **Impedia tratar las posiciones aparte.**  Una posicion y una afirmacion
+ *   tienen vidas distintas: la afirmacion muere cuando cambia el CoDIGO, la
+ *   posicion cuando se mueve el TEXTO -- reindentar, un comentario, una linea
+ *   en blanco --.  Al compartir clave manda la vida corta, asi que mover texto
+ *   tiraba analisis que seguian siendo validos.  Y para refrescarlas en vez de
+ *   tirarlas hay que poder saber CUALES son posiciones, que es justo lo que un
+ *   campo con tres significados no deja saber.
+ *
+ * Con el ancla tipada, la linea se RESUELVE al consumir, desde el intermedio
+ * que el consumidor ya tiene delante (@ref resolve_anchor_line).  Una posicion
+ * derivada no puede quedarse rancia, asi que deja de haber nada que invalidar
+ * -- que es la regla que el proyecto ya tenia escrita en @c hash_de_tokens:
+ * las posiciones entran en la clave solo cuando forman parte del artefacto.
+ */
+struct Anchor {
+    enum class Kind : uint8_t {
+        None,        ///< el productor no dijo donde miro.
+        Value,       ///< @c id es un value-id SSA.
+        Block,       ///< @c id es el indice del bloque.
+        Instruction, ///< @c id es la posicion lineal dentro de la funcion.
+        /**
+         * @brief @c id es una linea de FUENTE, ya resuelta.
+         *
+         * El ultimo recurso, para lo que no cuelga de ninguna entidad del
+         * intermedio -- una vista `@overlay` se declara en el fuente y no la
+         * produce ninguna instruccion --.  Es la unica clase que PUEDE quedarse
+         * rancia, y por eso se usa solo cuando no hay entidad a la que anclar.
+         */
+        Line,
+    };
+    Kind kind = Kind::None;
+    uint32_t id = 0;
+
+    bool operator==(const Anchor &o) const {
+        return kind == o.kind && id == o.id;
+    }
+};
+
+/// Nombre estable para volcados.  No es texto de usuario.
+const char *anchor_kind_name(Anchor::Kind k);
+
+// Como se convierte un ancla en una LINEA vive en `fact_base.h`, que es donde
+// el ASA se encuentra con el intermedio.  Aqui no: este fichero es la FORMA del
+// conocimiento y no conoce al productor de ningun lenguaje -- atarlo al IR
+// obligaria a arrastrarlo a cualquiera que solo quiera leer hechos.
+
+/**
  * @brief Quien descubrio un hecho y mirando que.
  *
  * Un hecho sin procedencia no se puede explicar ni depurar: cuando un veredicto
@@ -185,7 +243,7 @@ struct Origin {
     Source source = Source::Static;
     const char *producer = "?"; ///< analisis que lo emitio.
     const char *function = "";  ///< funcion mirada (vacio si es de modulo).
-    uint32_t site = 0;          ///< value-id, bloque o linea, segun el dominio.
+    Anchor site;                ///< donde miro, diciendo a QUE apunta.
 };
 
 /**
@@ -267,10 +325,26 @@ struct Subject {
     Kind kind = Kind::Module;
     const char *function = ""; ///< a quien pertenece (vacio si es del modulo).
     uint32_t id = 0;
+    /**
+     * @brief EN QUE MOMENTO del programa se habla de esto.  @see kStage*.
+     *
+     * Va en la IDENTIDAD y no solo en el sello, y la diferencia es real: el
+     * sello dice cuando se ESTABLECIO el hecho, esto dice de que codigo habla.
+     * `main:v3` antes de optimizar y `main:v3` despues no son el mismo valor --
+     * el optimizador renumera, funde y borra --, asi que tratarlos como un solo
+     * sujeto mezcla afirmaciones sobre dos programas distintos.
+     *
+     * Lo destapo un caso concreto: post-opt `main` se pliega a
+     * `%8 = const 142; ret %8`, `%3` deja de existir, y al preguntar por el se
+     * contestaba "no tiene definicion aqui, luego viene de fuera".  Ni venia de
+     * fuera ni era ignorancia: no estaba.
+     */
+    const char *stage = "";
 
     bool operator==(const Subject &o) const {
         return kind == o.kind && id == o.id &&
-               (function == o.function || std::string(function) == o.function);
+               (function == o.function || std::string(function) == o.function) &&
+               (stage == o.stage || std::string(stage) == o.stage);
     }
 };
 

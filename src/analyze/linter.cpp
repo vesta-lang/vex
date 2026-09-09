@@ -17,6 +17,7 @@
 
 #include "analyze/linter.h"
 
+#include "analysis/asa/fact_base.h" // AnchorLines: de ancla a linea, en UN sitio
 #include "ir/ssa_ir.h"
 
 #include <algorithm>
@@ -431,18 +432,26 @@ void family_dead_loop(const LintInput &in, vx::Diagnostics &diags) {
      * puso ese bucle y no puede arreglarlo.  La linea viene dentro del hecho.
      */
     std::set<uint32_t> ya_dicho;
-    auto donde = [&](const ir::IrFunction &fn, const analysis::asa::Fact *f) {
+    /* La posicion se RESUELVE contra el intermedio que tenemos delante, y el
+     * indice se pasa hecho: construirlo aqui dentro seria rehacerlo por hecho,
+     * o sea recorrer la funcion tantas veces como hechos tenga. */
+    auto donde = [&](const ir::IrFunction &fn, const analysis::asa::Fact *f,
+                     const analysis::asa::AnchorLines &lines) {
         vx::SourceLoc loc = where_is(in, fn.name);
-        if (f->seal.origin.site > 0) loc.line = f->seal.origin.site;
+        const uint32_t line = lines.of(f->seal.origin.site);
+        if (line > 0) loc.line = line;
         return loc;
     };
     for (const ir::IrFunction &fn : in.mod.functions) {
         if (fn.is_native || fn.blocks.empty()) continue;
+        /* UNA vez por funcion: es lo que hace lineal resolver las posiciones de
+         * todos sus hechos en vez de cuadratico. */
+        const analysis::asa::AnchorLines lines(fn);
         for (const analysis::asa::Fact *f :
              in.facts.find_all("loop.trip_count", fn.name.c_str(), escrito)) {
             if (f->seal.certainty != analysis::asa::Certainty::Proven) continue;
             if (f->what.a != 0 && f->what.a != 1) continue;
-            const vx::SourceLoc loc = donde(fn, f);
+            const vx::SourceLoc loc = donde(fn, f, lines);
             if (loc.line > 0 && !ya_dicho.insert(loc.line).second) continue;
             if (f->what.a == 0)
                 diags.diag(loc, vx::DiagLevel::WARN, "VXW916", {});
@@ -464,7 +473,7 @@ void family_dead_loop(const LintInput &in, vx::Diagnostics &diags) {
          * comprobara dejaria de fiarse del resto de los avisos. */
         for (const analysis::asa::Fact *f : in.facts.find_all(
                  "loop.ne_guard_never_lands", fn.name.c_str(), escrito)) {
-            const vx::SourceLoc loc = donde(fn, f);
+            const vx::SourceLoc loc = donde(fn, f, lines);
             if (loc.line > 0 && !ya_dicho.insert(loc.line).second) continue;
             diags.diag(loc, vx::DiagLevel::WARN, "VXW920", {});
         }
@@ -543,7 +552,15 @@ void family_bulk_by_hand(const LintInput &in, vx::Diagnostics &diags) {
                  * de otros sitios -- el aviso apuntaba a lineas donde no hay
                  * ningun bucle --, que es peor que no dar posicion. */
                 vx::SourceLoc loc = where_is(in, fn.name);
-                if (h->seal.origin.site > 0) loc.line = h->seal.origin.site;
+                /* Solo se acepta una LINEA ya materializada, y aqui la
+                 * comprobacion vale la pena: estos hechos son de mitad de la
+                 * optimizacion y lo que tenemos delante es el codigo de
+                 * DESPUES, asi que resolver un ancla al intermedio daria la
+                 * posicion de otro sitio.  Con el ancla tipada eso se puede
+                 * exigir; con el `uint32` de antes no habia forma de saberlo. */
+                if (h->seal.origin.site.kind == analysis::asa::Anchor::Kind::Line &&
+                    h->seal.origin.site.id > 0)
+                    loc.line = h->seal.origin.site.id;
                 if (loc.line > 0 && !ya_dicho.insert(loc.line).second) continue;
                 /* Sin el nombre de la funcion, por lo mismo que la dedup: tras
                  * el inline, el bucle esta en varias y decir en cual es decir
@@ -585,6 +602,9 @@ void family_native_gap(const LintInput &in, vx::Diagnostics &diags) {
     std::set<std::string> ya_dicho;
     for (const ir::IrFunction &fn : in.mod.functions) {
         if (fn.is_native || fn.blocks.empty()) continue;
+        /* UNA vez por funcion: es lo que convierte resolver las posiciones en
+         * lineal en vez de cuadratico. */
+        const analysis::asa::AnchorLines lines(fn);
         for (const analysis::asa::Fact *h : in.facts.find_all(
                  "backend.unsupported_op", fn.name.c_str(), en_nativo)) {
             if (h->seal.certainty != analysis::asa::Certainty::Proven) continue;
@@ -598,9 +618,15 @@ void family_native_gap(const LintInput &in, vx::Diagnostics &diags) {
              * al fichero del usuario en una linea de otro sitio.  Medido sobre
              * un programa de DIEZ lineas que importa `std.memory`: los avisos
              * apuntaban a las lineas 138 a 1177.  Ni uno existia. */
-            if (!cabe_en_el_fichero(in, h->seal.origin.site)) continue;
+            /* La linea se RESUELVE aqui, contra el intermedio que tenemos
+             * delante -- el hecho guarda a que se refiere, no donde estaba
+             * escrito cuando se produjo --.  El indice se construye una vez por
+             * funcion, fuera del bucle: resolverlo hecho a hecho seria recorrer
+             * la funcion por cada uno. */
+            const uint32_t line = lines.of(h->seal.origin.site);
+            if (!cabe_en_el_fichero(in, line)) continue;
             vx::SourceLoc loc = where_is(in, fn.name);
-            if (h->seal.origin.site > 0) loc.line = h->seal.origin.site;
+            if (line > 0) loc.line = line;
             if (!ya_dicho.insert(motivo).second) continue;
             diags.diag(loc, vx::DiagLevel::WARN, "VXW924", {motivo});
         }
@@ -654,7 +680,13 @@ void family_overlay_gaps(const LintInput &in, vx::Diagnostics &diags) {
          * localizar recorriendo el codigo. */
         vx::SourceLoc loc;
         loc.set_file(in.file);
-        loc.line = huella->seal.origin.site;
+        /* Una vista `@overlay` se declara en el fuente y no la produce ninguna
+         * instruccion: su ancla es una LINEA, que es el ultimo recurso y el
+         * unico que aqui puede valer -- no hay funcion contra la que resolver
+         * nada, que es lo que dice el comentario de arriba. */
+        loc.line = huella->seal.origin.site.kind == analysis::asa::Anchor::Kind::Line
+                       ? huella->seal.origin.site.id
+                       : 0;
         if (!cabe_en_el_fichero(in, loc.line)) continue;
 
         /* Los bytes cubiertos, marcados uno a uno.  La huella de una vista son

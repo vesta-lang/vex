@@ -5376,6 +5376,86 @@ for _t, _s, _p, _m, _f in DIR_EXCL_LLAMADA_CASES:
     _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
 
 
+@case("borrow_campos_disjuntos")
+def _(ctx):
+    """Dos campos DISTINTOS del mismo struct se pueden prestar a la vez.
+
+    El comprobador llevaba los prestamos por NOMBRE de variable, asi que `p.a` y
+    `p.b` eran los dos `p` y se rechazaban entre si sin tocarse.  Rechazar un
+    programa correcto es el lado caro de equivocarse: quien lo sufre no puede
+    hacer nada, su codigo ya esta bien.
+
+    Va aqui y no solo en el test unitario del lugar porque lo que hay que fijar
+    es que la cadena ENTERA lo permite -- construir el lugar desde el arbol,
+    compararlo, y no acusar --, no solo que el predicado conteste bien.
+    """
+    src = """struct Par {
+    i64[3] a;
+    i64[3] b;
+}
+void mueve(out i64[3] d, in i64[3] s) {
+    d[0] = s[0];
+    d[1] = s[1];
+}
+i32 main() {
+    Par p;
+    p.a[0] = 0_i64;
+    p.a[1] = 0_i64;
+    p.b[0] = 20_i64;
+    p.b[1] = 22_i64;
+    mueve(p.a, p.b);
+    return (i32) (p.a[0] + p.a[1]);
+}
+"""
+    vx = _write_vx(ctx, "borrow_campos_disjuntos.vx", src)
+    if not ctx.compile_vx(vx, "bcampos"):
+        return
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("bcampos", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 42:
+            ctx.fail("dos campos disjuntos (-m %s): R00 == %s, se esperaba 42"
+                     % (modo, got), log)
+            return
+        ctx.ok("dos campos disjuntos del mismo struct (-m %s) -> 42" % modo)
+
+
+# Y el negativo que lo sostiene: el MISMO campo dos veces si choca, y el struct
+# entero contra uno de sus campos tambien.  Sin esto, "no acusar nunca" pasaria
+# el positivo de arriba.
+BORROW_LUGAR_NEG_CASES = [
+    ("borrow_mismo_campo", """struct Par {
+    i64[3] a;
+    i64[3] b;
+}
+void mueve(out i64[3] d, in i64[3] s) { d[0] = s[0]; }
+i32 main() {
+    Par p;
+    mueve(p.a, p.a);
+    return 0;
+}
+""", "VX2026",
+     "el mismo campo prestado dos veces: choca consigo mismo",
+     "prestar dos veces el mismo campo debio fallar"),
+    ("borrow_todo_vs_campo", """struct Par {
+    i64[3] a;
+    i64[3] b;
+}
+void toca(out Par* d, in i64[3] s) { s[0]; }
+i32 main() {
+    Par p;
+    toca(&p, p.a);
+    return 0;
+}
+""", "VX2026",
+     "el struct entero abarca a su campo: chocan",
+     "prestar el struct entero y uno de sus campos debio fallar"),
+]
+
+for _t, _s, _p, _m, _f in BORROW_LUGAR_NEG_CASES:
+    _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
+
+
 @case("excl_llamada_ok")
 def _(ctx):
     """Lo que NO debe acusar: misma reserva, regiones que no se tocan.

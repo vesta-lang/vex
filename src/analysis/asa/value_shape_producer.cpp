@@ -41,9 +41,12 @@
 namespace analysis {
 namespace asa {
 
-namespace {
-
+/* Fuera del anonimo: el nombre se declara en `fact_base.h` porque su ALCANCE
+ * importa desde otros sitios -- este dominio sigue las llamadas, asi que no
+ * admite clave por funcion, y quien valida la cache tiene que poder nombrarlo. */
 const char *const kProducerValueShape = "asa.value_shape";
+
+namespace {
 
 /// Codigo estable de la forma.  El nombre para volcados lo da el dominio
 /// (`nombre_forma`); esto es el vocabulario del hecho, que viaja al disco.
@@ -167,7 +170,16 @@ void produce_value_shape(Production &p) {
 } // namespace
 
 void register_value_shape_producer() {
-    register_producer(kProducerValueShape, &produce_value_shape);
+    /* La FORMA de un valor sale de sus instrucciones y de sus tipos: codigo.
+     *
+     * Y ademas del codigo de OTRAS funciones: `observar_agregados` SIGUE LAS
+     * LLAMADAS -- por eso se le pasa la base, para que las que visita por ese
+     * camino no se recalculen --, asi que lo que dice de un valor de `f` puede
+     * depender de lo que haga `g`.  De ahi @c CallGraph: sin el tendria clave
+     * por funcion, y tocar `g` dejaria en pie una forma que ya no se deduce.
+     * @see DomainInput::CallGraph */
+    register_producer(kProducerValueShape, &produce_value_shape,
+                      DomainInput::FunctionCode | DomainInput::CallGraph);
 }
 
 } // namespace asa

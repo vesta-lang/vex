@@ -369,6 +369,11 @@ add_library(vx_lib STATIC
     # El comprobador de prestamos, en su propia carpeta: es una pieza aparte --
     # sus reglas no son las del sistema de tipos -- y ahi es donde entrara la
     # segunda etapa, la que comprueba sobre el IR en vez de sobre el AST.
+    # EL LUGAR que un prestamo ocupa -- raiz mas camino --, que es lo que
+    # sustituye al nombre de variable.  Va aparte y se prueba aparte porque es
+    # el nucleo: si "estos dos se pisan" contesta mal, todo lo de encima da
+    # igual, y con un nombre por clave contestaba mal por los dos lados.
+    borrow/place.cpp
     borrow/borrow_checker.cpp
     # La exclusividad CRUZANDO la llamada, que el del AST no puede ver: ahi los
     # parametros son dos nombres y quien sabe que le llega a cada uno es quien

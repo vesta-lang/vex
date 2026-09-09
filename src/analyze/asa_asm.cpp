@@ -178,7 +178,7 @@ void produce_asm(Production &p) {
     /* 1. Lo que se quedo como MICRO ASM: sigue siendo asm, pero dentro del IR y
      *    con sus efectos consultables.  El optimizador lo reordena y el backend
      *    lo re-emite verbatim. */
-    std::unordered_map<std::string, uint32_t> micros_por_funcion;
+    std::unordered_map<std::string, uint32_t> micros_by_function;
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
         uint32_t n = 0;
@@ -231,7 +231,7 @@ void produce_asm(Production &p) {
                 g.proof.from.push_back(id_micro);
                 p.assert_fact(std::move(g));
             }
-        micros_por_funcion[fn.name] = n;
+        micros_by_function[fn.name] = n;
     }
 
     /* 2. El DETALLE de los bloques asm que siguen en el IR -- opacos o micro
@@ -240,9 +240,9 @@ void produce_asm(Production &p) {
      *    queda, y lo que queda incluye las micro.  El destino lo dice quien
      *    elevo (punto 3), que es el unico que lo sabe. */
     const std::vector<AsmBlockReport> bloques = analizar_bloques_asm(p.mod);
-    std::unordered_map<std::string, uint32_t> bloques_en_ir_por_funcion;
+    std::unordered_map<std::string, uint32_t> ir_blocks_by_function;
     for (const AsmBlockReport &b : bloques) {
-        ++bloques_en_ir_por_funcion[b.funcion];
+        ++ir_blocks_by_function[b.funcion];
         Fact f;
         f.what.domain = kProductorAsm;
         f.what.code =
@@ -282,9 +282,9 @@ void produce_asm(Production &p) {
      *    elevada es una suma o un almacenamiento como cualquier otro --, asi
      * que lo dice quien lo elevo, que es el unico que lo sabe.  Sin esto, un
      *    programa cuyo asm se elevo entero salia igual que uno sin asm. */
-    std::unordered_map<std::string, uint32_t> elevadas_por_funcion;
-    std::unordered_map<std::string, uint32_t> sin_elevar_por_funcion;
-    std::unordered_map<std::string, uint32_t> bloques_por_funcion;
+    std::unordered_map<std::string, uint32_t> lifted_by_function;
+    std::unordered_map<std::string, uint32_t> unlifted_by_function;
+    std::unordered_map<std::string, uint32_t> blocks_by_function;
     for (const vx::BloqueAsmBajado &b : vx::bloques_asm_bajados()) {
         if (!p.mod.functions.empty()) {
             /* Puede ser de otra funcion del mismo proceso (otro modulo, o una
@@ -297,11 +297,11 @@ void produce_asm(Production &p) {
                 }
             if (!aqui) continue;
         }
-        ++bloques_por_funcion[b.funcion];
+        ++blocks_by_function[b.funcion];
         if (b.destino == vx::DestinoAsm::ElevadoAIr)
-            elevadas_por_funcion[b.funcion] += b.instrucciones;
+            lifted_by_function[b.funcion] += b.instrucciones;
         else if (b.destino == vx::DestinoAsm::SinElevar)
-            ++sin_elevar_por_funcion[b.funcion];
+            ++unlifted_by_function[b.funcion];
         Fact f;
         f.what.domain = kProductorAsm;
         f.what.code = b.destino == vx::DestinoAsm::ElevadoAIr ? "asm.lifted"
@@ -328,16 +328,16 @@ void produce_asm(Production &p) {
     /* 4. El resumen por funcion, que es lo que uno mira primero. */
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
-        const uint32_t micros = micros_por_funcion[fn.name];
-        auto it = sin_elevar_por_funcion.find(fn.name);
+        const uint32_t micros = micros_by_function[fn.name];
+        auto it = unlifted_by_function.find(fn.name);
         const uint32_t opacos =
-            it == sin_elevar_por_funcion.end() ? 0u : it->second;
-        auto ite = elevadas_por_funcion.find(fn.name);
+            it == unlifted_by_function.end() ? 0u : it->second;
+        auto ite = lifted_by_function.find(fn.name);
         const uint32_t elevadas =
-            ite == elevadas_por_funcion.end() ? 0u : ite->second;
-        const bool hubo_asm = bloques_por_funcion.count(fn.name) != 0;
-        if (micros == 0 && !hubo_asm &&
-            bloques_en_ir_por_funcion.count(fn.name) == 0) {
+            ite == lifted_by_function.end() ? 0u : ite->second;
+        const bool had_asm = blocks_by_function.count(fn.name) != 0;
+        if (micros == 0 && !had_asm &&
+            ir_blocks_by_function.count(fn.name) == 0) {
             /* No es ignorancia: se sabe perfectamente que no tiene asm. */
             p.say_unknown({Subject::Kind::Function, p.store.intern(fn.name), 0},
                           analysis::asa::UnknownReason::NothingToSay,
@@ -365,7 +365,7 @@ void produce_asm(Production &p) {
         /* Si el IR no se genero en este proceso -- viene de la cache -- el
          * elevado no corrio y no hay nada anotado.  Se dice: "no consta" no es
          * "no hubo". */
-        if (!hubo_asm)
+        if (!had_asm)
             /* Y este es el caso puro de "ni se miro": el analisis no llego a
              * correr, asi que no falta conocimiento -- falta haberlo pedido. */
             p.say_unknown(
@@ -423,7 +423,16 @@ void produce_asm(Production &p) {
 } // namespace
 
 void register_asm_producer() {
-    analysis::asa::register_producer(kProductorAsm, &produce_asm);
+    /* Lo que mira: los bloques `asm` y las micro-operaciones elevadas, que
+     * viven DENTRO del codigo de cada funcion.  No sigue llamadas.
+     *
+     * Iba sin declarar nada, que es el estado que el ASA llama "ni sabe decirlo
+     * ni se puede comprobar": en el lector, un dominio con huella cero no puede
+     * caducar, asi que lo suyo se aceptaba de disco pasara lo que pasara.  Lo
+     * unico que lo tapaba era que la puerta del modulo fuese gruesa -- y ese es
+     * justo el tipo de proteccion que no se ve cuando desaparece. */
+    analysis::asa::register_producer(kProductorAsm, &produce_asm,
+                                     analysis::asa::DomainInput::FunctionCode);
 }
 
 } // namespace analyze

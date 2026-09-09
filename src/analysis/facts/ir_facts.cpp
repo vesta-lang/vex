@@ -24,6 +24,7 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
     f.def_of.assign(fn.values.size(), nullptr);
     f.def_block.assign(fn.values.size(), -1);
     f.param_of.assign(fn.values.size(), -1);
+    f.used.assign(fn.values.size(), 0);
     for (size_t i = 0; i < fn.params.size(); ++i) {
         const ir::IrValueId p = fn.params[i];
         if (p < f.param_of.size()) f.param_of[p] = static_cast<int32_t>(i);
@@ -38,6 +39,12 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
                 f.def_of[in.dst] = &in;
                 f.def_block[in.dst] = static_cast<int32_t>(bi);
             }
+            /* Y QUIEN lo lee.  Es la mitad que faltaba para poder decir si un
+             * valor EXISTE aqui: la tabla de valores no encoge cuando el
+             * optimizador borra una instruccion, asi que sin esto una ranura
+             * vacia y algo que de verdad viene de fuera se ven igual. */
+            for (const ir::IrValueId op : in.operands)
+                if (op != ir::IR_NO_VALUE && op < f.used.size()) f.used[op] = 1;
             // call-sites.
             switch (in.op) {
             case ir::IrOp::CALL:

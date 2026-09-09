@@ -485,9 +485,24 @@ struct Resolver {
         }
 
         const ir::IrInstr *d = facts.def(v);
-        /* Sin definicion dentro de la funcion: viene de fuera.  Quien lo pase
-         * es quien sabe a que apunta, y por eso es frontera y no ignorancia. */
         if (!d) {
+            /* Sin definicion, y hay DOS casos que aqui se veian igual.
+             *
+             * Si tampoco lo lee nadie, no es que venga de fuera: es que YA NO
+             * ESTA.  La tabla de valores no encoge cuando el optimizador borra
+             * una instruccion, asi que la ranura sobrevive vacia -- post-opt
+             * `main` se pliega a `%8 = const 142; ret %8` y `%3` deja de
+             * existir --.  Contestar "viene de fuera" a eso es afirmar algo
+             * falso con toda la seguridad: ni viene de ningun sitio ni hay
+             * ignorancia que explicar.  Y no era raro: se llevaba el 84% de los
+             * huecos de este dominio. */
+            if (!facts.exists(v)) {
+                return unknown(asa::UnknownReason::NotAsked,
+                               "memory.value_not_here");
+            }
+            /* Alguien SI lo lee y nadie lo define: entonces si viene de fuera.
+             * Quien lo pase es quien sabe a que apunta, y por eso es frontera y
+             * no ignorancia. */
             PointsToEntry e = unknown(asa::UnknownReason::OpaqueBoundary,
                                       "memory.comes_from_outside");
             /* QUIEN viene de fuera.  "Fuera" no es un sitio: un global del

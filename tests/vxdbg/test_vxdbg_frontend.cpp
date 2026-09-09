@@ -99,7 +99,7 @@ i32 main() {
  * @param clave Clave del compilador.
  * @return Su identificador, o uno vacio.
  */
-static vxdbg::LanguageEntityId buscar(const vx::VxdbgEmitStats &stats,
+static vxdbg::LanguageEntityId lookup(const vx::VxdbgEmitStats &stats,
                                       const std::string &clave) {
     for (const auto &r : stats.roots)
         if (r.first == clave) return r.second;
@@ -182,7 +182,7 @@ int main() {
 
     std::printf("Los tipos, con la especie que les corresponde\n");
     vxdbg::LanguageEntity e;
-    comprobar(leer(store, buscar(stats, "Lector"), e), "la clase esta");
+    comprobar(leer(store, lookup(stats, "Lector"), e), "la clase esta");
     comprobar(e.kind == vxdbg::EntityKind::Type && e.lang_kind == "class",
               "  es un tipo, y Vesta lo llama clase");
     // Lo que pedia el usuario ver en un fallo: de quien deriva y que cumple.
@@ -194,27 +194,27 @@ int main() {
     comprobar(deriva == 1, "  deriva de una");
     comprobar(cumple == 1, "  y cumple un contrato");
 
-    comprobar(leer(store, buscar(stats, "Cerrable"), e), "la interfaz esta");
+    comprobar(leer(store, lookup(stats, "Cerrable"), e), "la interfaz esta");
     comprobar(e.kind == vxdbg::EntityKind::Contract,
               "  y es un contrato, no un tipo: se cumple, no se instancia");
 
-    comprobar(leer(store, buscar(stats, "Punto"), e), "el struct esta");
+    comprobar(leer(store, lookup(stats, "Punto"), e), "el struct esta");
     comprobar(e.kind == vxdbg::EntityKind::Type && e.lang_kind == "struct",
               "  con su genero");
     comprobar(e.byte_size == 16, "  y su tamano de verdad, no uno inventado");
     comprobar(e.alignment == 8, "  con su alineamiento");
 
-    comprobar(leer(store, buscar(stats, "Palabra"), e), "la union esta");
+    comprobar(leer(store, lookup(stats, "Palabra"), e), "la union esta");
     comprobar(e.lang_kind == "union", "  distinguida de un struct normal");
 
-    comprobar(leer(store, buscar(stats, "Color"), e), "el enum esta");
+    comprobar(leer(store, lookup(stats, "Color"), e), "el enum esta");
     comprobar(e.kind == vxdbg::EntityKind::Enumeration, "  como enumeracion");
     comprobar(e.lang_kind == "valued enum",
               "  sabiendo que sus casos SON valores de otro tipo");
 
     std::printf("Nada se inventa\n");
     comprobar(stats.duplicates == 0, "ninguna clave se declaro dos veces");
-    comprobar(buscar(stats, "NoExiste").hash.empty(),
+    comprobar(lookup(stats, "NoExiste").hash.empty(),
               "un tipo que no existe no aparece");
     comprobar(stats.unresolved == 0, "y no queda ninguna relacion sin destino");
 

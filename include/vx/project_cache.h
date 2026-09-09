@@ -299,6 +299,52 @@ ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
 std::string vxfacts_path_for(const std::string &source_path,
                              const std::string &tgt_suffix);
 
+/// Las opciones de compilacion.  ADELANTADA y no incluida: `vx/compiler.h` es
+/// la cabecera gorda del frontend y esto solo necesita el nombre.
+struct CompileOptions;
+
+/**
+ * @brief La clave de los hechos del ASA para UN momento.  HERMETICA.
+ *
+ * Una clave de cache tiene que describir TODAS las entradas o no sirve: la que
+ * omite una sirve el artefacto de otra configuracion, y eso no da error, da
+ * respuestas de otro programa.  Aqui entran el contenido del modulo, la
+ * configuracion de compilacion, los mandos de entorno que cambian lo emitido, y
+ * el momento.
+ *
+ * @par Y la CAPA de la configuracion depende del momento
+ * @c BuildConfig es por capas a proposito.  @c ir_fingerprint() describe el IR
+ * PRE-OPTIMIZE y **excluye `opt_level` adrede**, para que ese IR se comparta
+ * entre niveles de optimizacion.  @c full_fingerprint() lo incluye.
+ *
+ * Los hechos de antes de optimizar hablan del IR tal y como se bajo, asi que
+ * les vale la primera; los de despues dependen del optimizador y necesitan la
+ * segunda.  Usar la primera para los dos -- que es lo que se hacia -- sirve
+ * hechos post-opt calculados con otro `-O`, en silencio.
+ *
+ * @param content_key Identidad del modulo por CONTENIDO (fuente + deps).
+ * @param opts        La configuracion de esta compilacion.
+ * @param stage       @c analysis::asa::kStage*.
+ * @return La clave, distinta para cada momento.
+ */
+uint64_t asa_facts_key(uint64_t content_key, const CompileOptions &opts,
+                       const char *stage);
+
+/**
+ * @brief El fichero de hechos DE UN MOMENTO.
+ *
+ * Un fichero por momento, y no uno compartido.  Con clave por momento -- que es
+ * lo correcto -- un solo fichero no puede validarse: su cabecera lleva UNA
+ * huella y la puerta de lectura rechaza el fichero entero si no coincide, asi
+ * que el segundo momento en escribir invalidaria al primero en cada
+ * compilacion.
+ *
+ * @param base_facts_path Lo que devuelve @ref vxfacts_path_for.
+ * @param stage           @c analysis::asa::kStage*.
+ */
+std::string asa_facts_path_for_stage(const std::string &base_facts_path,
+                                     const char *stage);
+
 } // namespace vx
 
 #endif // VX_PROJECT_CACHE_H

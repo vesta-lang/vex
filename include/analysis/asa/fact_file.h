@@ -10,6 +10,16 @@
  * @brief Los hechos, en disco: lo que solo se sabe al BAJAR el codigo sobrevive
  *        al primer acierto de cache.
  *
+ * Este es el **nivel [2]** de las caches del ASA.  El mapa de los tres niveles
+ * -- que guarda cada uno, que se reutiliza y que no, y las trampas que ya
+ * mordieron -- esta dibujado en @c analysis/asa/fact_base.h.  Leerlo antes de
+ * mover conocimiento de un nivel a otro: el fallo que se repite no es cachear
+ * mal, es cachear en el nivel equivocado.
+ *
+ * Lo que aqui se guarda son los HECHOS PUBLICADOS, no los analisis que los
+ * produjeron: `PointsTo`, `RangeFacts` y el cierre de efectos se rehacen en
+ * cada compilacion.
+ *
  * EL PROBLEMA QUE RESUELVE.  Hay conocimiento que no se puede recalcular
  * mirando el modulo ya compilado porque nacio ANTES, mientras se bajaba: que
  * exige del procesador un bloque de asm, por que no se pudo demostrar algo, que
@@ -75,6 +85,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility> // pair: la clave por funcion
 #include <vector>
 
 namespace analysis {
@@ -89,10 +100,17 @@ constexpr uint16_t kContainerVersion = 1;
 /// devolvia hechos sin justificar y convertia cualquier motivo en "no
 /// preguntado" --; la 4, el MOMENTO de la compilacion en que vale, sin el cual
 /// un hecho de antes de optimizar volvia del disco valiendo tambien para
-/// despues y nombrando ids ya renumerados.  Va en cada registro: cambiarla
+/// despues y nombrando ids ya renumerados; la 5, la TABLA POR FUNCIoN que
+/// permite tirar los hechos de la funcion que cambio y conservar los de las
+/// demas -- antes la huella era del dominio entero, asi que tocar una linea
+/// invalidaba el modulo --; la 6, el ANCLA TIPADA en vez de un `uint32` cuyo
+/// significado dependia del dominio (value-id, bloque o linea, indistinguibles
+/// al volver del disco), que es lo que permite resolver la posicion al
+/// consultar en vez de guardarla -- y con ello que mover texto deje de caducar
+/// analisis que siguen siendo buenos --.  Va en cada registro: cambiarla
 /// descarta los registros viejos de todos los dominios, pero no rompe el
 /// fichero.
-constexpr uint16_t kFactVersion = 4;
+constexpr uint16_t kFactVersion = 6;
 
 /**
  * @brief Cuanto se guarda.  Ajustable con @c VESTA_ASA_CACHE.
@@ -129,13 +147,14 @@ enum class CacheLevel : uint8_t {
  * necesita poder fabricar un fichero VALIDO de otra version, que no es lo mismo
  * que uno corrupto.
  *
- * @param d    Bytes.
- * @param ini  Donde empieza el registro.
- * @param suma Donde esta el hueco de la suma (8 bytes que se saltan).
- * @param fin  Donde acaba el registro.
+ * @param d     Bytes.
+ * @param begin Donde empieza el registro.
+ * @param hole  Donde esta el hueco de la suma (8 bytes que se saltan).
+ * @param end   Donde acaba el registro.
  * @return La suma.
  */
-uint64_t record_checksum(const uint8_t *d, size_t ini, size_t suma, size_t fin);
+uint64_t record_checksum(const uint8_t *d, size_t begin, size_t hole,
+                         size_t end);
 
 /**
  * @brief Suma del fichero ENTERO, que cubre lo que las de cada registro no
@@ -155,6 +174,24 @@ CacheLevel cache_level();
 
 /// Nombre estable del nivel, para volcados y depuracion.
 const char *level_name(CacheLevel n);
+
+/**
+ * @brief El hash con el que una FUNCIoN se referencia dentro del fichero.
+ *
+ * Vive aqui, con el formato, y no del lado de los productores: escritor y
+ * lector tienen que usar exactamente la misma cuenta.  Dos hashes distintos del
+ * mismo nombre no casan nunca, y el modo de fallar seria el peor de todos --
+ * una cache que se escribe, se lee, no encaja jamas y no da ningun error: solo
+ * parece que el programa cambia siempre.
+ *
+ * Por NOMBRE y no por posicion porque el fichero se lee en otra compilacion,
+ * donde el modulo se construyo de nuevo: el indice de una funcion se mueve, su
+ * nombre no.
+ *
+ * @param name Nombre de la funcion.
+ * @return Su clave dentro del fichero.
+ */
+uint64_t function_name_hash(const std::string &name);
 
 /**
  * @brief Lo que un dominio cuenta de si mismo para decidir si se guarda.
@@ -180,37 +217,54 @@ struct DomainCost {
      * comprobar y se acepta lo que haya (que es lo mismo que hoy, no peor).
      */
     uint64_t fingerprint = 0;
+    /**
+     * @brief La misma clave, pero FUNCIoN A FUNCIoN.
+     *
+     * El siguiente escalon de granularidad, y el que de verdad ahorra: la
+     * huella de arriba se pliega sobre TODAS las funciones del modulo, asi que
+     * tocar una linea la mueve y caduca el dominio entero.  Con esta, caducan
+     * solo los hechos que hablan de la funcion que cambio.
+     *
+     * Par (hash del NOMBRE de la funcion, su clave).  Por nombre y no por
+     * indice porque el fichero se lee en otra compilacion, donde el modulo se
+     * construyo de nuevo: la posicion cambia, el nombre no.
+     *
+     * Vacio = ese dominio no sabe repartir por funcion.  Entonces manda
+     * @c fingerprint, que es lo de antes: correcto, solo mas grueso.
+     */
+    std::vector<std::pair<uint64_t, uint64_t>> by_function;
 };
 
 /**
- * @brief Si @p nivel manda guardar un dominio con ese coste.
+ * @brief Si @p level manda guardar un dominio con ese coste.
  *
- * @param nivel Nivel en vigor.
+ * @param level Nivel en vigor.
  * @param c     Lo que el dominio dice de si mismo.
  * @return true si merece ir a disco.
  */
-bool should_store(CacheLevel nivel, const DomainCost &c);
+bool should_store(CacheLevel level, const DomainCost &c);
 
 /**
- * @brief Empaqueta @p almacen en bytes.
+ * @brief Empaqueta @p store en bytes.
  *
- * @param almacen Hechos a guardar.
- * @param huella  Identidad del modulo; al leer, si no cuadra se descarta todo.
- * @param compilador Identidad de la version del compilador que los produjo
- *                   (@c VXI_COMPILER_BUILD_ID donde este disponible).  Al leer,
- *                   si no cuadra se descarta todo: los hechos son conclusiones
- *                   del analisis, y otro analisis puede concluir otra cosa.
- * @param nivel   Cuanto guardar.
- * @param costes  Lo que cada dominio dice de si mismo.  Un dominio que no
+ * @param store   Hechos a guardar.
+ * @param fingerprint Identidad del modulo; al leer, si no cuadra se descarta
+ *                    todo.
+ * @param compiler Identidad de la version del compilador que los produjo
+ *                 (@c VXI_COMPILER_BUILD_ID donde este disponible).  Al leer,
+ *                 si no cuadra se descarta todo: los hechos son conclusiones
+ *                 del analisis, y otro analisis puede concluir otra cosa.
+ * @param level   Cuanto guardar.
+ * @param costs   Lo que cada dominio dice de si mismo.  Un dominio que no
  *                aparezca se trata como recomputable y de coste cero, o sea que
  *                solo entra en el nivel @c Todo.
  * @return Los bytes, o vacio si el nivel es @c Nada o no quedo nada que
  * guardar.
  */
-std::vector<uint8_t> serialize(const FactStore &almacen, uint64_t huella,
-                               CacheLevel nivel,
-                               const std::vector<DomainCost> &costes,
-                               uint64_t compilador = 0);
+std::vector<uint8_t> serialize(const FactStore &store, uint64_t fingerprint,
+                               CacheLevel level,
+                               const std::vector<DomainCost> &costs,
+                               uint64_t compiler = 0);
 
 /**
  * @brief POR QUE no se pudo leer.  Es un DATO, no una frase.
@@ -257,6 +311,32 @@ struct ReadResult {
     uint32_t duplicates = 0;
     uint32_t corrupt = 0;     ///< registros cuya suma no cuadra.
     uint32_t lost_proofs = 0; ///< apoyos en hechos que no se cargaron.
+    /**
+     * @brief Registros de los que se trajo SOLO una parte.
+     *
+     * Es la granularidad por funcion en marcha: el dominio tenia funciones que
+     * cambiaron y funciones que no, asi que en vez de tirarlo entero -- que es
+     * lo que hacia @c stale -- se conservo lo que sigue valiendo.
+     */
+    uint32_t partial_domains = 0;
+    /**
+     * @brief Hechos dejados fuera de esos registros, que el productor rehara.
+     *
+     * Son de dos clases y las dos acaban igual: los de una funcion que cambio,
+     * y los del MoDULO -- sin funcion --, que se quedan fuera porque no hay
+     * forma de decirle al productor que se los salte, y quedarselos los
+     * afirmaria dos veces.
+     */
+    uint32_t stale_facts = 0;
+    /**
+     * @brief Funciones cuyo trabajo se dio por hecho y NO se volvio a producir.
+     *
+     * Es la medida de lo que la cache granular ahorra de verdad.  Sin contarlo,
+     * "se reutilizo todo" y "no se reutilizo nada" se leen igual -- y esa fue
+     * exactamente la forma en que este mecanismo estuvo roto sin que nadie lo
+     * notara: se escribia, se leia, y no ahorraba nada.
+     */
+    uint32_t reused_functions = 0;
 };
 
 /**

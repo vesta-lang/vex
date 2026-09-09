@@ -66,7 +66,7 @@ struct RangeSummaries {
     bool convergio = true;
     uint32_t rondas = 0;
 
-    const FnRangeSummary *buscar(const std::string &nombre) const {
+    const FnRangeSummary *lookup(const std::string &nombre) const {
         auto it = por_funcion.find(nombre);
         return it == por_funcion.end() ? nullptr : &it->second;
     }

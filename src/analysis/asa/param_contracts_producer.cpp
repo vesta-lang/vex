@@ -185,13 +185,17 @@ enum class PairVerdict {
  * @param sites Llamadas a esa funcion, del indice.
  * @param pa    Indice del primer parametro.
  * @param pb    Indice del segundo.
- * @param sitio Sale con la linea de la llamada que decide, si la hay.
+ * @param site Sale con la LINEA de la llamada que decide, si la hay.
+ *             Una linea y no un ancla: la llamada esta en OTRA funcion --
+ *             la que llama --, y un ancla se resuelve contra la funcion del
+ *             sujeto, que aqui es la llamada.  Es el caso para el que existe
+ *             @c Anchor::Kind::Line.
  * @return El veredicto.
  */
 PairVerdict pair_from_call_sites(Production &p,
                                  const std::vector<ModuleWalk::Site> &sites, size_t pa,
-                                 size_t pb, uint32_t &sitio) {
-    sitio = 0;
+                                 size_t pb, uint32_t &site) {
+    site = 0;
     if (sites.empty()) {
         /* Nadie la llama.  No se afirma nada: un hecho sobre codigo que no se
          * usa no ayuda y ensucia el recuento. */
@@ -209,14 +213,14 @@ PairVerdict pair_from_call_sites(Production &p,
         /* Una posicion sin raiz concreta no demuestra nada en ninguno de los
          * dos sentidos. */
         if (!la.concrete() || !lb.concrete()) {
-            sitio = in.source_line;
+            site = in.source_line;
             return PairVerdict::Unknown;
         }
         if (effects::may_alias(la, lb)) {
             /* Se solapan de verdad: NO es una limitacion del analisis, es un
              * dato del programa, y es lo que hay que decir en vez de pedir una
              * declaracion. */
-            sitio = in.source_line;
+            site = in.source_line;
             return PairVerdict::Overlaps;
         }
     }
@@ -499,7 +503,12 @@ void produce_param_contracts(Production &p) {
                  * los dos: tenerlo aqui dentro serian dos productores del
                  * mismo hecho. */
                 const effects::ParamPairInfo pi = aliasing.of(fn.name, a, b);
-                uint32_t sitio = pi.line;
+                /* Una LINEA y no un ancla al intermedio: la llamada que decide
+                 * esta en OTRA funcion -- la que llama --, y un ancla se
+                 * resuelve contra la funcion del sujeto, que aqui es la
+                 * llamada.  Es exactamente el caso para el que existe
+                 * @c Anchor::Kind::Line. */
+                const Anchor at{Anchor::Kind::Line, pi.line};
                 const effects::ParamPairVerdict v = pi.verdict;
 
                 if (v == effects::ParamPairVerdict::Overlaps) {
@@ -523,7 +532,7 @@ void produce_param_contracts(Production &p) {
                     f.what.a = static_cast<int64_t>(a);
                     f.what.b = static_cast<int64_t>(b);
                     f.about = s;
-                    f.seal.origin.site = sitio;
+                    f.seal.origin.site = at;
                     f.seal.certainty = Certainty::Proven;
                     f.seal.origin.source = Source::Static;
                     f.seal.origin.producer = kProducerParamContracts;

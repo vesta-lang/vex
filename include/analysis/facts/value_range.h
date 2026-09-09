@@ -677,7 +677,7 @@ struct DependenciasRango {
 
 /// Huella de la FUNCION: forma, tipos y destinos.  Es la parte de la entrada
 /// que si se puede leer entera de un sitio.
-uint64_t huella_de_funcion(const ir::IrFunction &fn);
+uint64_t function_code_key(const ir::IrFunction &fn);
 
 /// Huella de un resumen (nulo incluido: "no habia" es un estado distinto de
 /// cualquier resumen, y confundirlos serviria un resultado viejo).

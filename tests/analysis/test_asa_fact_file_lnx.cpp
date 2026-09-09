@@ -81,7 +81,12 @@ static void poblar(FactStore &a) {
         f.seal.certainty = Certainty::Inferred;
         f.seal.origin.source = Source::Profile;
         f.seal.origin.producer = (i % 2 == 0) ? kDomA : kDomB;
-        f.seal.origin.site = static_cast<uint32_t>(i);
+        /* Se alternan las CLASES de ancla a proposito: lo que este test mira es
+         * que el viaje a disco conserve el hecho entero, y la clase es parte
+         * del hecho desde que el ancla dejo de ser un numero suelto. */
+        f.seal.origin.site =
+            Anchor{static_cast<Anchor::Kind>(1 + (i % 4)),
+                   static_cast<uint32_t>(i)};
         f.seal.support.add(kDomA);
         f.proof.rule = "regla";
         if (anterior != kNoFact) f.proof.from.push_back(anterior);

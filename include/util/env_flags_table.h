@@ -375,7 +375,9 @@ VESTA_ENV_FLAG(ParallelCompile, "VX_PARALLEL_COMPILE", Speed, Parallel, Int,
 VESTA_ENV_FLAG(AsaBounds, "VESTA_ASA_BOUNDS", Report, Asa, BoolOn, Any)
 VESTA_ENV_FLAG(AsaCache, "VESTA_ASA_CACHE", Speed, Asa, Text, Any)
 VESTA_ENV_FLAG(AsaFormas, "VESTA_ASA_FORMAS", Report, Asa, Bool, Any)
-VESTA_ENV_FLAG(AsaHechosDebug, "VESTA_ASA_HECHOS_DEBUG", Report, Asa, Bool, Any)
+/* El NOMBRE de la variable se queda como esta: es interfaz -- puede estar en el
+ * guion de alguien --, y solo el identificador pasa a ingles. */
+VESTA_ENV_FLAG(AsaFactsDebug, "VESTA_ASA_HECHOS_DEBUG", Report, Asa, Bool, Any)
 VESTA_ENV_FLAG(BoundsDebug, "VESTA_BOUNDS_DEBUG", Report, Asa, Bool, Any)
 /* No mirar el CUERPO del llamado para acotar la region de cada parametro: la
  * pregunta "estos dos parametros reciben la misma memoria" se contesta solo con

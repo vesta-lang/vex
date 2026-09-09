@@ -85,7 +85,7 @@ static ir::IrFunction hacer_destino(const std::string &nombre) {
 /// Rango del parametro @p idx de @p nombre segun los resumenes.
 static ValueRange param_de(const RangeSummaries &s, const std::string &nombre,
                            size_t idx) {
-    const FnRangeSummary *f = s.buscar(nombre);
+    const FnRangeSummary *f = s.lookup(nombre);
     if (f == nullptr || idx >= f->params.size()) return ValueRange::top();
     return f->params[idx];
 }
@@ -113,11 +113,11 @@ static void probar_llamadas_directas() {
     const RangeSummaries s = compute_range_summaries(mod);
     check(s.convergio,
           "directas: el punto fijo del grafo de llamadas converge");
-    check(s.buscar("destino") != nullptr && s.buscar("destino")->cerrada,
+    check(s.lookup("destino") != nullptr && s.lookup("destino")->cerrada,
           "directas: 'destino' es cerrada -- se ven todos sus llamantes");
     check(es(param_de(s, "destino", 0), kI32, 3, 7),
           "directas: el parametro es la union de lo que pasa cada llamada");
-    check(es(s.buscar("destino")->ret, kI32, 3, 7),
+    check(es(s.lookup("destino")->ret, kI32, 3, 7),
           "directas: y lo que devuelve se sigue de lo que entra");
 
     // Control: sin resumenes, ese parametro vale lo que su tipo.
@@ -156,14 +156,14 @@ static void probar_mundo_abierto() {
     }
 
     const RangeSummaries s = compute_range_summaries(mod);
-    check(s.buscar("destino") != nullptr && !s.buscar("destino")->cerrada,
+    check(s.lookup("destino") != nullptr && !s.lookup("destino")->cerrada,
           "abierto: guardar la direccion en memoria abre la funcion");
     check(es(param_de(s, "destino", 0), kI32, INT32_MIN, INT32_MAX),
           "abierto: su parametro vale lo que su tipo, aunque la unica llamada "
           "VISIBLE pase 3");
 
     // Un punto de entrada tampoco se estrecha: le llaman desde fuera.
-    check(s.buscar("main") != nullptr && !s.buscar("main")->cerrada,
+    check(s.lookup("main") != nullptr && !s.lookup("main")->cerrada,
           "abierto: el punto de entrada nunca es cerrado");
 }
 
@@ -204,13 +204,13 @@ static void probar_indirecta_resuelta() {
           "visibles");
 
     const RangeSummaries s = compute_range_summaries(mod);
-    check(s.buscar("destino") != nullptr && s.buscar("destino")->cerrada,
+    check(s.lookup("destino") != nullptr && s.lookup("destino")->cerrada,
           "indirecta: tomar la direccion NO abre la funcion si se ve donde se "
           "llama");
     check(
         es(param_de(s, "destino", 0), kI32, 5, 5),
         "indirecta: y el argumento de la llamada indirecta llega al parametro");
-    check(es(s.buscar("destino")->ret, kI32, 5, 5),
+    check(es(s.lookup("destino")->ret, kI32, 5, 5),
           "indirecta: el retorno se sigue igual");
 }
 
@@ -262,7 +262,7 @@ static void probar_recursion() {
 
     const RangeSummaries s = compute_range_summaries(mod);
     check(s.convergio, "recursion: el punto fijo TERMINA");
-    const FnRangeSummary *f = s.buscar("baja");
+    const FnRangeSummary *f = s.lookup("baja");
     check(f != nullptr && f->cerrada,
           "recursion: llamarse a si misma no la abre");
     /* Lo que se exige no es un intervalo concreto -- el ensanchamiento puede
@@ -306,9 +306,9 @@ static void probar_retorno_en_abierta() {
     }
 
     const RangeSummaries s = compute_range_summaries(mod);
-    check(s.buscar("fija") != nullptr && !s.buscar("fija")->cerrada,
+    check(s.lookup("fija") != nullptr && !s.lookup("fija")->cerrada,
           "retorno: la funcion esta ABIERTA (su direccion se perdio de vista)");
-    check(es(s.buscar("fija")->ret, kI32, 5, 5),
+    check(es(s.lookup("fija")->ret, kI32, 5, 5),
           "retorno: aun asi se sabe lo que devuelve -- eso sale de SU cuerpo");
 
     // Y el llamante lo aprovecha: el resultado de la llamada no es desconocido.

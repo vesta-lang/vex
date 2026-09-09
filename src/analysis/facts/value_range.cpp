@@ -196,7 +196,7 @@ inline CostCounters &g_cost() { return g_cost_owner.get(); }
  *
  * En MinGW cada acceso a una variable de hilo es una LLAMADA
  * (`__emutls_get_address`), y los contadores estan en lo mas caliente del
- * motor: el constructor de `Estado` y `buscar`.  Medido con las pilas de VTune,
+ * motor: el constructor de `Estado` y `lookup`.  Medido con las pilas de VTune,
  * eso costaba el 1,15 % del tiempo total de compilar, encendido siempre y sin
  * que nadie mirara los numeros.  Con la bandera delante -- un bool global, sin
  * TLS
@@ -274,7 +274,7 @@ struct Estado {
 
     /// La ENTRADA, no el rango: aplanada ya no hay ningun `ValueRange` dentro
     /// al que apuntar.  Quien quiera el rango pide @c range().
-    const RangeEntry *buscar(ir::IrValueId v) const {
+    const RangeEntry *lookup(ir::IrValueId v) const {
         if (g_measure_cost) ++g_cost().busquedas;
         auto it = std::lower_bound(
             ref.begin(), ref.end(), v,
@@ -367,8 +367,8 @@ class LectorResumenes {
   public:
     explicit LectorResumenes(const RangeSummaries *s) : sum_(s) {}
 
-    const FnRangeSummary *buscar(const std::string &nombre) {
-        const FnRangeSummary *s = sum_ ? sum_->buscar(nombre) : nullptr;
+    const FnRangeSummary *lookup(const std::string &nombre) {
+        const FnRangeSummary *s = sum_ ? sum_->lookup(nombre) : nullptr;
         // Se apunta TAMBIEN cuando no hay resumen: "no habia" es un estado, y
         // si manana lo hay el resultado puede cambiar.
         leidas_.emplace_back(nombre, huella_de_resumen(s));
@@ -428,7 +428,7 @@ struct Contexto {
          * resumen solo estrecha cuando se conocen TODOS los llamantes; si no,
          * trae el mismo suelo y esto no cambia nada. */
         if (sum.hay()) {
-            const FnRangeSummary *mio = sum.buscar(fn.name);
+            const FnRangeSummary *mio = sum.lookup(fn.name);
             if (mio != nullptr)
                 for (size_t i = 0;
                      i < fn.params.size() && i < mio->params.size(); ++i) {
@@ -442,7 +442,7 @@ struct Contexto {
     ValueRange valor(const Estado &e, ir::IrValueId v) const {
         if (v == ir::IR_NO_VALUE || v >= suelo.size()) return ValueRange::top();
         if (!e.reachable) return ValueRange::bottom(suelo[v].t);
-        if (const RangeEntry *r = e.buscar(v)) return r->range();
+        if (const RangeEntry *r = e.lookup(v)) return r->range();
         return suelo[v];
     }
 
@@ -745,7 +745,7 @@ struct Motor : Contexto {
          * es avanzar dos indices a la vez -- O(|a|+|b|) en vez de
          * O(|a| log|b|) --, y ademas en orden, sin saltar por el vector.
          *
-         * Es lo que el perfil senalaba: `buscar` -> `lower_bound` bajo esta
+         * Es lo que el perfil senalaba: `lookup` -> `lower_bound` bajo esta
          * funcion era el mayor coste propio del motor.  El resultado es el
          * MISMO: mismos elementos, mismo orden. */
         size_t j = 0;
@@ -1551,7 +1551,7 @@ static ValueRange evaluate_op(const Contexto &cx, const ir::IrInstr &in,
                 (in.op == IrOp::CALL)
                     ? in.func_name
                     : pointed_function(fn, facts, in.func_ptr);
-            if (const FnRangeSummary *s = sum.buscar(destino)) nuevo = s->ret;
+            if (const FnRangeSummary *s = sum.lookup(destino)) nuevo = s->ret;
         }
         break;
     default: break; // op sin modelar: lo que diga el tipo
@@ -1617,7 +1617,7 @@ void Contexto::transferir(const ir::IrInstr &in, Estado &e,
 
 } // namespace
 
-uint64_t huella_de_funcion(const ir::IrFunction &fn) {
+uint64_t function_code_key(const ir::IrFunction &fn) {
     uint64_t h = util::kFnvOffset;
     for (const ir::IrBlock &b : fn.blocks) {
         h = util::fnv_mix(h, b.instrs.size());
@@ -1706,7 +1706,7 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
     if (!d.registrada) return false;
     if (d.huella_opciones != op.fingerprint())
         return false;
-    if (d.huella_ir != huella_de_funcion(fn)) return false;
+    if (d.huella_ir != function_code_key(fn)) return false;
     /* HABIA resumenes entonces y los hay ahora?  Esta comprobacion no la puede
      * hacer la lista de abajo: un calculo SIN resumenes no consulta ninguno, y
      * su lista vacia pasa el bucle sin mirar nada.  Es el guardia lo que
@@ -1728,7 +1728,7 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
      * de preguntar. */
     // Se RELEE cada resumen que se consulto, contra el estado de ahora.
     for (const auto &leida : d.resumenes) {
-        const FnRangeSummary *s = sum ? sum->buscar(leida.first) : nullptr;
+        const FnRangeSummary *s = sum ? sum->lookup(leida.first) : nullptr;
         if (huella_de_resumen(s) != leida.second) return false;
     }
     return true;
@@ -1989,7 +1989,7 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
     /* Lo que se leyo para llegar aqui.  No se enumera: se recoge de lo que el
      * lector fue apuntando, asi que incluye lo que se consulto de verdad --
      * incluidas las llamadas indirectas, que no llevan el nombre escrito. */
-    out.deps.huella_ir = huella_de_funcion(fn);
+    out.deps.huella_ir = function_code_key(fn);
     /* Los HECHOS (def-use) NO entran aqui, y no por descuido: se derivan de la
      * funcion, asi que la huella de la funcion ya los cubre.  Mezclarlos
      * ademas rompia el invariante que sostiene todo esto -- que
@@ -2152,7 +2152,7 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
     // Campo a campo, no bytes crudos: la estructura tiene relleno sin
     // inicializar y hashearlo hacia que la clave saliera distinta cada vez.
     const uint64_t clave =
-        util::fnv_mix(huella_de_funcion(fn), op.fingerprint());
+        util::fnv_mix(function_code_key(fn), op.fingerprint());
     {
         std::lock_guard<std::mutex> g(mx_cache);
         auto it = cache.find(clave);

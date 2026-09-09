@@ -111,7 +111,7 @@ EfectoEnLlamada EffectAnalysis::at_call_site(const ir::IrFunction &caller,
      * eso lo trata quien pregunta como lo que es: falta de conocimiento, no
      * ausencia de efecto. */
     const FunctionSummary *s = nullptr;
-    auto buscar = [&](const ModuleSummary &ms) {
+    auto lookup = [&](const ModuleSummary &ms) {
         auto it = ms.fns.find(call.func_name);
         if (it != ms.fns.end())
             s = &it->second;
@@ -124,8 +124,8 @@ EfectoEnLlamada EffectAnalysis::at_call_site(const ir::IrFunction &caller,
             }
         }
     };
-    buscar(program_cache_);
-    if (s == nullptr) buscar(module_cache_);
+    lookup(program_cache_);
+    if (s == nullptr) lookup(module_cache_);
     if (s == nullptr) {
         r.completo = false; // no hay resumen: no se sabe lo que hace.
         return r;

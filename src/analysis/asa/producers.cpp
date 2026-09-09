@@ -31,6 +31,7 @@
 #include "analysis/facts/loop_iv.h"
 #include "analysis/facts/loop_structure.h"
 #include "analysis/facts/loop_trip_count.h"
+#include "vx/diag/diag_catalog.h" // el texto del aviso, en todos los idiomas
 #include "vx/asm/asm_cfg.h"
 #include "vx/asm/asm_effects.h" // isa_actual
 
@@ -49,6 +50,23 @@ bool Production::is_interesting(const ir::IrFunction &fn) const {
          * quien lo lea no puede saber si el dominio vio el modulo entero o se
          * salto media docena de funciones.  Ningun sitio se calla. */
         ++summary.skipped;
+        return false;
+    }
+    /* Y lo que YA vino del disco para ESTA funcion, en ESTE dominio y ESTE
+     * momento, tampoco hay que mirarlo: producirlo otra vez daria las mismas
+     * afirmaciones por duplicado.
+     *
+     * Aqui es donde se cobra la granularidad por funcion.  El fichero de hechos
+     * valida funcion a funcion y trae lo que sigue valiendo sin marcar el
+     * dominio; el productor recorre el modulo entero como siempre -- no se
+     * entera de nada -- y este unico punto le salta lo que ya esta.  Sin esto
+     * la cache era todo-o-nada: o se tiraba el dominio entero porque una
+     * funcion cambio, o se duplicaba lo cargado.
+     *
+     * Cuando no hubo carga parcial -- el caso normal -- esto se responde sin
+     * tocar ninguna tabla: el almacen no tiene nada marcado. */
+    if (store.has_function(summary.domain, stage, fn.name.c_str())) {
+        ++summary.reused;
         return false;
     }
     return true;
@@ -70,7 +88,7 @@ FactId Production::assert_fact(Fact f) {
 
 void Production::say_unknown(Subject about, UnknownReason reason,
                              const char *code, const char *domain,
-                             const char *detail, Scope scope, uint32_t site) {
+                             const char *detail, Scope scope, Anchor site) {
     ++summary.looked_at;
     ++summary.silent;
     /* El motivo SIEMPRE, aunque no se pidan los hechos uno a uno: un dominio
@@ -123,7 +141,234 @@ struct RegisteredDomain {
     /// De que depende, para poder validar lo guardado SIN producir.  Nulo = no
     /// sabe decirlo, y entonces lo suyo no se puede comprobar.
     DomainFingerprint fingerprint = nullptr;
+    /// Lo que MIRA, declarado.  @c None con @c fingerprint nulo es el estado
+    /// que hay que erradicar: ni sabe decirlo ni se puede comprobar.
+    DomainInput inputs = DomainInput::None;
 };
+
+/**
+ * @brief Las huellas de las entradas del modulo, calculadas UNA vez.
+ *
+ * Se calculan todas de golpe y cada dominio pliega las suyas.  Al reves --
+ * que cada uno calcule lo que mira -- serian tantos recorridos del modulo como
+ * dominios, que es justo lo que @c ModuleWalk existe para no hacer.
+ */
+struct ModuleInputs {
+    /// Plegado de las de TODAS las funciones.  Sirve mientras la validacion sea
+    /// por dominio; con granularidad por funcion se usa la de cada una.
+    uint64_t function_code = 0;
+    uint64_t param_contracts = 0;
+    uint64_t static_data = 0;
+    uint64_t globals = 0;
+    /**
+     * @brief El codigo de las funciones SIN NOMBRE, plegado.
+     *
+     * Va con las entradas del MoDULO y no con las de cada funcion porque no hay
+     * forma de referenciarlas: la tabla del fichero indexa por hash del nombre,
+     * asi que una funcion anonima no puede tener su propia entrada.  Sin esto
+     * quedaria fuera de TODAS las claves por funcion -- y como la validacion
+     * granular se salta la huella de dominio cuando hay tabla, un cambio
+     * encerrado en una anonima no lo veria nadie.
+     *
+     * Es la misma solucion que para los datos estaticos: lo que no se puede
+     * repartir se le cobra a todos.
+     */
+    uint64_t unnamed_code = 0;
+};
+
+/// @brief Las entradas de UNA funcion.  Lo mismo, sin plegar.
+struct FunctionInputs {
+    uint64_t function_code = 0;
+    uint64_t param_contracts = 0;
+};
+
+/**
+ * @brief Dice, UNA vez, que llego una funcion del intermedio sin nombre.
+ *
+ * Una vez por proceso y no por funcion: el aviso es sobre una via de
+ * construccion que se salta el nombre, no sobre cada caso, y repetirlo por
+ * funcion en un modulo grande taparia lo que si dice algo.
+ *
+ * Aviso y no aborto a proposito: la compilacion es correcta -- el codigo de esa
+ * funcion se le cobra a todas --, lo que se pierde es granularidad de cache.
+ * Matar el compilador por eso seria desproporcionado; callarlo, lo de siempre.
+ */
+void warn_unnamed_function() {
+    static bool said = false;
+    if (said) return;
+    said = true;
+    const std::string msg =
+        vx::diag::format("VXA072", vx::diag::current_language(), {});
+    std::fprintf(stderr, "%s\n", msg.c_str());
+}
+
+/// @brief La huella de los CONTRATOS de una funcion.
+///
+/// Aparte de @c function_code_key a proposito: aquella no los cubre -- hashea
+/// instrucciones, valores y parametros, no lo que los parametros PROMETEN --,
+/// asi que cambiar un `in` por un `out` no la movería.  Meterlos dentro habria
+/// invalidado la cache de rangos, que hoy es correcta, por un cambio que a los
+/// rangos no les afecta.
+uint64_t param_contracts_key(const ir::IrFunction &fn) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    auto mix = [&h](uint64_t v) {
+        h ^= v;
+        h *= 0x100000001b3ULL;
+    };
+    for (const ir::IrParamContract &pc : fn.param_contracts) {
+        for (const ir::IrParamLevel &lv : pc.levels) {
+            mix(lv.holds);
+            mix(lv.denied);
+            mix(lv.proven);
+            mix(lv.declared);
+            mix(static_cast<uint64_t>(lv.extent_bytes));
+            mix(lv.extent_from_param);
+            mix(lv.align_bytes);
+        }
+    }
+    return h;
+}
+
+FunctionInputs compute_function_inputs(const ir::IrFunction &fn) {
+    FunctionInputs in;
+    in.function_code = function_code_key(fn);
+    in.param_contracts = param_contracts_key(fn);
+    return in;
+}
+
+/**
+ * @brief Las entradas de CADA funcion y su plegado del modulo, en UNA pasada.
+ *
+ * Las dos cifras salen del mismo recorrido a proposito: el plegado del modulo
+ * ES la suma de las de las funciones, asi que calcularlas por separado seria
+ * recorrer el modulo dos veces para obtener lo mismo.  Y lo que de verdad
+ * importa es que se calcule una vez para TODOS los dominios: son las mismas
+ * cifras para los dieciseis, lo unico que cambia por dominio es que parte se
+ * pliega -- una operacion, no una pasada --.  Pedirlas por dominio serian
+ * dieciseis recorridos completos del modulo antes de producir nada.
+ */
+struct AllInputs {
+    ModuleInputs module;
+    /// (hash del nombre, sus entradas).  Solo las funciones con nombre: una
+    /// sin el no se puede referenciar desde el fichero de la proxima
+    /// compilacion, que es donde esta tabla se compara.
+    std::vector<std::pair<uint64_t, FunctionInputs>> by_function;
+};
+
+AllInputs compute_all_inputs(const ir::IrModule &mod) {
+    AllInputs all;
+    ModuleInputs &in = all.module;
+    auto mix = [](uint64_t h, uint64_t v) {
+        h ^= v;
+        return h * 0x100000001b3ULL;
+    };
+    in.function_code = 0xcbf29ce484222325ULL;
+    in.param_contracts = 0xcbf29ce484222325ULL;
+    in.unnamed_code = 0xcbf29ce484222325ULL;
+    all.by_function.reserve(mod.functions.size());
+    for (const ir::IrFunction &fn : mod.functions) {
+        /* Cada funcion aporta las suyas, y se pliegan.  Las de una funcion
+         * suelta salen de @ref compute_function_inputs, que es lo que usa la
+         * validacion por funcion. */
+        const FunctionInputs f = compute_function_inputs(fn);
+        in.function_code = mix(in.function_code, f.function_code);
+        in.param_contracts = mix(in.param_contracts, f.param_contracts);
+        if (!fn.name.empty()) {
+            all.by_function.emplace_back(function_name_hash(fn.name), f);
+        } else {
+            /* Sin nombre no hay entrada posible en la tabla del fichero, asi
+             * que su codigo se le cobra a TODAS: es la unica forma de que un
+             * cambio encerrado en una anonima siga moviendo alguna clave.
+             *
+             * Y NO se calla.  Que sea correcto no lo hace inocuo: degrada la
+             * granularidad del modulo ENTERO, y sin decirlo la cache se iria
+             * volviendo gruesa sola sin que nadie supiera por que.  Hoy no
+             * deberia sonar -- todos los sitios que construyen una funcion le
+             * ponen nombre --, asi que si suena es que hay una via nueva. */
+            in.unnamed_code = mix(in.unnamed_code, f.function_code);
+            in.unnamed_code = mix(in.unnamed_code, f.param_contracts);
+            warn_unnamed_function();
+        }
+    }
+    in.static_data = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < mod.static_data.size(); ++i) {
+        const auto &m = mod.static_data.meta_at(i);
+        for (char c : m.section_name)
+            in.static_data = mix(in.static_data,
+                                 static_cast<uint64_t>(
+                                     static_cast<unsigned char>(c)));
+    }
+    in.globals = 0xcbf29ce484222325ULL;
+    for (const auto &g : mod.globals) {
+        for (char c : g.first)
+            in.globals =
+                mix(in.globals,
+                    static_cast<uint64_t>(static_cast<unsigned char>(c)));
+        in.globals = mix(in.globals, g.second);
+    }
+    return all;
+}
+
+/// Solo el plegado del modulo, para quien no necesite el desglose.
+ModuleInputs compute_module_inputs(const ir::IrModule &mod) {
+    return compute_all_inputs(mod).module;
+}
+
+/// @brief Pliega las entradas que un dominio DECLARA mirar.
+///
+/// Cero cuando no declara nada: es "no se decirlo", que se acepta sin
+/// comprobar.  Distinto de declarar @c DomainInput::None, que es "no miro nada
+/// del programa" y da una huella constante -- comprobable y siempre valida.
+/**
+ * @brief La clave de un dominio PARA UNA FUNCIoN.
+ *
+ * Lo mismo que @ref fold_declared_inputs pero tomando del modulo solo lo que es
+ * del modulo -- datos estaticos, globales -- y de la funcion lo que es suyo.
+ * Es lo que hace que tocar una funcion no invalide los hechos de las demas.
+ *
+ * Un dominio que NO mire codigo ni contratos da la misma clave para todas: sus
+ * hechos no dependen de en que funcion esten, y eso es correcto -- `layout`
+ * habla del modulo aunque sus hechos se atribuyan a algo.
+ */
+uint64_t fold_declared_inputs_for_function(DomainInput set,
+                                           const ModuleInputs &mod_in,
+                                           const FunctionInputs &fn_in) {
+    uint64_t h = 0x9E3779B97F4A7C15ULL;
+    auto mix = [&h](uint64_t v) {
+        h ^= v;
+        h *= 0x100000001b3ULL;
+    };
+    if (has_input(set, DomainInput::FunctionCode)) {
+        mix(fn_in.function_code);
+        /* Y el de las anonimas, que no puede ir en la clave de ninguna: ver
+         * @c ModuleInputs::unnamed_code.  Quien mira codigo lo mira TODO.
+         *
+         * Lo que NO entra es DONDE esta escrita.  Un hecho no guarda su linea:
+         * guarda a que entidad se refiere, y la linea se resuelve al consultar
+         * (@ref AnchorLines).  Meterla aqui hacia que reindentar caducara
+         * analisis que seguian siendo validos -- la vida corta de la posicion
+         * gobernando la larga de la afirmacion --, que es justo lo que
+         * `hash_de_tokens` evita ignorando comentarios y espaciado. */
+        mix(mod_in.unnamed_code);
+    }
+    if (has_input(set, DomainInput::ParamContracts)) mix(fn_in.param_contracts);
+    if (has_input(set, DomainInput::StaticData)) mix(mod_in.static_data);
+    if (has_input(set, DomainInput::Globals)) mix(mod_in.globals);
+    return h;
+}
+
+uint64_t fold_declared_inputs(DomainInput set, const ModuleInputs &in) {
+    uint64_t h = 0x9E3779B97F4A7C15ULL; // semilla != 0: declarar None es un dato
+    auto mix = [&h](uint64_t v) {
+        h ^= v;
+        h *= 0x100000001b3ULL;
+    };
+    if (has_input(set, DomainInput::FunctionCode)) mix(in.function_code);
+    if (has_input(set, DomainInput::ParamContracts)) mix(in.param_contracts);
+    if (has_input(set, DomainInput::StaticData)) mix(in.static_data);
+    if (has_input(set, DomainInput::Globals)) mix(in.globals);
+    return h;
+}
 
 /// Vector plano: son unos pocos y se recorren enteros; un mapa aqui seria
 /// indireccion para nada.  Function-local para no depender del orden de
@@ -235,19 +480,18 @@ void produce_ranges(Production &p) {
                  *     de el;
                  *   - y acotado a TODO su tipo si es de verdad "puede valer
                  *     cualquier cosa de las que caben ahi". */
-                UnknownReason por_que = UnknownReason::RuntimeDependent;
-                const char *detalle = "vale todo su tipo";
+                UnknownReason why = UnknownReason::RuntimeDependent;
+                const char *detail = "vale todo su tipo";
                 if (!rf.convergio) {
-                    por_que = UnknownReason::BudgetExceeded;
-                    detalle = "el analisis de rangos paro por presupuesto "
-                              "antes de llegar a punto fijo";
+                    why = UnknownReason::BudgetExceeded;
+                    detail = "el analisis de rangos paro por presupuesto "
+                             "antes de llegar a punto fijo";
                 } else if (r.es_top()) {
-                    por_que = UnknownReason::NotAsked;
-                    detalle = "sin dominio: no se miro este valor";
+                    why = UnknownReason::NotAsked;
+                    detail = "sin dominio: no se miro este valor";
                 }
-                p.say_unknown(value_subject(p, fn, v), por_que,
-                              "range.unbounded", kProducerRanges, detalle,
-                              Scope::everywhere());
+                p.say_unknown(value_subject(p, fn, v), why, "range.unbounded",
+                              kProducerRanges, detail, Scope::everywhere());
                 continue;
             }
             Fact f;
@@ -288,9 +532,12 @@ void produce_ranges(Production &p) {
                                        std::to_string(w.hi) + "]");
         f.about = value_subject(p, fn, w.dst);
         f.seal = s;
-        // La LINEA viaja dentro del hecho: el consumidor tiene otro codigo
-        // delante y no puede deducirla de ningun indice.
-        f.seal.origin.site = w.line;
+        /* Se ancla al VALOR, no a su linea.  El consumidor tiene otro codigo
+         * delante, si -- pero lo que necesita es a que se refiere, no donde
+         * estaba escrito cuando se produjo: la linea la saca del intermedio que
+         * tenga en la mano (@ref resolve_anchor_line).  Guardarla aqui la
+         * convertia en un dato que caduca al reindentar. */
+        f.seal.origin.site = Anchor{Anchor::Kind::Value, w.dst};
         support_with_structure(p, fn, f, "data-flow");
         p.assert_fact(std::move(f));
     }
@@ -304,7 +551,7 @@ void produce_boundary(Production &p) {
     const Seal s = p.base.module_seal(kProducerBoundary);
     for (const ir::IrFunction &fn : p.mod.functions) {
         if (!p.is_interesting(fn)) continue;
-        const FnRangeSummary *r = rs.buscar(fn.name);
+        const FnRangeSummary *r = rs.lookup(fn.name);
         if (r == nullptr) {
             /* Y aqui la misma distincion: si el punto fijo del grafo de
              * llamadas no llego a converger, que falte un resumen NO es una
@@ -469,7 +716,10 @@ void produce_asm_flow(Production &p) {
                 f.seal.origin.source = Source::Static;
                 f.seal.origin.producer = kProducerAsmFlow;
                 f.seal.origin.function = s.function;
-                f.seal.origin.site = idx;
+                /* Aqui el ancla es una INSTRUCCIoN, no una linea -- y que el
+                 * mismo campo significara una cosa aqui y otra 700 lineas mas
+                 * abajo es justo lo que se vino a quitar. */
+                f.seal.origin.site = Anchor{Anchor::Kind::Instruction, idx};
                 f.proof.rule = "asm_flow.block_graph";
                 p.assert_fact(f);
 
@@ -876,19 +1126,20 @@ void produce_loops(Production &p) {
             about.kind = Subject::Kind::Block;
             about.function = p.store.intern(fn.name);
             about.id = lf.header_block_of(L);
-            /* La LINEA del bucle, para todo lo que se diga de el.
+            /* DONDE esta el bucle, para todo lo que se diga de el.
              *
-             * Sin ella, un consumidor solo puede senalar la funcion -- y tras
-             * el inline el mismo bucle esta en varias, asi que el aviso sale
-             * repetido y en sitios donde el usuario no escribio nada.  El
-             * numero de bloque no sirve: el optimizador los renumera. */
-            uint32_t linea = 0;
-            if (about.id < fn.blocks.size())
-                for (const ir::IrInstr &i : fn.blocks[about.id].instrs)
-                    if (i.source_line > 0) {
-                        linea = i.source_line;
-                        break;
-                    }
+             * Sin esto un consumidor solo puede senalar la funcion -- y tras el
+             * inline el mismo bucle esta en varias, asi que el aviso sale
+             * repetido y en sitios donde el usuario no escribio nada.
+             *
+             * Se ancla al BLOQUE cabecera y NO a su linea, aunque la linea es
+             * lo que acabara pintando el consumidor: es el mismo indice que ya
+             * lleva `about`, asi que no se guarda nada nuevo, y la linea la
+             * saca `resolve_anchor_line` del intermedio que tenga delante.  Con
+             * la linea guardada aqui, reindentar el fichero la dejaba mintiendo
+             * -- y para no mentir habia que tirar el analisis entero, que sigue
+             * siendo bueno. */
+            const Anchor at{Anchor::Kind::Block, about.id};
 
             const LoopStructure ls = detect_loop_structure(fn, lf, L);
             /* CONTABLE basta, que es mas debil que elegible para transformar.
@@ -910,7 +1161,7 @@ void produce_loops(Production &p) {
                               (ls.why != nullptr && ls.why[0] != '\0')
                                   ? ls.why
                                   : "loop.shape_unsupported",
-                              kProducerLoops, "", Scope::everywhere(), linea);
+                              kProducerLoops, "", Scope::everywhere(), at);
                 continue;
             }
             /* Los DOS sentidos: aqui solo se CUENTA, y un bucle que baja
@@ -949,7 +1200,7 @@ void produce_loops(Production &p) {
                 }
                 p.say_unknown(about, UnknownReason::ShapeNotRecognized,
                               "loop.no_induction", kProducerLoops, "",
-                              Scope::everywhere(), linea);
+                              Scope::everywhere(), at);
                 continue;
             }
             /* Con los RANGOS: son una segunda fuente para lo mismo.  Un
@@ -982,7 +1233,7 @@ void produce_loops(Production &p) {
                               (tc.code != nullptr && tc.code[0] != '\0')
                                   ? tc.code
                                   : "loop.trip_unknown",
-                              kProducerLoops, "", Scope::everywhere(), linea);
+                              kProducerLoops, "", Scope::everywhere(), at);
                 continue;
             }
             /* El hecho lo arma UN solo sitio (@c loop_trip_fact), el mismo que
@@ -996,7 +1247,7 @@ void produce_loops(Production &p) {
             /* El apoyo CONCRETO -- no solo el nombre del productor -- para que
              * la derivacion se pueda recorrer.  Eso solo lo sabe quien produce
              * el dominio, que es quien tiene el hecho de estructura a mano. */
-            f.seal.origin.site = linea;
+            f.seal.origin.site = at;
             support_with_structure(p, fn, f, f.proof.rule);
             p.assert_fact(std::move(f));
         }
@@ -1004,16 +1255,38 @@ void produce_loops(Production &p) {
 }
 
 void register_builtin_producers() {
-    register_producer(kProducerStructure, &produce_structure);
-    register_producer(kProducerRanges, &produce_ranges);
-    register_producer(kProducerBoundary, &produce_boundary);
-    register_producer(kProducerMemory, &produce_memory);
-    register_producer(kProducerLoops, &produce_loops);
-    /* El primero que sabe decir de que depende.  Los demas se registran sin
-     * huella -- "no se decirlo" --, que es lo que habia y no es peor; segun
-     * vayan sabiendolo, la cache se vuelve granular sin tocar el motor. */
+    /* CADA UNO DECLARA QUE MIRA.  Sin esto, el lector los aceptaba sin
+     * comprobar -- y peor: en el lector, un dominio con huella cero ni siquiera
+     * PUEDE caducar --, asi que la unica proteccion era que la puerta del
+     * modulo fuese gruesa.  Quince de dieciseis estaban asi.
+     *
+     * Declarar de mas no da un error, da trabajo rehecho sin motivo; declarar
+     * de menos SI da error, y del mudo.  En la duda, de mas. */
+    register_producer(kProducerStructure, &produce_structure,
+                      DomainInput::FunctionCode);
+    register_producer(kProducerRanges, &produce_ranges,
+                      DomainInput::FunctionCode);
+    /* Los resumenes de frontera cierran sobre el grafo de llamadas, que sale
+     * del propio codigo: con el codigo del modulo basta.
+     *
+     * Y por eso lleva ademas @c CallGraph: lo que dice de una funcion depende
+     * de QUIEN LA LLAMA, asi que no puede validarse por funcion.  Con clave por
+     * funcion, cambiar el llamante dejaba en pie una frontera que ya no era la
+     * suya -- hechos falsos, no trabajo de mas --. */
+    register_producer(kProducerBoundary, &produce_boundary,
+                      DomainInput::FunctionCode | DomainInput::CallGraph);
+    /* El points-to mira el codigo, y ademas la marca de direccion de los
+     * parametros -- de ahi sale `AbstractLoc::exclusive` --, que vive en el
+     * CONTRATO y no en las instrucciones. */
+    register_producer(kProducerMemory, &produce_memory,
+                      DomainInput::FunctionCode | DomainInput::ParamContracts);
+    register_producer(kProducerLoops, &produce_loops,
+                      DomainInput::FunctionCode);
+    /* El unico que ya sabia decirlo, y con precision que las entradas no
+     * alcanzan: distingue "hay .data" de "no hay".  Se le respeta la suya. */
     register_producer(kProducerLayout, &produce_layout, &layout_inputs);
-    register_producer(kProducerAsmFlow, &produce_asm_flow);
+    register_producer(kProducerAsmFlow, &produce_asm_flow,
+                      DomainInput::FunctionCode);
     /* La forma de un valor vive en otra unidad de traduccion y se da de alta
      * ella misma.  Llevaba SIN registrar: calculaba sus hechos, los sellaba
      * con procedencia y certeza, y no llegaban al almacen -- o sea que nadie
@@ -1070,6 +1343,11 @@ Subject value_subject(Production &p, const ir::IrFunction &fn,
     s.kind = Subject::Kind::Value;
     s.function = p.store.intern(fn.name);
     s.id = v;
+    /* El MOMENTO forma parte de a quien se senyala.  `main:v3` antes de
+     * optimizar y `main:v3` despues no son el mismo valor: el optimizador
+     * renumera, funde y borra, asi que sin esto dos afirmaciones sobre
+     * programas distintos caen sobre el mismo sujeto. */
+    s.stage = p.stage;
     return s;
 }
 
@@ -1103,29 +1381,92 @@ ModuleWalk ModuleWalk::of(const ir::IrModule &mod) {
     return w;
 }
 
-void register_producer(const char *domain, Producer p) {
-    register_producer(domain, p, nullptr);
-}
-
 void register_producer(const char *domain, Producer p, DomainFingerprint fp) {
     for (const RegisteredDomain &d : registry())
         if (std::strcmp(d.name, domain) == 0) return; // ya esta
-    registry().push_back({domain, p, fp});
+    registry().push_back({domain, p, fp, DomainInput::None});
+}
+
+void register_producer(const char *domain, Producer p, DomainInput inputs) {
+    for (const RegisteredDomain &d : registry())
+        if (std::strcmp(d.name, domain) == 0) return; // ya esta
+    registry().push_back({domain, p, nullptr, inputs});
+}
+
+std::vector<std::pair<uint64_t, uint64_t>>
+current_inputs_per_function(const ir::IrModule &mod, const char *domain) {
+    ensure_registry();
+    std::vector<std::pair<uint64_t, uint64_t>> out;
+    if (domain == nullptr) return out;
+    const RegisteredDomain *d = nullptr;
+    for (const RegisteredDomain &r : registry())
+        if (std::strcmp(r.name, domain) == 0) {
+            d = &r;
+            break;
+        }
+    /* Sin declaracion no hay clave por funcion.  Los que traen su propia huella
+     * de dominio (`fingerprint`) tampoco entran: la suya habla del modulo y
+     * partirla por funcion seria inventarle una precision que no tiene.
+     *
+     * Y el que avisa de que mira OTRAS funciones tampoco: su clave por funcion
+     * invalidaria de menos.  @see DomainInput::CallGraph */
+    if (d == nullptr || d->inputs == DomainInput::None ||
+        has_input(d->inputs, DomainInput::CallGraph))
+        return out;
+
+    const AllInputs all = compute_all_inputs(mod);
+    out.reserve(all.by_function.size());
+    for (const auto &f : all.by_function)
+        out.emplace_back(f.first, fold_declared_inputs_for_function(
+                                      d->inputs, all.module, f.second));
+    return out;
 }
 
 std::vector<DomainCost> current_inputs(const ir::IrModule &mod) {
     ensure_registry();
     std::vector<DomainCost> r;
     r.reserve(registry().size());
+    /* Las entradas del modulo Y las de cada funcion, UNA vez para todos.  Si
+     * cada dominio calculara las suyas serian tantos recorridos como dominios;
+     * asi el recorrido es uno y por dominio solo queda plegar. */
+    const AllInputs all = compute_all_inputs(mod);
+    const ModuleInputs &in = all.module;
     for (const RegisteredDomain &d : registry()) {
         /* Un dominio que no sabe decir de que depende NO sale en la lista, y
          * eso no es lo mismo que salir con huella cero: la lista dice "esto es
          * lo que hoy se puede comprobar", y meter en ella a quien no sabe
          * responder solo sirve para que parezca comprobado. */
-        if (d.fingerprint == nullptr) continue;
         DomainCost c;
         c.domain = d.name;
-        c.fingerprint = d.fingerprint(mod);
+        if (d.fingerprint != nullptr) {
+            /* Trae la suya hecha, y habla del MODULO.  No se reparte por
+             * funcion: partirla seria inventarle una precision que no tiene, y
+             * una clave por funcion falsa invalida menos de lo que debe -- que
+             * es el unico error de esta cache que da un resultado equivocado en
+             * vez de trabajo de mas. */
+            c.fingerprint = d.fingerprint(mod);
+        } else if (d.inputs != DomainInput::None) {
+            c.fingerprint = fold_declared_inputs(d.inputs, in);
+            /* Y la misma cuenta funcion a funcion, que es la que de verdad
+             * ahorra: la de arriba se pliega sobre TODAS, asi que tocar una
+             * linea la mueve y caduca el dominio entero.
+             *
+             * MENOS si el dominio avisa de que mira mas alla de la funcion.
+             * Ahi una clave por funcion invalidaria de MENOS -- lo que dice de
+             * `f` cambia cuando cambia `g`, y su clave no se movería --, que es
+             * el unico error de esta cache que sirve hechos falsos en vez de
+             * rehacer trabajo.  Sin tabla, se valida entero por la huella de
+             * dominio: mas grueso y correcto.  @see DomainInput::CallGraph */
+            if (!has_input(d.inputs, DomainInput::CallGraph)) {
+                c.by_function.reserve(all.by_function.size());
+                for (const auto &f : all.by_function)
+                    c.by_function.emplace_back(
+                        f.first, fold_declared_inputs_for_function(
+                                     d.inputs, in, f.second));
+            }
+        } else {
+            continue; // ni sabe decirlo ni declara: no se puede comprobar
+        }
         r.push_back(c);
     }
     return r;
@@ -1151,7 +1492,10 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
     std::vector<ProductionSummary> summaries;
     /* UNA base para todos los dominios: si tres piden la estructura, se calcula
      * una vez.  Es la Regla 1 aplicada a la propia produccion. */
-    FactBase base;
+    /* Con el MOMENTO del que se esta produciendo.  Sin el, un analisis hecho
+     * para los hechos de antes de optimizar se serviria tal cual para los de
+     * despues, que hablan de otro codigo. */
+    FactBase base(stage);
     std::unordered_map<std::string, FactId> structure_of;
 
     /* Reservar de golpe: un modulo grande produce cientos de miles de hechos y
@@ -1185,6 +1529,10 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
             if (w == domain || std::strcmp(w, domain) == 0) return true;
         return false;
     };
+    /* Las entradas del modulo, compartidas por todos los dominios que declaren
+     * mirar algo.  Perezosas: ver abajo. */
+    ModuleInputs inputs;
+    bool inputs_ready = false;
     for (const RegisteredDomain &d : registry()) {
         if (!is_wanted(d.name)) continue;
         /* Y no se repite: si ese dominio ya corrio sobre este almacen, su
@@ -1199,7 +1547,18 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
         /* De que depende, apuntado ANTES de producir: es lo que se guardara con
          * sus hechos para que la proxima compilacion pueda validarlos sin
          * volver a producirlos. */
-        if (d.fingerprint != nullptr) r.fingerprint = d.fingerprint(mod);
+        if (d.fingerprint != nullptr) {
+            r.fingerprint = d.fingerprint(mod);
+        } else if (d.inputs != DomainInput::None) {
+            /* Perezoso: las entradas del modulo se calculan la PRIMERA vez que
+             * un dominio declarado las necesita, no al entrar.  Un `produce`
+             * donde ninguno declare nada no paga el recorrido. */
+            if (!inputs_ready) {
+                inputs = compute_module_inputs(mod);
+                inputs_ready = true;
+            }
+            r.fingerprint = fold_declared_inputs(d.inputs, inputs);
+        }
         Production p{mod, walk, base, store, r, structure_of, stage};
         d.producer(p);
         r.micros = static_cast<long>(

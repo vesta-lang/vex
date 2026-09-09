@@ -101,7 +101,9 @@ void produce_use_def(Production &p) {
 } // namespace
 
 void register_use_def_producer() {
-    register_producer(kProducerUseDef, &produce_use_def);
+    /* Quien define y quien usa cada valor: es el codigo, literalmente. */
+    register_producer(kProducerUseDef, &produce_use_def,
+                      DomainInput::FunctionCode);
 }
 
 } // namespace asa

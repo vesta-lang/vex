@@ -562,8 +562,52 @@ ensure_facts_impl_(const ir::IrModule &mod, analysis::asa::FactStore &store,
      * El dominio que no sepa decirlo no sale de `current_inputs`, y entonces lo
      * suyo se acepta sin comprobar, que es lo de siempre.  Asi la cache se
      * vuelve granular de uno en uno, segun cada dominio aprenda a responder. */
-    recuperar_hechos_(path, store, fingerprint,
-                      analysis::asa::current_inputs(mod));
+    /* De que depende HOY cada dominio, y ademas funcion a funcion.  Se calcula
+     * UNA vez y sirve para las dos puntas -- validar lo que se lee y sellar lo
+     * que se escribe --: son la misma cuenta, y hacerla dos veces seria otro
+     * recorrido del modulo entero. */
+    std::vector<analysis::asa::DomainCost> keys =
+        analysis::asa::current_inputs(mod);
+
+    /* Al LEER, la via granular solo se le ofrece a los dominios que despues se
+     * van a producir.  Es la condicion que la hace correcta: una carga parcial
+     * deja adrede las funciones que cambiaron sin hechos, contando con que el
+     * productor las rehaga.  Si ese dominio no esta pedido, nadie las rehace --
+     * y al reescribir el fichero se sellaria como completo, con lo que la
+     * proxima compilacion daria por bueno un agujero.  Sin tabla por funcion la
+     * lectura vuelve a ser todo-o-nada, que es lo de siempre: correcto. */
+    std::vector<analysis::asa::DomainCost> read_keys = keys;
+    if (!wanted.empty())
+        for (analysis::asa::DomainCost &c : read_keys) {
+            bool asked = false;
+            for (const char *w : wanted)
+                if (w != nullptr && c.domain != nullptr &&
+                    std::strcmp(w, c.domain) == 0) {
+                    asked = true;
+                    break;
+                }
+            if (!asked) c.by_function.clear();
+        }
+    const analysis::asa::ReadResult read =
+        recuperar_hechos_(path, store, fingerprint, read_keys);
+
+    /* Y se puede MIRAR lo que hizo la cache.  Sin esto el mecanismo no se
+     * distingue de uno roto: los dos compilan igual, y este ya estuvo mal
+     * mucho tiempo sin que nada lo dijera.  Lo importante son las tres ultimas
+     * cifras -- son las que dicen si la granularidad por funcion ahorra algo o
+     * es contabilidad. */
+    static const bool log_cache = util::flag_on(util::FlagId::AsaFactsDebug);
+    if (log_cache)
+        std::fprintf(stderr,
+                     "[hechos:disco] %s momento=%s -> %s | %u hechos, "
+                     "%u dominios, %u caducos, %u saltados, %u corruptos | "
+                     "granular: %u dominios a medias, %u hechos tirados, "
+                     "%u funciones reutilizadas\n",
+                     path.c_str(), stage != nullptr ? stage : "",
+                     read.ok ? "leido" : analysis::asa::diag_code(read.reason),
+                     read.facts, read.domains, read.stale, read.skipped,
+                     read.corrupt, read.partial_domains, read.stale_facts,
+                     read.reused_functions);
 
     /* Y lo que falte.  `producir` se salta los dominios que la lectura ya
      * marco, asi que esto es exactamente el trabajo que la cache no cubrio. */
@@ -572,22 +616,40 @@ ensure_facts_impl_(const ir::IrModule &mod, analysis::asa::FactStore &store,
     // Todo vino de la cache: nada que guardar, y nada que contar tampoco.
     if (summaries.empty()) return summaries;
 
-    /* Se guarda lo que costo, para que el nivel de cache decida que merece ir a
-     * disco.  Un dominio que se produce en 3 us no compensa escribirlo. */
-    std::vector<analysis::asa::DomainCost> costs;
-    costs.reserve(summaries.size());
+    /* Lo que se va a escribir sale de `keys`, no de los resumenes, y la
+     * diferencia era un fallo MUDO: los resumenes solo traen los dominios que
+     * ACABAN de producirse, asi que uno servido entero desde la cache se
+     * reescribia con huella cero -- "no se puede comprobar" --.  A la segunda
+     * compilacion su registro se aceptaba pasara lo que pasara: la validacion
+     * granular se borraba sola en cuanto acertaba una vez, sin dar ningun
+     * error y pareciendo que la cache iba de maravilla. */
+    for (analysis::asa::DomainCost &c : keys)
+        for (const analysis::asa::ProductionSummary &r : summaries)
+            if (r.domain != nullptr && c.domain != nullptr &&
+                std::strcmp(r.domain, c.domain) == 0) {
+                /* Lo que costo, para que el nivel de cache decida que merece ir
+                 * a disco: un dominio que se produce en 3 us no compensa. */
+                c.micros = r.micros;
+                break;
+            }
+    /* Y los que no saben decir de que dependen tampoco salen de `keys`, asi que
+     * se anaden con su coste: se guardan igual, solo que sin poder validarse. */
     for (const analysis::asa::ProductionSummary &r : summaries) {
+        bool known = false;
+        for (const analysis::asa::DomainCost &c : keys)
+            if (c.domain != nullptr && r.domain != nullptr &&
+                std::strcmp(c.domain, r.domain) == 0) {
+                known = true;
+                break;
+            }
+        if (known) continue;
         analysis::asa::DomainCost c;
         c.domain = r.domain;
         c.micros = r.micros;
-        /* Y de que dependia al producirlo, que es lo que la proxima
-         * compilacion comparara.  Sin esto se guardaba con huella cero -- "no
-         * se puede comprobar" -- y el registro se aceptaba siempre, incluso
-         * cuando sus entradas habian cambiado. */
         c.fingerprint = r.fingerprint;
-        costs.push_back(c);
+        keys.push_back(c);
     }
-    guardar_hechos_(path, store, fingerprint, costs);
+    guardar_hechos_(path, store, fingerprint, keys);
     return summaries;
 }
 
@@ -1219,6 +1281,67 @@ ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
              const std::vector<const char *> &wanted, const std::string &path,
              uint64_t fingerprint, const char *stage) {
     return ensure_facts_impl_(mod, store, wanted, path, fingerprint, stage);
+}
+
+uint64_t asa_facts_key(uint64_t content_key, const CompileOptions &opts,
+                       const char *stage) {
+    /* La configuracion, con los MISMOS campos que usa el CAS: dos criterios
+     * distintos de "que configuracion es esta" acabarian con uno invalidando y
+     * el otro no. */
+    BuildConfig cfg;
+    cfg.asm_target_bits = opts.asm_target_bits;
+    cfg.native_poo = opts.native_poo;
+    cfg.exceptions_enabled = opts.exceptions_enabled;
+    cfg.instrument_mode = opts.instrument_mode;
+    cfg.opt_level = opts.opt_level;
+    cfg.emit_debug = opts.emit_debug;
+    cfg.aot_vec_width = opts.aot_vec_width;
+
+    const bool pre = (stage != nullptr &&
+                      std::strcmp(stage, analysis::asa::kStagePreOpt) == 0);
+    /* La CAPA que corresponde al momento.  Ver la nota de `asa_facts_key` en la
+     * cabecera: pre-opt habla del IR tal y como se bajo, post-opt depende del
+     * optimizador. */
+    const uint64_t cfg_fp =
+        pre ? cfg.ir_fingerprint() : cfg.full_fingerprint();
+
+    uint64_t h = 0xcbf29ce484222325ULL;
+    auto mix = [&h](uint64_t v) {
+        h ^= v;
+        h *= 0x100000001b3ULL;
+    };
+    mix(0x41534146414354ull); // dominio: "ASA facts key".
+    mix(content_key);
+    mix(cfg_fp);
+    /* Los mandos de entorno que CAMBIAN lo emitido.  La tabla ya los clasifica
+     * (`FlagScope::Emitted`), asi que esto no es una lista que mantener: es
+     * preguntarle a la que hay. */
+    mix(util::emitted_fingerprint());
+    // Y el momento, que es lo que hace que las dos claves no puedan coincidir.
+    for (const char *p = (stage != nullptr ? stage : ""); *p != '\0'; ++p)
+        mix(static_cast<uint64_t>(static_cast<unsigned char>(*p)));
+    return h;
+}
+
+std::string asa_facts_path_for_stage(const std::string &base_facts_path,
+                                     const char *stage) {
+    if (base_facts_path.empty()) return base_facts_path;
+    static const std::string kExt = ".vxfacts";
+    const std::string short_name =
+        (stage != nullptr &&
+         std::strcmp(stage, analysis::asa::kStagePreOpt) == 0)
+            ? "pre"
+            : (stage != nullptr &&
+               std::strcmp(stage, analysis::asa::kStageDuringOpt) == 0)
+                  ? "mid"
+                  : "post";
+    if (base_facts_path.size() > kExt.size() &&
+        base_facts_path.compare(base_facts_path.size() - kExt.size(),
+                                kExt.size(), kExt) == 0) {
+        return base_facts_path.substr(0, base_facts_path.size() - kExt.size()) +
+               "." + short_name + kExt;
+    }
+    return base_facts_path + "." + short_name;
 }
 
 ///  M.L20: calcula el nivel topologico de cada modulo.  Nivel 0 =
@@ -4360,12 +4483,19 @@ CompileResult compile_vx_project(
             const std::vector<const char *> asa_wanted =
                 opts.asa_all_domains ? std::vector<const char *>{}
                                      : opts.asa_domains;
+            /* Clave y fichero POR MOMENTO, como en el camino de fichero
+             * suelto: los dos tienen que construirlas igual o la misma
+             * pregunta acaba con dos respuestas segun como compiles. */
             const auto s = ensure_facts_impl_(
                 pre_snapshot, facts, asa_wanted,
                 root_facts_key != 0
-                    ? rutas_cache_(root_path, std::string()).hechos
+                    ? asa_facts_path_for_stage(
+                          rutas_cache_(root_path, std::string()).hechos,
+                          analysis::asa::kStagePreOpt)
                     : std::string(),
-                root_facts_key, analysis::asa::kStagePreOpt);
+                asa_facts_key(root_facts_key, opts,
+                              analysis::asa::kStagePreOpt),
+                analysis::asa::kStagePreOpt);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }
@@ -4435,6 +4565,21 @@ CompileResult compile_vx_project(
         traer_asignador_del_lenguaje(merged, opts, root_path);
     }
 
+    /* La exclusividad de los prestamos, ANTES de optimizar y con su propia base
+     * de ese momento.  Aqui corria DESPUES, compartiendo base con las cotas, y
+     * eran dos fallos en uno: el inline se lleva por delante los sitios de
+     * llamada que la demuestran -- asi que no encontraba nada, mientras que en
+     * el camino de fichero suelto si --, y una misma base servia a dos momentos,
+     * con lo que un analisis de antes de optimizar se reutilizaba despues.
+     *
+     * La misma comprobacion no puede dar dos respuestas segun se compile un
+     * fichero o un proyecto. */
+    if (opts.report_bounds) {
+        analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
+        vx_report_borrow_across_calls(merged, res.diagnostics, root_path,
+                                      pre_opt_base);
+    }
+
     {
         util::CronoTramo t_("fase-opt:ir_optimize",
                         util::flag_on(util::FlagId::Times));
@@ -4452,16 +4597,12 @@ CompileResult compile_vx_project(
      * salir al compilar, que es cuando se lee. */
     /* La base de hechos de ESTA compilacion, una sola: ver la nota del camino
      * de fichero suelto.  Los dos entran por el mismo sitio a proposito. */
-    analysis::asa::FactBase fact_base;
+    analysis::asa::FactBase fact_base(analysis::asa::kStagePostOpt);
     if (opts.report_bounds)
         vx_report_bounds(merged, res.diagnostics, root_path, fact_base);
-    /* La exclusividad de los prestamos, cruzando las llamadas.  Por la misma
-     * puerta que las cotas y con el mismo criterio: al CONSTRUIR es un error --
-     * dos prestamos exclusivos vivos de la misma region no es un programa
-     * valido --, y al analizar se ensena con la prueba en vez de abortar. */
-    if (opts.report_bounds)
-        vx_report_borrow_across_calls(merged, res.diagnostics, root_path,
-                                      fact_base);
+    /* La exclusividad de los prestamos NO se comprueba aqui: se hizo ANTES de
+     * optimizar, que es donde todavia existen las llamadas que la demuestran.
+     * Ver el comentario de alli. */
     /* Precondiciones del asm.  SIEMPRE, no bajo opcion: una instruccion cuya
      * exigencia no se cumple no da un resultado peor, hace caer el programa --
      * y callarselo ya costo descubrirlo ejecutando.
@@ -4512,9 +4653,13 @@ CompileResult compile_vx_project(
                 if (d != nullptr) wanted.push_back(d);
         const auto s = ensure_facts_impl_(
             merged, facts, wanted,
-            root_facts_key != 0 ? rutas_cache_(root_path, std::string()).hechos
-                                : std::string(),
-            root_facts_key, analysis::asa::kStagePostOpt);
+            root_facts_key != 0
+                ? asa_facts_path_for_stage(
+                      rutas_cache_(root_path, std::string()).hechos,
+                      analysis::asa::kStagePostOpt)
+                : std::string(),
+            asa_facts_key(root_facts_key, opts, analysis::asa::kStagePostOpt),
+            analysis::asa::kStagePostOpt);
         res.asa_summaries.insert(res.asa_summaries.end(), s.begin(), s.end());
         /* Y sale con el resultado, para que quien compilo pueda consultarlo sin
          * volver a producirlo.  Se MUEVE, y el informe de abajo lee ya de ahi.

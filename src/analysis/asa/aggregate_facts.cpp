@@ -758,7 +758,8 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
         a.pasado_por_abi = o.pasado_por_abi;
         a.devuelto_entero = o.devuelto_entero;
         a.transferido_como_bloque = o.transferido_como_bloque;
-        a.seal.origin = {Source::Static, kProductor, fn.name.c_str(), p};
+        a.seal.origin = {Source::Static, kProductor, fn.name.c_str(),
+                         Anchor{Anchor::Kind::Value, p}};
         a.seal.support.add("analysis.points_to");
         const FormaDeValor f = a.forma();
         a.seal.certainty =
@@ -821,7 +822,7 @@ AggregateFactsMap observar_con_cache(const ir::IrModule &mod,
             a.transferido_como_bloque = o.transferido_como_bloque;
 
             a.seal.origin = {Source::Static, kProductor, fn.name.c_str(),
-                             in.dst};
+                             Anchor{Anchor::Kind::Value, in.dst}};
             a.seal.support.add("analysis.points_to");
             if (!a.frontera.empty()) a.seal.support.add("analysis.fn_targets");
 

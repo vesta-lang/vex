@@ -75,7 +75,7 @@ static void poblar(FactStore &a) {
     rango.seal.certainty = Certainty::Inferred;
     rango.seal.origin.source = Source::Profile;
     rango.seal.origin.producer = kProducerRanges;
-    rango.seal.origin.site = 12;
+    rango.seal.origin.site = Anchor{Anchor::Kind::Value, 12};
     rango.seal.support.add(kProducerStructure);
     rango.proof.rule = "flujo-de-datos";
     rango.proof.from.push_back(id_base);

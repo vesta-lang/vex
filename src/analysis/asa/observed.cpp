@@ -91,17 +91,23 @@ bool bulk_memory_fact(FactStore &store, const ir::IrFunction &fn,
     f.about.function = store.intern(fn.name);
     f.about.id = b.st.header;
 
-    /* Y la LINEA de fuente del bucle, apuntada AQUI, que es donde el numero de
-     * bloque todavia significa algo.
+    /* Y DONDE, como LINEA ya resuelta y no como ancla al intermedio.
      *
-     * Un identificador de bloque solo vale dentro de su momento: el optimizador
-     * los renumera, asi que quien lea este hecho mas tarde y lo use para mirar
-     * el codigo de despues no encuentra un bloque parecido, encuentra OTRO.
-     * Con la linea dentro, el consumidor no necesita el bloque -- y una linea
-     * de fuente no la renumera nadie. */
+     * Es la excepcion, y tiene motivo: este hecho es de MITAD de la
+     * optimizacion y quien lo consume -- el linter -- tiene delante el codigo
+     * de DESPUES, ya renumerado.  Un ancla solo se resuelve contra el
+     * intermedio de su propio momento, asi que aqui no habria contra que
+     * resolverla: mirar ese bloque en el codigo de despues no encuentra un
+     * bloque parecido, encuentra OTRO, y el aviso salia senalando lineas donde
+     * no hay ningun bucle.
+     *
+     * O sea que @c Anchor::Kind::Line no es solo "no hay entidad a la que
+     * anclar": es tambien "este hecho esta hecho para SOBREVIVIR a su
+     * momento".  Se paga que la posicion caduque al mover texto, y se paga a
+     * sabiendas, porque la alternativa es no poder senalar nada. */
     for (const ir::IrInstr &in : fn.blocks[b.st.header].instrs)
         if (in.source_line > 0) {
-            f.seal.origin.site = in.source_line;
+            f.seal.origin.site = Anchor{Anchor::Kind::Line, in.source_line};
             break;
         }
 
@@ -149,13 +155,15 @@ bool straight_line_bulk_fact(FactStore &store, const ir::IrFunction &fn,
     f.about.function = store.intern(fn.name);
     f.about.id = b.block;
 
-    /* La LINEA, apuntada aqui por lo mismo que en el de bucles: un numero de
-     * bloque solo significa algo en su momento, y el optimizador los renumera.
-     * Se coge la de la PRIMERA escritura del grupo, que es donde el programador
-     * escribio el primero de los campos. */
+    /* DONDE, por lo mismo que en el de bucles: LINEA ya resuelta, porque este
+     * hecho tambien esta hecho para sobrevivir a su momento y quien lo lea
+     * tendra otro codigo delante.  Se coge la de la PRIMERA escritura del
+     * grupo, que es donde el programador escribio el primero de los campos. */
     const ir::IrBlock &bb = fn.blocks[b.block];
     if (b.instrs.front() < bb.instrs.size())
-        f.seal.origin.site = bb.instrs[b.instrs.front()].source_line;
+        f.seal.origin.site =
+            Anchor{Anchor::Kind::Line,
+                   bb.instrs[b.instrs.front()].source_line};
 
     f.seal.certainty = Certainty::Proven;
     f.seal.origin.source = source;

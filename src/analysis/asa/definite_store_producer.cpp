@@ -122,7 +122,10 @@ void produce_definite_store(Production &p) {
 } // namespace
 
 void register_definite_store_producer() {
-    register_producer(kProducerDefiniteStore, &produce_definite_store);
+    /* Si una escritura ocurre en TODOS los caminos: puro flujo de control y
+     * escrituras, o sea codigo. */
+    register_producer(kProducerDefiniteStore, &produce_definite_store,
+                      DomainInput::FunctionCode);
 }
 
 } // namespace asa

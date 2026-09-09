@@ -148,6 +148,40 @@ class FactStore {
     /// un productor suelto no tiene por que saber de esto.
     void mark_domain(const char *domain, const char *stage = "");
 
+    /**
+     * @brief Lo mismo, un ESCALON mas fino: (dominio, momento, FUNCIoN).
+     *
+     * Es lo que hace util la validacion por funcion del fichero en disco.  Con
+     * solo @ref mark_domain la cache era todo-o-nada: si una funcion cambiaba,
+     * o se tiraba el dominio entero -- y se rehacian tambien las que no habian
+     * cambiado --, o se cargaba lo bueno y NO se marcaba el dominio, con lo que
+     * el productor volvia a correr sobre todas y el almacen acababa afirmando
+     * lo mismo dos veces.
+     *
+     * Con esto la lectura puede traer lo de las funciones que siguen valiendo,
+     * marcarlas una a una, y dejar el dominio SIN marcar para que el productor
+     * corra: @ref Production::is_interesting consulta esto y le salta las que
+     * ya vinieron de disco.  El productor no se entera; sigue recorriendo el
+     * modulo como siempre.
+     *
+     * La clave se resume en 64 bits para encontrar el cubo, pero la coincidencia
+     * se CONFIRMA comparando las tres cadenas: un choque de hash aqui no seria
+     * trabajo de mas sino un hecho que nadie produce, y eso si cambia el
+     * resultado.
+     *
+     * @param domain   Quien lo produjo.
+     * @param stage    En que momento del programa.  @see kStage*.
+     * @param function A que funcion pertenece lo cargado.
+     */
+    void mark_function(const char *domain, const char *stage,
+                       const char *function);
+    /// Si esa funcion, de ese dominio y ese momento, ya esta en el almacen.
+    bool has_function(const char *domain, const char *stage,
+                      const char *function) const;
+    /// Cuantas hay marcadas.  Para las pruebas y para los volcados: sin esto,
+    /// "no se reutilizo nada" y "se reutilizo todo" se leen igual.
+    size_t marked_functions() const { return produced_fn_count_; }
+
     /// Hechos que hablan de @p function (cualquier clase de sujeto dentro).
     const std::vector<FactId> &of_function(const std::string &function) const;
     /// Hechos que produjo @p domain.
@@ -301,6 +335,16 @@ class FactStore {
         const char *stage = "";
     };
     std::vector<ProducedDomain> produced_;
+    /// Idem POR FUNCIoN.  Aqui si hace falta un mapa: se pregunta una vez por
+    /// (dominio x funcion), que en un modulo grande son decenas de miles de
+    /// consultas, y un vector plano las convertiria en cuadratico.
+    struct ProducedFunction {
+        const char *domain = nullptr;
+        const char *stage = "";
+        const char *function = "";
+    };
+    std::unordered_map<uint64_t, std::vector<ProducedFunction>> produced_fn_;
+    size_t produced_fn_count_ = 0;
     std::deque<std::string> names_; ///< arena: no invalida punteros al crecer.
     std::unordered_map<std::string, const char *> interned_;
     std::unordered_map<std::string, std::vector<FactId>> by_function_;

@@ -123,7 +123,10 @@ void produce_bulk_memory(Production &p) {
 } // namespace
 
 void register_bulk_memory_producer() {
-    register_producer(kProducerBulkMemory, &produce_bulk_memory);
+    /* Reconocer un bucle como relleno o copia es mirar su forma y sus
+     * escrituras, y estas se atribuyen con el points-to: codigo y contratos. */
+    register_producer(kProducerBulkMemory, &produce_bulk_memory,
+                      DomainInput::FunctionCode | DomainInput::ParamContracts);
 }
 
 } // namespace asa

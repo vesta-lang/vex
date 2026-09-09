@@ -1391,13 +1391,23 @@ CompileResult compile_vx_source(const std::string &source,
                 if (w != nullptr && std::strcmp(w, s) == 0) return true;
             return false;
         };
-        const uint64_t fingerprint =
+        /* El CONTENIDO del modulo.  La clave completa la arma
+         * `asa_facts_key`, que le anade la configuracion -- con la capa que
+         * corresponda al momento --, los mandos que cambian lo emitido y el
+         * propio momento.  Aqui iba solo esto, sin nada mas: dos compilaciones
+         * con distinto `-O` compartian clave y se servian los hechos post-opt
+         * la una a la otra. */
+        const uint64_t content_key =
             wants_facts ? hash_de_tokens(source, /*con_lineas=*/false) : 0;
         if (wants_facts && wants_stage(analysis::asa::kStagePreOpt)) {
             const auto s =
                 ensure_facts(irmod_for_section, res.facts, asa_wanted,
-                             vxfacts_path_for(filename, std::string()),
-                             fingerprint, analysis::asa::kStagePreOpt);
+                             asa_facts_path_for_stage(
+                                 vxfacts_path_for(filename, std::string()),
+                                 analysis::asa::kStagePreOpt),
+                             asa_facts_key(content_key, opts,
+                                           analysis::asa::kStagePreOpt),
+                             analysis::asa::kStagePreOpt);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }
@@ -1418,7 +1428,7 @@ CompileResult compile_vx_source(const std::string &source,
          * son dos codigos distintos.  Mezclarlos daria respuestas de uno sobre
          * el otro. */
         {
-            analysis::asa::FactBase pre_opt_base;
+            analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
             vx_report_borrow_across_calls(irmod_for_section, res.diagnostics,
                                           filename, pre_opt_base);
         }
@@ -1443,8 +1453,12 @@ CompileResult compile_vx_source(const std::string &source,
         if (wants_facts && wants_stage(analysis::asa::kStagePostOpt)) {
             const auto s =
                 ensure_facts(irmod_for_section, res.facts, asa_wanted,
-                             vxfacts_path_for(filename, std::string()),
-                             fingerprint, analysis::asa::kStagePostOpt);
+                             asa_facts_path_for_stage(
+                                 vxfacts_path_for(filename, std::string()),
+                                 analysis::asa::kStagePostOpt),
+                             asa_facts_key(content_key, opts,
+                                           analysis::asa::kStagePostOpt),
+                             analysis::asa::kStagePostOpt);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }
@@ -1473,7 +1487,7 @@ CompileResult compile_vx_source(const std::string &source,
          * consumidor pida -- el resumen de efectos, los rangos, la memoria --
          * queda aqui para el siguiente que lo necesite en el mismo momento, en
          * vez de que cada uno se lo calcule entero. */
-        analysis::asa::FactBase fact_base;
+        analysis::asa::FactBase fact_base(analysis::asa::kStagePostOpt);
         if (opts.report_bounds)
             vx_report_bounds(irmod_for_section, res.diagnostics, filename,
                              fact_base);

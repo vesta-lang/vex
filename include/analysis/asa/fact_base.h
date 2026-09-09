@@ -37,7 +37,121 @@
  * el consumidor se monta la suya como ultimo recurso: correcto, solo sin
  * reparto.
  *
- * MUTAR EL IR CADUCA LOS HECHOS: quien lo toque avisa con @c invalidate.
+ * MUTAR EL IR CADUCA LOS HECHOS.  Ya no hace falta acordarse: la version de la
+ * funcion entra en la consulta y un resultado de otra version no se entrega.
+ * @c invalidate sigue existiendo para tirar algo a proposito.
+ *
+ * ===========================================================================
+ * LOS TRES NIVELES DE CACHE, Y QUE GUARDA CADA UNO
+ * ===========================================================================
+ *
+ * Esto esta dibujado porque el fallo que se repite NO es cachear mal: es
+ * cachear en el nivel equivocado, o construir un mecanismo y no adoptarlo.  Han
+ * aparecido SEIS mecanismos correctos y sin usar mientras se investigaba esto.
+ * Antes de anadir uno nuevo, mirar aqui cual es su nivel.
+ *
+ *   fuente .vx                                       QUE SE GUARDA
+ *      |                                             -------------
+ *      v
+ *   [3] CAS / cache de proyecto ................... el IR y los artefactos
+ *      |    clave: BuildConfig POR CAPAS               (.vxir, .vxi, .velb)
+ *      |      ir_fingerprint()   -> lo pre-optimize
+ *      |      full_fingerprint() -> + opt/codegen
+ *      |    + hash del fuente + deps + mandos `Emitted`
+ *      v
+ *   IrModule  --------------------------------------------------------+
+ *      |                                                              |
+ *      v                                                              |
+ *   [1] FactBase / AnalysisManager (ESTA CLASE) ... los ANALISIS       |
+ *      |    clave: (analisis, funcion|modulo, MOMENTO) + VERSION       |
+ *      |    vida: la de la base.  NO va a disco.                       |
+ *      |                                                              |
+ *      |  IrFacts, PointsTo, RangeFacts, LoopFacts, DemandedBits,      |
+ *      |  EffectAnalysis, Escape, ModuleWalk, ParamAliasing...         |
+ *      v                                                              |
+ *   productores  ->  FactStore  ->  [2] fichero .vxfacts ..... los HECHOS
+ *                                        clave: POR CAPAS, ver abajo
+ *                                        vida: entre compilaciones
+ *
+ * LAS TRES CAPAS DE CLAVE DE [2].  De gruesa a fina; cada una decide un
+ * descarte mas pequeno, y por eso importa que existan las tres:
+ *
+ *   modulo    -> `asa_facts_key`: fuente + BuildConfig (la CAPA que toque:
+ *                `ir_fingerprint` pre-opt, `full_fingerprint` post-opt) + el
+ *                momento.  Si no cuadra se tira el fichero ENTERO -- habla de
+ *                otro programa o de otra configuracion.
+ *   dominio   -> `DomainCost::fingerprint`, el plegado de las ENTRADAS que ese
+ *                dominio declara mirar (`DomainInput`).  Si no cuadra se tira
+ *                SU registro y los demas siguen: tocar codigo no invalida a
+ *                quien solo mira los datos estaticos.
+ *   funcion   -> `DomainCost::by_function`, la misma cuenta pero tomando de la
+ *                funcion lo suyo y del modulo lo del modulo.  Si no cuadra se
+ *                tiran los hechos de ESA funcion y entran los de las demas.
+ *
+ * LA CARGA PARCIAL, Y POR QUE NECESITA DOS MARCAS.  Cuando solo unas funciones
+ * caducan, el lector trae el resto y el productor tiene que rehacer lo que
+ * falta.  Eso obliga a distinguir dos cosas que antes eran una:
+ *
+ *   `FactStore::mark_domain(dom, momento)`     -> "este dominio esta COMPLETO"
+ *   `FactStore::mark_function(dom, mom, fn)`   -> "de este dominio, esta funcion
+ *                                                  ya vino de disco"
+ *
+ * En carga parcial se marcan las FUNCIONES y NO el dominio.  Asi `produce`
+ * corre -- porque el dominio no esta completo -- y `Production::is_interesting`
+ * le salta una a una las que ya estan.  Las dos marcas mal puestas fallan en
+ * silencio y de formas opuestas: marcar el dominio deja un AGUJERO que nadie
+ * produce; no marcar las funciones DUPLICA lo que se acaba de cargar.
+ *
+
+ * QUE SE REUTILIZA HOY, Y QUE NO
+ *
+ *   [1] SI, dentro de una compilacion.  Pregunta la misma cosa dos veces y se
+ *       computa una.  Lo garantiza `tests/analysis/test_fact_base_reuse.cpp`,
+ *       que ademas comprueba lo contrario: que al subir la version SI se
+ *       recalcula, y que tocar una funcion no invalida a su vecina.
+ *
+ *   [2] SI, entre compilaciones, pero SOLO lo publicado.
+ *
+ *   [1] entre compilaciones: NO.  Y ahi esta el trabajo tirado: en una
+ *       recompilacion sin cambios se rehace TODO el razonamiento -- points-to,
+ *       rangos, efectos -- y solo se ahorra el publicar.  Se cachean las
+ *       CONCLUSIONES y no el RAZONAMIENTO.  Ver el plan del ASA incremental.
+ *
+ * LAS TRAMPAS QUE YA MORDIERON.  Todas daban silencio, no error:
+ *
+ *   - **El MOMENTO tiene que estar en la clave.**  Sin el, lo analizado antes
+ *     de optimizar se sirve despues, sobre un codigo que ya no existe.  Ocho de
+ *     diez accesores no lo llevaban.
+ *   - **La VERSION tambien.**  Estos analisis guardan punteros a instrucciones:
+ *     servir uno viejo no es imprecision, es leer memoria liberada.  Esta clase
+ *     hacia ONCE llamadas a la puerta sin versionar y cero a la versionada.
+ *   - **`cached()` no mira la version**; contesta "hay algo guardado", que no es
+ *     "se va a reutilizar".  Para contar reuso o refrescar sellos, @c cached_v.
+ *   - **La capa de `BuildConfig` importa**: `ir_fingerprint()` excluye el
+ *     `opt_level` A PROPoSITO porque describe el IR pre-optimize.  Usarla para
+ *     keyar hechos POST-opt sirve los de otro nivel de optimizacion.
+ *   - **Un mecanismo sin adoptar parece uno que funciona.**  La validacion por
+ *     dominio del lector de [2] existe y solo UN dominio de dieciseis la usa;
+ *     los demas entran con huella nula, que ademas les impide caducar.
+ *   - **Sellar y comprobar tienen que salir de la MISMA cuenta.**  Lo que se
+ *     escribia en [2] salia de los resumenes de produccion, que solo traen lo
+ *     recien producido; un dominio servido desde la cache se reescribia con
+ *     huella CERO, o sea que su validacion se borraba sola en cuanto acertaba
+ *     una vez.  El sintoma era el contrario del problema: acertaba SIEMPRE.
+ *   - **La carga parcial solo vale si alguien va a producir lo que falta.**  Se
+ *     le ofrece unicamente a los dominios pedidos (`wanted`); uno cargado a
+ *     medias que nadie produce se reescribiria sellado como completo.
+ *
+ * COMO SE ANADE UN ANALISIS NUEVO A [1]
+ *
+ *   1. Un accesor aqui que tome `(unidad, stage = nullptr)`.
+ *   2. La clave con @c key_of / @c module_key y @c stage_or_default.
+ *   3. La version: @c IrFunction::version si es por funcion,
+ *      @c module_version si es del modulo.
+ *   4. Pedir por @c get_or_compute_v -- NUNCA la variante sin version -- y
+ *      contar lo fresco con @c cached_v.
+ *   5. Lo que ese analisis necesite de otros, pedirlo POR LA BASE: asi el
+ *      gestor anota la dependencia solo y una invalidacion arrastra.
  */
 #ifndef ANALYSIS_ASA_FACT_BASE_H
 #define ANALYSIS_ASA_FACT_BASE_H
@@ -116,6 +230,11 @@ extern const char *const kProducerBulkMemory;
 /// se convierte en conocimiento compartido: el mismo hecho lo lee tambien el
 /// linter, y cualquiera que venga despues, sin volver a analizar nada.
 extern const char *const kProducerBackend;
+/// Que FORMA tiene un valor: si es un agregado, cual, y con que campos.  Se
+/// exporta -- no se queda dentro de su unidad -- porque su alcance importa
+/// fuera: su recorrido SIGUE LAS LLAMADAS, asi que es uno de los dos dominios
+/// que no admiten clave por funcion.  @see DomainInput::CallGraph
+extern const char *const kProducerValueShape;
 
 /// La COBERTURA de una vista `@overlay`: que bytes ocupa cada campo, en el
 /// marco de simbolos del que cuelga su offset.  Es conocimiento de TIPO -- lo
@@ -159,6 +278,55 @@ extern const char *const kModuleUnit;
 void register_asa_canonical_names();
 
 /**
+ * @brief Las POSICIONES de una funcion, indexadas para resolver anclas.
+ *
+ * La UNICA puerta que convierte un ancla en una linea, y por eso vive aqui y no
+ * en cada consumidor: si cada uno lo resolviera a su manera, dos herramientas
+ * senalarian sitios distintos para el mismo hecho -- que es exactamente la
+ * bifurcacion que el ASA existe para quitar.
+ *
+ * Se resuelve AL CONSULTAR, contra el intermedio que el consumidor tiene
+ * delante, no al producir.  Esa es la diferencia que hace que una posicion no
+ * pueda quedarse rancia: no se guarda una linea, se guarda A QUE ENTIDAD
+ * pertenece, y la linea sale del codigo que se esta mirando ahora.  De ahi que
+ * mover texto -- reindentar, un comentario, una linea en blanco -- no invalide
+ * NADA: la afirmacion depende del codigo, la posicion se deriva aparte.
+ *
+ * @par Por que es una CLASE y no una funcion suelta
+ * Porque resolver un ancla suelta obliga a recorrer la funcion, y un consumidor
+ * resuelve TODOS los hechos de esa funcion: eso seria O(hechos x
+ * instrucciones), cuadratico en cuanto hay un hecho por valor -- que es el caso
+ * normal --.  Construyendo el indice una vez sale O(instrucciones + hechos).
+ * No hay version suelta A PROPoSITO: asi la forma cuadratica no se puede ni
+ * escribir por descuido.
+ *
+ * Vive aqui y no en `fact.h` porque necesita el intermedio, y `fact.h` es la
+ * FORMA del conocimiento: atarlo al IR obligaria a arrastrarlo a cualquiera que
+ * solo quiera leer hechos.
+ */
+class AnchorLines {
+  public:
+    /// Recorre @p fn UNA vez.  El indice vale mientras @p fn no se toque.
+    explicit AnchorLines(const ir::IrFunction &fn);
+
+    /**
+     * @brief La linea a la que apunta @p a.  O(1).
+     * @return La linea, o 0 si no se puede decir -- que NO es la linea 1: cero
+     *         significa "no consta", y quien pregunta decide si cae al
+     *         principio de la funcion o se calla.  Confundirlos ya mordio en el
+     *         linter, que acababa senalando lineas de otro fichero.
+     */
+    uint32_t of(const Anchor &a) const;
+
+  private:
+    /// Tres vectores planos indexados por id, no tablas asociativas: los ids
+    /// son densos y consecutivos, asi que un mapa seria indireccion para nada.
+    std::vector<uint32_t> by_value_; ///< value-id -> linea de su definicion.
+    std::vector<uint32_t> by_block_; ///< bloque -> su primera linea con dato.
+    std::vector<uint32_t> by_instr_; ///< posicion lineal -> su linea.
+};
+
+/**
  * @brief Una entrada de la base, tal y como se vuelca.
  *
  * Es DATO, no frase: quien quiera ensenarlo lo formatea.  Lleva el sello de ASA
@@ -194,6 +362,19 @@ class FactBase {
      * conocer a los productores de nadie.
      */
     FactBase();
+    /**
+     * @brief Base con un momento POR DEFECTO.
+     *
+     * Es lo que evita repetir el momento en cada consulta cuando la base
+     * describe un solo instante, que es el caso comun.  No lo cierra: cada
+     * accesor admite el suyo, porque **la misma pregunta se puede hacer en dos
+     * momentos distintos** y las dos respuestas son ciertas -- de codigos
+     * distintos --.  Lo que no se puede es confundirlas, y por eso el momento
+     * entra en la clave de la cache siempre, se pase o se herede.
+     *
+     * @param stage @see kStagePreOpt, kStageDuringOpt, kStagePostOpt.
+     */
+    explicit FactBase(const char *stage);
     ~FactBase();
     FactBase(const FactBase &) = delete;
     FactBase &operator=(const FactBase &) = delete;
@@ -203,14 +384,16 @@ class FactBase {
      * @param fn Funcion IR a consultar.
      * @return Los hechos, cacheados mientras viva la base.
      */
-    const IrFacts &structure(const ir::IrFunction &fn);
+    const IrFacts &structure(const ir::IrFunction &fn,
+                             const char *stage = nullptr);
 
     /**
      * @brief Entre que dos numeros esta cada valor de @p fn.
      * @param fn Funcion IR a consultar.
      * @return Los rangos por valor SSA, cacheados mientras viva la base.
      */
-    const RangeFacts &ranges(const ir::IrFunction &fn);
+    const RangeFacts &ranges(const ir::IrFunction &fn,
+                             const char *stage = nullptr);
 
     /**
      * @brief Cuantos bits de cada valor de @p fn llega a mirar alguien.
@@ -225,21 +408,24 @@ class FactBase {
      * @param fn Funcion IR a consultar.
      * @return Los bits demandados por valor, cacheados mientras viva la base.
      */
-    const DemandedBits &demanded(const ir::IrFunction &fn);
+    const DemandedBits &demanded(const ir::IrFunction &fn,
+                                 const char *stage = nullptr);
 
     /**
      * @brief A que memoria puede referirse cada puntero de @p fn.
      * @param fn Funcion IR a consultar.
      * @return La tabla points-to, cacheada mientras viva la base.
      */
-    const PointsTo &memory(const ir::IrFunction &fn);
+    const PointsTo &memory(const ir::IrFunction &fn,
+                           const char *stage = nullptr);
 
     /**
      * @brief Forma del CFG de @p fn: bucles, cabeceras y profundidad.
      * @param fn Funcion IR a consultar.
      * @return Los hechos de bucle, cacheados mientras viva la base.
      */
-    const LoopFacts &loops(const ir::IrFunction &fn);
+    const LoopFacts &loops(const ir::IrFunction &fn,
+                           const char *stage = nullptr);
 
     /**
      * @brief Hasta donde llega la variable de cada bucle CONTADO de @p fn.
@@ -252,7 +438,8 @@ class FactBase {
      * @param fn Funcion IR a consultar.
      * @return Las cotas por valor SSA, cacheadas mientras viva la base.
      */
-    const LoopIvBounds &iv_bounds(const ir::IrFunction &fn);
+    const LoopIvBounds &iv_bounds(const ir::IrFunction &fn,
+                                  const char *stage = nullptr);
 
     /**
      * @brief Lo que cruza la frontera de cada funcion del modulo.
@@ -264,7 +451,8 @@ class FactBase {
      * @param mod Modulo completo.
      * @return Los resumenes de entrada y salida por funcion.
      */
-    const RangeSummaries &boundary(const ir::IrModule &mod);
+    const RangeSummaries &boundary(const ir::IrModule &mod,
+                                   const char *stage = nullptr);
 
     /**
      * @brief Si dos parametros puntero de una funcion reciben la misma region.
@@ -300,7 +488,8 @@ class FactBase {
      * @param mod Modulo completo.
      * @return El indice de llamadas, cacheado una vez por base.
      */
-    const ModuleWalk &walk(const ir::IrModule &mod);
+    const ModuleWalk &walk(const ir::IrModule &mod,
+                           const char *stage = nullptr);
 
     /**
      * @brief Que EFECTOS tiene cada funcion del modulo: que memoria toca, si
@@ -403,6 +592,31 @@ class FactBase {
     /// Preguntas atendidas.  Con @c computations mide el reparto de verdad, que
     /// es lo unico que distingue una base compartida de un computo con otro
     /// nombre.
+    /**
+     * @brief La VERSION del modulo: cuanto ha cambiado, como un solo numero.
+     *
+     * Lo que es @c IrFunction::version para una funcion, pero para lo que se
+     * cachea del modulo ENTERO -- el recorrido de llamadas, los resumenes de
+     * frontera, los efectos, que le llega a cada parametro --.  Pliega las
+     * versiones de todas sus funciones: si cualquiera cambia, el resultado
+     * puede cambiar, que es exactamente cuando esos analisis dejan de valer.
+     *
+     * @par Como se usa
+     * No hace falta llamarla para consultar la base -- los accesores de modulo
+     * ya lo hacen --.  Se expone porque es una pregunta legitima por si misma
+     * ("ha cambiado algo de este modulo desde que mire") y porque sin ella no se
+     * puede COMPROBAR que la reutilizacion funcione, que es la mitad del valor.
+     *
+     * @par Y no es una suma, a proposito
+     * Dos funciones que se intercambiaran versiones -- una sube, otra baja --
+     * darian la misma suma, y un modulo se serviria con los resumenes del otro.
+     * Se pliega mezclando, asi que la posicion cuenta.
+     *
+     * Cuesta O(funciones) y se pide una vez por consulta, no por funcion: frente
+     * a recalcular un punto fijo sobre el grafo de llamadas, no se nota.
+     */
+    static uint64_t module_version(const ir::IrModule &mod) noexcept;
+
     size_t queries() const { return queries_; }
     /// Analisis que hubo que ejecutar de verdad (los demas salieron de la
     /// cache).
@@ -415,7 +629,23 @@ class FactBase {
     /// La clave de @p fn: el nombre INTERNADO, no una copia.  Se llama al
     /// principio de cada accesor, asi que devolverlo por valor era una reserva
     /// por consulta.
-    static const std::string *key_of(const ir::IrFunction &fn);
+    /// @brief La clave de @p fn EN @p stage.
+    ///
+    /// El momento va SIEMPRE en la clave.  Sin el, el analisis que se hizo
+    /// antes de optimizar se sirve despues, y entonces se contesta sobre un
+    /// codigo que ya no existe -- valores que el optimizador borro, bloques que
+    /// fusiono -- sin dar ningun error: solo respuestas equivocadas.  Es el
+    /// mismo motivo que el de @ref effects, que lo llevaba desde el principio,
+    /// aplicado al resto, que se quedaron fuera cuando aquello se hizo.
+    static const std::string *key_of(const ir::IrFunction &fn,
+                                     const char *stage);
+    /// @brief La clave del MoDULO en @p stage, para lo que no es por funcion.
+    static const std::string *module_key(const char *stage);
+    /// @brief El momento efectivo: el que se pide, o el de la base.
+    const char *stage_or_default(const char *stage) const noexcept {
+        return (stage != nullptr && stage[0] != '\0') ? stage : default_stage_;
+    }
+
 
     /// Anota el sello de un hecho recien producido.
     void mark(const char *producer, const std::string &key, Certainty c,
@@ -428,6 +658,10 @@ class FactBase {
         seals_;
 
     AnalysisManager manager_;
+    /// El momento que se usa cuando la consulta no trae el suyo.  Por defecto
+    /// @c kStagePreOpt: es lo que el compilador tiene delante mientras no haya
+    /// pasado el optimizador, asi que una base sin declarar habla de eso.
+    const char *default_stage_ = kStagePreOpt;
     size_t queries_ = 0;
     size_t computations_ = 0;
 };

@@ -196,8 +196,19 @@ void produce_fingerprint(Production &p) {
 } // namespace
 
 void register_fingerprint_producer() {
-    analysis::asa::register_producer(kProducerFingerprint,
-                                     &produce_fingerprint);
+    /* Lo que mira: el codigo de las funciones... y el de TODAS las que alcanza,
+     * porque `compose_fingerprints` cierra los efectos sobre el grafo de
+     * llamadas -- de ahi que sepa hablar de "frontera opaca" --.  De ahi las
+     * dos marcas: mira codigo, y mira mas alla de la funcion, asi que no puede
+     * validarse por funcion.
+     *
+     * Iba sin declarar nada, igual que `asa.asm`: huella cero, que en el lector
+     * significa "acepta sin mirar" e IMPIDE caducar.  No lo cazo ningun test --
+     * este productor se registra tarde, solo desde el linter y el editor --,
+     * sino que dejo de compilar al quitar la via de registrar sin declarar. */
+    analysis::asa::register_producer(kProducerFingerprint, &produce_fingerprint,
+                                     analysis::asa::DomainInput::FunctionCode |
+                                         analysis::asa::DomainInput::CallGraph);
 }
 
 } // namespace analyze

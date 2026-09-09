@@ -475,10 +475,27 @@ bool ir_pass_unroll(IrFunction &fn, int factor,
                 h.seal.origin.source = analysis::asa::Source::Static;
                 h.seal.origin.producer = analysis::asa::kProducerLoops;
                 h.seal.origin.function = about.function;
+                /* La LINEA ya resuelta, no un ancla al intermedio.
+                 *
+                 * Este hecho es de MITAD de la optimizacion y quien lo lea
+                 * tendra delante el codigo de despues.  Ninguna referencia al
+                 * intermedio guardada FUERA de el sobrevive: los pases solo
+                 * reescriben las que viven dentro (los operandos), y dos lineas
+                 * despues de este pase ya corren `ir_pass_unreachable` -- que
+                 * renumera bloques -- y `ir_pass_dce` -- que mueve los indices
+                 * de instruccion --.  Es lo mismo que le paso a `borrow_facts`
+                 * cuando era una tabla lateral, y por lo que tuvo que volverse
+                 * un operando; un hecho no puede volverse operando.
+                 *
+                 * Se paga que la posicion pueda quedarse rancia al mover texto.
+                 * Se paga a sabiendas y se DICE en el tipo del ancla, en vez de
+                 * esconderlo en un `uint32` que podia ser cualquier cosa. */
                 if (li.st.header < fn.blocks.size())
                     for (const IrInstr &i : fn.blocks[li.st.header].instrs)
                         if (i.source_line > 0) {
-                            h.seal.origin.site = i.source_line;
+                            h.seal.origin.site = analysis::asa::Anchor{
+                                analysis::asa::Anchor::Kind::Line,
+                                i.source_line};
                             break;
                         }
                 h.scope.stage = analysis::asa::kStageDuringOpt;

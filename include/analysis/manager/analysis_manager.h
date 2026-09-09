@@ -488,10 +488,34 @@ class AnalysisManager {
     }
 
     /// ¿Hay resultado cacheado de @c A para @p unit?
+    ///
+    /// OJO: no mira la VERSION.  Para una unidad versionada esto contesta "hay
+    /// algo guardado", que NO es lo mismo que "se va a reutilizar": si la
+    /// version no coincide, @ref get_or_compute_v recalcula y esto seguiria
+    /// diciendo que si.  Quien quiera saber si de verdad se ahorra el computo
+    /// tiene que usar @ref cached_v -- preguntarlo con esta cuenta de menos los
+    /// recomputos, y con ellos se pierden los sellos que dependan de saberlo.
     template <class A> bool cached(const std::string *unit) const {
         // Solo LEE: cerrojo compartido.
         std::shared_lock<util::SharedMutex> lk(m_);
         return results_.count(Key{analysis_id<A>(), unit}) != 0;
+    }
+
+    /**
+     * @brief ¿Hay resultado cacheado de @c A para @p unit Y de esta @p version?
+     *
+     * La pregunta que de verdad interesa antes de pedir algo versionado: si
+     * contesta @c false, la siguiente llamada a @ref get_or_compute_v VA a
+     * computar.  Existe porque @ref cached se queda corta justo donde importa,
+     * y usarla para contar recomputos los cuenta de menos -- lo destapo
+     * `test_fact_base_reuse`, que vio que subir la version no aumentaba la
+     * cuenta de analisis ejecutados.
+     */
+    template <class A>
+    bool cached_v(const std::string *unit, uint64_t version) const {
+        std::shared_lock<util::SharedMutex> lk(m_);
+        const auto it = results_.find(Key{analysis_id<A>(), unit});
+        return it != results_.end() && it->second->version == version;
     }
 
     /// Invalida el resultado @c A de @p unit y, transitivamente, todo lo que

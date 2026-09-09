@@ -3473,7 +3473,11 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
         /* Y quien lo emitio, con el sitio exacto que miro: el numero de valor o
          * de bloque del que salio, que es lo que permite cruzarlo con el IR. */
         j["producer"] = f.seal.origin.producer ? f.seal.origin.producer : "";
-        j["site"] = f.seal.origin.site;
+        /* El ancla se ensena ENTERA -- a que apunta y cual --: con solo el
+         * numero, quien lea el volcado no puede saber si es un valor, un bloque
+         * o una linea, que es justo lo que dejo de ser ambiguo. */
+        j["site"] = f.seal.origin.site.id;
+        j["site_kind"] = analysis::asa::anchor_kind_name(f.seal.origin.site.kind);
         /* En que se apoya, por analisis.  Grueso, pero dice si un hecho es de
          * cosecha propia o depende de lo que otro dedujo antes. */
         nlohmann::json apoyos = nlohmann::json::array();

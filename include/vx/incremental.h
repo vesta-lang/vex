@@ -59,6 +59,17 @@ using MerkleKey = uint64_t;
  *     ARTEFACTO FINAL (.velb / .exe AOT), que SI depende de arch/os/opt/perfil.
  *
  * Extender = añadir un campo + incluirlo en el fingerprint que corresponda.
+ *
+ * @par ELEGIR LA CAPA ES PARTE DEL CONTRATO, y equivocarse no da error
+ * Que `ir_fingerprint()` excluya `opt_level` no es un descuido que haya que
+ * "arreglar" mezclandolo: es lo que permite compartir el IR entre niveles de
+ * optimizacion.  Lo que NO vale es usar esa capa para keyar algo que SI depende
+ * del optimizador -- y eso paso: la cache de hechos del ASA la usaba para sus
+ * hechos post-opt, con lo que servia los de otro nivel de `-O` sin avisar.
+ *
+ * Antes de usar una de las dos, preguntarse de que depende de verdad lo que se
+ * va a guardar.  El mapa de los tres niveles de cache del ASA -- y de que
+ * entra en la clave de cada uno -- esta en @c analysis/asa/fact_base.h.
  */
 struct BuildConfig {
     // -- Dimensiones que afectan al IR PRE-OPTIMIZE --------------------------

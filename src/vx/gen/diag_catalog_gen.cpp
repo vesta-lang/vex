@@ -63,6 +63,9 @@ const CatEntry kEntries[] = {
     {"VX2054", {"the call at line {0} passes both, and there they are the same memory", "la llamada de la linea {0} le pasa los dos, y ahi son la misma memoria"}},
     {"VX2055", {"two exclusive borrows of one region cannot be alive at once: end one before taking the other, or use 'borrow<T>' if reading is enough", "no pueden estar vivos dos prestamos exclusivos de una misma region: termina uno antes de tomar el otro, o usa 'borrow<T>' si con leer basta"}},
     {"VX2056", {"the direction declared on parameter {0} asserts that its region is reached only through it; drop the declaration, or do not pass overlapping memory at that call", "la direccion declarada en el parametro {0} afirma que su region solo se alcanza por el; quita la declaracion, o no le pases memoria solapada en esa llamada"}},
+    {"VX2057", {"these two were not separated because the index is not a compile-time constant: with a runtime index it could name any element", "no se han podido separar porque el indice no es constante al compilar: con un indice de ejecucion puede nombrar cualquier elemento"}},
+    {"VX2058", {"these two were not separated because the region this pointer names is not resolved at this level; a 'borrow<T>', 'unique<T>' or 'shared<T>' does say whose memory it is", "no se han podido separar porque la region que nombra este puntero no esta resuelta en este nivel; un 'borrow<T>', un 'unique<T>' o un 'shared<T>' si dicen de quien es la memoria"}},
+    {"VX2059", {"the borrow that gets in the way is of '{0}', which covers '{1}'", "el prestamo que estorba es de '{0}', que abarca a '{1}'"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -286,6 +289,7 @@ const CatEntry kEntries[] = {
     {"VXA070", {"the function '{2}' does not say which target it is compiled for, so its calling convention is unknown -- whoever builds it must set MFunction::target", "la funcion '{2}' no dice para que objetivo se compila, asi que su convencion de llamada se desconoce -- quien la construye tiene que poner MFunction::target"}},
     {"VXA071", {"the body of an inline asm block in '{0}' was never generated: {1}", "el cuerpo de un bloque de ensamblador en '{0}' no se llego a generar: {1}"}},
     {"VXA072", {"it uses the operand '{0}', of {1} bits, which does not travel whole between micro-operations (they carry 64)", "usa el operando '{0}', de {1} bits, que no viaja entero entre micro-operaciones (llevan 64)"}},
+    {"VXA073", {"an IR function reached the fact cache with no name, so it cannot be referenced per function: its code is charged to every function of the module, which loses granularity. Whoever builds it must give it a name", "una funcion del intermedio llego a la cache de hechos SIN NOMBRE, asi que no se puede referenciar por funcion: su codigo se le cobra a todas las del modulo y se pierde la granularidad. Quien la construye tiene que darle un nombre"}},
     {"VXE930", {"@Hook(<point>) needs the instrumentation point.  Available: {0}", "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"}},
     {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
     {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
@@ -492,6 +496,7 @@ const CatEntry kEntries[] = {
     {"memory.not_an_address", {"there is nothing to locate here: this value is not an address (neither a pointer type nor host memory), so asking where it points has no answer to give", "aqui no hay nada que localizar: este valor no es una direccion (ni tipo puntero ni memoria del anfitrion), asi que preguntar a donde apunta no tiene respuesta que dar"}},
     {"memory.points_to_symbol", {"points to global #{0}{1}, identified by its SYMBOL: two accesses to the same global are the same address, and two different globals never overlap", "apunta al global #{0}{1}, identificado por su SIMBOLO: dos accesos al mismo global son la misma direccion, y dos globales distintos no se pisan nunca"}},
     {"memory.unmodelled_op", {"the pointer resolver does not model '{2}': the program is fine and what has to grow is the resolver", "el resolvedor de punteros no modela '{2}': el programa esta bien y lo que hay que ampliar es el resolvedor"}},
+    {"memory.value_not_here", {"this value is not in the code being looked at: nothing defines it and nothing reads it, so it was left behind by a pass that removed its instruction", "este valor no esta en el codigo que se mira: nada lo define y nadie lo lee, asi que lo dejo atras un pase que quito su instruccion"}},
     {"memory_access.no_accesses", {"none of its instructions touch memory", "ninguna de sus instrucciones toca memoria"}},
     {"memory_access.not_localizable", {"it touches memory but the location cannot be determined", "toca memoria pero no se puede localizar"}},
     {"memory_access.read", {"reads {2}", "lee {2}"}},
@@ -548,7 +553,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 527;
+const int kEntryCount = 532;
 
 } // namespace
 

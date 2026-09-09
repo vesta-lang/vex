@@ -452,7 +452,7 @@ collect_native_decls(const std::vector<const ir::IrModule *> &mods) {
 }
 
 // Lo declarado para una nativa, o nullptr si nadie ha dicho nada de ella.
-static const ir::IrNativeEffects *buscar_decl(const NativeDecls &d,
+static const ir::IrNativeEffects *lookup_decl(const NativeDecls &d,
                                               const std::string &lib_fn) {
     auto it = d.find(lib_fn);
     return it == d.end() ? nullptr : it->second;
@@ -939,7 +939,7 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
          * en el sitio de llamada -- donde eso se puede convertir en memoria
          * concreta: el mismo resolvedor que usan LOAD y STORE. */
         const ir::IrNativeEffects *d =
-            env.decls ? buscar_decl(*env.decls, ins.func_name) : nullptr;
+            env.decls ? lookup_decl(*env.decls, ins.func_name) : nullptr;
         if (d) aplicar_decl(e, *d, ops, loc);
         break;
     }

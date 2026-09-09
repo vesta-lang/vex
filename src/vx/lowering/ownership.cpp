@@ -804,7 +804,7 @@ uint64_t Lowering::method_by_ref_mask_(const ast::FieldAccessExpr *fa) const {
     if (bt.struct_name.empty()) return 0;
     // Una clase y un struct guardan sus metodos en sitios distintos, pero la
     // ficha es la MISMA (`ClassMethodInfo`), asi que se busca en los dos.
-    const auto buscar =
+    const auto lookup =
         [&fa](const std::vector<ClassMethodInfo> &ms) -> uint64_t {
         for (const ClassMethodInfo &m : ms)
             if (!m.is_constructor && m.name == fa->field_name)
@@ -812,9 +812,9 @@ uint64_t Lowering::method_by_ref_mask_(const ast::FieldAccessExpr *fa) const {
         return 0;
     };
     const auto itc = tc_.class_layouts().find(bt.struct_name);
-    if (itc != tc_.class_layouts().end()) return buscar(itc->second.methods);
+    if (itc != tc_.class_layouts().end()) return lookup(itc->second.methods);
     const auto its = tc_.struct_layouts().find(bt.struct_name);
-    if (its != tc_.struct_layouts().end()) return buscar(its->second.methods);
+    if (its != tc_.struct_layouts().end()) return lookup(its->second.methods);
     return 0;
 }
 
@@ -825,7 +825,7 @@ uint64_t Lowering::ctor_by_ref_mask_(const std::string &type_name,
                                      size_t argc) const {
     // Una clase y un struct guardan sus constructores en sitios distintos,
     // pero la ficha es la MISMA, asi que se busca en los dos.
-    const auto buscar =
+    const auto lookup =
         [argc](const std::vector<ClassMethodInfo> &ms) -> uint64_t {
         for (const ClassMethodInfo &m : ms)
             if (m.is_constructor && m.param_types.size() == argc)
@@ -833,9 +833,9 @@ uint64_t Lowering::ctor_by_ref_mask_(const std::string &type_name,
         return 0;
     };
     const auto itc = tc_.class_layouts().find(type_name);
-    if (itc != tc_.class_layouts().end()) return buscar(itc->second.methods);
+    if (itc != tc_.class_layouts().end()) return lookup(itc->second.methods);
     const auto its = tc_.struct_layouts().find(type_name);
-    if (its != tc_.struct_layouts().end()) return buscar(its->second.methods);
+    if (its != tc_.struct_layouts().end()) return lookup(its->second.methods);
     return 0;
 }
 

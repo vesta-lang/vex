@@ -1247,6 +1247,39 @@ else ()
     target_link_libraries(test_vx_builtin_names PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Que la base de hechos REUTILICE de verdad y no sirva lo rancio.  Los dos lados
+# en el mismo test: una base que recalcula siempre es un computo con otro nombre,
+# y una que reutiliza sin comprobar sirve hechos de un codigo que ya no existe.
+# Ningun test miraba ninguna de las dos, y por eso `FactBase` pudo hacer once
+# llamadas a la puerta SIN versionar sin que nada fallara.
+add_executable(test_fact_base_reuse tests/analysis/test_fact_base_reuse.cpp)
+target_include_directories(test_fact_base_reuse PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_fact_base_reuse PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_fact_base_reuse PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_fact_base_reuse PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_fact_base_reuse PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# El LUGAR de un prestamo: cuando dos se pisan y cuando no.  Los dos lados en
+# el mismo test a proposito -- separar de menos deja pasar un error, separar de
+# mas rechaza un programa correcto --, porque un test que mire solo uno se
+# satisface contestando siempre lo mismo.
+add_executable(test_borrow_place tests/vx/test_borrow_place.cpp)
+target_include_directories(test_borrow_place PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_borrow_place PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_borrow_place PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_borrow_place PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_borrow_place PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # Driver incremental granular (claves Merkle + CAS + plan_rebuild + fragmentos
 # de IR).  vx_lib aporta el indice + el driver; vmcore aporta ir:: (IrModule,
 # serializacion).  vx_lib va PRIMERO: referencia simbolos ir:: de vmcore.

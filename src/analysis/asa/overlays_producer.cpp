@@ -334,7 +334,11 @@ void produce_contiguous_runs(Production &p, const ir::IrOverlay &ov,
                 /* El PRIMER campo del tramo, que es por donde empieza a
                  * mirarlo quien lo consuma. */
                 f.about.id = ps[i].idx;
-                f.seal.origin.site = ov.line;
+                /* Una vista `@overlay` se DECLARA en el fuente: no la produce ninguna
+                 * instruccion, asi que no hay entidad del intermedio a la que
+                 * anclarla.  Es el ultimo recurso del ancla, y el unico que puede
+                 * quedarse rancio al mover texto. */
+                f.seal.origin.site = Anchor{Anchor::Kind::Line, ov.line};
                 f.seal.certainty = Certainty::Proven;
                 f.seal.origin.source = Source::Static;
                 f.seal.origin.producer = kProducerOverlays;
@@ -378,7 +382,11 @@ void produce_overlays(Production &p) {
             f.what.detail = view;
             /* Donde se declara: una vista no es una funcion, asi que quien
              * quiera senalarla no la puede localizar por el codigo. */
-            f.seal.origin.site = ov.line;
+            /* Una vista `@overlay` se DECLARA en el fuente: no la produce ninguna
+                 * instruccion, asi que no hay entidad del intermedio a la que
+                 * anclarla.  Es el ultimo recurso del ancla, y el unico que puede
+                 * quedarse rancio al mover texto. */
+                f.seal.origin.site = Anchor{Anchor::Kind::Line, ov.line};
             f.about = subject;
             f.about.function = view;
             f.seal.certainty = Certainty::Proven;

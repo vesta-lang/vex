@@ -171,7 +171,11 @@ void produce_memory_access(Production &p) {
 } // namespace
 
 void register_memory_access_producer() {
-    register_producer(kProducerMemoryAccess, &produce_memory_access);
+    /* Que toca cada instruccion, resuelto con el points-to.  Codigo, y los
+     * contratos por lo mismo que el points-to: la direccion declarada de un
+     * parametro cambia a que region se atribuye un acceso. */
+    register_producer(kProducerMemoryAccess, &produce_memory_access,
+                      DomainInput::FunctionCode | DomainInput::ParamContracts);
 }
 
 } // namespace asa

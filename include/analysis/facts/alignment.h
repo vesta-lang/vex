@@ -187,13 +187,13 @@ struct AlignmentSummaries {
 
     /// Lo que se sabe de @p nombre, o nullptr si no hay entrada (equivale a
     /// universo abierto: no se afirma nada).
-    const Resumen *buscar(const std::string &nombre) const {
+    const Resumen *lookup(const std::string &nombre) const {
         auto it = por_funcion.find(nombre);
         return it == por_funcion.end() ? nullptr : &it->second;
     }
     /// Universo de @p nombre; abierto si no hay entrada.
     Universo universo_de(const std::string &nombre) const {
-        const Resumen *r = buscar(nombre);
+        const Resumen *r = lookup(nombre);
         return r == nullptr ? Universo::Abierto : r->universo;
     }
 };

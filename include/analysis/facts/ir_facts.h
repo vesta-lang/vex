@@ -75,12 +75,37 @@ struct IrFacts {
     uint32_t loop_count = 0; ///< back-edges (aproximacion de bucles).
     bool recursive = false;  ///< se llama a si misma directamente.
 
+    /// value id -> alguien lo LEE (aparece como operando).
+    ///
+    /// Con la def y el parametro completa la unica pregunta que importa antes
+    /// de analizar nada: @ref exists.  Sale del mismo recorrido, asi que no
+    /// cuesta una pasada mas.
+    std::vector<uint8_t> used;
+
     /// Hay def para @p v?  (helper de conveniencia.)
     const ir::IrInstr *def(ir::IrValueId v) const {
         return v < def_of.size() ? def_of[v] : nullptr;
     }
     int32_t param_index(ir::IrValueId v) const {
         return v < param_of.size() ? param_of[v] : -1;
+    }
+    /**
+     * @brief EXISTE este valor en el codigo que se esta mirando?
+     *
+     * La tabla de valores de una funcion no encoge cuando el optimizador borra
+     * una instruccion: la ranura se queda, sin nada que la defina y sin nadie
+     * que la lea.  Preguntarle algo a esa ranura es trabajo sobre un dato
+     * muerto, y peor, se contesta -- el resolutor de punteros respondia "no
+     * tiene definicion aqui, asi que viene de fuera", que es FALSO: no viene de
+     * ningun sitio porque ya no esta.
+     *
+     * Un valor existe si algo lo define, si es un parametro (lo define la
+     * llamada) o si alguien lo lee.  Lo ultimo es lo que distingue al que de
+     * verdad viene de fuera -- ese SI se usa -- del hueco que quedo.
+     */
+    bool exists(ir::IrValueId v) const {
+        return def(v) != nullptr || param_index(v) >= 0 ||
+               (v < used.size() && used[v] != 0);
     }
 };
 

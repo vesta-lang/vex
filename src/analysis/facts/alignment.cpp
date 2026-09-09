@@ -77,7 +77,7 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
      * alineacion pueda comprobarse donde ESTA -- dentro de la funcion que
      * recibe el destino -- y no solo donde se reserva. */
     if (resumen != nullptr) {
-        if (const auto *r = resumen->buscar(fn.name)) {
+        if (const auto *r = resumen->lookup(fn.name)) {
             const auto &ps = r->params;
             for (size_t i = 0; i < fn.params.size() && i < ps.size(); ++i) {
                 const ir::IrValueId v = fn.params[i];
@@ -254,7 +254,7 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
                      * ya alineado.  Mirando el cuerpo salen todos, y el dia que
                      * el asignador cambie su cabecera esto se entera solo. */
                     if (resumen == nullptr || in.func_name.empty()) break;
-                    const auto *r = resumen->buscar(in.func_name);
+                    const auto *r = resumen->lookup(in.func_name);
                     if (r == nullptr || !r->retorno_valido) break;
                     nueva = r->retorno.modulo;
                     nuevo_resto = r->retorno.resto;
@@ -513,7 +513,7 @@ AlignmentSummaries compute_alignment_summaries(const ir::IrModule &mod,
                         r = h.resto_de(in.operands[0]);
                     } else if (in.op == ir::IrOp::TAILCALL) {
                         if (in.func_name.empty()) continue;
-                        const auto *rd = out.buscar(in.func_name);
+                        const auto *rd = out.lookup(in.func_name);
                         if (rd == nullptr || !rd->retorno_valido) continue;
                         m = rd->retorno.modulo;
                         r = rd->retorno.resto;
