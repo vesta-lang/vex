@@ -5325,6 +5325,92 @@ i32 main() {
     ctx.ok("dos `in` al mismo dueno -> 42: compartidos, es legitimo")
 
 
+# ---------------------------------------------------------------------------
+# La exclusividad prometida, comprobada CRUZANDO LA LLAMADA.
+#
+# El comprobador de prestamos lleva los suyos por NOMBRE y dentro de una
+# funcion, asi que la misma region con otro nombre se le escapa.  Eso lo cierra
+# una pasada sobre el IR, que ve los ARGUMENTOS de cada llamada.
+#
+# Los dos lados van juntos a proposito.  Sin el negativo, la comprobacion entera
+# se podria borrar sin que nada fallara; sin el positivo, se podria "arreglar"
+# cualquier queja acusando siempre, que rechaza programas correctos -- y eso ya
+# paso: las posiciones se resolvian sin ancho y `may_alias` daba solape para dos
+# direcciones a sesenta y cuatro bytes una de otra.
+DIR_EXCL_LLAMADA_CASES = [
+    ("excl_llamada_neg", """void mueve(out i64* d, in i64* s) {
+    d[0] = s[0];
+}
+i32 main() {
+    i64* a = (i64*)malloc(64);
+    i64* b = a;
+    mueve(a, b);
+    free(a);
+    return 0;
+}
+""", "VX2053",
+     "la misma region con OTRO nombre: la promesa de `out` se incumple y se dice",
+     "dos nombres de la misma region en una llamada con `out` debio fallar"),
+    # Y el que necesita mirar el CUERPO del llamado.  Las dos direcciones son
+    # distintas -- `m + 1` y `m` --, asi que por donde apuntan no se decide
+    # nada: lo que las cruza es que la funcion toca tres elementos por cada
+    # una, y entonces [8,32) y [0,24) se cortan.  Sin esa mitad este caso pasa
+    # desapercibido, que es justo lo que fija el test.
+    ("excl_llamada_desfase", """void mueve(out i64* d, in i64* s) {
+    d[0] = s[0];
+    d[1] = s[1];
+    d[2] = s[2];
+}
+i32 main() {
+    i64* m = (i64*)malloc(128);
+    mueve(m + 1, m);
+    free(m);
+    return 0;
+}
+""", "VX2053",
+     "regiones desfasadas que SI se pisan: sale del cuerpo del llamado",
+     "un solape real con desplazamiento debio fallar"),
+]
+
+for _t, _s, _p, _m, _f in DIR_EXCL_LLAMADA_CASES:
+    _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
+
+
+@case("excl_llamada_ok")
+def _(ctx):
+    """Lo que NO debe acusar: misma reserva, regiones que no se tocan.
+
+    Es el lado caro de equivocarse.  Acusar de mas no da un resultado
+    equivocado, da un programa correcto que no compila -- y quien lo sufre no
+    puede hacer nada, porque su codigo ya esta bien --.  Aqui los dos argumentos
+    salen del mismo `malloc` y estan a sesenta y cuatro bytes: no se solapan, y
+    no poder demostrar que son disjuntos NO es demostrar que se pisan.
+    """
+    src = """void mueve(out i64* d, in i64* s) {
+    d[0] = s[0];
+    d[1] = s[1];
+}
+i32 main() {
+    i64* m = (i64*)malloc(128);
+    m[0] = 20;
+    m[1] = 22;
+    mueve(m + 8, m);
+    i64 r = m[8] + m[9];
+    free(m);
+    return (i32) r;
+}
+"""
+    vx = _write_vx(ctx, "excl_llamada_ok.vx", src)
+    if not ctx.compile_vx(vx, "exclok"):
+        return
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("exclok", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 42:
+            ctx.fail("regiones disjuntas de la misma reserva (-m %s): R00 == %s,"
+                     " se esperaba 42" % (modo, got), log)
+            return
+        ctx.ok("regiones disjuntas de la misma reserva (-m %s) -> 42" % modo)
 
 
 @case("fmt_corpus_formateado")

@@ -15,6 +15,7 @@
 #include "analysis/asa/fact_base.h"
 
 #include "analysis/asa/fact_store.h"
+#include "analysis/asa/producers.h" // ModuleWalk: el recorrido, una sola vez
 #include "ir/ssa_ir.h"
 
 #include <algorithm>
@@ -90,6 +91,12 @@ struct BoundaryAnalysis {
 struct EffectsSummaryAnalysis {
     static char ID;
 };
+struct ParamAliasingAnalysis {
+    static char ID;
+};
+struct ModuleWalkAnalysis {
+    static char ID;
+};
 struct EscapeAnalysisId {
     static char ID;
 };
@@ -98,6 +105,8 @@ char LoopsAnalysis::ID = 0;
 char IvBoundsAnalysis::ID = 0;
 char BoundaryAnalysis::ID = 0;
 char EffectsSummaryAnalysis::ID = 0;
+char ParamAliasingAnalysis::ID = 0;
+char ModuleWalkAnalysis::ID = 0;
 char EscapeAnalysisId::ID = 0;
 } // namespace
 
@@ -292,6 +301,44 @@ const RangeSummaries &FactBase::boundary(const ir::IrModule &mod) {
              kProducerStructure);
     }
     return rs;
+}
+
+const ModuleWalk &FactBase::walk(const ir::IrModule &mod) {
+    ++queries_;
+    const std::string *key = util::intern_name(kModuleUnit);
+    const bool fresh = !manager_.cached<ModuleWalkAnalysis>(key);
+    if (fresh) ++computations_;
+    return manager_.get_or_compute<ModuleWalkAnalysis, ModuleWalk>(
+        key, [&mod]() { return ModuleWalk::of(mod); });
+}
+
+const effects::ParamAliasing &FactBase::param_aliasing(const ir::IrModule &mod,
+                                                       const char *stage) {
+    ++queries_;
+    /* La clave lleva el MOMENTO, por lo mismo que la de los efectos: esto se
+     * apoya en ellos, asi que compartirlo entre momentos le daria a uno el
+     * resumen de un codigo que ya no existe. */
+    const std::string *key = util::intern_name(
+        std::string(kModuleUnit) + "@" + (stage != nullptr ? stage : ""));
+    const bool fresh = !manager_.cached<ParamAliasingAnalysis>(key);
+    if (fresh) ++computations_;
+    /* Fuera de la lambda: pedir el recorrido tambien es una consulta a la base,
+     * y meterla dentro la ataria a que la lambda se ejecute -- que es justo lo
+     * que no pasa cuando ya esta cacheado. */
+    const ModuleWalk &w = walk(mod);
+    const effects::ParamAliasing &pa =
+        manager_.get_or_compute<ParamAliasingAnalysis, effects::ParamAliasing>(
+            key, [&mod, &w, stage, this]() {
+                return effects::ParamAliasing(mod, w, *this, stage);
+            });
+    if (fresh) {
+        /* Lo que se sella aqui es el ANALISIS, no cada respuesta: esta montado
+         * sobre el resolutor de punteros y no anade suposiciones propias.  Que
+         * un par concreto salga "no se" viaja en la respuesta de esa consulta,
+         * que es donde tiene que ir. */
+        mark(kProducerParamContracts, *key, Certainty::Proven, kProducerMemory);
+    }
+    return pa;
 }
 
 effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,

@@ -238,6 +238,43 @@ EfectoEnLlamada instanciar_en_llamada(const SemanticEffects &callee_eff,
                                       const ir::IrOperands &args,
                                       const analysis::PointsTo &pt);
 
+/**
+ * @brief Que memoria del llamante alcanza una llamada A TRAVES de UN parametro.
+ *
+ * Es @ref instanciar_en_llamada sin fundir: aquella junta lo que se lee y lo
+ * que se escribe por TODOS los parametros en dos conjuntos, y con eso ya no se
+ * puede saber por cual de ellos se llega a cada byte.  Aqui se filtra ANTES de
+ * sustituir, que es cuando la atribucion todavia existe: una localizacion
+ * @c ArgDerived lleva en su @c id el indice del parametro, y sustituirla es
+ * justo lo que lo borra.
+ *
+ * @par Que significa "alcanza", y por que un efecto POSIBLE vale
+ * El resumen de efectos es un *puede*: una escritura dentro de un `if` es
+ * "puede escribir".  Para lo que pregunta esto -- si otro parametro llega a la
+ * region de uno que prometio exclusividad -- un *puede* es la respuesta
+ * CORRECTA, no una aproximacion: la promesa habla de ALCANZAR, no de ejecutar,
+ * y quien optimiza reordena fiandose de ella sin saber que camino se tomara.
+ *
+ * Cuidado con parecerlo a un error que ya se cometio: alli el *puede* era sobre
+ * si dos nombres senyalan el mismo sitio (@c may_alias) y se leia como que si;
+ * aqui el *puede* es sobre que bytes alcanza un parametro, que es literalmente
+ * el predicado del que habla la promesa.  No es el mismo caso.
+ *
+ * @param callee_eff Efecto (cierre) de la funcion llamada.
+ * @param args       Argumentos del sitio de llamada, en orden.
+ * @param pt         Points-to del LLAMANTE, para resolver cada argumento.
+ * @param param      Indice del parametro por el que se pregunta.
+ * @param[out] complete Se pone a @c false si algo quedo sin nombrar.  Cada
+ *                  localizacion devuelta es memoria que la llamada SI alcanza,
+ *                  asi que para demostrar un SOLAPE valen aunque esto sea
+ *                  falso; solo la disyuncion necesita que sean todas.
+ * @return Lo que se alcanza por ese parametro, en memoria del llamante.
+ */
+LocSet reach_through_param(const SemanticEffects &callee_eff,
+                           const ir::IrOperands &args,
+                           const analysis::PointsTo &pt, size_t param,
+                           bool &complete);
+
 /// Efecto LOCAL de UNA instruccion IR (con completeness + motivo).  El asm
 /// lifteado no es especial: llega como ADD/LOAD/STORE/... normales. INLINE_ASM/
 /// ASM_MICRO (residuo opaco) se analizan aparte con tags.  @p pt es la tabla

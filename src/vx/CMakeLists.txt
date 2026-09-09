@@ -104,6 +104,11 @@ add_library(vx_lib STATIC
     ${CMAKE_SOURCE_DIR}/src/analysis/effects/ir_effects.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/effects/effect_analysis.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/effects/effects_report.cpp
+    # Que le llega a cada parametro mirando las LLAMADAS.  Conocimiento del
+    # modulo, y con DOS consumidores -- el productor de contratos y la
+    # comprobacion de prestamos --, que es justo por lo que no vive dentro de
+    # ninguno de los dos.
+    ${CMAKE_SOURCE_DIR}/src/analysis/effects/param_aliasing.cpp
     # Hechos IR objetivos (def-use, call-sites, estructura) para la infra de
     # analisis: base compartida que consumen los analisis sin re-recorrer el IR.
     ${CMAKE_SOURCE_DIR}/src/analysis/facts/ir_facts.cpp
@@ -365,6 +370,10 @@ add_library(vx_lib STATIC
     # sus reglas no son las del sistema de tipos -- y ahi es donde entrara la
     # segunda etapa, la que comprueba sobre el IR en vez de sobre el AST.
     borrow/borrow_checker.cpp
+    # La exclusividad CRUZANDO la llamada, que el del AST no puede ver: ahi los
+    # parametros son dos nombres y quien sabe que le llega a cada uno es quien
+    # llama.  Consume conocimiento de la base; no produce ninguno.
+    borrow/borrow_ir_check.cpp
     compiler.cpp
     compiler_project.cpp
     # Traductor de los tipos de Vesta a entidades de la base de conocimiento de

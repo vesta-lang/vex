@@ -83,6 +83,35 @@ bool no_alias(const AbstractLoc &a, const AbstractLoc &b) {
     return !may_alias(a, b);
 }
 
+bool must_overlap(const AbstractLoc &a, const AbstractLoc &b) {
+    /* Sin raiz concreta no hay nada que demostrar en ningun sentido, y la clase
+     * generica es "cualquier sitio de la clase", que tampoco senyala un byte. */
+    if (!a.concrete() || !b.concrete()) return false;
+    /* Raices distintas: dos reservas, dos huecos del marco, dos globales.  Y en
+     * un parametro la raiz es su POSICION -- un nombre --, asi que ahi tampoco
+     * se demuestra el solape: solo se deja de poder demostrar lo contrario, que
+     * es otra cosa y la contesta @ref may_alias. */
+    if (a.kind != b.kind || a.id != b.id) return false;
+    /* Un ancho sin conocer NO es cero bytes: la region EMPIEZA en `off`, asi
+     * que ese byte es suyo con seguridad.  Contarlo como uno es lo mas que se
+     * puede afirmar sin suponer nada -- de ahi en adelante no se sabe -- y
+     * ademas unifica los tres casos en una sola cuenta:
+     *
+     *   - los dos anchos conocidos: se cortan o no se cortan;
+     *   - los dos sin conocer: solo coinciden si arrancan en el MISMO byte;
+     *   - uno de cada: solapan si el arranque del que no se conoce cae DENTRO
+     *     del rango del que si.  Al reves no demuestra nada, porque el
+     *     desconocido puede acabar antes.
+     *
+     * Ojo con la direccion de la cuenta: sale de la region, no del acceso.  Un
+     * puntero que nadie desreferencia no toca ese byte, pero la region que
+     * empieza ahi sigue siendo la suya, y es de regiones de lo que hablan las
+     * promesas que preguntan por esto. */
+    const int64_t wa = a.width > 0 ? a.width : 1;
+    const int64_t wb = b.width > 0 ? b.width : 1;
+    return a.off < b.off + wb && b.off < a.off + wa;
+}
+
 // --------------------------------------------------------------------------
 // LocSet
 // --------------------------------------------------------------------------

@@ -40,6 +40,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
                            bool emit_map);
 } // namespace asm_multi_process
 #include "vx/comptime/comptime_collect.h"
+#include "vx/borrow/borrow_ir_check.h" // la exclusividad, cruzando la llamada
 #include "vx/compiler.h"
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "vx/vxdbg_emit.h"  // grafo de conocimiento del programa
@@ -3443,24 +3444,61 @@ CompileResult compile_vx_project(
             // que la libreria sea distribuible standalone.  El
             // consumidor puede tomar lib.vx + lib.vxi + lib.vel y
             // armar su .velb directamente con vm --asm-file lib.vel.
-            ir::EmitOptions dep_emit_opts;
-            dep_emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
-            dep_emit_opts.emit_debug = opts.emit_debug;
-            // emit_stackmaps queda en su default (true): VSMP siempre presente.
-            dep_emit_opts.module_name = pm.module_name;
-            ir::EmitResult dep_eres = ir::ir_emit_module(pm.ir, dep_emit_opts);
-            std::string dvel_path = dep_vel_path_for_(pm.canonical_path);
-            if (dep_eres.ok) {
-                std::vector<uint8_t> velb_bytes(dep_eres.vel_text.begin(),
-                                                dep_eres.vel_text.end());
-                (void)write_file_atomic_(dvel_path, velb_bytes);
-            }
-            if (verbose_cache) {
+            /* APAGADO POR DEFECTO, y no es una micro-optimizacion.
+             *
+             * Producir este `.vel` obliga a llamar a `ir_emit_module` una
+             * SEGUNDA vez sobre el mismo modulo -- la primera es la del IR
+             * fusionado, mas abajo --, y emitir incluye asignar registros.  El
+             * comentario de esa otra llamada lo dice: *"asignar registros y
+             * escribir el texto .vel es el noventa por ciento del coste del
+             * frontend"*.  O sea que cada funcion del proyecto se asignaba
+             * registros dos veces.
+             *
+             * Medido sobre el proyecto de 21 modulos del banco de compilacion
+             * (144k lineas): el banco de registros fisicos se construia 48.001
+             * veces para 24.001 funciones -- exactamente dos por funcion --, y
+             * la cuenta cuadraba por dos caminos independientes (el vector de
+             * `Lane` y el de `ViewGeom`).
+             *
+             * Lo que se pierde al apagarlo es real y por eso hay valvula: sin
+             * este fichero la dependencia no se puede repartir suelta, que era
+             * su motivo (`lib.vx` + `lib.vxi` + `lib.vel` y armar el `.velb`
+             * con `vm --asm-file lib.vel`).  Quien reparta modulos sueltos pone
+             * `VESTA_DEP_VEL=1`; quien solo quiere su `.velb` no paga por una
+             * emision que no va a usar.
+             *
+             * El `.velb` del proyecto NO cambia: este camino solo escribia un
+             * artefacto lateral.  Por eso la bandera es `Speed` y no `Emitted`
+             * -- no entra en la huella. */
+            if (util::flag_present(util::FlagId::DepVel)) {
+                ir::EmitOptions dep_emit_opts;
+                dep_emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
+                dep_emit_opts.emit_debug = opts.emit_debug;
+                // emit_stackmaps en su default (true): VSMP siempre presente.
+                dep_emit_opts.module_name = pm.module_name;
+                ir::EmitResult dep_eres =
+                    ir::ir_emit_module(pm.ir, dep_emit_opts);
+                std::string dvel_path = dep_vel_path_for_(pm.canonical_path);
+                if (dep_eres.ok) {
+                    std::vector<uint8_t> velb_bytes(dep_eres.vel_text.begin(),
+                                                    dep_eres.vel_text.end());
+                    (void)write_file_atomic_(dvel_path, velb_bytes);
+                }
+                if (verbose_cache) {
+                    std::ostringstream tmp;
+                    tmp << "[vx-cache] wrote: " << vp << " (" << vbytes.size()
+                        << " B) + " << ip << " (" << ibytes.size() << " B) + "
+                        << dvel_path << " ("
+                        << (dep_eres.ok ? dep_eres.vel_text.size() : 0)
+                        << " B)\n";
+                    std::lock_guard<std::mutex> lk(verbose_mtx);
+                    std::cerr << tmp.str();
+                }
+            } else if (verbose_cache) {
                 std::ostringstream tmp;
                 tmp << "[vx-cache] wrote: " << vp << " (" << vbytes.size()
-                    << " B) + " << ip << " (" << ibytes.size() << " B) + "
-                    << dvel_path << " ("
-                    << (dep_eres.ok ? dep_eres.vel_text.size() : 0) << " B)\n";
+                    << " B) + " << ip << " (" << ibytes.size()
+                    << " B)  [sin .vel: VESTA_DEP_VEL apagado]\n";
                 std::lock_guard<std::mutex> lk(verbose_mtx);
                 std::cerr << tmp.str();
             }
@@ -4417,6 +4455,13 @@ CompileResult compile_vx_project(
     analysis::asa::FactBase fact_base;
     if (opts.report_bounds)
         vx_report_bounds(merged, res.diagnostics, root_path, fact_base);
+    /* La exclusividad de los prestamos, cruzando las llamadas.  Por la misma
+     * puerta que las cotas y con el mismo criterio: al CONSTRUIR es un error --
+     * dos prestamos exclusivos vivos de la misma region no es un programa
+     * valido --, y al analizar se ensena con la prueba en vez de abortar. */
+    if (opts.report_bounds)
+        vx_report_borrow_across_calls(merged, res.diagnostics, root_path,
+                                      fact_base);
     /* Precondiciones del asm.  SIEMPRE, no bajo opcion: una instruccion cuya
      * exigencia no se cumple no da un resultado peor, hace caer el programa --
      * y callarselo ya costo descubrirlo ejecutando.
@@ -5600,6 +5645,36 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
                 diags.diag(loc, DiagLevel::WARN, "VXA014", {razon});
             }
         }
+    }
+}
+
+void vx_report_borrow_across_calls(const ir::IrModule &mod, Diagnostics &diags,
+                                   const std::string &file,
+                                   analysis::asa::FactBase &base) {
+    for (const borrow::ExclusiveViolation &v :
+         borrow::check_exclusive_across_calls(mod, base)) {
+        SourceLoc loc;
+        /* La linea de la LLAMADA, que es donde se ve el fallo.  Dentro de la
+         * funcion los dos parametros son dos nombres y no hay nada que senalar:
+         * lo que los junta esta en quien la llama. */
+        loc.line = v.line;
+        loc.set_file(file);
+        diags.diag(loc, DiagLevel::ERR, "VX2053",
+                   {std::to_string(v.promised), v.function,
+                    std::to_string(v.other)});
+        /* La PRUEBA, en datos: sin la llamada delante esto seria una acusacion
+         * que quien la lee no puede juzgar. */
+        diags.note(loc, vx::diag::format("VX2054", {std::to_string(v.line)}));
+        /* Y la salida, que depende de QUIEN hizo la promesa.  Derivada del
+         * tipo, se habla de prestamos y las salidas las define el modelo;
+         * escrita por el programador, lo que sobra o falta es su declaracion, y
+         * mandarle a terminar un prestamo seria mandarle a buscar algo que en su
+         * programa no existe. */
+        if (v.declared)
+            diags.note(loc, vx::diag::format(
+                                "VX2056", {std::to_string(v.promised)}));
+        else
+            diags.note(loc, vx::diag::format("VX2055", {}));
     }
 }
 

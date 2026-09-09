@@ -51,6 +51,7 @@
 #include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
 #include "analysis/effects/effect_analysis.h" // el motor de efectos, compartido
+#include "analysis/effects/param_aliasing.h"  // que le llega a cada parametro
 #include "analysis/escape/escape.h"          // que sobrevive a la funcion
 #include "analysis/memory/points_to.h"
 
@@ -67,6 +68,10 @@ struct IrModule;
 
 namespace analysis {
 namespace asa {
+
+/// El recorrido del modulo; su definicion vive con los productores, que son
+/// quienes lo llenan.  Aqui solo se cachea y se reparte.
+struct ModuleWalk;
 
 /// Los dominios que hoy guarda la base.  Nombres ESTABLES: son la procedencia
 /// que aparece en el volcado, no texto de usuario.
@@ -260,6 +265,42 @@ class FactBase {
      * @return Los resumenes de entrada y salida por funcion.
      */
     const RangeSummaries &boundary(const ir::IrModule &mod);
+
+    /**
+     * @brief Si dos parametros puntero de una funcion reciben la misma region.
+     *
+     * Conocimiento DEL MoDULO por el mismo motivo que el de arriba: dentro de
+     * la funcion sus parametros son dos nombres, y quien sabe que le llega a
+     * cada uno es quien la llama.
+     *
+     * Vive aqui y no dentro de un consumidor porque lo preguntan DOS -- el
+     * productor de contratos de parametro, que lo afirma, y la comprobacion de
+     * prestamos, que lo cruza con la exclusividad prometida --, y calcularlo en
+     * cada uno serian dos productores del mismo hecho.
+     *
+     * @param mod Modulo completo.
+     * @param stage EN QUE MOMENTO se pregunta.  @see kStage*.  Va en la clave
+     *              porque esto se apoya en los efectos, que ya se piden con el:
+     *              el resumen de antes de optimizar describe otro codigo que el
+     *              de despues, y darle uno al otro habla de memoria que ya no
+     *              se toca.
+     * @return Los veredictos por (funcion, par), cacheados una vez por momento.
+     */
+    const effects::ParamAliasing &param_aliasing(const ir::IrModule &mod,
+                                                 const char *stage);
+
+    /**
+     * @brief El modulo recorrido UNA vez: quien llama a quien.
+     *
+     * Lo comparten los productores y quien necesite mirar los argumentos con
+     * los que una funcion se usa de verdad.  Vive aqui porque si cada uno lo
+     * construye por su cuenta vuelve la pasada de mas que `ModuleWalk` existe
+     * justo para quitar.
+     *
+     * @param mod Modulo completo.
+     * @return El indice de llamadas, cacheado una vez por base.
+     */
+    const ModuleWalk &walk(const ir::IrModule &mod);
 
     /**
      * @brief Que EFECTOS tiene cada funcion del modulo: que memoria toca, si

@@ -1167,7 +1167,10 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
      * cuenta y cada huella otra vez -- trece pasadas donde hace falta una --,
      * y no solo por el tiempo: cada pasada se trae el modulo a la cache y lo
      * tira, asi que se pisan entre ellas. */
-    const ModuleWalk walk = ModuleWalk::of(mod);
+    /* Y se pide a la BASE, que es quien lo cachea.  Construirlo aqui dejaba dos
+     * recorridos vivos en cuanto un analisis de la base necesitara el mismo
+     * indice -- exactamente la pasada de mas que esto vino a quitar. */
+    const ModuleWalk &walk = base.walk(mod);
 
     /* Se reserva de golpe: los resumenes se referencian desde el contexto de
      * cada productor y un realloc a mitad dejaria la referencia colgando. */

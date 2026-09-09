@@ -587,6 +587,47 @@ EfectoEnLlamada instanciar_en_llamada(const SemanticEffects &callee_eff,
     return out;
 }
 
+LocSet reach_through_param(const SemanticEffects &callee_eff,
+                           const ir::IrOperands &args,
+                           const analysis::PointsTo &pt, size_t param,
+                           bool &complete) {
+    LocSet out;
+    const LocSet *const sets[] = {&callee_eff.mem.reads, &callee_eff.mem.writes};
+    for (const LocSet *s : sets) {
+        if (s->is_top) {
+            // Ya venia sin acotar: puede alcanzar cualquier cosa, y eso incluye
+            // lo de este parametro.  No hay nada que traducir y se dice.
+            complete = false;
+            continue;
+        }
+        for (const AbstractLoc &l : s->locs) {
+            /* Solo lo que se alcanza POR UN PARAMETRO.  Lo global, la pila del
+             * llamado o su propio monton no llegan por aqui, asi que no son de
+             * este parametro ni de ningun otro. */
+            if (l.kind != AbstractLoc::Kind::ArgDerived) continue;
+            if (l.id == LOC_GENERIC) {
+                /* "Alcanzable desde ALGUN parametro", sin decir cual.  Podria
+                 * ser este, asi que no se puede descartar -- pero tampoco
+                 * atribuir --: se cuenta como lo que falta por saber. */
+                complete = false;
+                continue;
+            }
+            if (l.id != param) continue;
+            const AbstractLoc t = instanciar_loc(l, args, pt);
+            if (t.kind == AbstractLoc::Kind::Unknown) {
+                /* No se pudo nombrar aqui.  Meterla en el conjunto lo absorbe
+                 * entero -- lo desconocido es el tope -- y se perderia lo que
+                 * SI se sabe de las demas.  Se apunta aparte, igual que en la
+                 * traduccion completa. */
+                complete = false;
+                continue;
+            }
+            out.add(t);
+        }
+    }
+    return out;
+}
+
 EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
                                       const analysis::IrFacts &facts,
                                       const analysis::PointsTo &pt,

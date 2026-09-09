@@ -129,6 +129,33 @@ bool must_alias(const AbstractLoc &a, const AbstractLoc &b);
 /// Se refieren SIEMPRE a memoria DISJUNTA?  (== !may_alias, pero explicito).
 bool no_alias(const AbstractLoc &a, const AbstractLoc &b);
 
+/**
+ * @brief Se DEMUESTRA que @p a y @p b tocan algun byte comun?
+ *
+ * No es la negacion de @ref no_alias, y confundirlas es el error que este
+ * predicado existe para impedir.  @ref may_alias contesta "no se puede demostrar
+ * que sean disjuntas", que es una respuesta PERMISIVA: sirve para NO optimizar,
+ * porque quedarse quieto de mas nunca da un resultado equivocado.  Usarla para
+ * ACUSAR invierte su sentido y rompe el segundo invariante del ASA -- no poder
+ * demostrar que algo es seguro no es demostrar que es inseguro --, que es
+ * exactamente como un programa correcto acababa rechazado.
+ *
+ * Demostrarlo exige la misma raiz concreta y que los rangos se corten, contando
+ * un ancho DESCONOCIDO como un solo byte: la region empieza en su
+ * desplazamiento, asi que ese byte es suyo con seguridad y de ahi en adelante
+ * no se sabe.  Sale solo, entonces, que dos posiciones sin ancho solo se
+ * demuestran solapadas si arrancan en el MISMO byte, y que una sin ancho contra
+ * una con ancho se demuestra si su arranque cae DENTRO del rango de la otra.
+ *
+ * Con eso, `mover(m + 1, m)` se ve o no segun lo que la firma diga: con
+ * `i64 d[3]` el contrato lleva la extension y los rangos se cortan; con un
+ * `i64*` pelado no hay ancho por ningun lado y queda en que no consta.  Es
+ * conservador a proposito -- preferimos no ver un fallo real antes que
+ * inventarnos uno --, y lo que falta para cerrarlo del todo es la extension
+ * DERIVADA del cuerpo, que hoy no es un hecho del ASA.
+ */
+bool must_overlap(const AbstractLoc &a, const AbstractLoc &b);
+
 // ===========================================================================
 // LocSet -- conjunto de AbstractLoc con TOP absorbente (is_top).  Cuando entra
 // Unknown, colapsa a top y vacia el vector (comparaciones O(1)).

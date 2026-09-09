@@ -171,6 +171,24 @@ VESTA_ENV_FLAG(SchedVerify, "VESTA_SCHED_VERIFY", Report, Scheduler, Bool, Any)
  * conviene anadir depende de lo que EJECUTEN los programas, no de lo que uno
  * suponga: sin esto la lista se elige a ojo y envejece sin que nadie lo note. */
 VESTA_ENV_FLAG(SlowOps, "VESTA_SLOW_OPS", Report, Scheduler, Bool, Any)
+/* Cuando al manejador de fallos de la VM le llega un codigo que NO es un fallo
+ * del procesador conocido, contar tambien la caida del ANFITRION -- pila
+ * nativa, simbolos y desensamblado -- ademas de la linea con el codigo.
+ *
+ * APAGADO por defecto, y no por lo que cuesta sino por lo que MEZCLA.  Son dos
+ * manejadores distintos a proposito: el de la VM convierte un fallo del
+ * PROGRAMA INVITADO en un `FatalError` que se puede capturar, y el informe de
+ * caidas cuenta que se ha muerto VESTAVM.  Llamar al segundo desde el primero
+ * imprime "el proceso se ha caido" sobre un proceso que sigue vivo, y ademas se
+ * gasta el informe -- que es de UNA sola vez por proceso --, con lo que una
+ * caida de verdad mas tarde no contaria nada.
+ *
+ * Encenderlo es para perseguir justo eso: un codigo del sistema que no es
+ * nuestro y del que hace falta saber COMO se llego.  Asi salio que la
+ * corrupcion de monton de `173_wndproc_win32` venia de `uxtheme` cargandose
+ * PEREZOSAMENTE dentro de `CreateWindowExW`. */
+VESTA_ENV_FLAG(VmFaultHostReport, "VESTA_VM_FAULT_HOST_REPORT", Report,
+               Scheduler, Bool, Any)
 /* Vuelca el ESTADO de las caches del interprete al morir cada proceso: cuanto
  * ocupa la icache, cuantas cabeceras de paquete hay, que region esta en uso y
  * cuanto lleva, y cuantos paquetes siguen vivos.
@@ -359,6 +377,13 @@ VESTA_ENV_FLAG(AsaCache, "VESTA_ASA_CACHE", Speed, Asa, Text, Any)
 VESTA_ENV_FLAG(AsaFormas, "VESTA_ASA_FORMAS", Report, Asa, Bool, Any)
 VESTA_ENV_FLAG(AsaHechosDebug, "VESTA_ASA_HECHOS_DEBUG", Report, Asa, Bool, Any)
 VESTA_ENV_FLAG(BoundsDebug, "VESTA_BOUNDS_DEBUG", Report, Asa, Bool, Any)
+/* No mirar el CUERPO del llamado para acotar la region de cada parametro: la
+ * pregunta "estos dos parametros reciben la misma memoria" se contesta solo con
+ * donde apunta cada argumento.  Es la mitad cara -- pide el punto fijo de
+ * efectos --, asi que apagarla es lo que permite medir cuanto vale, y ademas
+ * deja una salida si algun dia estorba.  Sin ella se pierde precision, no
+ * correccion: se dejan de VER solapes reales, nunca se inventa uno. */
+VESTA_ENV_FLAG(NoParamReach, "VESTA_NO_PARAM_REACH", Speed, Asa, Bool, Any)
 VESTA_ENV_FLAG(FormaDebug, "VESTA_FORMA_DEBUG", Report, Asa, Bool, Any)
 VESTA_ENV_FLAG(RpoDump, "VESTA_RPO_DUMP", Report, Asa, Bool, Any)
 
@@ -367,6 +392,11 @@ VESTA_ENV_FLAG(CacheDir, "VX_CACHE_DIR", Location, Cache, Text, Any)
 VESTA_ENV_FLAG(CasDir, "VX_CAS_DIR", Location, Cache, Text, Any)
 VESTA_ENV_FLAG(NoCache, "VX_NO_CACHE", Speed, Cache, Bool, Any)
 VESTA_ENV_FLAG(NoProjectCache, "VX_NO_PROJECT_CACHE", Speed, Cache, Bool, Any)
+/* El `.vel` suelto de cada dependencia -- el que la hace distribuible sin el
+ * proyecto.  Producirlo obliga a EMITIR el modulo una segunda vez, o sea a
+ * asignarle registros otra vez, y eso es la mayor parte del coste del frontend.
+ * Va apagado: quien reparta modulos sueltos lo enciende. */
+VESTA_ENV_FLAG(DepVel, "VESTA_DEP_VEL", Speed, Cache, Bool, Any)
 VESTA_ENV_FLAG(CacheFingerprint, "VX_CACHE_FINGERPRINT", Location, Cache, Text,
                Any)
 VESTA_ENV_FLAG(McCacheTtlDays, "VESTA_MC_CACHE_TTL_DAYS", Location, Cache, Int,

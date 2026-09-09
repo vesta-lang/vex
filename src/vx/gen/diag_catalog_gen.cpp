@@ -59,6 +59,10 @@ const CatEntry kEntries[] = {
     {"VX2050", {"this integer operation does not fit in its type: the result {0} is outside {1} ({2} to {3}), so it comes out as a different number; write a cast to the type -- (i8)(a + b) -- if wrapping around is what you meant", "esta cuenta entera no cabe en su tipo: el resultado {0} se sale de {1} ({2} a {3}), asi que sale otro numero; escribe un cast al tipo -- (i8)(a + b) -- si envolver es lo que querias"}},
     {"VX2051", {"the field '{0}' covers bytes {1}..{2} of this view, which the field '{3}' ({4}..{5}) already covers: two fields describing the same bytes is almost always a mistyped offset. If they share them on purpose -- a union inside the format -- say so on the field: @overlaps({3})", "el campo '{0}' cubre los bytes {1}..{2} de esta vista, que ya cubre el campo '{3}' ({4}..{5}): dos campos describiendo los mismos bytes son casi siempre un offset mal escrito. Si los comparten a proposito -- una union dentro del formato -- dilo en el campo: @overlaps({3})"}},
     {"VX2052", {"'@overlaps({0})' on the field '{1}' names something that is not a field of this view: it can only name a sibling that shares its bytes", "'@overlaps({0})' en el campo '{1}' nombra algo que no es un campo de esta vista: solo puede nombrar a un hermano con el que comparta bytes"}},
+    {"VX2053", {"parameter {0} of '{1}' promises that no other parameter reaches its region, and parameter {2} reaches the same memory", "el parametro {0} de '{1}' promete que ningun otro parametro alcanza su region, y el parametro {2} alcanza esa misma memoria"}},
+    {"VX2054", {"the call at line {0} passes both, and there they are the same memory", "la llamada de la linea {0} le pasa los dos, y ahi son la misma memoria"}},
+    {"VX2055", {"two exclusive borrows of one region cannot be alive at once: end one before taking the other, or use 'borrow<T>' if reading is enough", "no pueden estar vivos dos prestamos exclusivos de una misma region: termina uno antes de tomar el otro, o usa 'borrow<T>' si con leer basta"}},
+    {"VX2056", {"the direction declared on parameter {0} asserts that its region is reached only through it; drop the declaration, or do not pass overlapping memory at that call", "la direccion declarada en el parametro {0} afirma que su region solo se alcanza por el; quita la declaracion, o no le pases memoria solapada en esa llamada"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -215,6 +219,7 @@ const CatEntry kEntries[] = {
     {"VX9254", {"a `.pdata` entry ends before it begins.", "una entrada de `.pdata` acaba antes de empezar."}},
     {"VX9255", {"two `.pdata` entries begin at the same address: either the same table was linked twice, or a relocation was left unresolved.", "dos entradas de `.pdata` empiezan en la misma direccion: o la misma tabla entro dos veces, o una relocation quedo sin resolver."}},
     {"VX9256", {"out of memory while writing the object's string table.", "sin memoria al escribir la tabla de cadenas del objeto."}},
+    {"VX9257", {"cannot mix {1} and {3} objects: '{0}' is {1} and '{2}' is {3}.  These are different ABIs, not just different container formats: an x86-64 ELF object passes arguments in rdi/rsi/rdx and uses the red zone, while a COFF one passes them in rcx/rdx/r8/r9 and reserves 32 bytes of shadow space.", "no se pueden mezclar objetos {1} y {3}: '{0}' es {1} y '{2}' es {3}.  Son ABI distintas, no solo contenedores distintos: un objeto ELF de x86-64 pasa los argumentos en rdi/rsi/rdx y usa la zona roja, y uno COFF los pasa en rcx/rdx/r8/r9 y reserva 32 bytes de espacio de sombra."}},
     {"VXA001", {"asm: dead code: unreachable instruction in the asm block", "asm: codigo muerto: instruccion inalcanzable en el bloque asm"}},
     {"VXA002", {"asm: jump to label '{0}' not defined in the asm block", "asm: salto a etiqueta '{0}' no definida en el bloque asm"}},
     {"VXA003", {"asm: infinite loop: control cannot leave the asm block", "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"}},
@@ -543,7 +548,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 522;
+const int kEntryCount = 527;
 
 } // namespace
 

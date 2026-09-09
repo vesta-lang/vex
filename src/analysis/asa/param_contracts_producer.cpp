@@ -228,6 +228,34 @@ PairVerdict pair_from_call_sites(Production &p,
  * @param fn Funcion.
  * @return Cuantos hay.
  */
+/**
+ * @brief Cuantos punteros PROMETEN que su region no la alcanza otro parametro.
+ *
+ * Es la cuenta contraria a @ref undeclared_pointer_params, y hace falta por una
+ * razon distinta: alli las llamadas se miran para decirle a un par SIN declarar
+ * lo que le falta; aqui se miran porque el par SI declaro, y entonces un
+ * solapamiento no es una declaracion que falta -- es una promesa INCUMPLIDA.
+ *
+ * Es el caso de dos `borrow_mut<T>` del mismo sitio: cada uno promete
+ * exclusividad, el comprobador lo hace cumplir por nombre y dentro de una
+ * funcion, y pasarselos a otra por separado lo vuelve invisible.
+ *
+ * @param fn Funcion a mirar.
+ * @return Cuantos de sus parametros puntero declaran la exclusividad.
+ */
+size_t exclusive_pointer_params(const ir::IrFunction &fn) {
+    size_t n = 0;
+    for (size_t i = 0; i < fn.params.size(); ++i) {
+        const ir::IrValueId v = fn.params[i];
+        if (v >= fn.values.size()) continue;
+        if (fn.values[v].type != ir::IrType::PTR) continue;
+        if (i < fn.param_contracts.size() &&
+            fn.param_contracts[i].pointee().has(ir::IrParamClaim::ExclusiveCall))
+            ++n;
+    }
+    return n;
+}
+
 size_t undeclared_pointer_params(const ir::IrFunction &fn) {
     size_t n = 0;
     for (size_t i = 0; i < fn.params.size(); ++i) {
@@ -433,7 +461,15 @@ void produce_param_contracts(Production &p) {
          * el mismo y vale igual.  Lo que no se hace es callarlo, que es como
          * estaba: el programador no tenia forma de saber que una palabra suya
          * cambia el codigo que sale. */
-        if (undeclared_pointer_params(fn) < 2) continue;
+        /* Y TAMBIEN cuando el par SI declaro.  Son dos preguntas distintas y
+         * antes solo se hacia la primera: con la exclusividad declarada, este
+         * mismo recorrido deja de buscar lo que falta y pasa a comprobar lo que
+         * se prometio.  Sin esto, dos `borrow_mut<T>` de la misma region
+         * pasaban invisibles en cuanto se los llevaba otra funcion -- el
+         * comprobador los cruza por nombre y dentro de una sola --. */
+        if (undeclared_pointer_params(fn) < 2 &&
+            exclusive_pointer_params(fn) < 2)
+            continue;
 
         /* Y ahora se MIRAN LAS LLAMADAS, en vez de pedir una declaracion sin
          * haberlo hecho.  Para cada par de punteros sin declarar hay tres
@@ -445,7 +481,11 @@ void produce_param_contracts(Production &p) {
          * nadie, no hay nada que mirar y no se afirma nada. */
         const auto it_sites = calls.find(fn.name);
         if (it_sites == calls.end()) continue;
-        const std::vector<ModuleWalk::Site> &sites = it_sites->second;
+        /* UNA vez, fuera de los dos bucles.  Pedirlo por par seria una consulta
+         * a la base -- con su comprobacion de cache y su recuento -- por cada
+         * uno de los pares, y los pares son el cuadrado de los parametros. */
+        const effects::ParamAliasing &aliasing =
+            p.base.param_aliasing(p.mod, p.stage);
         for (size_t a = 0; a < fn.params.size(); ++a) {
             for (size_t b = a + 1; b < fn.params.size(); ++b) {
                 const ir::IrValueId va = fn.params[a], vb = fn.params[b];
@@ -453,16 +493,30 @@ void produce_param_contracts(Production &p) {
                 if (fn.values[va].type != ir::IrType::PTR ||
                     fn.values[vb].type != ir::IrType::PTR)
                     continue;
-                uint32_t sitio = 0;
-                const PairVerdict v =
-                    pair_from_call_sites(p, sites, a, b, sitio);
+                /* Se PREGUNTA, no se calcula.  Este mismo conocimiento lo
+                 * necesita la comprobacion de prestamos para cruzarlo con la
+                 * exclusividad prometida, asi que vive en la base y lo piden
+                 * los dos: tenerlo aqui dentro serian dos productores del
+                 * mismo hecho. */
+                const effects::ParamPairInfo pi = aliasing.of(fn.name, a, b);
+                uint32_t sitio = pi.line;
+                const effects::ParamPairVerdict v = pi.verdict;
 
-                if (v == PairVerdict::Overlaps) {
+                if (v == effects::ParamPairVerdict::Overlaps) {
                     /* Un DATO del programa, no una limitacion del analisis: hay
                      * una llamada donde esas dos regiones son la misma.  Se
                      * dice con su linea, que es lo unico accionable -- y ahi
                      * declarar la direccion no arreglaria nada, la haria
-                     * MENTIR. */
+                     * MENTIR.
+                     *
+                     * El hecho es el MISMO declare el par o no: "estas dos
+                     * regiones son la misma en esta llamada".  Que ademas sea
+                     * un fallo -- porque uno de los dos prometia exclusividad
+                     * -- no se decide aqui: eso sale de juntar este hecho con
+                     * `param.exclusive_call`, que ya se afirma por su cuenta, y
+                     * juntarlos es del CONSUMIDOR.  Acunar un hecho
+                     * "promesa incumplida" seria meter el veredicto dentro del
+                     * dato y duplicar lo que las dos proposiciones ya dicen. */
                     Fact f;
                     f.what.domain = kProducerParamContracts;
                     f.what.code = "param.call_site_overlaps";
@@ -477,7 +531,7 @@ void produce_param_contracts(Production &p) {
                     p.assert_fact(f);
                     continue;
                 }
-                if (v == PairVerdict::Disjoint) {
+                if (v == effects::ParamPairVerdict::Disjoint) {
                     /* Todas las llamadas VISIBLES lo demuestran.  Si ademas no
                      * hay otras -- funcion privada --, vale para el cuerpo y no
                      * hace falta que nadie declare nada.  Si es publica, sigue

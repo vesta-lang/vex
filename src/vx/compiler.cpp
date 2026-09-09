@@ -1402,6 +1402,27 @@ CompileResult compile_vx_source(const std::string &source,
                                      s.end());
         }
 
+        /* La exclusividad de los prestamos, ANTES de optimizar, y por dos
+         * razones que apuntan al mismo sitio.
+         *
+         * La primera es de correccion: esa promesa es lo que autoriza al
+         * optimizador a reordenar accesos, asi que comprobarla despues seria
+         * comprobar si valia lo que ya se uso.
+         *
+         * La segunda es que despues no se puede: lo que demuestra el fallo es
+         * una LLAMADA que pasa las dos regiones, y al inlinar esa llamada
+         * desaparece.  Medido -- el hecho del solapamiento solo existe en el
+         * momento de antes --.
+         *
+         * Base propia y corta: la de mas abajo mira el codigo YA optimizado, y
+         * son dos codigos distintos.  Mezclarlos daria respuestas de uno sobre
+         * el otro. */
+        {
+            analysis::asa::FactBase pre_opt_base;
+            vx_report_borrow_across_calls(irmod_for_section, res.diagnostics,
+                                          filename, pre_opt_base);
+        }
+
         /* Y el almacen, si alguien pidio el momento de EN MEDIO: lo que un
          * pase averigua y acto seguido deshace -- el desenrollador sabe
          * cuantas vueltas da el bucle justo antes de reescribirlo -- no esta
@@ -1456,6 +1477,9 @@ CompileResult compile_vx_source(const std::string &source,
         if (opts.report_bounds)
             vx_report_bounds(irmod_for_section, res.diagnostics, filename,
                              fact_base);
+        /* La exclusividad de los prestamos NO se comprueba aqui: se hizo antes
+         * de optimizar, que es donde todavia existen las llamadas que la
+         * demuestran.  Ver el comentario de alli. */
         /* Precondiciones del asm.  SIEMPRE, no bajo opcion: una instruccion
          * cuya exigencia no se cumple no da un resultado peor, hace caer el
          * programa -- y callarselo ya costo descubrirlo ejecutando.

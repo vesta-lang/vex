@@ -1560,6 +1560,10 @@ es = "`--unwind`: valor no reconocido '{0}'.  Usa auto|none|table|cfi|both."
 en = "`--unwind table` asks for `.pdata`/`.xdata`, which only exist in PE; the target format is ELF.  Use `cfi` there, or `auto`."
 es = "`--unwind table` pide `.pdata`/`.xdata`, que solo existen en PE; el formato del objetivo es ELF.  Ahi usa `cfi`, o `auto`."
 
+[VX9257]
+en = "cannot mix {1} and {3} objects: '{0}' is {1} and '{2}' is {3}.  These are different ABIs, not just different container formats: an x86-64 ELF object passes arguments in rdi/rsi/rdx and uses the red zone, while a COFF one passes them in rcx/rdx/r8/r9 and reserves 32 bytes of shadow space."
+es = "no se pueden mezclar objetos {1} y {3}: '{0}' es {1} y '{2}' es {3}.  Son ABI distintas, no solo contenedores distintos: un objeto ELF de x86-64 pasa los argumentos en rdi/rsi/rdx y usa la zona roja, y uno COFF los pasa en rcx/rdx/r8/r9 y reserva 32 bytes de espacio de sombra."
+
 [VX9252]
 en = "the size of `.pdata` is not a multiple of 12: a RUNTIME_FUNCTION is three RVAs, so a half entry would be left at the end and the system would read it anyway."
 es = "el tamano de `.pdata` no es multiplo de 12: un RUNTIME_FUNCTION son tres RVA, asi que quedaria una entrada a medias al final y el sistema la leeria igual."
@@ -2251,6 +2255,29 @@ es = "un argumento de '{0}' esta a su vez pendiente, asi que se difiere la llama
 # El informe de una CAIDA DEL PROCESO.  Va entero por catalogo, y aqui importa
 # mas que en ningun otro sitio: es lo unico que quien se encuentra el fallo va a
 # poder leer, y con frecuencia lo unico que va a poder pegar en un informe.
+# La exclusividad de un prestamo, incumplida CRUZANDO una llamada.  El
+# comprobador del AST la hace cumplir por nombre y dentro de una funcion; esto es
+# lo que se le escapa: dos prestamos exclusivos de la misma region que llegan por
+# separado.  El mensaje lleva la LLAMADA que lo demuestra, porque sin ella seria
+# una acusacion sin nada detras.
+["VX2053"]
+en = "parameter {0} of '{1}' promises that no other parameter reaches its region, and parameter {2} reaches the same memory"
+es = "el parametro {0} de '{1}' promete que ningun otro parametro alcanza su region, y el parametro {2} alcanza esa misma memoria"
+["VX2054"]
+en = "the call at line {0} passes both, and there they are the same memory"
+es = "la llamada de la linea {0} le pasa los dos, y ahi son la misma memoria"
+["VX2055"]
+en = "two exclusive borrows of one region cannot be alive at once: end one before taking the other, or use 'borrow<T>' if reading is enough"
+es = "no pueden estar vivos dos prestamos exclusivos de una misma region: termina uno antes de tomar el otro, o usa 'borrow<T>' si con leer basta"
+# La misma promesa puede venir de dos sitios y la salida NO es la misma, asi que
+# tampoco puede serlo la nota: una la deriva el compilador del TIPO -- ahi se
+# habla de prestamos, arriba -- y la otra la ESCRIBIO el programador con la
+# direccion del parametro.  A quien puso `out` decirle que termine un prestamo
+# lo manda a buscar algo que no existe en su programa.
+["VX2056"]
+en = "the direction declared on parameter {0} asserts that its region is reached only through it; drop the declaration, or do not pass overlapping memory at that call"
+es = "la direccion declarada en el parametro {0} afirma que su region solo se alcanza por el; quita la declaracion, o no le pases memoria solapada en esa llamada"
+
 ["crash.header"]
 en = "=== VestaVM: the process crashed ==="
 es = "=== VestaVM: el proceso se ha caido ==="

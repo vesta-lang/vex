@@ -537,6 +537,16 @@ struct Resolver {
         case Op::GC_HANDLE_FOR_PTR:
         case Op::UNWRAP:
         case Op::MVTAKE_IR:
+        /* Un PRESTAMO es la misma direccion que su dueno: no mueve nada, solo
+         * dice quien puede tocarla y con que exclusividad.  Su primer operando
+         * es el puntero prestado, asi que la region es la del dueno.
+         *
+         * Sin este caso el resolutor se topaba con un opcode que no conoce y
+         * RENUNCIA -- lo decia, que es lo correcto, pero renunciaba --, y con
+         * el una funcion con un solo `lend` dejaba de tener region resuelta
+         * para todo lo que viene detras: alias, cotas y la comprobacion de
+         * prestamos que se apoya justo en esto. */
+        case Op::BORROW:
             if (!d->operands.empty()) return resolve(d->operands[0]);
             /* Una derivacion sin origen: el IR no tiene esa forma.  Si llega
              * aqui es un fallo NUESTRO al construirlo, no del programa. */

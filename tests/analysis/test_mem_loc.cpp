@@ -89,6 +89,58 @@ static void test_must_alias() {
 }
 
 // --------------------------------------------------------------------------
+// 3b) Solape DEMOSTRADO: lo que hace falta para ACUSAR, que no es !no_alias.
+//
+// `may_alias` contesta "no se pudo demostrar que sean disjuntas", y esa
+// respuesta esta bien para no optimizar y INVERTIDA para acusar.  Con ella un
+// `f(m + 8, m)` sobre una reserva comun -- dos regiones que no se tocan --
+// salia como solape probado y tumbaba un programa correcto.
+// --------------------------------------------------------------------------
+static void test_must_overlap() {
+    // Rangos conocidos que se cortan de verdad.
+    CHECK(must_overlap(L(K::Heap, 7, 0, 8), L(K::Heap, 7, 4, 8)),
+          "[0..8) y [4..12) de la misma reserva se cortan");
+    // Rangos conocidos que NO se cortan.
+    CHECK(!must_overlap(L(K::Heap, 7, 0, 8), L(K::Heap, 7, 8, 8)),
+          "adyacentes no se cortan");
+    // El caso que rechazaba un programa correcto: misma raiz, anchos sin
+    // conocer, desplazamientos distintos.  may_alias dice que si; demostrado,
+    // no hay nada.
+    CHECK(may_alias(L(K::Heap, 7, 64, 0), L(K::Heap, 7, 0, 0)),
+          "sin anchos, may_alias es conservador y dice que puede");
+    CHECK(!must_overlap(L(K::Heap, 7, 64, 0), L(K::Heap, 7, 0, 0)),
+          "pero eso NO demuestra el solape: 64 bytes de distancia");
+    // Sin anchos, lo unico demostrable es el mismo byte de arranque.
+    CHECK(must_overlap(L(K::Heap, 7, 16, 0), L(K::Heap, 7, 16, 0)),
+          "misma raiz y mismo desplazamiento: ese byte lo tocan los dos");
+    // Uno de cada: el arranque del que no se conoce cae DENTRO del otro.  Es lo
+    // que habilita la extension declarada (`i64 p[3]` -> 24 bytes): con ella
+    // `f(m + 1, m)` si se ve, y sin ella no.
+    CHECK(must_overlap(L(K::Heap, 7, 0, 24), L(K::Heap, 7, 8, 0)),
+          "un arranque dentro de un rango conocido: solape demostrado");
+    CHECK(must_overlap(L(K::Heap, 7, 8, 0), L(K::Heap, 7, 0, 24)),
+          "y da igual el orden de los dos");
+    // Pero fuera del rango conocido no se demuestra nada: el desconocido puede
+    // acabar antes de llegar.
+    CHECK(!must_overlap(L(K::Heap, 7, 0, 24), L(K::Heap, 7, 64, 0)),
+          "un arranque FUERA del rango conocido no demuestra solape");
+    // Raices y clases distintas no demuestran solape en ningun caso.
+    CHECK(!must_overlap(L(K::Heap, 7, 0, 8), L(K::Heap, 9, 0, 8)),
+          "dos reservas distintas no se solapan");
+    CHECK(!must_overlap(L(K::Heap, 7, 0, 8), L(K::Stack, 7, 0, 8)),
+          "clases distintas tampoco");
+    // Un parametro: su raiz es un NOMBRE, asi que dos indices distintos no
+    // demuestran ni lo uno ni lo otro.
+    CHECK(!must_overlap(L(K::ArgDerived, 0, 0, 8), L(K::ArgDerived, 1, 0, 8)),
+          "dos posiciones de parametro no demuestran solape");
+    // Y TOP, que aliasa todo, no demuestra nada.
+    CHECK(!must_overlap(L(K::Unknown, LOC_GENERIC, 0, 0), L(K::Heap, 7, 0, 8)),
+          "Unknown puede aliasar todo, y por eso no demuestra nada");
+    CHECK(!must_overlap(L(K::None, 0, 0, 0), L(K::None, 0, 0, 0)),
+          "bottom no toca ningun byte");
+}
+
+// --------------------------------------------------------------------------
 // 4) Resolvedor points-to: ALLOCA raiz, ADD const acumula, ADD var = Unknown.
 // --------------------------------------------------------------------------
 static void test_points_to() {
@@ -283,6 +335,7 @@ int main() {
     test_range_alias();
     test_class_alias();
     test_must_alias();
+    test_must_overlap();
     test_points_to();
     std::printf("=== mem-loc (modelo unico): %d checks, %d fallos ===\n",
                 g_checks, g_fail);
