@@ -1465,7 +1465,17 @@ std::vector<DomainCost> current_inputs(const ir::IrModule &mod) {
                                      d.inputs, in, f.second));
             }
         } else {
-            continue; // ni sabe decirlo ni declara: no se puede comprobar
+            /* Declara `None`: no mira NADA del programa, asi que sus hechos no
+             * pueden caducar por tocar el codigo.  Sale con una huella
+             * constante -- comprobable y siempre valida -- en vez de quedarse
+             * fuera de la lista.
+             *
+             * La diferencia importa: quedarse fuera es "no se puede comprobar",
+             * y eso, con la puerta del modulo abierta, seria aceptar lo que
+             * haya.  Una constante dice lo que de verdad pasa: no depende de
+             * nada, luego siempre vale.  Y ya no existe la tercera opcion --
+             * no declarar es error de compilacion. */
+            c.fingerprint = fold_declared_inputs(d.inputs, in);
         }
         r.push_back(c);
     }

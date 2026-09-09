@@ -1283,7 +1283,19 @@ ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
     return ensure_facts_impl_(mod, store, wanted, path, fingerprint, stage);
 }
 
-uint64_t asa_facts_key(uint64_t content_key, const CompileOptions &opts,
+uint64_t asa_module_id(const std::string &source_path) {
+    /* Solo la ruta: es QUIEN es el modulo, no que dice.  Que el contenido no
+     * entre aqui es justo lo que permite que las claves por dominio y por
+     * funcion lleguen a actuar. */
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (unsigned char c : source_path) {
+        h ^= static_cast<uint64_t>(c);
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+uint64_t asa_facts_key(uint64_t module_id, const CompileOptions &opts,
                        const char *stage) {
     /* La configuracion, con los MISMOS campos que usa el CAS: dos criterios
      * distintos de "que configuracion es esta" acabarian con uno invalidando y
@@ -1311,7 +1323,11 @@ uint64_t asa_facts_key(uint64_t content_key, const CompileOptions &opts,
         h *= 0x100000001b3ULL;
     };
     mix(0x41534146414354ull); // dominio: "ASA facts key".
-    mix(content_key);
+    /* QUE modulo, no que dice.  El contenido lo comprueban las claves por
+     * dominio y por funcion, que saben de que depende cada una; meterlo aqui
+     * descartaba el fichero entero ante cualquier edicion y dejaba esas dos
+     * sin llegar a actuar nunca. */
+    mix(module_id);
     mix(cfg_fp);
     /* Los mandos de entorno que CAMBIAN lo emitido.  La tabla ya los clasifica
      * (`FlagScope::Emitted`), asi que esto no es una lista que mantener: es
@@ -4493,7 +4509,7 @@ CompileResult compile_vx_project(
                           rutas_cache_(root_path, std::string()).hechos,
                           analysis::asa::kStagePreOpt)
                     : std::string(),
-                asa_facts_key(root_facts_key, opts,
+                asa_facts_key(asa_module_id(root_path), opts,
                               analysis::asa::kStagePreOpt),
                 analysis::asa::kStagePreOpt);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
@@ -4658,7 +4674,8 @@ CompileResult compile_vx_project(
                       rutas_cache_(root_path, std::string()).hechos,
                       analysis::asa::kStagePostOpt)
                 : std::string(),
-            asa_facts_key(root_facts_key, opts, analysis::asa::kStagePostOpt),
+            asa_facts_key(asa_module_id(root_path), opts,
+                          analysis::asa::kStagePostOpt),
             analysis::asa::kStagePostOpt);
         res.asa_summaries.insert(res.asa_summaries.end(), s.begin(), s.end());
         /* Y sale con el resultado, para que quien compilo pueda consultarlo sin

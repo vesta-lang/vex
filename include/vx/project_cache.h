@@ -308,9 +308,29 @@ struct CompileOptions;
  *
  * Una clave de cache tiene que describir TODAS las entradas o no sirve: la que
  * omite una sirve el artefacto de otra configuracion, y eso no da error, da
- * respuestas de otro programa.  Aqui entran el contenido del modulo, la
- * configuracion de compilacion, los mandos de entorno que cambian lo emitido, y
- * el momento.
+ * respuestas de otro programa.
+ *
+ * @par Es la capa GRUESA de tres, no la unica
+ * Aqui NO entra el contenido del modulo, y es a proposito.  La hermeticidad se
+ * reparte en tres capas y cada una decide un descarte de su tamano:
+ *
+ *   - esta, el FICHERO: identidad del modulo + configuracion + mandos
+ *     `Emitted` + momento.  Si no cuadra, lo guardado habla de otro programa o
+ *     de otra configuracion y no se salva nada.
+ *   - por DOMINIO (@c DomainCost::fingerprint): las entradas que ese dominio
+ *     declara mirar.  Tocar codigo no invalida a quien solo mira datos
+ *     estaticos.
+ *   - por FUNCION (@c DomainCost::by_function): lo mismo tomando de la funcion
+ *     lo suyo.  Tocar una funcion no invalida los hechos de las demas.
+ *
+ * Con el contenido AQUI, las otras dos no llegaban a actuar nunca: cualquier
+ * edicion movia esta clave y el fichero se descartaba entero antes de mirar
+ * ninguna funcion.  La granularidad estaba construida y era inerte.
+ *
+ * Sacarlo solo es seguro porque ya no existe un dominio que no diga de que
+ * depende: no declararlo es un ERROR DE COMPILACIoN (@c register_producer), y
+ * el que no mira nada del programa lo declara con @c DomainInput::None, que da
+ * una huella constante -- comprobable, no "acepta lo que haya" --.
  *
  * @par Y la CAPA de la configuracion depende del momento
  * @c BuildConfig es por capas a proposito.  @c ir_fingerprint() describe el IR
@@ -322,13 +342,30 @@ struct CompileOptions;
  * segunda.  Usar la primera para los dos -- que es lo que se hacia -- sirve
  * hechos post-opt calculados con otro `-O`, en silencio.
  *
- * @param content_key Identidad del modulo por CONTENIDO (fuente + deps).
- * @param opts        La configuracion de esta compilacion.
- * @param stage       @c analysis::asa::kStage*.
+ * @param module_id QUE modulo es -- no que dice --.  Sale de
+ *                  @ref asa_module_id.  Va en la clave y no se deja solo a la
+ *                  RUTA del fichero para que un `.vxfacts` movido de sitio no
+ *                  se acepte para otro modulo.
+ * @param opts      La configuracion de esta compilacion.
+ * @param stage     @c analysis::asa::kStage*.
  * @return La clave, distinta para cada momento.
  */
-uint64_t asa_facts_key(uint64_t content_key, const CompileOptions &opts,
+uint64_t asa_facts_key(uint64_t module_id, const CompileOptions &opts,
                        const char *stage);
+
+/**
+ * @brief La IDENTIDAD de un modulo: quien es, no que dice.
+ *
+ * La distincion es la que permite que la validacion sea granular.  Una huella
+ * de CONTENIDO cambia con cualquier edicion y descarta el fichero entero; una
+ * de IDENTIDAD solo cambia si se pregunta por otro modulo, y entonces lo que
+ * decide si lo guardado sigue valiendo son las claves por dominio y por
+ * funcion, que si saben de que dependen.
+ *
+ * @param source_path Ruta del fuente, tal cual la maneja el compilador.
+ * @return Su identidad.
+ */
+uint64_t asa_module_id(const std::string &source_path);
 
 /**
  * @brief El fichero de hechos DE UN MOMENTO.

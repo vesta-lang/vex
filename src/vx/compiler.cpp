@@ -1397,15 +1397,19 @@ CompileResult compile_vx_source(const std::string &source,
          * propio momento.  Aqui iba solo esto, sin nada mas: dos compilaciones
          * con distinto `-O` compartian clave y se servian los hechos post-opt
          * la una a la otra. */
-        const uint64_t content_key =
-            wants_facts ? hash_de_tokens(source, /*con_lineas=*/false) : 0;
+        /* La IDENTIDAD del modulo, no su contenido: quien es, no que dice.
+         * El contenido lo comprueban las claves por dominio y por funcion --
+         * que saben de que depende cada una --, y meterlo aqui descartaba el
+         * fichero entero ante cualquier edicion, con lo que esa granularidad
+         * no llegaba a actuar nunca. */
+        const uint64_t module_id = wants_facts ? asa_module_id(filename) : 0;
         if (wants_facts && wants_stage(analysis::asa::kStagePreOpt)) {
             const auto s =
                 ensure_facts(irmod_for_section, res.facts, asa_wanted,
                              asa_facts_path_for_stage(
                                  vxfacts_path_for(filename, std::string()),
                                  analysis::asa::kStagePreOpt),
-                             asa_facts_key(content_key, opts,
+                             asa_facts_key(module_id, opts,
                                            analysis::asa::kStagePreOpt),
                              analysis::asa::kStagePreOpt);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
@@ -1456,7 +1460,7 @@ CompileResult compile_vx_source(const std::string &source,
                              asa_facts_path_for_stage(
                                  vxfacts_path_for(filename, std::string()),
                                  analysis::asa::kStagePostOpt),
-                             asa_facts_key(content_key, opts,
+                             asa_facts_key(module_id, opts,
                                            analysis::asa::kStagePostOpt),
                              analysis::asa::kStagePostOpt);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),

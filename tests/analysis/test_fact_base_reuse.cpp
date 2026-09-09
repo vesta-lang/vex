@@ -296,10 +296,23 @@ static void test_facts_key_is_hermetic() {
 
     CHECK(pre2 != post2, "y los dos momentos nunca comparten clave");
 
-    // Y el contenido del modulo sigue mandando, claro.
+    // Y otro MODULO nunca comparte clave con este.
     CHECK(vx::asa_facts_key(1234, o2, analysis::asa::kStagePreOpt) !=
               vx::asa_facts_key(5678, o2, analysis::asa::kStagePreOpt),
-          "otro contenido = otra clave");
+          "otro modulo = otra clave");
+
+    /* Pero el CONTENIDO no entra aqui, y es la condicion de que la
+     * granularidad llegue a actuar: con el dentro, cualquier edicion movia esta
+     * clave y el fichero se descartaba ENTERO antes de mirar una sola funcion
+     * -- la validacion por dominio y por funcion existia y era inerte --.
+     *
+     * Se comprueba con la identidad, que es lo unico que entra: el mismo
+     * modulo da la misma clave se haya editado o no.  Lo que decide si lo
+     * guardado sigue valiendo son las otras dos capas. */
+    CHECK(vx::asa_module_id("F:/x/a.vx") == vx::asa_module_id("F:/x/a.vx"),
+          "la identidad de un modulo no cambia porque se edite");
+    CHECK(vx::asa_module_id("F:/x/a.vx") != vx::asa_module_id("F:/x/b.vx"),
+          "pero dos modulos distintos no la comparten");
 }
 
 // --------------------------------------------------------------------------
