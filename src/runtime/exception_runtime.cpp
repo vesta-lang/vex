@@ -3,6 +3,7 @@
  * @brief Implementacion del sistema FatalError
  */
 
+#include "util/crash_report.h" // contar la caida entera antes de saltar
 #include "util/env_flags.h"
 #include "runtime/exception_runtime.h"
 
@@ -2368,6 +2369,20 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
                          "(exception_runtime.cpp).\n",
                          (unsigned long)code,
                          info->ExceptionRecord->ExceptionAddress);
+        /* Y, SI SE PIDE, el informe del anfitrion entero: pila nativa, simbolos
+         * y desensamblado.  La linea de arriba dice QUE paso y DoNDE; esto dice
+         * COMO se llego, que es lo que convierte un codigo desconocido en un
+         * diagnostico.  Tiene que ser en este punto: lo siguiente es el salto al
+         * punto de rescate, y a partir de ahi la pila es la del salto.
+         *
+         * Apagado por defecto porque son DOS manejadores distintos a proposito
+         * -- este convierte un fallo del programa invitado en algo capturable;
+         * aquel cuenta que se ha muerto VestaVM -- y mezclarlos imprime "el
+         * proceso se ha caido" sobre un proceso vivo y ademas se gasta el
+         * informe, que es de una sola vez.  Lo del invitado se cuenta por su
+         * camino: `pending_av_kind` y `build_stack_trace`. */
+        if (util::flag_on(util::FlagId::VmFaultHostReport))
+            ::util::crash_report_for(info);
     }
     ProcessVM *proc = runtime::get_current_executing_process();
     if (proc == nullptr || !proc->av_recovery_active) {

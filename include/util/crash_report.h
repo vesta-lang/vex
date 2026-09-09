@@ -66,6 +66,27 @@ void install_crash_reporter() noexcept;
 void crash_test_if_asked() noexcept;
 
 /**
+ * @brief Cuenta la caida ENTERA para una excepcion que ya tiene otro manejador.
+ *
+ * El informe se instala como filtro de lo NO capturado, asi que una excepcion
+ * que un manejador anterior se queda no llega nunca hasta el.  Eso ya escondio
+ * un fallo: una corrupcion de monton (`0xC0000374`) la recogia el manejador de
+ * fallos del procesador de la VM, que la desviaba a su punto de rescate, y del
+ * suceso quedaba UNA LINEA -- codigo y direccion -- mientras que el informe que
+ * si salia era el del salto, cuya pila habla del salto y no de la corrupcion.
+ *
+ * Esto le da a ese manejador la forma de contarlo antes de decidir que hace.
+ *
+ * @param platform_exception En Windows, el @c EXCEPTION_POINTERS* que recibe el
+ *        manejador.  Nulo no hace nada.  Fuera de Windows todavia no hace nada:
+ *        alli el equivalente es el manejador de senal, que ya es el nuestro.
+ *
+ * @note Informa UNA sola vez por proceso, igual que el filtro: una segunda
+ *       caida durante el propio informe no vuelve a entrar.
+ */
+void crash_report_for(void *platform_exception) noexcept;
+
+/**
  * @brief Deja dicho QUE se esta haciendo, para que el informe lo cuente.
  *
  * Una traza de pila dice donde reviento; esto dice sobre QUE.  "compilando

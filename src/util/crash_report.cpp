@@ -975,6 +975,25 @@ void on_terminate() noexcept {
 
 } // namespace
 
+void crash_report_for(void *platform_exception) noexcept {
+#if defined(_WIN32)
+    if (platform_exception == nullptr) return;
+    /* Se reusa el filtro entero, no una version recortada de el: lo que hay que
+     * contar es lo mismo, y dos caminos que informan de una caida acaban
+     * contando cosas distintas -- y el que menos se ejecuta es el que se
+     * queda corto justo el dia que hace falta --.  El valor que devuelve no
+     * significa nada aqui: quien decide que hacer despues es el manejador que
+     * llama, que para eso tiene el contexto. */
+    (void)crash_filter(static_cast<EXCEPTION_POINTERS *>(platform_exception));
+#else
+    /* Fuera de Windows el manejador de fallos del procesador YA es el nuestro,
+     * asi que no hay ningun otro del que rescatar el suceso.  Se acepta el
+     * parametro igual para que quien llame no tenga que envolverlo en
+     * condicionales de plataforma. */
+    (void)platform_exception;
+#endif
+}
+
 void install_crash_reporter() noexcept {
     bool expected = false;
     if (!g_installed.compare_exchange_strong(expected, true)) return;
