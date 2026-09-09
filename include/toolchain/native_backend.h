@@ -33,10 +33,11 @@
 #include <memory>
 #include <vector>
 
-#include "aot/aot_native.h"    // AotArch
-#include "ir/ssa_ir.h"         // IrFunction
-#include "jit/jit_registry.h"  // Stackmap
-#include "jit/vreg_pipeline.h" // NativeReloc, FloatIsa
+#include "aot/aot_native.h"          // AotArch
+#include "codegen/frame_unwind.h"    // FrameUnwind
+#include "ir/ssa_ir.h"               // IrFunction
+#include "jit/jit_registry.h"        // Stackmap
+#include "jit/vreg_pipeline.h"       // NativeReloc, FloatIsa
 
 namespace aot {
 
@@ -70,6 +71,17 @@ struct NativeCompileResult {
     /// Donde cambia la linea del fuente dentro de @c bytes.  Vacio salvo que
     /// se pidiera con @c NativeCompileOpts::want_line_map.
     std::vector<jit::LineMapEntry> line_map;
+    /// Que hizo el prologo, para poder deshacer el marco.
+    ///
+    /// Sin codificar y sin bandera que lo pida, al contrario que
+    /// @c line_map: describirlo no cuesta nada -- el codegen ya sabe que
+    /// guardo, solo hay que apuntarlo -- y quien decide si acaba en el
+    /// binario, y en que formato, es el driver con `--unwind`.  Ponerle aqui
+    /// un interruptor obligaria a decidirlo dos veces.
+    ///
+    /// Queda vacio en los backends que aun no lo describen; el driver lo
+    /// trata como "esta funcion no aporta tabla", no como un error.
+    codegen::FrameUnwind unwind;
 };
 
 /// Backend de codegen nativo de una arquitectura.

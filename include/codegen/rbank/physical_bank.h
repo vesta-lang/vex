@@ -86,6 +86,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib> // getenv, para la valvula de la memoizacion del banco
 #include <string>
 #include <vector>
 
@@ -754,6 +755,124 @@ physical_bank_x86_64_from_reginfo(const TargetRegInfo &tri,
                                   const BackendCaps &caps) {
     return build_physical_bank(descriptor_x86_64_from_reginfo(tri, caps));
 }
+/**
+ * @brief Igualdad POR VALOR de dos descriptores de registros.
+ *
+ * `TargetRegInfo` no define `operator==` y no se le anade desde aqui: es un
+ * tipo de `jit/`, y darle igualdad seria decidir por otro modulo cuando dos de
+ * sus objetos son el mismo.  Esta comparacion existe solo para la memoizacion
+ * de abajo, y por eso vive con ella.
+ */
+inline bool same_target_reginfo(const TargetRegInfo &a,
+                                const TargetRegInfo &b) noexcept {
+    if (a.pointer_size != b.pointer_size ||
+        a.is_two_address != b.is_two_address ||
+        a.can_jump_to_abs_addr != b.can_jump_to_abs_addr ||
+        a.stack_reg != b.stack_reg || a.reserved != b.reserved)
+        return false;
+    for (size_t c = 0; c < TargetRegInfo::NCLASS; ++c) {
+        if (a.ret_reg[c] != b.ret_reg[c] ||
+            a.allocatable[c] != b.allocatable[c] ||
+            a.caller_saved[c] != b.caller_saved[c] ||
+            a.callee_saved[c] != b.callee_saved[c] ||
+            a.scratch[c] != b.scratch[c] || a.arg_regs[c] != b.arg_regs[c])
+            return false;
+    }
+    return true;
+}
+
+/** @brief ¿Esta apagada la memoizacion del banco?  Ver la nota de la cache. */
+inline bool rbank_cache_valve_off() noexcept {
+    const char *v = std::getenv("VESTA_NO_RBANK_CACHE");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
+
+/**
+ * @brief El mismo banco que @c physical_bank_x86_64_from_reginfo, memoizado.
+ *
+ * POR QUE EXISTE, con la medida que lo motivo.  El banco se construia una vez
+ * POR FUNCION, desde `rbank_allocate`, y la cabecera de este mismo fichero
+ * declara en su invariante I4 que la geometria es INMUTABLE: depende de la ISA,
+ * no del ABI, y no cambia.  Se estaba rehaciendo algo constante una vez por
+ * funcion compilada.
+ *
+ * Medido sobre el proyecto de 21 modulos del banco de compilacion (144k lineas,
+ * `VESTA_HOST_ALLOC_SITES=1`), construirlo era:
+ *
+ *     4.608.096 reservas   41,0 MiB   crecer `std::vector<ViewGeom>`
+ *       288.006 reservas  184,6 MiB   el resto de `build_physical_bank`
+ *
+ * 4,6 millones de reservas de 9,33 bytes de media -- tres viajes al monticulo
+ * por lane para guardar 12 bytes.
+ *
+ * LA CLAVE ES POR VALOR, no la direccion de @p tri.  Los accesores del arbol
+ * (`target_x86_64_abi`, `target_arm64`...) devuelven referencias a estaticos,
+ * asi que comparar punteros funcionaria hoy; pero `build_x86_64_target` es
+ * publico y devuelve POR VALOR, y un temporal puede reutilizar la direccion de
+ * otro ya muerto.  Eso daria un banco equivocado sin fallar, que es el peor
+ * modo de fallo.  Comparar los campos cuesta unos pocos memcmp de vectores de
+ * bytes, dos ordenes de magnitud menos que construir el banco.
+ *
+ * Y la clave lleva los caps ENTEROS (`to_bits`) aunque hoy solo se miren `avx`
+ * y `avx512f` en `x86_fp_widths`: si manana el banco pasa a depender de otro,
+ * la clave ya lo cubre en vez de devolver algo caducado en silencio.
+ *
+ * MEMORIA POR HILO, sin cerrojos.  El compilador reparte los modulos de un
+ * nivel topologico en hasta 8 hilos; un `static` compartido necesitaria
+ * sincronizacion en un camino que se recorre una vez por funcion.  Una entrada
+ * por hilo basta porque una tanda de compilacion procesa muchas funciones
+ * seguidas para el MISMO objetivo: el fallo de cache ocurre al cambiar de
+ * objetivo, no por funcion.
+ *
+ * @warning La referencia devuelta vive hasta la siguiente llamada EN ESTE HILO
+ *          con una clave distinta.  Hoy es seguro tenerla durante toda una
+ *          asignacion de registros porque nada aguas abajo vuelve a pedir un
+ *          banco -- `rbank_solve` y `build_fragmentation_plan` lo reciben como
+ *          parametro --, y son los dos unicos consumidores del arbol.  Quien
+ *          anada un tercero que construya bancos dentro de esa ventana tiene
+ *          que copiarlo en vez de guardar la referencia.
+ */
+inline const PhysicalRegisterBank &
+physical_bank_x86_64_from_reginfo_cached(const TargetRegInfo &tri,
+                                         const BackendCaps &caps) {
+    /* Valvula de diagnostico: `VESTA_NO_RBANK_CACHE=1` la apaga.
+     *
+     * No es cortesia. Sin poder apagarla no hay contra que comparar, y
+     * entonces "la cache suma" es una creencia y no una medida -- que es
+     * justamente el error que este cambio vino a corregir.
+     *
+     * Se lee UNA vez, y con `std::getenv` en vez del registro de banderas de
+     * `util/env_flags.h`: `flag_present` se define en un `.cpp`, y esta
+     * cabecera la incluyen pruebas que hoy no enlazan esa biblioteca.  Anadir
+     * una dependencia de enlace a ocho objetivos por una valvula de medida
+     * saldria mas caro que la valvula. */
+    static const bool disabled = rbank_cache_valve_off();
+    if (disabled) {
+        static thread_local PhysicalRegisterBank fresh;
+        fresh = physical_bank_x86_64_from_reginfo(tri, caps);
+        return fresh;
+    }
+
+    struct Memo {
+        bool valid = false;
+        TargetRegInfo key_tri;
+        uint64_t key_caps = 0;
+        PhysicalRegisterBank bank;
+    };
+    static thread_local Memo memo;
+
+    const uint64_t bits = caps.to_bits();
+    if (memo.valid && memo.key_caps == bits &&
+        same_target_reginfo(memo.key_tri, tri))
+        return memo.bank;
+
+    memo.bank = physical_bank_x86_64_from_reginfo(tri, caps);
+    memo.key_tri = tri;
+    memo.key_caps = bits;
+    memo.valid = true;
+    return memo.bank;
+}
+
 inline PhysicalRegisterBank physical_bank_x86_32() {
     return build_physical_bank(descriptor_x86_32());
 }

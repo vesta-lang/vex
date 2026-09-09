@@ -20,6 +20,9 @@
 
 #include "aot/object_writer.h"
 
+#include "vx/diag/diag_catalog.h" // los errores del emisor salen por codigo
+
+#include <string>
 #include <utility>
 
 namespace aot {
@@ -38,6 +41,38 @@ int ObjectWriter::add_text(std::vector<uint8_t> code) {
     set_entry(idx, 0); // por defecto el _start esta al inicio de .text
     return idx;
 }
+
+namespace {
+
+/**
+ * @brief Traduce lo que devolvio el emisor en C.
+ *
+ * Los emisores de objeto son C y no alcanzan el catalogo de diagnosticos, asi
+ * que devuelven un CODIGO -- "VX9252" -- en vez de una frase, y se renderiza
+ * aqui, que es el primer punto en C++ del camino.  Un error lo lee una persona,
+ * y este proyecto sabe decirlo en su idioma; dejar el texto pegado dentro del
+ * emisor lo fijaria a uno solo.
+ *
+ * Lo que NO es un codigo se devuelve tal cual: el resto de mensajes de esos
+ * ficheros son anteriores a esta convencion, y convertirlos todos de golpe
+ * seria un cambio mucho mayor que el que se esta haciendo.
+ *
+ * @param raw      lo que dejo el emisor (puede venir vacio).
+ * @param fallback que decir si no dejo nada.
+ */
+std::string render_emitter_error(const char *raw, const char *fallback) {
+    if (!raw || !raw[0]) return fallback;
+
+    // Un codigo es "VX" y cuatro digitos, y nada mas.
+    bool is_code = raw[0] == 'V' && raw[1] == 'X';
+    for (int i = 2; is_code && i < 6; ++i)
+        is_code = raw[i] >= '0' && raw[i] <= '9';
+    if (is_code && raw[6] == '\0') return vx::diag::format(raw, {});
+
+    return raw;
+}
+
+} // namespace
 
 int ObjectWriter::add_rodata(std::vector<uint8_t> data) {
     WriterSection s;
@@ -97,6 +132,24 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
 
     // Relocations cross-seccion (refs a datos / simbolos de seccion).  El
     // shim las resuelve tras el layout.
+    /* El `static_cast<int>` de abajo da por hecho que los dos enumerados
+     * valen lo mismo.  Es cierto, pero hasta ahora no lo comprobaba nadie: si
+     * alguien insertara un valor en medio de uno de los dos, cada reloc pasaria
+     * a aplicarse como la SIGUIENTE -- un rel32 escrito donde iba una direccion
+     * absoluta --, y eso no rompe el enlace: produce un binario que salta mal.
+     * Se comprueba al compilar, que es cuando todavia se puede arreglar. */
+    static_assert((int)RelocKind::REL32 == AOT_RELOC_REL32, "kind desincronizado");
+    static_assert((int)RelocKind::ABS64 == AOT_RELOC_ABS64, "kind desincronizado");
+    static_assert((int)RelocKind::IMM32 == AOT_RELOC_IMM32, "kind desincronizado");
+    static_assert((int)RelocKind::IMM64 == AOT_RELOC_IMM64, "kind desincronizado");
+    static_assert((int)RelocKind::TPOFF32 == AOT_RELOC_TPOFF32,
+                  "kind desincronizado");
+    static_assert((int)RelocKind::SECREL32 == AOT_RELOC_SECREL32,
+                  "kind desincronizado");
+    static_assert((int)RelocKind::ARM64_CALL26 == AOT_RELOC_ARM64_CALL26,
+                  "kind desincronizado");
+    static_assert((int)RelocKind::RVA32 == AOT_RELOC_RVA32, "kind desincronizado");
+
     std::vector<AotReloc> crelocs(relocs_.size());
     for (size_t i = 0; i < relocs_.size(); ++i) {
         const AbsReloc &r = relocs_[i];
@@ -188,7 +241,7 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
                                              crel_ptr, crel_n, sym_ptr, sym_n,
                                              errbuf, sizeof(errbuf));
         if (!ok) {
-            err = errbuf[0] ? errbuf : "ObjectWriter: error obj";
+            err = render_emitter_error(errbuf, "ObjectWriter: error obj");
             return false;
         }
         return true;
@@ -202,7 +255,7 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
                                static_cast<int>(csecs.size()), crel_ptr, crel_n,
                                errbuf, sizeof(errbuf));
         if (!ok) {
-            err = errbuf[0] ? errbuf : "ObjectWriter: error flat bin";
+            err = render_emitter_error(errbuf, "ObjectWriter: error flat bin");
             return false;
         }
         return true;
@@ -231,7 +284,7 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
                                 static_cast<int>(csecs.size()), crel_ptr,
                                 crel_n, sym_ptr, sym_n, errbuf, sizeof(errbuf));
         if (!ok) {
-            err = errbuf[0] ? errbuf : "ObjectWriter: error shared";
+            err = render_emitter_error(errbuf, "ObjectWriter: error shared");
             return false;
         }
         return true;
@@ -310,7 +363,8 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     aot_set_debug_symbols(nullptr, 0);
 
     if (!ok) {
-        err = errbuf[0] ? errbuf : "ObjectWriter: error desconocido";
+        err = render_emitter_error(errbuf,
+                                   "ObjectWriter: error desconocido");
         return false;
     }
     return true;

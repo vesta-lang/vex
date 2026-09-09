@@ -47,7 +47,8 @@ class X86Backend : public NativeBackend {
             opts.mode32, opts.fisa, opts.want_line_map,
             opts.want_line_map ? &r.line_map : nullptr,
             /*asm_labels_out=*/nullptr,
-            /*stackmaps_out=*/&r.stackmaps, opts.cpu);
+            /*stackmaps_out=*/&r.stackmaps, opts.cpu,
+            /*unwind_out=*/&r.unwind);
         return r;
     }
 

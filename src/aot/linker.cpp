@@ -29,7 +29,11 @@
 #include <cstdint>
 #include <cstdio>  // std::snprintf (cabeceras ar)
 #include <cstdlib> // std::getenv (ruta de las DLLs del sistema)
+#include "vx/diag/diag_catalog.h" // los errores salen del catalogo, por idioma
+
+#include <cctype>  // std::tolower (nombres de directiva sin distinguir caja)
 #include <cstring> // std::memset/memcpy (cabeceras ar)
+#include <filesystem> // recorrer las versiones instaladas del SDK
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -118,7 +122,105 @@ struct ParsedObj {
     std::vector<ObjSym> syms; // indexado por indice de symtab
     std::vector<ObjRel> rels;
     bool is32 = false; // ELF32 / COFF i386
+    /// Contenedor del que salio: ELF o COFF.
+    ///
+    /// Se guarda para poder RECHAZAR la mezcla.  No es una comprobacion
+    /// formalista: aunque los dos contenedores se sepan leer, un objeto ELF de
+    /// x86-64 sigue la ABI SysV -- argumentos en rdi/rsi, zona roja, sin
+    /// espacio de sombra -- y uno COFF sigue la de Windows -- rcx/rdx/r8/r9,
+    /// 32 bytes de sombra, sin zona roja.  Fusionarlos produce un binario que
+    /// se enlaza, arranca, y devuelve resultados equivocados en cuanto una
+    /// mitad llama a la otra.
+    enum class Container { Elf, Coff } container = Container::Elf;
+    /// Librerias que el objeto pide por su cuenta (`/DEFAULTLIB` de COFF).
+    ///
+    /// Un objeto de MSVC no supone que quien lo enlace sepa contra que hay que
+    /// enlazarlo: lo lleva escrito dentro, en su seccion `.drectve`.  El
+    /// compilador emite ahi referencias -- el guardia de pila, por ejemplo --
+    /// cuya definicion vive en el CRT, y la instruccion de ir a buscarla viaja
+    /// con el objeto.  Ignorarla es lo que hacia que esos simbolos salieran
+    /// como no resueltos: no faltaba una definicion que tuvieramos que
+    /// inventar, es que no leiamos la peticion.
+    std::vector<std::string> default_libs;
 };
+
+/// Archivo estatico cargado, con su indice simbolo -> miembro.
+///
+/// El indice sale del que trae el propio `.a` cuando lo trae; si no, se
+/// construye escaneando los symtab de cada miembro.  Vive en el ambito del
+/// fichero, y no dentro de la funcion de enlace, porque hay dos sitios que
+/// cargan archivos -- las entradas explicitas y las que pide un objeto con
+/// `/DEFAULTLIB` -- y los dos tienen que hablar de lo mismo.
+struct ArchiveInput {
+    std::string path;
+    std::vector<uint8_t> buf;
+    std::vector<ArMember> members;
+    std::vector<bool> pulled;
+    std::unordered_map<std::string, int> sym_to_member;
+};
+
+/**
+ * @brief Extrae los `/DEFAULTLIB` de una seccion `.drectve` de COFF.
+ *
+ * El contenido es una cadena de opciones separadas por espacios, tal cual las
+ * escribiria alguien en la linea de ordenes: `/DEFAULTLIB:libcmt.lib
+ * /DEFAULTLIB:oldnames.lib`.  No lleva terminador ni longitud aparte -- la
+ * longitud es el tamano de la seccion --, y puede venir con comillas si el
+ * nombre lleva espacios.
+ *
+ * Se aceptan `/` y `-` como prefijo, y el nombre de la opcion sin distinguir
+ * mayusculas, porque las tres formas aparecen: MSVC escribe `/DEFAULTLIB`,
+ * clang-cl tambien, pero un objeto pasado por otras herramientas puede traer
+ * `-defaultlib`.  Rechazar por la grafia seria rechazar por una diferencia que
+ * no significa nada.
+ *
+ * Las demas directivas (`/EXPORT`, `/INCLUDE`, `/alternatename`) se IGNORAN a
+ * proposito: cada una es una funcionalidad distinta del enlazador, y aceptarlas
+ * a medias seria peor que no verlas.  Aqui solo se atiende la que hace falta
+ * para resolver lo que el propio objeto referencia.
+ *
+ * @param p     bytes de la seccion.
+ * @param n     cuantos.
+ * @param out   [in,out] se anaden los nombres encontrados, en orden.
+ */
+void coff_parse_drectve(const uint8_t *p, size_t n,
+                        std::vector<std::string> &out) {
+    const std::string s((const char *)p, n);
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' ||
+                         s[i] == '\n'))
+            ++i;
+        if (i >= n) break;
+
+        // Un token, respetando las comillas: `/DEFAULTLIB:"con espacios.lib"`.
+        std::string tok;
+        bool quoted = false;
+        while (i < n) {
+            const char c = s[i];
+            if (c == '"') {
+                quoted = !quoted;
+                ++i;
+                continue;
+            }
+            if (!quoted && (c == ' ' || c == '\t' || c == '\r' || c == '\n'))
+                break;
+            tok.push_back(c);
+            ++i;
+        }
+        if (tok.size() < 2 || (tok[0] != '/' && tok[0] != '-')) continue;
+
+        const std::string key = "defaultlib:";
+        if (tok.size() <= 1 + key.size()) continue;
+        std::string head = tok.substr(1, key.size());
+        for (char &c : head)
+            c = (char)std::tolower((unsigned char)c);
+        if (head != key) continue;
+
+        const std::string lib = tok.substr(1 + key.size());
+        if (!lib.empty()) out.push_back(lib);
+    }
+}
 
 bool read_file(const std::string &path, std::vector<uint8_t> &out) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -498,6 +600,15 @@ constexpr uint32_t IMAGE_SCN_MEM_EXECUTE = 0x20000000;
 constexpr uint32_t IMAGE_SCN_MEM_WRITE = 0x80000000;
 constexpr uint16_t IMAGE_REL_AMD64_ADDR64 = 1;
 constexpr uint16_t IMAGE_REL_AMD64_ADDR32 = 2;
+/* Desplazamiento de 32 bits desde la BASE DE LA IMAGEN ("NB" = no base).
+ *
+ * Es la que usan las tablas que lee el propio sistema -- cada RUNTIME_FUNCTION
+ * de `.pdata` son tres --, y por eso no vale ninguna de sus vecinas: ADDR32
+ * escribiria la direccion entera y REL32 una distancia al sitio.  No poder
+ * resolverla era el motivo de que se descartaran `.pdata` y `.xdata` de los
+ * objetos de entrada, y con ellas el desenrollado de todo lo que viniera
+ * compilado por otro. */
+constexpr uint16_t IMAGE_REL_AMD64_ADDR32NB = 3;
 constexpr uint16_t IMAGE_REL_AMD64_REL32 = 4;
 constexpr int16_t IMAGE_SYM_UNDEFINED = 0;
 constexpr uint8_t IMAGE_SYM_CLASS_EXTERNAL = 2;
@@ -581,18 +692,43 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
         // C++ duplicado en cada .obj).  El simbolo que la define se tolera
         // duplicado (folding: la primera definicion gana).
         s.comdat = (chars & 0x00001000u) != 0;
-        // COFF marca casi todo como cargable; descartamos por nombre las
-        // secciones no esenciales para ejecutar: .drectve (directivas del
-        // linker), .debug* (info de depuracion) y .pdata/.xdata (tablas SEH de
-        // unwinding -- usan relocs ADDR32NB/RVA que no resolvemos y que nuestro
-        // propio AOT tampoco emite; sin ellas el binario corre, sin unwinding
-        // nativo de excepciones en esos frames).
-        // Prefijo (no igualdad): gcc separa codigo frio en .text.unlikely con
-        // sus tablas SEH propias .pdata.unlikely / .xdata.unlikely (relocs
-        // ADDR32NB/RVA que no resolvemos).  El prefijo las cubre todas.
-        if (s.name == ".drectve" || s.name.rfind(".debug", 0) == 0 ||
-            s.name.rfind(".pdata", 0) == 0 || s.name.rfind(".xdata", 0) == 0)
+        /* `.drectve` no va a la imagen, pero SE LEE ANTES de descartarla.
+         *
+         * No son datos: son ordenes para el enlazador que el compilador dejo
+         * dentro del objeto.  La mas importante es `/DEFAULTLIB`, con la que un
+         * objeto de MSVC dice contra que biblioteca hay que resolver lo que el
+         * mismo referencia -- el guardia de pila, por ejemplo.  Tirar la seccion
+         * sin mirarla es lo que hacia que esos simbolos salieran como no
+         * resueltos, y el mensaje mandaba a buscar una definicion que faltaba
+         * cuando lo que faltaba era leer la peticion. */
+        if (s.name == ".drectve" && s.sh_offset &&
+            (uint64_t)s.sh_offset + s.sh_size <= b.size())
+            coff_parse_drectve(&b[s.sh_offset], s.sh_size, po.default_libs);
+
+        /* COFF marca casi todo como cargable; se descartan por nombre las
+         * secciones que no hacen falta para ejecutar: `.drectve` (ya leida
+         * arriba, son ordenes y no datos) y `.debug*`.
+         *
+         * `.pdata` y `.xdata` YA NO se descartan.  Se descartaban porque no
+         * sabiamos resolver `ADDR32NB`, y tirarlas dejaba correr el binario a
+         * cambio de perder el desenrollado de todo lo que viniera compilado por
+         * otro -- una perdida que no se ve hasta que hay una excepcion o hay
+         * que sacar una pila.  Ahora esa relocation se resuelve, asi que se
+         * conservan.
+         *
+         * Se normaliza el NOMBRE a `.pdata`/`.xdata` a secas: gcc separa el
+         * codigo frio en `.text.unlikely` con sus tablas propias
+         * `.pdata.unlikely` / `.xdata.unlikely`, y si cada variante fuera a su
+         * seccion de salida tendriamos VARIAS tablas de excepciones y el
+         * directorio del PE solo puede apuntar a una.  Fusionarlas en una es lo
+         * que hace cualquier enlazador, y es lo que permite ordenarlas juntas
+         * despues. */
+        if (s.name == ".drectve" || s.name.rfind(".debug", 0) == 0)
             s.sh_flags = 0;
+        else if (s.name.rfind(".pdata", 0) == 0)
+            s.name = ".pdata";
+        else if (s.name.rfind(".xdata", 0) == 0)
+            s.name = ".xdata";
     }
     // Simbolos (18 bytes; saltar aux symbols via NumberOfAuxSymbols).
     po.syms.resize(nsyms);
@@ -666,6 +802,11 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
                 r.addend =
                     (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
                 break;
+            case IMAGE_REL_AMD64_ADDR32NB:
+                r.kind = aot::RelocKind::RVA32;
+                r.addend =
+                    (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
+                break;
             case IMAGE_REL_I386_REL32:
                 r.kind = aot::RelocKind::REL32;
                 r.addend =
@@ -705,15 +846,378 @@ bool parse_any_obj(const std::string &path, ParsedObj &po, std::string &err) {
         return false;
     }
     if (head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F') {
+        po.container = ParsedObj::Container::Elf;
         if (head.size() >= 5 && head[4] == 1) // ELFCLASS32
             return parse_elf32_obj(path, po, err);
         return parse_elf_obj(path, po, err); // ELFCLASS64
     }
+    po.container = ParsedObj::Container::Coff;
     const uint16_t m = rd16(&head[0]);
     if (m == IMAGE_FILE_MACHINE_AMD64 || m == IMAGE_FILE_MACHINE_I386)
         return parse_coff_obj(path, po, err);
     err = path + ": formato de objeto no reconocido (ELF / COFF x86)";
     return false;
+}
+
+/**
+ * @brief Carga un archivo estatico y lo indexa por simbolo.
+ *
+ * @param path      ruta, solo para los mensajes y para los miembros "thin".
+ * @param buf       contenido ya leido (se consume).
+ * @param archives  [in,out] donde se anade.
+ * @param err       [out] motivo si falla.
+ * @return false solo si el archivo esta mal formado; un miembro que no se
+ *         entiende se salta, porque un `.a` puede llevar cosas que no son
+ *         objetos y eso no invalida el resto.
+ */
+bool load_archive_input(const std::string &path, std::vector<uint8_t> buf,
+                        std::vector<ArchiveInput> &archives, std::string &err) {
+    ArchiveInput a;
+    a.path = path;
+    a.buf = std::move(buf);
+    std::vector<ArSymbol> arsyms;
+    if (!ar_parse(a.buf, a.members, arsyms, err)) {
+        err = path + ": " + err;
+        return false;
+    }
+    a.pulled.assign(a.members.size(), false);
+    if (!arsyms.empty()) {
+        // Indice del propio .a (rapido: no parsea miembros no usados).
+        for (const ArSymbol &s : arsyms)
+            if (s.member_index >= 0)
+                a.sym_to_member.emplace(s.name, s.member_index);
+    } else {
+        // Fallback: escanear los globals definidos de cada miembro.
+        for (size_t mi = 0; mi < a.members.size(); ++mi) {
+            const ArMember &m = a.members[mi];
+            ParsedObj tmp;
+            if (!load_ar_member_bytes(a.path, a.buf, m, tmp.bytes))
+                continue; // thin: fichero externo ausente
+            std::string e2;
+            if (!parse_any_obj(a.path + "(" + m.name + ")", tmp, e2))
+                continue; // miembro no-objeto: ignorar
+            for (const ObjSym &sy : tmp.syms)
+                if (sy.bind == STB_GLOBAL && sy.shndx != SHN_UNDEF &&
+                    sy.type != STT_SECTION && !sy.name.empty())
+                    a.sym_to_member.emplace(sy.name, (int)mi);
+        }
+    }
+    archives.push_back(std::move(a));
+    return true;
+}
+
+/* Separador de las listas de directorios que vienen del entorno.
+ *
+ * En Windows es ';' y NO puede ser ':': una ruta de Windows lleva dos puntos en
+ * la letra de unidad, y partir por ahi convertiria "U:\visual\..." en dos rutas
+ * que no existen.  Fuera de Windows es ':', que es lo habitual. */
+#if defined(_WIN32)
+constexpr char kPathSep = ';';
+#else
+constexpr char kPathSep = ':';
+#endif
+
+/// Anade @p dir a @p out, con separador final, SI EXISTE.
+///
+/// Comprobar aqui permite ofrecer candidatos de varias plataformas sin
+/// ensuciar la lista: los de Windows y los de Linux se proponen igual y solo
+/// entra el que este de verdad.  La alternativa -- compilar la lista con
+/// `#if` -- obligaria a repetir la logica de cada cadena dos veces.
+void add_dir(std::vector<std::string> &out, std::string dir) {
+    if (dir.empty()) return;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) return;
+    const char sep = (kPathSep == ';') ? '\\' : '/';
+    if (dir.back() != '\\' && dir.back() != '/') dir.push_back(sep);
+    out.push_back(std::move(dir));
+}
+
+/// Parte una lista de directorios del entorno y la anade a @p out.
+void split_dir_list(const std::string &list, std::vector<std::string> &out) {
+    size_t i = 0;
+    while (i <= list.size()) {
+        size_t j = list.find(kPathSep, i);
+        if (j == std::string::npos) j = list.size();
+        add_dir(out, list.substr(i, j - i));
+        i = j + 1;
+    }
+}
+
+/// Busca @p exe en el PATH y devuelve su ruta completa, o cadena vacia.
+///
+/// Se localiza el EJECUTABLE y de ahi se deducen sus directorios, en vez de
+/// lanzarlo para preguntarle: es mas barato, no depende de que el programa
+/// arranque, y da el mismo resultado.  Solo donde no hay forma de deducirlo de
+/// la ruta -- el caso de `rustc` -- se recurre a preguntar.
+std::string find_on_path(const std::string &exe) {
+    const char *path = std::getenv("PATH");
+    if (!path) return std::string();
+    std::vector<std::string> dirs;
+    split_dir_list(path, dirs);
+    for (const std::string &d : dirs) {
+        const std::string cand = d + exe;
+        std::ifstream f(cand, std::ios::binary);
+        if (f) return cand;
+#if defined(_WIN32)
+        const std::string cand_exe = cand + ".exe";
+        std::ifstream f2(cand_exe, std::ios::binary);
+        if (f2) return cand_exe;
+#endif
+    }
+    return std::string();
+}
+
+/// Sube @p n niveles desde la ruta de un ejecutable ("C:/x/bin/cl.exe" -> "C:/x").
+std::string parent_dir(const std::string &path, int levels) {
+    std::string p = path;
+    for (int i = 0; i < levels; ++i) {
+        const size_t s = p.find_last_of("\\/");
+        if (s == std::string::npos) return std::string();
+        p = p.substr(0, s);
+    }
+    return p;
+}
+
+/// Ejecuta @p command y devuelve su primera linea de salida, sin el salto.
+///
+/// Se usa solo para preguntarle a `vswhere` donde esta Visual Studio.  Lanzar
+/// un proceso desde el enlazador no es bonito, pero es que la ubicacion de VS
+/// no esta en ningun sitio fijo -- cambia con la version, la edicion y la
+/// unidad donde se instalo -- y `vswhere` es la herramienta que Microsoft
+/// publica precisamente para responder a esa pregunta.  La alternativa seria
+/// codificar rutas, que estarian mal en cuanto alguien instale otra version.
+std::string first_line_of(const std::string &command) {
+/* La funcion se llama distinto en cada sitio pero hace lo mismo; se envuelve
+ * aqui para que el resto del fichero no tenga que saberlo. */
+#if defined(_WIN32)
+    FILE *p = _popen(command.c_str(), "r");
+#else
+    FILE *p = popen(command.c_str(), "r");
+#endif
+    if (!p) return std::string();
+    char buf[1024];
+    std::string out;
+    if (std::fgets(buf, sizeof(buf), p)) out = buf;
+#if defined(_WIN32)
+    _pclose(p);
+#else
+    pclose(p);
+#endif
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
+        out.pop_back();
+    return out;
+}
+
+/**
+ * @brief Donde buscar las bibliotecas que hagan falta al enlazar.
+ *
+ * Se construye UNA vez, y en orden de lo mas EXPLICITO a lo mas ADIVINADO.  El
+ * orden no es un detalle: lo que alguien ha dicho a proposito tiene que ganar a
+ * lo que nosotros dedujimos, o una instalacion detectada por sorpresa se
+ * impondria sobre la que el usuario preparo.
+ *
+ * Se cubren las cuatro familias porque convivimos con las cuatro, y cada una
+ * publica sus rutas a su manera:
+ *
+ *  1. `VESTA_LIBPATH` -- la nuestra.  Existe para no obligar a nadie a usar la
+ *     variable de otra cadena para hablar con la nuestra.
+ *  2. `LIB` -- convenio de Microsoft, lo que deja `vcvarsall`.
+ *     `LIBRARY_PATH` -- convenio de GCC y Clang.  Son dos mundos y hay que
+ *     mirar los dos: quien viene de MinGW no tiene `LIB` puesta ni tiene por
+ *     que ponerla.
+ *  3. Del entorno de Visual Studio a medias (`VCToolsInstallDir`,
+ *     `WindowsSdkDir` + `UCRTVersion`), que es lo que queda al heredar de un
+ *     shell de desarrollo.
+ *  4. Deducido de donde esta cada compilador en el PATH:
+ *       - `clang`  -> `lib/clang/<version>/lib/windows`, donde viven las
+ *         `clang_rt.*` que pide `clang-cl` para builtins y sanitizers, y que
+ *         NO estan con las de MSVC.
+ *       - `gcc`    -> `../lib` y `../<triplete>/lib`.  Cubre TDM y MinGW.
+ *       - `rustc`  -> se le pregunta por su `target-libdir`, porque su
+ *         ejecutable en el PATH suele ser un lanzador de `rustup` y de su ruta
+ *         no se deduce donde estan las bibliotecas de verdad.
+ *       - `go`     -> `GOROOT/pkg`.
+ *  5. `vswhere` y el SDK de Windows, como ultimo recurso en Windows.
+ *
+ * No se codifica NINGUNA ruta concreta.  La version del toolset, la edicion y
+ * hasta la unidad cambian de maquina a maquina: una ruta fija seria correcta en
+ * una y mentira en todas las demas.
+ */
+const std::vector<std::string> &library_search_dirs() {
+    static std::vector<std::string> dirs;
+    static bool done = false;
+    if (done) return dirs;
+    done = true;
+
+    // 1-2. Lo que alguien puso a proposito, en los tres convenios.
+    if (const char *v = std::getenv("VESTA_LIBPATH")) split_dir_list(v, dirs);
+    if (const char *lib = std::getenv("LIB")) split_dir_list(lib, dirs);
+    if (const char *lp = std::getenv("LIBRARY_PATH")) split_dir_list(lp, dirs);
+
+    // 4. Deducido del compilador que este instalado.  Vale en todas las
+    //    plataformas: un gcc de Linux publica sus rutas igual.
+    {
+        const std::string gcc = find_on_path("gcc");
+        if (!gcc.empty()) {
+            const std::string root = parent_dir(gcc, 2); // .../bin/gcc -> ...
+            if (!root.empty()) {
+                add_dir(dirs, root + "/lib");
+                add_dir(dirs, root + "/lib64");
+                /* El directorio del TRIPLETE, que es donde estan de verdad las
+                 * bibliotecas del sistema y no en `lib` a secas.  Se proponen
+                 * los de las dos plataformas y `add_dir` deja pasar el que
+                 * exista: escribirlo con `#if` obligaria a repetir el bloque
+                 * entero por una linea de diferencia. */
+                add_dir(dirs, root + "/x86_64-w64-mingw32/lib"); // TDM, MinGW
+                add_dir(dirs, root + "/lib/gcc/x86_64-w64-mingw32");
+                add_dir(dirs, root + "/lib/x86_64-linux-gnu"); // Linux
+                add_dir(dirs, root + "/lib/gcc/x86_64-linux-gnu");
+            }
+        }
+    }
+    {
+        const std::string clang = find_on_path("clang");
+        if (!clang.empty()) {
+            const std::string root = parent_dir(clang, 2);
+            if (!root.empty()) {
+                add_dir(dirs, root + "/lib");
+                /* Las `clang_rt.*` cuelgan de la VERSION del compilador, que no
+                 * se sabe sin mirar: se recorre y se coge la mas alta. */
+                std::string best;
+                std::error_code ec;
+                for (const auto &e : std::filesystem::directory_iterator(
+                         root + "/lib/clang", ec)) {
+                    if (!e.is_directory()) continue;
+                    const std::string v = e.path().filename().string();
+                    if (v > best) best = v;
+                }
+                if (!best.empty()) {
+                    const std::string base = root + "/lib/clang/" + best + "/lib";
+                    add_dir(dirs, base + "/windows");
+                    add_dir(dirs, base + "/linux");
+                    add_dir(dirs, base);
+                }
+            }
+        }
+    }
+    {
+        /* A `rustc` SI hay que preguntarle: lo que hay en el PATH suele ser el
+         * lanzador de `rustup`, y de su ruta no se deduce donde acaba la
+         * cadena de herramientas activa. */
+        if (!find_on_path("rustc").empty()) {
+            const std::string libdir =
+                first_line_of("rustc --print target-libdir 2>&1");
+            if (!libdir.empty() && libdir.find("error") == std::string::npos)
+                add_dir(dirs, libdir);
+        }
+    }
+    if (const char *goroot = std::getenv("GOROOT")) {
+        add_dir(dirs, std::string(goroot) + "/pkg");
+    } else {
+        const std::string go = find_on_path("go");
+        if (!go.empty()) {
+            const std::string root = parent_dir(go, 2);
+            if (!root.empty()) add_dir(dirs, root + "/pkg");
+        }
+    }
+
+#if defined(_WIN32)
+    // 3. Entorno de Visual Studio heredado a medias.
+    if (const char *vct = std::getenv("VCToolsInstallDir"))
+        add_dir(dirs, std::string(vct) + "\\lib\\x64");
+    if (const char *sdk = std::getenv("WindowsSdkDir")) {
+        if (const char *ver = std::getenv("UCRTVersion")) {
+            const std::string d = sdk;
+            add_dir(dirs, d + "\\Lib\\" + ver + "\\ucrt\\x64");
+            add_dir(dirs, d + "\\Lib\\" + ver + "\\um\\x64");
+        }
+    }
+
+    // vswhere: instalacion de VS + version del toolset predeterminada.
+    {
+        const char *pf86 = std::getenv("ProgramFiles(x86)");
+        if (pf86) {
+            const std::string vswhere = std::string("\"") + pf86 +
+                                        "\\Microsoft Visual Studio\\Installer\\"
+                                        "vswhere.exe\"";
+            const std::string install = first_line_of(
+                vswhere + " -latest -products * -property installationPath "
+                          "2>nul");
+            if (!install.empty()) {
+                std::ifstream f(install + "\\VC\\Auxiliary\\Build\\"
+                                          "Microsoft.VCToolsVersion.default."
+                                          "txt");
+                std::string version;
+                if (f && std::getline(f, version)) {
+                    while (!version.empty() &&
+                           (version.back() == '\r' || version.back() == '\n' ||
+                            version.back() == ' '))
+                        version.pop_back();
+                    if (!version.empty())
+                        dirs.push_back(install + "\\VC\\Tools\\MSVC\\" +
+                                       version + "\\lib\\x64\\");
+                }
+            }
+        }
+    }
+
+    /* SDK de Windows: se toma la version MAS ALTA que haya instalada.  Se
+     * ordena como cadena porque los numeros van con relleno fijo
+     * ("10.0.28000.0"), asi que el orden alfabetico coincide con el numerico;
+     * si algun dia dejara de coincidir, esto habria que compararlo por
+     * componentes. */
+    {
+        const char *pf86 = std::getenv("ProgramFiles(x86)");
+        if (pf86) {
+            const std::string root =
+                std::string(pf86) + "\\Windows Kits\\10\\Lib";
+            std::string best;
+            std::error_code ec;
+            for (const auto &e :
+                 std::filesystem::directory_iterator(root, ec)) {
+                if (!e.is_directory()) continue;
+                const std::string v = e.path().filename().string();
+                if (v.size() > 2 && v[0] == '1' && v > best) best = v;
+            }
+            if (!best.empty()) {
+                dirs.push_back(root + "\\" + best + "\\ucrt\\x64\\");
+                dirs.push_back(root + "\\" + best + "\\um\\x64\\");
+            }
+        }
+    }
+#endif
+    return dirs;
+}
+
+/**
+ * @brief Busca en disco una biblioteca pedida con `/DEFAULTLIB`.
+ *
+ * El nombre viene como lo escribio el compilador, que puede ser `libcmt.lib` o
+ * solo `libcmt`; se prueban las dos formas.
+ *
+ * @param nombre lo pedido en la directiva.
+ * @return la ruta encontrada, o cadena vacia si no esta.
+ */
+std::string find_default_lib(const std::string &name) {
+    std::vector<std::string> candidates;
+    candidates.push_back(name);
+    if (name.size() < 4 || name.compare(name.size() - 4, 4, ".lib") != 0)
+        candidates.push_back(name + ".lib");
+
+    // Tal cual, por si la directiva trae una ruta o el fichero esta al lado.
+    for (const std::string &c : candidates) {
+        std::ifstream f(c, std::ios::binary);
+        if (f) return c;
+    }
+
+    for (const std::string &dir : library_search_dirs()) {
+        for (const std::string &c : candidates) {
+            const std::string path = dir + c;
+            std::ifstream f(path, std::ios::binary);
+            if (f) return path;
+        }
+    }
+    return std::string();
 }
 
 // Seccion fusionada de salida.
@@ -808,15 +1312,6 @@ bool aot_link(const std::vector<std::string> &inputs,
     //    estandar de linker).  Auto-detecta ELF32/64 y COFF i386/AMD64.
     std::vector<ParsedObj> objs;
 
-    // Archivo .a cargado + su indice simbolo->miembro (del indice del .a si lo
-    // trae, o construido escaneando los symtab de los miembros como fallback).
-    struct ArchiveInput {
-        std::string path;
-        std::vector<uint8_t> buf;
-        std::vector<ArMember> members;
-        std::vector<bool> pulled;
-        std::unordered_map<std::string, int> sym_to_member;
-    };
     std::vector<ArchiveInput> archives;
     // DLLs pasadas como entrada (el usuario puede enlazar contra los exports de
     // cualquier .dll, ademas de las del sistema): se consultan sus exports para
@@ -843,37 +1338,8 @@ bool aot_link(const std::vector<std::string> &inputs,
             continue;
         }
         if (ar_is_archive(buf)) {
-            ArchiveInput a;
-            a.path = in;
-            a.buf = std::move(buf);
-            std::vector<ArSymbol> arsyms;
-            if (!ar_parse(a.buf, a.members, arsyms, err)) {
-                err = in + ": " + err;
+            if (!load_archive_input(in, std::move(buf), archives, err))
                 return false;
-            }
-            a.pulled.assign(a.members.size(), false);
-            if (!arsyms.empty()) {
-                // Indice del propio .a (rapido: no parsea miembros no usados).
-                for (const ArSymbol &s : arsyms)
-                    if (s.member_index >= 0)
-                        a.sym_to_member.emplace(s.name, s.member_index);
-            } else {
-                // Fallback: escanear los globals definidos de cada miembro.
-                for (size_t mi = 0; mi < a.members.size(); ++mi) {
-                    const ArMember &m = a.members[mi];
-                    ParsedObj tmp;
-                    if (!load_ar_member_bytes(a.path, a.buf, m, tmp.bytes))
-                        continue; // thin: fichero externo ausente
-                    std::string e2;
-                    if (!parse_any_obj(a.path + "(" + m.name + ")", tmp, e2))
-                        continue; // miembro no-objeto: ignorar
-                    for (const ObjSym &sy : tmp.syms)
-                        if (sy.bind == STB_GLOBAL && sy.shndx != SHN_UNDEF &&
-                            sy.type != STT_SECTION && !sy.name.empty())
-                            a.sym_to_member.emplace(sy.name, (int)mi);
-                }
-            }
-            archives.push_back(std::move(a));
         } else {
             ParsedObj po;
             po.bytes = std::move(buf); // pre-cargado (no se relee del disco)
@@ -881,6 +1347,7 @@ bool aot_link(const std::vector<std::string> &inputs,
             objs.push_back(std::move(po));
         }
     }
+
     if (objs.empty()) {
         err = "linker: sin objetos de entrada (solo se dieron archivos .a)";
         return false;
@@ -904,9 +1371,47 @@ bool aot_link(const std::vector<std::string> &inputs,
         };
         for (const ParsedObj &o : objs)
             scan(o);
+
+        /* Las bibliotecas que piden los propios objetos (`/DEFAULTLIB`) se
+         * resuelven DENTRO de este punto fijo, no antes.
+         *
+         * El motivo es que un miembro extraido de un archivo trae su propia
+         * `.drectve`: un `.lib` de MSVC no es una caja cerrada, sus miembros
+         * piden a su vez otras bibliotecas.  Mirar solo los objetos de entrada
+         * cubriria el primer nivel y dejaria el segundo sin atender, y eso no
+         * se ve como "falta una biblioteca": se ve como un simbolo sin resolver
+         * cuyo nombre no dice de donde tenia que salir.
+         *
+         * Un `.lib` y un `.a` son el mismo formato, asi que esto vale igual
+         * para los dos; lo unico propio de COFF es la directiva.
+         *
+         * Que una biblioteca pedida NO aparezca no es un error: un objeto puede
+         * pedir algo que en este enlace no hace falta, y abortar por eso
+         * impediria enlazar cosas que se enlazan bien.  Si de verdad hacia
+         * falta, el simbolo saldra sin resolver y ese mensaje ya lo nombra. */
+        std::unordered_set<std::string> libs_seen;
+
         bool changed = true;
         while (changed) {
             changed = false;
+
+            for (size_t oi = 0; oi < objs.size(); ++oi) {
+                for (const std::string &lib : objs[oi].default_libs) {
+                    if (!libs_seen.insert(lib).second) continue;
+                    const std::string path = find_default_lib(lib);
+                    if (path.empty()) continue;
+                    std::vector<uint8_t> buf;
+                    if (!read_file(path, buf) || !ar_is_archive(buf)) continue;
+                    if (!load_archive_input(path, std::move(buf), archives,
+                                            err))
+                        return false;
+                    /* Un archivo nuevo puede resolver lo que quedaba, asi que
+                     * hay que dar otra vuelta aunque no se extraiga nada en
+                     * esta. */
+                    changed = true;
+                }
+            }
+
             std::vector<std::string> undef;
             for (const std::string &n : referenced)
                 if (!defined.count(n)) undef.push_back(n);
@@ -943,6 +1448,31 @@ bool aot_link(const std::vector<std::string> &inputs,
         if (objs[i].is32 != is32) {
             err =
                 "linker: mezcla de objetos de 32 y 64 bits (" + inputs[i] + ")";
+            return false;
+        }
+
+    /* Y el CONTENEDOR: o todos ELF, o todos COFF.
+     *
+     * No es una restriccion del formato, es de la ABI.  Los dos contenedores se
+     * saben leer, asi que sin esta comprobacion la mezcla se fusionaba sin una
+     * queja y salia un ejecutable que arranca -- lo cual es lo peor que podia
+     * pasar, porque nadie mira lo que no falla.  Pero un objeto ELF de x86-64
+     * pasa los argumentos en rdi/rsi/rdx, usa la zona roja y no reserva espacio
+     * de sombra, y uno COFF los pasa en rcx/rdx/r8/r9, reserva 32 bytes de
+     * sombra y no tiene zona roja.  En cuanto una mitad llama a la otra, los
+     * argumentos se leen de registros donde no estan.
+     *
+     * Se nombra el objeto por su ruta y no por su indice en la orden porque a
+     * estas alturas la lista incluye miembros extraidos de archivos, que no
+     * tienen posicion en la linea de ordenes. */
+    for (size_t i = 1; i < objs.size(); ++i)
+        if (objs[i].container != objs[0].container) {
+            const std::string first =
+                objs[0].container == ParsedObj::Container::Elf ? "ELF" : "COFF";
+            const std::string other =
+                objs[i].container == ParsedObj::Container::Elf ? "ELF" : "COFF";
+            err = vx::diag::format(
+                "VX9257", {objs[i].path, other, objs[0].path, first});
             return false;
         }
 
@@ -1235,6 +1765,22 @@ bool aot_link(const std::vector<std::string> &inputs,
         w.add_section(std::move(ss)); // indice 0
     }
     for (MergedSec &m : merged) {
+        /* `.eh_frame` se cierra con un registro de longitud cero.
+         *
+         * Va AQUI y no en cada objeto a proposito: las secciones se concatenan,
+         * asi que un terminador dentro de un objeto quedaria en medio del
+         * resultado y cualquier lector se pararia ahi -- dando por vacio todo
+         * lo que aportan los objetos siguientes.  Solo el enlazador sabe cual
+         * es el final, que es el motivo por el que las cadenas de herramientas
+         * lo meten en un objeto que se enlaza el ultimo (`crtend.o`).
+         *
+         * Sin esto funcionaba por casualidad: los registros sumaban 92 bytes y
+         * el relleno de alineamiento ponia cuatro ceros detras que se leian
+         * como terminador.  Una descripcion que depende de que el tamano no
+         * sea multiplo de la alineacion no es una descripcion. */
+        if (m.name == ".eh_frame" && !m.data.empty())
+            m.data.insert(m.data.end(), 4, 0);
+
         WriterSection ws;
         ws.name = m.name;
         ws.flags = m.perms;

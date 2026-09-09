@@ -136,8 +136,11 @@ rbank_allocate(const jit::IntervalResult &ivs, uint32_t vreg_count,
                SpillTrace *trace = nullptr, bool recover = true,
                codegen::AssignmentPlan *plan_out = nullptr,
                const ConstraintSet *cs_in = nullptr) {
-    PhysicalRegisterBank bank =
-        physical_bank_x86_64_from_reginfo(tri, jit::backend_caps_host());
+    /* Memoizado: la geometria es inmutable (invariante I4) y esto corre una vez
+     * por funcion.  La referencia vale durante toda la funcion porque nada
+     * aguas abajo pide otro banco -- ver la nota de la propia cache. */
+    const PhysicalRegisterBank &bank =
+        physical_bank_x86_64_from_reginfo_cached(tri, jit::backend_caps_host());
     const AbstractProblem p = intervals_to_problem(ivs);
     LaneAssignment la;
     codegen::RegAlloc ra = rbank_solve(p, vreg_count, bank, vec_active,

@@ -4437,7 +4437,15 @@ int main(int argc, char *argv[]) {
                    << ":"
                    << (result.count("sysroot")
                            ? result["sysroot"].as<std::string>()
-                           : "");
+                           : "")
+                   /* `--unwind` decide si el binario lleva `.pdata`/`.xdata`,
+                    * asi que cambia lo que sale y tiene que estar en la clave.
+                    * Sin esto, compilar con `--unwind none` despues de un
+                    * `auto` servia el binario anterior CON las tablas: el
+                    * backend ni corria, y desde fuera parecia que la opcion no
+                    * hacia nada.  Siempre tiene valor (por defecto "auto"), de
+                    * ahi que no se consulte `result.count`. */
+                   << ":" << result["unwind"].as<std::string>();
             pck.aot_perfil = perfil.str();
         }
         const uint32_t opts_hash = vx::project_cache_opts_hash(pck);

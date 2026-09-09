@@ -42,9 +42,11 @@ struct Code {
 
 } // namespace
 
-bool build_pe_x86_64(const FrameUnwind &frame,
-                     std::vector<uint8_t> &out) noexcept {
+bool build_pe_x86_64(const FrameUnwind &frame, std::vector<uint8_t> &out,
+                     PeUnwindSkip *why) noexcept {
     out.clear();
+    // Por defecto, "no habia nada"; solo los dos topes del formato son un no.
+    if (why) *why = PeUnwindSkip::Nothing;
 
     /* Una funcion duena de su pila no tiene prologo que describir; mentirle al
      * desenrollador es peor que no decirle nada. */
@@ -53,8 +55,11 @@ bool build_pe_x86_64(const FrameUnwind &frame,
      * ninguno (hoja sin marco): ahi la suposicion de hoja del sistema ES la
      * correcta, asi que no describir es lo acertado. */
     if (frame.prologue_bytes == 0) return false;
-    if (frame.prologue_bytes > 255)
+    if (frame.prologue_bytes > 255) {
+        // Aqui SI hay marco y no cabe: callarlo lo haria pasar por hoja.
+        if (why) *why = PeUnwindSkip::TooComplex;
         return false; // no cabe en el campo del formato
+    }
 
     const uint8_t end = static_cast<uint8_t>(frame.prologue_bytes);
 
@@ -120,13 +125,17 @@ bool build_pe_x86_64(const FrameUnwind &frame,
         }
     }
 
-    if (codes.empty()) return false; // nada que describir
+    if (codes.empty()) return false; // nada que describir (why sigue en Nothing)
 
     // Cuantas ranuras de dos bytes ocupan en total.
     uint32_t slots = 0;
     for (const Code &c : codes)
         slots += 1u + c.n_extra;
-    if (slots > PE_X86_64_MAX_SLOTS) return false;
+    if (slots > PE_X86_64_MAX_SLOTS) {
+        // Igual que el tope de 255: hay marco y no cabe.
+        if (why) *why = PeUnwindSkip::TooComplex;
+        return false;
+    }
 
     out.resize(4u + 2u * static_cast<size_t>(slots), 0);
 

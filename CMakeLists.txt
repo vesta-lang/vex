@@ -243,6 +243,74 @@ if (CMAKE_CONFIGURATION_TYPES)
 endif ()
 
 
+# ---------------------------------------------------------------------------
+#  LTO / IPO: optimizacion en tiempo de enlazado
+# ---------------------------------------------------------------------------
+#
+# Vale para los TRES modos -- Debug, Release y Profile --, porque
+# `CMAKE_INTERPROCEDURAL_OPTIMIZATION` no distingue configuracion.  Si algun dia
+# se quiere separar, la variable por configuracion existe:
+# `CMAKE_INTERPROCEDURAL_OPTIMIZATION_<CONFIG>`.  Conviene saber lo que cuesta en
+# cada uno antes de encenderlos todos:
+#
+#   Release  es donde suma.  Cruza unidades de traduccion, y este arbol tiene
+#            muchas: sin LTO, cada llamada entre `vmcore`, `vx_lib` y el
+#            asignador es una llamada de verdad.
+#   Profile  el modo existe para atribuir tiempo a funciones, y el LTO mete en
+#            linea a traves de ficheros: el perfil deja de corresponder al
+#            fuente.  Es la misma perdida que ya documenta el bloque de `-g1`,
+#            pero mayor.
+#   Debug    lo que se ve en el depurador deja de ser lo que se escribio.
+#
+# POR QUE ESTE BLOQUE VA AQUI Y NO DONDE ESTABA EL `set` COMENTADO (mas abajo,
+# junto a las opciones de enlazado de `vm`).  Los targets leen
+# `CMAKE_INTERPROCEDURAL_OPTIMIZATION` en el momento de CREARSE, no al enlazar.
+# Puesto ahi abajo, `sqlite3`, `miniz`, `vmcore`, `vx_lib` y todo lo demas ya
+# existen y se quedarian sin el: se construiria un binario a medio optimizar
+# creyendo que lleva LTO.  Por eso esta antes del primer `add_library`.
+#
+# SOLO GCC Y CLANG.  MSVC hace lo equivalente con `/GL` + `/LTCG` y CMake lo
+# sabe, pero este arbol no se construye con MSVC y no hay como comprobarlo aqui:
+# no se enciende lo que no se puede probar.
+#
+# NOTA HISTORICA, porque el fichero decia lo contrario.  Mas abajo habia
+# `#-flto=thin  # mi MinGW no soporta LTO`.  `-flto=thin` es un flag de CLANG;
+# GCC lo rechaza por el nombre, no por la capacidad -- el suyo es `-flto` a
+# secas, y funciona.  Comprobado con el TDM-GCC 10.3 con el que se construye
+# este arbol: enlaza, ejecuta, y las llamadas entre unidades desaparecen.  La
+# conclusion de entonces era falsa; el compilador siempre pudo.
+#
+# POR DEFECTO VA APAGADO, y no por prudencia: hoy no se puede encender.
+# `vesta_alloc` corta la configuracion con un `FATAL_ERROR` a proposito, porque
+# `src/interpose/call_site.cpp` escribe un salto sobre la ENTRADA de
+# `operator new` para saber quien reserva, y con LTO el enlazador puede meterlo
+# en linea en sus llamantes: esas reservas dejan de anotarse sin fallar y sin
+# avisar.  Mientras esa guarda siga, encender esto solo cambia el sitio donde
+# falla la configuracion.
+option(VESTA_LTO "Optimizacion en tiempo de enlazado (LTO/IPO)" OFF)
+
+if (VESTA_LTO)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
+        include(CheckIPOSupported)
+        # Se PREGUNTA en vez de darlo por hecho: la cadena de herramientas puede
+        # traer el compilador y no el plugin del enlazador, y entonces `-flto`
+        # compila y falla al enlazar.  Aqui se sabe antes.
+        check_ipo_supported(RESULT VESTA_IPO_OK OUTPUT VESTA_IPO_WHY)
+        if (VESTA_IPO_OK)
+            set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+            message(STATUS "LTO activado en los tres modos (${CMAKE_CXX_COMPILER_ID})")
+        else ()
+            # No se degrada en silencio: sin LTO el binario tiene otro coste, y
+            # quien pidio LTO tiene que enterarse de que no lo lleva.
+            message(WARNING "LTO pedido pero NO disponible -- ${VESTA_IPO_WHY}")
+        endif ()
+    else ()
+        message(WARNING "LTO pedido pero solo se aplica con GCC o Clang; "
+                "aqui el compilador es ${CMAKE_CXX_COMPILER_ID} y se ignora.")
+    endif ()
+endif ()
+
+
 # SQLite library (statica)
 add_library(sqlite3 STATIC
         libs/SourceCode/sqlite/sqlite3.c
@@ -832,8 +900,12 @@ else ()
     target_link_libraries(vm PRIVATE vesta_openssl dl)
 endif ()
 
-# LTO (Link Time Optimization)
-#set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+# LTO: ver la opcion `VESTA_LTO`, arriba, ANTES del primer `add_library`.
+#
+# Aqui estaba el `set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)` comentado, y este
+# sitio no servia: los targets leen esa variable al crearse, y a estas alturas
+# ya existen todos.  Descomentarlo habria dado un binario a medio optimizar --
+# solo lo definido despues de esta linea -- con la impresion de llevar LTO.
 
 # global
 if (WIN32)
@@ -864,7 +936,11 @@ target_link_options(vm PRIVATE
         # --- Flags NO soportados por tu MinGW (comentados) ---
         #-Wl,--icf=all             # Identical Code Folding (solo gold/lld)
         #-Wl,--compress-debug-sections=zlib   # Solo binutils modernos
-        #-flto=thin                # mi MinGW no soporta LTO
+        # `-flto=thin` es de CLANG, y por eso GCC lo rechazaba: no por no saber
+        # hacer LTO, sino por el nombre del flag.  El de GCC es `-flto` a secas
+        # y funciona en este TDM-GCC.  El LTO no se pide aqui de todas formas --
+        # va por `VESTA_LTO`, que lo aplica a la compilacion Y al enlace, que es
+        # como tiene que ir.
         >
 
         # Profile enlaza como Release SALVO el estripado: `--strip-all` borra
@@ -2146,6 +2222,22 @@ if (WIN32)
     target_link_libraries(test_vec_acc_demand PRIVATE vesta_openssl ws2_32 synchronization)
 else ()
     target_link_libraries(test_vec_acc_demand PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# El mapeo CPUID -> microarquitectura.  Se prueba SIN la CPU delante: el mapeo
+# recibe lo que CPUID contesto como dato, asi que aqui se describen piezas que
+# la maquina no es -- entre ellas un core E, cuya rama no la ejercitaria nadie
+# si el mapeo leyera CPUID por dentro.
+add_executable(test_cost_model_uarch tests/jit/test_cost_model_uarch.cpp)
+target_include_directories(test_cost_model_uarch PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_cost_model_uarch PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_cost_model_uarch PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_cost_model_uarch PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_cost_model_uarch PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
 add_executable(test_machine_cost_facts tests/jit/test_machine_cost_facts.cpp)

@@ -62,9 +62,9 @@ vm_allocate(const ir::IrFunction &fn, const ir::LivenessResult &live,
         empty.assign.assign(n, codegen::RegAlloc::VAssign{});
         return empty;
     }
-    const rbank::PhysicalRegisterBank bank =
-        rbank::physical_bank_x86_64_from_reginfo(target_vm(),
-                                                 jit::backend_caps_host());
+    const rbank::PhysicalRegisterBank &bank =
+        rbank::physical_bank_x86_64_from_reginfo_cached(
+            target_vm(), jit::backend_caps_host());
     codegen::RegAlloc ra = rbank::rbank_solve(
         p, n, bank, /*vec_active=*/false, /*next_use=*/nullptr,
         /*trace=*/nullptr, /*recover=*/true);

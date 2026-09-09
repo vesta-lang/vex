@@ -42,6 +42,10 @@
 #include <unordered_set>
 #include <vector>
 
+#include "codegen/unwind/dwarf_cfi.h" // CFI de DWARF (.eh_frame)
+#include "codegen/unwind/pe_x86_64.h" // UNWIND_INFO de Windows x64 (.xdata)
+#include "vx/diag/diag_catalog.h" // los errores salen del catalogo, por idioma
+
 #include "aot/aot_analyze.h"
 #include "aot/aot_lower.h"
 #include "aot/aot_native.h"
@@ -2112,6 +2116,19 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         }
     }
 
+    /* `--unwind table` contra ELF se rechaza AQUI, no al emitir.
+     *
+     * `.pdata`/`.xdata` son de PE; en ELF el equivalente es `.eh_frame`.  Pedir
+     * la tabla para un ELF no es una peticion que se pueda cumplir a medias, y
+     * cumplirla en silencio -- emitiendo nada -- dejaria al usuario creyendo
+     * que la tiene.  Se dice antes de compilar para no gastar el trabajo y,
+     * sobre todo, para que el mensaje llegue cuando aun se esta mirando la
+     * linea de ordenes. */
+    if (opt.unwind == UnwindEmit::TABLE && fmt == aot::ObjFormat::ELF) {
+        std::cerr << vx::diag::format("VX9249", {}) << "\n";
+        return EXIT_FAILURE;
+    }
+
     // Referencias a datos: PIC (RIP-relativo, default) vs absoluto
     // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
     // x86-32 NO tiene RIP-relative -> el PIC clasico exige GOT/PLT (no
@@ -2365,6 +2382,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             std::string ir_txt;
         };
         std::vector<PuntoFuente> puntos;
+        /// Como deshacer el marco de esta funcion, sin codificar.  De aqui
+        /// salen `.xdata` y `.pdata` en PE; vacio si el backend no lo
+        /// describe (arm64 hoy) o si la funcion no llego por el path vreg.
+        codegen::FrameUnwind unwind;
     };
     std::vector<AotFn> compiled;
     std::unordered_map<std::string, size_t> compiled_idx; // name -> compiled[]
@@ -2502,6 +2523,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             af.bytes = std::move(ncr.bytes);
             af.relocs = std::move(ncr.relocs);
             af.stackmaps = std::move(ncr.stackmaps);
+            af.unwind = std::move(ncr.unwind);
             /* El punto de fuente de cada tramo de codigo.  La linea
              * la da el mapa; la COLUMNA y el tramo salen de la propia
              * instruccion del intermedio, que el mapa identifica por
@@ -2591,6 +2613,12 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                         native_backend->compile_function(*itf->second, vopts);
                     vf.bytes = std::move(vcr.bytes);
                     vf.relocs = std::move(vcr.relocs);
+                    /* La variante es una funcion mas en `.text`, con su
+                     * propio prologo: si se quedara sin entrada en `.pdata`,
+                     * el desenrollado se cortaria justo en la version que se
+                     * eligio en tiempo de ejecucion -- el peor sitio, porque
+                     * cual sea depende de la maquina. */
+                    vf.unwind = std::move(vcr.unwind);
                 }
                 if (vf.bytes.empty()) {
                     std::cerr << "[aot] variante " << vf.name
@@ -2806,6 +2834,283 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                 b[12 + i] = static_cast<uint8_t>((total >> (i * 8)) & 0xFF);
             smap_si = get_sec(".vxgc_smap", /*is_code=*/false, "r");
             secs[smap_si].bytes = std::move(b);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Desenrollado en Windows x64: `.xdata` + `.pdata`.
+    //
+    // `.xdata` dice COMO deshacer un marco; `.pdata` dice a QUE funcion
+    // pertenece cada tramo de codigo y donde esta su `.xdata`.  Sin las dos,
+    // `RtlLookupFunctionEntry` no encuentra la funcion, la da por hoja, y el
+    // recorrido de pila se acaba en el primer marco: sin manejador de
+    // excepcion, sin traza, y sin nada que perfilar mas alla de la hoja.
+    //
+    // Las TRES RVA de cada entrada se dejan a cero y se resuelven con relocs
+    // despues del layout, que es cuando existen las direcciones -- igual que
+    // hace `.vxgc_smap` aqui arriba con su `func_addr`.
+    // ------------------------------------------------------------------
+    struct PdataFix {
+        uint32_t site;    ///< offset dentro de `.pdata` a parchear
+        int target_sec;   ///< seccion del objetivo
+        uint64_t
+            target_off;   ///< offset dentro de esa seccion
+    };
+    std::vector<PdataFix> pdata_fixes;
+    int pdata_si = -1, xdata_si = -1;
+
+    /* Un binario plano no tiene donde poner NINGUNA de las dos tablas: no hay
+     * cabecera, ni secciones, ni nada que las localice.  Lo comparten los dos
+     * bloques de abajo, de ahi que se decida una sola vez. */
+    const bool flat_binary = emit_bin;
+
+    {
+        /* Solo PE de 64 bits.  El PE de 32 bits no lleva estas tablas -- ahi
+         * el SEH va por la pila --, y el de ARM64 usa otra codificacion y otro
+         * emisor. */
+        /* Y solo en artefactos que TENGAN cabecera PE propia.
+         *
+         * En un objeto relocatable las tres RVA de cada entrada no se pueden
+         * escribir: no hay base de imagen todavia.  Se dejan como relocations
+         * `ADDR32NB` para que las resuelva el enlazador, y el escritor COFF aun
+         * no las emite.  Un binario plano directamente no tiene donde poner un
+         * directorio de excepciones.
+         *
+         * `emit_obj` tambien se enciende para el `.obj` TEMPORAL que se usa
+         * cuando hay que autoenlazar bibliotecas estaticas, asi que ese camino
+         * queda igualmente fuera hasta que el enlazador sepa arrastrar la
+         * tabla de un objeto al binario final. */
+        const bool no_own_header = (emit_obj || flat_binary);
+
+        bool want_table = false;
+        if (fmt == aot::ObjFormat::PE && arch == aot::AotArch::X86_64 &&
+            !no_own_header) {
+            switch (opt.unwind) {
+            case UnwindEmit::AUTO:  // el defecto en Windows, y es cambiable
+            case UnwindEmit::TABLE:
+            case UnwindEmit::BOTH: want_table = true; break;
+            case UnwindEmit::NONE:
+            case UnwindEmit::CFI: break; // CFI es `.eh_frame`, no esta tabla
+            }
+        }
+
+        /* Pedirla EXPRESAMENTE donde no se puede dar es un error, no un
+         * silencio: con `auto` el defecto se adapta y no hay nada que decir,
+         * pero quien escribe `--unwind table` espera la tabla. */
+        if (no_own_header && fmt == aot::ObjFormat::PE &&
+            (opt.unwind == UnwindEmit::TABLE ||
+             opt.unwind == UnwindEmit::BOTH)) {
+            std::cerr << vx::diag::format("VX9251", {}) << "\n";
+            return EXIT_FAILURE;
+        }
+
+        if (want_table && !compiled.empty()) {
+            /* ORDEN.  `.pdata` tiene que ir ordenada por la RVA de inicio
+             * porque el sistema la recorre con busqueda binaria.  Aqui todavia
+             * no hay RVA, pero si hay seccion y offset, y el layout asigna
+             * direcciones crecientes en el orden de las secciones: ordenar por
+             * (seccion, offset) da el mismo orden que ordenar por RVA.
+             *
+             * La suposicion se comprueba despues, con las RVA ya escritas, en
+             * el emisor: una tabla desordenada no da error al construirla, da
+             * respuestas equivocadas al consultarla. */
+            std::vector<size_t> order;
+            order.reserve(compiled.size());
+            for (size_t ci = 0; ci < compiled.size(); ++ci)
+                if (fn_loc.count(compiled[ci].name)) order.push_back(ci);
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                const FnLoc &la = fn_loc[compiled[a].name];
+                const FnLoc &lb = fn_loc[compiled[b].name];
+                if (la.sec != lb.sec) return la.sec < lb.sec;
+                return la.off < lb.off;
+            });
+
+            std::vector<uint8_t> xdata, pdata;
+            /* Los prologos se repiten muchisimo -- casi todas las funciones
+             * guardan lo mismo --, asi que el mismo `UNWIND_INFO` sirve para
+             * muchas entradas.  Se comparte por contenido: varias entradas de
+             * `.pdata` pueden apuntar al mismo sitio de `.xdata`. */
+            std::map<std::vector<uint8_t>, uint32_t> xdata_off;
+
+            auto put32 = [](std::vector<uint8_t> &v, uint32_t x) {
+                for (int i = 0; i < 4; ++i)
+                    v.push_back(static_cast<uint8_t>((x >> (i * 8)) & 0xFF));
+            };
+
+            bool xdata_failed = false;
+            for (size_t ci : order) {
+                const AotFn &af = compiled[ci];
+                if (af.bytes.empty()) continue;
+
+                std::vector<uint8_t> info;
+                codegen::unwind::PeUnwindSkip why;
+                if (!codegen::unwind::build_pe_x86_64(af.unwind, info,
+                                                      &why)) {
+                    if (why == codegen::unwind::PeUnwindSkip::TooComplex) {
+                        std::cerr << vx::diag::format("VX9250", {af.name})
+                                  << "\n";
+                        xdata_failed = true;
+                        break;
+                    }
+                    /* No habia nada que describir: la funcion no reservo pila,
+                     * asi que no pudo llamar a nadie y es hoja de verdad.  El
+                     * formato no sabe decir "hoja"; lo que el desenrollador
+                     * espera para una hoja es justamente NO encontrarla, asi
+                     * que la entrada se omite.  Callar aqui es lo correcto,
+                     * mientras el otro caso -- hay marco y no cabe -- siga
+                     * siendo un error. */
+                    continue;
+                }
+
+                uint32_t xoff;
+                auto it = xdata_off.find(info);
+                if (it != xdata_off.end()) {
+                    xoff = it->second;
+                } else {
+                    /* `UNWIND_INFO` va alineado a 4: el campo que lo apunta en
+                     * `.pdata` es una RVA cualquiera, pero el formato exige la
+                     * alineacion y el desenrollador lee campos de 2 y 4 bytes
+                     * dentro. */
+                    while (xdata.size() % 4) xdata.push_back(0);
+                    xoff = static_cast<uint32_t>(xdata.size());
+                    xdata.insert(xdata.end(), info.begin(), info.end());
+                    xdata_off.emplace(info, xoff);
+                }
+
+                const FnLoc &fl = fn_loc[af.name];
+                // BeginAddress, EndAddress, UnwindInfoAddress: tres RVA.
+                pdata_fixes.push_back({static_cast<uint32_t>(pdata.size()),
+                                       fl.sec, fl.off});
+                put32(pdata, 0);
+                pdata_fixes.push_back({static_cast<uint32_t>(pdata.size()),
+                                       fl.sec, fl.off + af.bytes.size()});
+                put32(pdata, 0);
+                pdata_fixes.push_back(
+                    {static_cast<uint32_t>(pdata.size()), -1, xoff});
+                put32(pdata, 0);
+            }
+
+            if (xdata_failed) return EXIT_FAILURE;
+
+            if (!pdata.empty()) {
+                /* `.xdata` primero: asi su indice de seccion es menor y el
+                 * orden de creacion no depende de nada mas. */
+                xdata_si = get_sec(".xdata", /*is_code=*/false, "r");
+                secs[xdata_si].bytes = std::move(xdata);
+                pdata_si = get_sec(".pdata", /*is_code=*/false, "r");
+                secs[pdata_si].bytes = std::move(pdata);
+                // El objetivo de la tercera RVA es `.xdata`, ya conocido.
+                for (auto &f : pdata_fixes)
+                    if (f.target_sec < 0) f.target_sec = xdata_si;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Desenrollado por CFI de DWARF: la seccion `.eh_frame`.
+    //
+    // Es el otro eje, no la otra plataforma.  Lo lee todo lo que no sea el
+    // desenrollador del sistema en Windows: `gdb`, `libunwind`, el runtime de
+    // excepciones de C++ que traen los objetos de MinGW, y el propio lector de
+    // simbolos de este proyecto.  Vale igual en ELF y en PE, y por eso la
+    // decision no mira el formato salvo para elegir el DEFECTO.
+    //
+    // La seccion es una CIE -- el preambulo comun -- seguida de una FDE por
+    // funcion.  Cada FDE deja un hueco de cuatro bytes con la direccion de su
+    // funcion, relativa a la posicion del propio hueco; se resuelve con una
+    // reloc despues del layout, igual que las RVA de `.pdata`.
+    // ------------------------------------------------------------------
+    struct EhFix {
+        uint32_t site;  ///< offset del hueco dentro de `.eh_frame`
+        int target_sec; ///< seccion de la funcion
+        uint64_t target_off; ///< offset de la funcion dentro de esa seccion
+    };
+    std::vector<EhFix> eh_fixes;
+    int eh_si = -1;
+    {
+        bool want_cfi = false;
+        if (arch == aot::AotArch::X86_64 && !flat_binary) {
+            switch (opt.unwind) {
+            case UnwindEmit::CFI:
+            case UnwindEmit::BOTH: want_cfi = true; break;
+            /* En `auto` manda la costumbre del formato: en ELF el desenrollado
+             * ES esto, mientras que en PE lo que el sistema sabe leer son las
+             * tablas, asi que alli `auto` ya eligio `.pdata` mas arriba.  Quien
+             * quiera los dos en una PE lo pide con `both`. */
+            case UnwindEmit::AUTO: want_cfi = (fmt == aot::ObjFormat::ELF); break;
+            case UnwindEmit::NONE:
+            case UnwindEmit::TABLE: break;
+            }
+        }
+
+        if (want_cfi && !compiled.empty()) {
+            std::vector<uint8_t> eh;
+
+            /* Una sola CIE para todas.  Va la primera porque cada FDE guarda la
+             * distancia HACIA ATRAS hasta ella, asi que tiene que quedar por
+             * delante de todas las que la referencian. */
+            std::vector<uint8_t> cie;
+            codegen::unwind::build_eh_frame_cie_x86_64(cie);
+            const uint32_t cie_off = 0;
+            eh.insert(eh.end(), cie.begin(), cie.end());
+
+            /* El formato NO exige orden -- se recorre entero, registro a
+             * registro, no por biseccion como `.pdata` --, pero se emite en el
+             * mismo orden por determinismo: dos compilaciones de la misma
+             * entrada tienen que dar el mismo byte, o la cache de artefactos
+             * deja de poder comparar. */
+            std::vector<size_t> order;
+            order.reserve(compiled.size());
+            for (size_t ci = 0; ci < compiled.size(); ++ci)
+                if (fn_loc.count(compiled[ci].name)) order.push_back(ci);
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                const FnLoc &la = fn_loc[compiled[a].name];
+                const FnLoc &lb = fn_loc[compiled[b].name];
+                if (la.sec != lb.sec) return la.sec < lb.sec;
+                return la.off < lb.off;
+            });
+
+            for (size_t ci : order) {
+                const AotFn &af = compiled[ci];
+                if (af.bytes.empty()) continue;
+
+                std::vector<uint8_t> fde;
+                uint32_t hole = 0;
+                if (!codegen::unwind::build_eh_frame_fde_x86_64(
+                        af.unwind, static_cast<uint32_t>(af.bytes.size()),
+                        cie_off, static_cast<uint32_t>(eh.size()), fde,
+                        &hole)) {
+                    /* Solo falla si el cuerpo es dueno de su pila, y ahi
+                     * describir mal es peor que callar.  A diferencia de PE, la
+                     * hoja SI lleva FDE y no entra por aqui. */
+                    continue;
+                }
+
+                eh_fixes.push_back({static_cast<uint32_t>(eh.size() + hole),
+                                    fn_loc[af.name].sec, fn_loc[af.name].off});
+                eh.insert(eh.end(), fde.begin(), fde.end());
+            }
+
+            /* Terminador: un registro de longitud cero.  Quien recorre la
+             * seccion salta de longitud en longitud y para al leer un cero; sin
+             * el, un lector que no se fie del tamano de la seccion sigue
+             * leyendo lo que haya detras.
+             *
+             * SOLO en un artefacto FINAL.  En un objeto relocatable seria un
+             * error, y de los que no se ven: al enlazar varios, las secciones
+             * se concatenan y el terminador del primero queda EN MEDIO, con lo
+             * que cualquier lector se para ahi y todo lo que aportan los demas
+             * objetos es inalcanzable.  El binario corre igual y la seccion
+             * tiene el tamano correcto; lo unico que falla es el recorrido de
+             * pila, y solo por las funciones que quedaron detras.
+             *
+             * Es el motivo por el que las cadenas de herramientas lo ponen en
+             * un objeto aparte que se enlaza el ultimo (`crtend.o`) y no en
+             * cada unidad. */
+            if (!emit_obj) eh.insert(eh.end(), 4, 0);
+
+            eh_si = get_sec(".eh_frame", /*is_code=*/false, "r");
+            secs[eh_si].bytes = std::move(eh);
         }
     }
 
@@ -3162,6 +3467,31 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     aot::RelocTarget::addr(it->second.sec, it->second.off),
                     aot::RelocKind::ABS64);
         }
+    }
+    /* Las tres RVA de cada `RUNTIME_FUNCTION`.  RVA32 y no ABS64 como las de
+     * `.vxgc_smap`: estas tablas las lee el propio sistema, y las quiere
+     * relativas a la base de la imagen, en 32 bits. */
+    if (pdata_si >= 0) {
+        for (const auto &f : pdata_fixes)
+            w.add_reloc(pdata_si, f.site,
+                        aot::RelocTarget::addr(f.target_sec, f.target_off),
+                        aot::RelocKind::RVA32);
+    }
+    /* Las direcciones de funcion de las FDE.
+     *
+     * Van como REL32 CON ADDEND +4, y ese +4 no es un apano: la codificacion
+     * que declara la CIE es `pcrel`, o sea relativa a la posicion del propio
+     * campo -- `objetivo - sitio` --, mientras que REL32 escribe lo que necesita
+     * un `call` de x86, que es `objetivo - (sitio + 4)` porque el procesador
+     * cuenta desde la instruccion SIGUIENTE.  El addend cancela esa diferencia.
+     *
+     * Y se emite pcrel, y no una direccion absoluta, para que `.eh_frame` pueda
+     * ser de solo lectura y no haya que reubicarla en cada arranque. */
+    if (eh_si >= 0) {
+        for (const auto &f : eh_fixes)
+            w.add_reloc(eh_si, f.site,
+                        aot::RelocTarget::addr(f.target_sec, f.target_off),
+                        aot::RelocKind::REL32, /*addend=*/4);
     }
     if (emit_shared) {
         // Libreria compartida: exporta TODAS las funciones como

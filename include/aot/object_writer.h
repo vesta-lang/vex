@@ -150,6 +150,14 @@ enum class RelocKind : uint8_t {
     ARM64_CALL26 =
         6, ///< AArch64 BL/B: parchea imm26 = (target - site) >> 2 en la
            ///< instruccion de 32 bits del sitio (R_AARCH64_CALL26/JUMP26).
+    RVA32 =
+        7, ///< desplazamiento de 32 bits DESDE LA BASE DE LA IMAGEN, no desde
+           ///< el sitio: *(uint32*)site = target_va - image_base.  Es lo que
+           ///< piden las tablas que lee el propio sistema -- cada
+           ///< `RUNTIME_FUNCTION` de `.pdata` son tres --, y por eso no vale
+           ///< ni REL32 (relativa al sitio) ni IMM32 (la direccion entera).
+           ///< Solo tiene sentido en PE; en ELF el emisor la rechaza en vez
+           ///< de escribir un numero que parezca bueno.
 };
 
 /**

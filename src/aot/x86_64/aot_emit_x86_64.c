@@ -286,6 +286,165 @@ static void aot_pe_append_coff_symtab(const char *path, const AotSym *syms,
     free(strtab);
 }
 
+/* Apunta DataDirectory[EXCEPTION] a la seccion `.pdata`, si la hay.
+ *
+ * Sin este directorio la tabla NO EXISTE para el sistema: `.pdata` seria una
+ * seccion de datos mas.  `RtlLookupFunctionEntry` la busca aqui, nunca por
+ * nombre, y la funcion que no aparece la trata como hoja -- con lo que el
+ * desenrollado se detiene en el primer marco.  El sintoma no es un error: es un
+ * proceso que muere sin manejador y sin traza, que es justo lo que la tabla
+ * viene a evitar.
+ *
+ * Se localiza por NOMBRE, y no por un indice que pase el driver, igual que
+ * `.reloc` y `.tls` aqui al lado.  Asi un guion de enlazado puede colocar la
+ * seccion donde quiera y el directorio la sigue sin tocar nada mas.  El indice
+ * PE coincide con el indice AOT porque las secciones se anaden en orden.
+ *
+ * @return 1 si quedo puesto, y tambien si no hay `.pdata` -- no todos los
+ *         binarios la llevan, y no llevarla es legitimo; 0 si la seccion existe
+ *         pero su tamano no puede describir una tabla.
+ */
+static int aot_pe_set_exception_dir(PE64FILE_struct *pe, const AotSection *secs,
+                                    int num_secs, char *err, size_t err_cap) {
+    for (int i = 0; i < num_secs; ++i) {
+        if (!secs[i].name || strcmp(secs[i].name, ".pdata") != 0) continue;
+
+        const uint64_t size = aot_sec_size(&secs[i]);
+        if (size == 0) return 1; /* declarada pero vacia: nada que anunciar */
+
+        /* Cada RUNTIME_FUNCTION son TRES RVA de 4 bytes.  Un tamano que no sea
+         * multiplo de 12 deja una entrada a medias al final, y el sistema la
+         * leeria igual: recorre el directorio por su tamano, con busqueda
+         * binaria, y no hay centinela que marque el final. */
+        if (size % 12u != 0) {
+            /* Se devuelve el CODIGO, no la frase.  Este fichero es C y no
+             * alcanza el catalogo de diagnosticos; quien lo renderiza en el
+             * idioma que toque es la frontera C++ del emisor.  Un error lo lee
+             * una persona, y dejarlo escrito aqui lo fijaria a un idioma. */
+            set_err(err, err_cap, "VX9252");
+            return 0;
+        }
+        if (size > 0xFFFFFFFFull) {
+            set_err(err, err_cap, "VX9253");
+            return 0;
+        }
+
+        pe->ntHeaders.OptionalHeader
+            .DataDirectory[___IMAGE_DIRECTORY_ENTRY_EXCEPTION]
+            .VirtualAddress = pe->sectionHeaders[i].VirtualAddress;
+        pe->ntHeaders.OptionalHeader
+            .DataDirectory[___IMAGE_DIRECTORY_ENTRY_EXCEPTION]
+            .Size = (uint32_t)size;
+        return 1;
+    }
+    return 1;
+}
+
+/* Comparador de RUNTIME_FUNCTION por su RVA de inicio (little endian). */
+static int aot_pe_cmp_runtime_function(const void *a, const void *b) {
+    const uint8_t *x = (const uint8_t *)a, *y = (const uint8_t *)b;
+    const uint32_t bx = (uint32_t)x[0] | ((uint32_t)x[1] << 8) |
+                        ((uint32_t)x[2] << 16) | ((uint32_t)x[3] << 24);
+    const uint32_t by = (uint32_t)y[0] | ((uint32_t)y[1] << 8) |
+                        ((uint32_t)y[2] << 16) | ((uint32_t)y[3] << 24);
+    if (bx < by) return -1;
+    return (bx > by) ? 1 : 0;
+}
+
+/* Deja `.pdata` como el sistema la espera: compactada, ORDENADA y anunciada
+ * con su tamano real.  Corre con las RVA ya escritas, que es el unico momento
+ * en que existen.
+ *
+ * SE ORDENA, no se comprueba y ya esta.  Cuando la tabla la producia solo
+ * nuestro driver bastaba con verificar que salia ordenada, porque el la
+ * construia en orden.  Pero al enlazar, esta seccion es la CONCATENACION de las
+ * tablas de cada objeto, y pegar dos tablas ordenadas da una desordenada: el
+ * orden final depende de donde caiga el codigo de cada objeto, cosa que ningun
+ * productor sabe por separado.  Ordenar aqui es lo unico que funciona para los
+ * dos casos.
+ *
+ * Y hace falta porque el fallo no se manifiesta: el sistema busca en esta tabla
+ * por BISECCION.  Una tabla desordenada no da error al consultarla -- devuelve
+ * la entrada equivocada, o ninguna, para una direccion que si esta --, asi que
+ * el desenrollado fallaria solo a veces y solo para algunas funciones.
+ *
+ * Las entradas a cero se COMPACTAN fuera y el directorio se reajusta al tamano
+ * que queda.  Una entrada a cero no es una funcion en la RVA 0: es relleno de
+ * alineamiento, o un hueco que ninguna reloc llego a tocar.  Dejarla dentro
+ * seria peor que ignorarla, porque al ordenar se iria al principio y la
+ * biseccion la encontraria antes que a ninguna otra.
+ *
+ * @return 1 si quedo bien, o si no hay `.pdata`; 0 con el motivo si alguna
+ *         entrada es imposible.
+ */
+static int aot_pe_finish_pdata(PE64FILE_struct *pe, const AotSection *secs,
+                               int num_secs, char *err, size_t err_cap) {
+    for (int i = 0; i < num_secs; ++i) {
+        if (!secs[i].name || strcmp(secs[i].name, ".pdata") != 0) continue;
+        uint8_t *p = (uint8_t *)pe->sectionData[i];
+        if (!p) return 1;
+
+        const uint64_t size = aot_sec_size(&secs[i]);
+        const uint64_t total = size / 12;
+
+        /* Compactar: mover las entradas live al principio, conservando su
+         * orden relativo (que aun no importa, pero mantenerlo hace que el
+         * resultado sea reproducible). */
+        uint64_t live = 0;
+        for (uint64_t k = 0; k < total; ++k) {
+            const uint8_t *e = p + k * 12;
+            int all_zero = 1;
+            for (int j = 0; j < 12; ++j)
+                if (e[j]) {
+                    all_zero = 0;
+                    break;
+                }
+            if (all_zero) continue;
+            if (live != k) memcpy(p + live * 12, e, 12);
+            ++live;
+        }
+        // Lo que quedo detras ya no describe nada: a cero, para no confundir.
+        if (live < total)
+            memset(p + live * 12, 0, (size_t)((total - live) * 12));
+
+        if (live > 1)
+            qsort(p, (size_t)live, 12, aot_pe_cmp_runtime_function);
+
+        /* Ya ordenada, se valida lo que el orden no arregla. */
+        uint32_t prev_begin = 0;
+        int has_prev = 0;
+        for (uint64_t k = 0; k < live; ++k) {
+            const uint8_t *e = p + k * 12;
+            const uint32_t begin = (uint32_t)e[0] | ((uint32_t)e[1] << 8) |
+                                   ((uint32_t)e[2] << 16) |
+                                   ((uint32_t)e[3] << 24);
+            const uint32_t end = (uint32_t)e[4] | ((uint32_t)e[5] << 8) |
+                                 ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
+            if (end <= begin) {
+                set_err(err, err_cap, "VX9254");
+                return 0;
+            }
+            /* Dos funciones no pueden empezar en la misma direccion.  Si pasa,
+             * es que la misma tabla entro dos veces o que una reloc se quedo
+             * sin resolver, y la biseccion devolveria una de las dos al azar. */
+            if (has_prev && begin == prev_begin) {
+                set_err(err, err_cap, "VX9255");
+                return 0;
+            }
+            prev_begin = begin;
+            has_prev = 1;
+        }
+
+        /* El directorio se anuncio antes con el tamano de la seccion; ahora se
+         * ajusta a lo que de verdad hay, que es lo que recorre la biseccion. */
+        pe->ntHeaders.OptionalHeader
+            .DataDirectory[___IMAGE_DIRECTORY_ENTRY_EXCEPTION]
+            .Size = (uint32_t)(live * 12);
+        return 1;
+    }
+    return 1;
+}
+
 int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 const AotSection *secs, int num_secs, int entry_sec,
                 uint64_t entry_off, const AotImport *imps, int num_imps,
@@ -332,6 +491,16 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
             addSection(&pe, s->name, pe_section_chars(s->flags),
                        (_BYTE *)s->data, s->size);
         }
+    }
+
+    /* Desenrollado: anunciar `.pdata` en el directorio de excepciones.  Va justo
+     * detras del bucle porque es donde addSection ya ha asignado las
+     * VirtualAddress de todas las secciones del usuario, que es lo unico que
+     * hace falta; lo que se anada despues (una `.reloc` del TLS, por ejemplo)
+     * se coloca al final y no mueve a las anteriores. */
+    if (!aot_pe_set_exception_dir(&pe, secs, num_secs, err, err_cap)) {
+        freePE64File(&pe); /* addSection copia los datos: liberar aqui es seguro */
+        return 0;
     }
 
     /* TLS (thread_local): sintetizar el IMAGE_TLS_DIRECTORY + _tls_index si hay
@@ -582,6 +751,13 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         if (dbg_rva)
             for (int i = 0; i < num_secs; ++i)
                 dbg_rva[i] = (uint32_t)pe.sectionHeaders[i].VirtualAddress;
+    }
+
+    /* Ultimo momento en que las RVA existen y todavia no se ha escrito nada. */
+    if (!aot_pe_finish_pdata(&pe, secs, num_secs, err, err_cap)) {
+        freePE64File(&pe);
+        free(dbg_rva);
+        return 0;
     }
 
     writePE64File(&pe, path);
@@ -1816,6 +1992,15 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
                        (_BYTE *)secs[i].data, secs[i].size);
     }
 
+    /* Desenrollado: la .dll lo necesita igual que el .exe.  De hecho mas: el
+     * codigo de una biblioteca aparece en las pilas de quien la llama, y sin su
+     * `.pdata` el desenrollado se corta AL ENTRAR en ella, llevandose por
+     * delante el manejador del programa que la cargo. */
+    if (!aot_pe_set_exception_dir(&pe, secs, num_secs, err, err_cap)) {
+        freePE64File(&pe);
+        return 0;
+    }
+
     /* TLS (thread_local) en la .dll: sintetizar el IMAGE_TLS_DIRECTORY +
      * _tls_index igual que en el .exe.  El cargador de Windows procesa el
      * directorio TLS tambien para DLLs (Vista+: tambien las cargadas con
@@ -1989,6 +2174,11 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
         if (dbg_rva_dll)
             for (int i = 0; i < num_secs; ++i)
                 dbg_rva_dll[i] = (uint32_t)pe.sectionHeaders[i].VirtualAddress;
+    }
+    if (!aot_pe_finish_pdata(&pe, secs, num_secs, err, err_cap)) {
+        freePE64File(&pe);
+        free(dbg_rva_dll);
+        return 0;
     }
     writePE64File(&pe, path);
     freePE64File(&pe);

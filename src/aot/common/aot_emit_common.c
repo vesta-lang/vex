@@ -265,6 +265,50 @@ static int coff_obj_impl(const char *path, const AotSection *secs, int num_secs,
         symtab[i].StorageClass = AOT_COFF_SYM_STATIC;
         symtab[i].NumberOfAuxSymbols = 0;
     }
+
+    /* Nombres de seccion de mas de ocho caracteres.
+     *
+     * La cabecera de seccion reserva ocho bytes justos para el nombre, asi que
+     * `.eh_frame` -- que tiene nueve -- no cabe.  En un OBJETO el formato da
+     * salida: se escribe `/N`, donde N es en decimal el desplazamiento del
+     * nombre completo dentro de la tabla de cadenas.  (En una imagen ya no vale,
+     * y por eso alli la seccion aparece recortada; es lo que hacen todos.)
+     *
+     * Sin esto el nombre se truncaba, y el fallo es de los que no avisan: `gcc`
+     * emite `.eh_frame` con el nombre completo, nosotros emitiriamos
+     * `.eh_fram`, y al enlazar los dos objetos las dos tablas irian a SECCIONES
+     * DISTINTAS.  Cada una queda bien formada por su cuenta, el binario corre,
+     * y el desenrollado solo funciona para la mitad del programa.
+     *
+     * Se hace despues de los simbolos porque comparten tabla de cadenas: ahi ya
+     * estan los nombres largos de simbolo y esto se anade detras. */
+    for (int i = 0; i < num_secs; ++i) {
+        const char *nm = secs[i].name ? secs[i].name : "";
+        const size_t ln = strlen(nm);
+        if (ln <= 8) continue;
+
+        const uint32_t off = strtab_size;
+        char *grown = (char *)realloc(strtab, strtab_size + ln + 1);
+        if (!grown) {
+            set_err(err, err_cap, "VX9256"); // lo renderiza la frontera C++
+            free(strtab);
+            free(symtab);
+            free(sh);
+            return 0;
+        }
+        strtab = grown;
+        memcpy(strtab + strtab_size, nm, ln + 1);
+        strtab_size += (uint32_t)(ln + 1);
+
+        /* "/" + hasta siete digitos entra en los ocho bytes; una tabla de
+         * cadenas que llegara a 10 millones no cabria, y eso no puede pasar
+         * con nombres de seccion. */
+        char short_name[16];
+        snprintf(short_name, sizeof(short_name), "/%u", (unsigned)off);
+        const size_t sn = strlen(short_name);
+        memset(sh[i].Name, 0, 8);
+        memcpy(sh[i].Name, short_name, sn < 8 ? sn : 8);
+    }
     for (int g = 0; g < num_syms; ++g) {
         COFF_SYMBOL *s = &symtab[num_secs + g];
         AOT_COFF_SET_NAME(*s, syms[g].name);

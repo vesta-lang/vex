@@ -63,20 +63,31 @@ inline constexpr uint32_t PE_X86_64_MAX_SLOTS = 32;
  * @param out   [out] Se SOBRESCRIBE.  Queda con la cabecera de cuatro bytes
  *              seguida de los codigos, listo para copiar a `.xdata` o a
  *              memoria viva.
+ * @param why   [out, opcional] Por que no se emitio, cuando devuelve false.
  * @return true si hay descripcion que emitir.
  *
- * Devuelve false, dejando @p out vacio, en los casos en los que NO describir es
- * lo correcto, que no es lo mismo que fallar:
+ * DEVOLVER FALSE SIGNIFICA DOS COSAS MUY DISTINTAS, y de ahi el @p why.  Quien
+ * las confunda acaba dando un error por una funcion hoja perfectamente normal,
+ * o -- peor -- pasando por alto una que si necesitaba entrada:
  *
- *  - el cuerpo es dueno de la pila (`owns_stack`): mentirle al desenrollador es
- *    peor que no decirle nada;
- *  - no se midio el prologo, o el prologo no hizo nada: ahi la suposicion de
- *    hoja que hace el sistema cuando no encuentra entrada ES la correcta;
- *  - el prologo pasa de 255 bytes, que es lo que cabe en el campo del formato;
- *  - la descripcion pasa de @ref PE_X86_64_MAX_SLOTS ranuras.
+ *  - @c Nothing, y omitir la entrada es LO CORRECTO: el cuerpo es dueno de la
+ *    pila (`owns_stack`, y mentirle al desenrollador es peor que callar), o el
+ *    prologo no hizo nada.  En ese segundo caso la funcion no reservo pila, asi
+ *    que no pudo llamar a nadie, asi que es hoja de verdad -- y la suposicion
+ *    de hoja que hace el sistema cuando no encuentra entrada acierta.
+ *  - @c TooComplex, y ahi SI hay un marco que describir pero no cabe: el
+ *    prologo pasa de 255 bytes, o la descripcion pasa de
+ *    @ref PE_X86_64_MAX_SLOTS ranuras.  Omitir la entrada dejaria al
+ *    desenrollador creyendo que es hoja cuando no lo es, asi que esto no se
+ *    puede tragar en silencio.
  */
-bool build_pe_x86_64(const FrameUnwind &frame,
-                     std::vector<uint8_t> &out) noexcept;
+enum class PeUnwindSkip : uint8_t {
+    Nothing,    ///< no habia nada que describir; omitir es correcto
+    TooComplex, ///< hay marco, pero no cabe en lo que el formato expresa
+};
+
+bool build_pe_x86_64(const FrameUnwind &frame, std::vector<uint8_t> &out,
+                     PeUnwindSkip *why = nullptr) noexcept;
 
 } // namespace unwind
 } // namespace codegen
