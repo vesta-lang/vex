@@ -72,17 +72,10 @@ void BorrowChecker::reset() {
 
 void BorrowChecker::declare_owner(const std::string &owner_name,
                                   OwnerKind kind) {
-    // Insertamos un record en estado None si no existia.  Si ya
-    // existia, actualizamos solo el owner_kind (puede haber sido
-    // registrado implicitamente por on_lend como Local-default).
-    auto it = owners_.find(owner_name);
-    if (it == owners_.end()) {
-        BorrowRecord rec;
-        rec.owner_kind = kind;
-        owners_.emplace(owner_name, rec);
-    } else {
-        it->second.owner_kind = kind;
-    }
+    // La categoria es de la RAIZ, no de cada lugar: que `p` sea un parametro
+    // no cambia porque se preste `p.a`.  Si ya estaba (registrada al vuelo por
+    // un prestamo), solo se corrige la categoria.
+    owners_[owner_name].owner_kind = kind;
 }
 
 OwnerKind
@@ -90,6 +83,32 @@ BorrowChecker::owner_kind_of(const std::string &owner_name) const noexcept {
     auto it = owners_.find(owner_name);
     if (it == owners_.end()) return OwnerKind::Local; // defensivo
     return it->second.owner_kind;
+}
+
+BorrowRecord *
+BorrowChecker::find_same_place_(OwnerState &st,
+                                const borrow::Place &place) noexcept {
+    for (BorrowRecord &r : st.live)
+        if (borrow::places_same(r.place, place)) return &r;
+    return nullptr;
+}
+
+const BorrowRecord *
+BorrowChecker::find_overlapping_(const OwnerState &st,
+                                 const borrow::Place &place,
+                                 borrow::PlaceUnknown *why) noexcept {
+    /* Solo los VIVOS, que es lo que hay en la lista: los soltados se borran.
+     * Por eso esto es un punyado de comparaciones y no un barrido. */
+    for (const BorrowRecord &r : st.live) {
+        if (r.kind == BorrowKind::None) continue;
+        borrow::PlaceUnknown w = borrow::PlaceUnknown::None;
+        if (borrow::places_may_overlap(r.place, place, &w)) {
+            if (why != nullptr) *why = w;
+            return &r;
+        }
+    }
+    if (why != nullptr) *why = borrow::PlaceUnknown::None;
+    return nullptr;
 }
 
 std::string
@@ -104,10 +123,17 @@ BorrowChecker::root_owner_of(const std::string &borrower_name) const {
         // Caso self-referencial (param borrow registrado como
         // borrow de si mismo); su owner es el mismo nombre y aqui
         // paramos.
-        if (it->second.owner == cur) return cur;
-        cur = it->second.owner;
+        if (it->second.owner.root == cur) return cur;
+        cur = it->second.owner.root;
     }
     return cur;
+}
+
+borrow::Place
+BorrowChecker::owner_place_of(const std::string &borrower_name) const {
+    auto it = borrows_.find(borrower_name);
+    if (it == borrows_.end()) return borrow::Place();
+    return it->second.owner;
 }
 
 void BorrowChecker::set_last_use(const std::string &borrower_name,
@@ -135,7 +161,7 @@ void BorrowChecker::advance_stmt(uint32_t current_stmt_idx) {
         // Param borrows self-referenciales (owner == borrower) NO
         // se dropean por NLL porque su lifetime cubre la funcion
         // entera y el "uso" es implicito al final.
-        if (kv.second.owner == kv.first) continue;
+        if (kv.second.owner.root == kv.first) continue;
         if (kv.second.last_use_idx > 0 &&
             current_stmt_idx > kv.second.last_use_idx) {
             to_drop.push_back(kv.first);
@@ -152,7 +178,14 @@ void BorrowChecker::advance_stmt(uint32_t current_stmt_idx) {
 void BorrowChecker::register_borrow(const std::string &borrower_name,
                                     const std::string &owner_name,
                                     bool is_mut) {
-    BorrowMeta m{owner_name, is_mut, 0, false, ""};
+    borrow::Place p;
+    p.root = owner_name;
+    register_borrow(borrower_name, p, is_mut);
+}
+
+void BorrowChecker::register_borrow(const std::string &borrower_name,
+                                    const borrow::Place &owner, bool is_mut) {
+    BorrowMeta m{owner, is_mut, 0, false, ""};
     // F1 - consultar pending_last_use_ poblado por el pre-pase.
     // Si no hay info, last_use_idx queda en 0 -> NLL no dropea
     // (conservador: borrow vive hasta el RET de la funcion).
@@ -170,10 +203,15 @@ bool BorrowChecker::suspend_for_reborrow(
     // se mantiene en el OWNER, no en el borrow intermedio).
     auto it = borrows_.find(source_borrower_name);
     if (it == borrows_.end()) return false;
-    const std::string root = root_owner_of(source_borrower_name);
-    auto orec = owners_.find(root);
-    if (orec == owners_.end()) return false;
-    BorrowRecord &rec = orec->second;
+    /* El estado se suspende en el LUGAR del que salio el prestamo fuente, que
+     * es donde esta el registro -- no en la raiz --: con `p.a` represtado, lo
+     * que hay que apartar es el de `p.a` y no lo que hubiera de `p`. */
+    const borrow::Place src = it->second.owner;
+    auto ost = owners_.find(src.root);
+    if (ost == owners_.end()) return false;
+    BorrowRecord *found = find_same_place_(ost->second, src);
+    if (found == nullptr) return false;
+    BorrowRecord &rec = *found;
     // Solo suspendemos si el owner esta efectivamente en estado
     // Mutable.  Si esta Shared o None, el reborrow normal funciona
     // sin necesidad de suspend (shared puede coexistir mas de uno).
@@ -207,39 +245,60 @@ void BorrowChecker::mark_as_reborrow(const std::string &reborrower_name,
 bool BorrowChecker::on_lend(const std::string &owner_name,
                             const std::string &borrower_name,
                             SourceLoc loc_borrow, bool is_mut) {
-    auto &rec = owners_[owner_name]; // crea si no existe (estado None).
+    borrow::Place p;
+    p.root = owner_name;
+    return on_lend(p, borrower_name, loc_borrow, is_mut);
+}
 
-    // R1: si hay un mutable activo, prohibir cualquier nuevo borrow.
-    if (rec.kind == BorrowKind::Mutable) {
-        error_aliasing(loc_borrow, owner_name, rec, is_mut);
-        return false;
-    }
-    // R2 (caso mut): si hay shared activos, prohibir borrow_mut.
-    if (rec.kind == BorrowKind::Shared && is_mut) {
-        error_aliasing(loc_borrow, owner_name, rec, /*trying_mut=*/true);
-        return false;
-    }
+bool BorrowChecker::on_lend(const borrow::Place &place,
+                            const std::string &borrower_name,
+                            SourceLoc loc_borrow, bool is_mut) {
+    if (!place.valid()) return true; // no hay memoria que registrar
+    OwnerState &st = owners_[place.root]; // crea la raiz si no existia
 
-    // Validacion OK; actualizar estado.
-    if (is_mut) {
-        rec.kind = BorrowKind::Mutable;
-        rec.shared_count = 0;
-        rec.loc_taken = loc_borrow;
-        rec.borrower_name = borrower_name;
-    } else {
-        if (rec.kind == BorrowKind::None) {
-            rec.kind = BorrowKind::Shared;
-            rec.shared_count = 1;
-            rec.loc_taken = loc_borrow;
-            rec.borrower_name = borrower_name;
-        } else {
-            // Ya hay Shared; solo incrementamos el contador.  Mantenemos
-            // loc_taken del primero (suficiente para errores; los
-            // siguientes se pueden citar dinamicamente si fuera necesario).
-            rec.shared_count++;
+    /* R1 y R2 se preguntan contra lo que PUEDE PISARSE, no contra lo que se
+     * llame igual.  Ese es todo el cambio: `p.a` y `p.b` conviven, `p` y `p.a`
+     * no, y dos nombres de la misma region chocan aunque sean dos nombres. */
+    borrow::PlaceUnknown why = borrow::PlaceUnknown::None;
+    if (const BorrowRecord *hit = find_overlapping_(st, place, &why)) {
+        // R1: con un exclusivo vivo encima, no cabe ningun prestamo mas.
+        if (hit->kind == BorrowKind::Mutable) {
+            error_aliasing(loc_borrow, place, *hit, is_mut, why);
+            return false;
+        }
+        // R2: los compartidos conviven entre si, pero no con un exclusivo.
+        if (hit->kind == BorrowKind::Shared && is_mut) {
+            error_aliasing(loc_borrow, place, *hit, /*trying_mut=*/true, why);
+            return false;
         }
     }
-    register_borrow(borrower_name, owner_name, is_mut);
+
+    /* Validado.  Un compartido MAS del mismo lugar solo suma al que ya hay --
+     * por eso se busca el lugar exacto y no uno que se le parezca: sumar sobre
+     * uno que solo se solapa daria un recuento que no corresponde a nada. */
+    BorrowRecord *same = find_same_place_(st, place);
+    if (same == nullptr) {
+        BorrowRecord fresh;
+        fresh.place = place;
+        st.live.push_back(std::move(fresh));
+        same = &st.live.back();
+    }
+    if (is_mut) {
+        same->kind = BorrowKind::Mutable;
+        same->shared_count = 0;
+        same->loc_taken = loc_borrow;
+        same->borrower_name = borrower_name;
+    } else if (same->kind == BorrowKind::None) {
+        same->kind = BorrowKind::Shared;
+        same->shared_count = 1;
+        same->loc_taken = loc_borrow;
+        same->borrower_name = borrower_name;
+    } else {
+        // Ya hay Shared sobre ESTE lugar; solo sube el contador.  Se conserva
+        // loc_taken del primero, que es el que se cita.
+        same->shared_count++;
+    }
+    register_borrow(borrower_name, place, is_mut);
     return true;
 }
 
@@ -251,14 +310,16 @@ void BorrowChecker::on_borrow_drop(const std::string &borrower_name,
         // expresion temporal, no de variable nombrada).  No error.
         return;
     }
-    const std::string owner = it->second.owner;
+    const borrow::Place owner = it->second.owner;
     const bool is_mut = it->second.is_mut;
     const std::string reborrow_source = it->second.reborrow_source;
     borrows_.erase(it);
 
-    auto orec = owners_.find(owner);
-    if (orec == owners_.end()) return; // defensive
-    BorrowRecord &rec = orec->second;
+    auto ost = owners_.find(owner.root);
+    if (ost == owners_.end()) return; // defensive
+    BorrowRecord *found = find_same_place_(ost->second, owner);
+    if (found == nullptr) return;     // defensive
+    BorrowRecord &rec = *found;
     if (is_mut) {
         rec.kind = BorrowKind::None;
         rec.shared_count = 0;
@@ -287,35 +348,69 @@ void BorrowChecker::on_borrow_drop(const std::string &borrower_name,
         rec.loc_taken = s.loc_taken;
         rec.borrower_name = std::move(s.borrower_name);
     }
+
+    /* Y si ya no queda nada vivo de ese lugar, fuera de la lista.  No es
+     * limpieza cosmetica: es lo que mantiene el recorrido de
+     * @ref find_overlapping_ proporcional a los prestamos VIVOS y no al numero
+     * de lugares que la funcion haya prestado alguna vez. */
+    if (rec.kind == BorrowKind::None && rec.suspend_stack.empty()) {
+        OwnerState &st = ost->second;
+        for (size_t i = 0; i < st.live.size(); ++i) {
+            if (&st.live[i] != &rec) continue;
+            st.live.erase(st.live.begin() + static_cast<long>(i));
+            break;
+        }
+    }
 }
 
 bool BorrowChecker::on_owner_use(const std::string &owner_name,
                                  SourceLoc loc_use, bool is_mutation) {
-    auto it = owners_.find(owner_name);
-    if (it == owners_.end()) return true; // no borrows -> OK
-    const BorrowRecord &rec = it->second;
-    if (rec.kind == BorrowKind::None) return true;
+    borrow::Place p;
+    p.root = owner_name;
+    return on_owner_use(p, loc_use, is_mutation);
+}
+
+bool BorrowChecker::on_owner_use(const borrow::Place &place, SourceLoc loc_use,
+                                 bool is_mutation) {
+    if (!place.valid()) return true;
+    auto it = owners_.find(place.root);
+    if (it == owners_.end()) return true; // nada prestado de esa raiz
+    /* Lo que estorba es lo que PUEDE PISARSE con lo que se usa.  Escribir en
+     * `p.b` con `p.a` prestado no toca memoria prestada; leer `p` con `p.a`
+     * prestado en exclusiva, si. */
+    borrow::PlaceUnknown why = borrow::PlaceUnknown::None;
+    const BorrowRecord *rec = find_overlapping_(it->second, place, &why);
+    if (rec == nullptr) return true;
     // Lectura del owner: prohibida si hay Mutable activo.
     if (!is_mutation) {
-        if (rec.kind == BorrowKind::Mutable) {
-            error_use_while_borrowed(loc_use, owner_name, rec,
-                                     /*is_mutation=*/false);
+        if (rec->kind == BorrowKind::Mutable) {
+            error_use_while_borrowed(loc_use, place, *rec,
+                                     /*is_mutation=*/false, why);
             return false;
         }
         return true; // Shared + lectura: permitido (lectura coexiste).
     }
     // Mutacion del owner: prohibida si hay cualquier borrow activo.
-    error_use_while_borrowed(loc_use, owner_name, rec, /*is_mutation=*/true);
+    error_use_while_borrowed(loc_use, place, *rec, /*is_mutation=*/true, why);
     return false;
 }
 
 bool BorrowChecker::on_owner_move(const std::string &owner_name,
                                   SourceLoc loc_move) {
-    auto it = owners_.find(owner_name);
+    borrow::Place p;
+    p.root = owner_name;
+    return on_owner_move(p, loc_move);
+}
+
+bool BorrowChecker::on_owner_move(const borrow::Place &place,
+                                  SourceLoc loc_move) {
+    if (!place.valid()) return true;
+    auto it = owners_.find(place.root);
     if (it == owners_.end()) return true;
-    const BorrowRecord &rec = it->second;
-    if (rec.kind == BorrowKind::None) return true;
-    error_move_while_borrowed(loc_move, owner_name, rec);
+    borrow::PlaceUnknown why = borrow::PlaceUnknown::None;
+    const BorrowRecord *rec = find_overlapping_(it->second, place, &why);
+    if (rec == nullptr) return true;
+    error_move_while_borrowed(loc_move, place, *rec, why);
     return false;
 }
 
@@ -329,8 +424,11 @@ bool BorrowChecker::on_borrow_escape(const std::string &borrower_name,
     std::string owner = "?";
     OwnerKind ok = OwnerKind::Local;
     if (it != borrows_.end()) {
-        owner = it->second.owner;
-        ok = owner_kind_of(owner);
+        /* La categoria es de la RAIZ -- que `p` sea un parametro no cambia
+         * porque lo prestado sea `p.a` --, pero al usuario se le cita el LUGAR,
+         * que es lo que escribio. */
+        ok = owner_kind_of(it->second.owner.root);
+        owner = it->second.owner.text();
     }
     // Param, Global, Field -> lifetime cubre la funcion -> escape valido.
     if (ok == OwnerKind::Param || ok == OwnerKind::Global ||
@@ -352,49 +450,89 @@ void BorrowChecker::note_previous_borrow_(const BorrowRecord &rec) {
     // En un sitio porque la ponen los TRES errores: quien presta encima, quien
     // usa al dueno prestado y quien lo mueve.  Con tres copias, el dia que la
     // nota cambie cambiaria en dos.
-    const std::string clase = kind_word(rec.kind);
+    const std::string kind_text = kind_word(rec.kind);
     if (!rec.borrower_name.empty())
         diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2028",
-                    {clase, rec.borrower_name});
+                    {kind_text, rec.borrower_name});
     else
-        diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2029", {clase});
+        diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2029", {kind_text});
+}
+
+void BorrowChecker::note_unproven_overlap_(SourceLoc loc,
+                                           borrow::PlaceUnknown why) {
+    /* Solo cuando el choque NO se demostro.  El mensaje de arriba dice "estos
+     * dos son la misma memoria"; si en realidad es "no he podido separarlos",
+     * hay que decirlo, porque lo primero se arregla cambiando el programa y lo
+     * segundo puede que no haya nada que arreglar. */
+    switch (why) {
+    case borrow::PlaceUnknown::RuntimeIndex:
+        diags_.diag(loc, DiagLevel::NOTE, "VX2057", {});
+        break;
+    case borrow::PlaceUnknown::RegionNotResolvedHere:
+        diags_.diag(loc, DiagLevel::NOTE, "VX2058", {});
+        break;
+    case borrow::PlaceUnknown::None:
+        break;
+    }
 }
 
 void BorrowChecker::error_aliasing(SourceLoc loc_conflict,
-                                   const std::string &owner_name,
-                                   const BorrowRecord &rec, bool trying_mut) {
-    const std::string quiere =
+                                   const borrow::Place &place,
+                                   const BorrowRecord &rec, bool trying_mut,
+                                   borrow::PlaceUnknown why) {
+    const std::string wanted =
         diag::format(trying_mut ? "VX2040" : "VX2039", {});
+    /* El LUGAR, no la raiz: con `p.a` prestado, decir que el problema es `p`
+     * manda a mirar donde no esta. */
+    const std::string place_text = place.text();
     if (rec.kind == BorrowKind::Mutable)
         diags_.diag(loc_conflict, DiagLevel::ERR, "VX2026",
-                    {owner_name, quiere, kind_word(rec.kind)});
+                    {place_text, wanted,kind_word(rec.kind)});
     else
         diags_.diag(loc_conflict, DiagLevel::ERR, "VX2027",
-                    {owner_name, quiere, std::to_string(rec.shared_count)});
+                    {place_text, wanted,std::to_string(rec.shared_count)});
     note_previous_borrow_(rec);
-    diags_.diag(loc_conflict, DiagLevel::NOTE, "VX2030", {quiere});
+    /* Y CUAL es el prestamo que estorba, cuando no es el mismo lugar: `p`
+     * bloqueando a `p.a` se lee de otra manera si se dice. */
+    if (!borrow::places_same(rec.place, place))
+        diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2059",
+                    {rec.place.text(), place_text});
+    note_unproven_overlap_(loc_conflict, why);
+    diags_.diag(loc_conflict, DiagLevel::NOTE, "VX2030", {wanted});
 }
 
 void BorrowChecker::error_use_while_borrowed(SourceLoc loc_use,
-                                             const std::string &owner_name,
+                                             const borrow::Place &place,
                                              const BorrowRecord &rec,
-                                             bool is_mutation) {
+                                             bool is_mutation,
+                                             borrow::PlaceUnknown why) {
+    const std::string place_text = place.text();
     if (is_mutation)
         diags_.diag(loc_use, DiagLevel::ERR, "VX2031",
-                    {owner_name, kind_word(rec.kind)});
+                    {place_text,kind_word(rec.kind)});
     else
-        diags_.diag(loc_use, DiagLevel::ERR, "VX2032", {owner_name});
+        diags_.diag(loc_use, DiagLevel::ERR, "VX2032", {place_text});
     note_previous_borrow_(rec);
+    if (!borrow::places_same(rec.place, place))
+        diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2059",
+                    {rec.place.text(), place_text});
+    note_unproven_overlap_(loc_use, why);
     diags_.diag(loc_use, DiagLevel::NOTE, "VX2033",
                 {diag::format(is_mutation ? "VX2041" : "VX2042", {})});
 }
 
 void BorrowChecker::error_move_while_borrowed(SourceLoc loc_move,
-                                              const std::string &owner_name,
-                                              const BorrowRecord &rec) {
+                                              const borrow::Place &place,
+                                              const BorrowRecord &rec,
+                                              borrow::PlaceUnknown why) {
+    const std::string place_text = place.text();
     diags_.diag(loc_move, DiagLevel::ERR, "VX2034",
-                {owner_name, kind_word(rec.kind)});
+                {place_text,kind_word(rec.kind)});
     note_previous_borrow_(rec);
+    if (!borrow::places_same(rec.place, place))
+        diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2059",
+                    {rec.place.text(), place_text});
+    note_unproven_overlap_(loc_move, why);
     diags_.diag(loc_move, DiagLevel::NOTE, "VX2035", {});
     diags_.diag(loc_move, DiagLevel::NOTE, "VX2036", {});
 }

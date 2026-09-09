@@ -2797,6 +2797,91 @@ Type TypeChecker::enum_type_of(const EnumLayout &lay,
  * campo.  Con un puntero calculado no hay a quien atribuirlo, y inventar un
  * dueno seria peor que no comprobar -- daria errores sobre algo que no es.
  */
+/**
+ * @brief EL LUGAR que un argumento presta, no solo su raiz.
+ *
+ * Es lo que sustituye a bajar hasta el nombre y tirar el camino.  Con la raiz
+ * sola, `p.a` y `p.b` eran el mismo dueno y se rechazaban entre si sin tocarse;
+ * con el lugar entero se separan, que es lo que son.
+ *
+ * @par Un `*b` se RESUELVE, no se da por perdido
+ * Si lo que se desreferencia es un prestamo registrado, su dueno ya se conoce
+ * -- el comprobador lleva la cadena entera, represtamos incluidos --, asi que
+ * el lugar es el DEL DUENO.  Ahi es donde dos nombres de una misma region
+ * dejan de ser dos cosas.  Solo cuando no hay de quien tirar queda el paso sin
+ * resolver, y entonces lo dice.
+ *
+ * @param a  La expresion del argumento.
+ * @param bc El comprobador, para preguntarle de quien es un prestamo.
+ * @param[out] out El lugar.  Queda sin raiz si no hay memoria que nombrar --
+ *             una llamada, un temporal --, y entonces no hay nada que
+ *             registrar.
+ */
+static void borrowed_place(const ast::Expr *a, const BorrowChecker &bc,
+                           borrow::Place &out) {
+    if (a == nullptr) return;
+    switch (a->kind) {
+    case ast::NodeKind::IdentExpr:
+        out.root = static_cast<const ast::IdentExpr *>(a)->name;
+        return;
+    case ast::NodeKind::UnaryExpr: {
+        const auto *u = static_cast<const ast::UnaryExpr *>(a);
+        if (u->op == ast::UnOp::AddrOf) {
+            // `&x` nombra la memoria de `x`: el mismo lugar, no uno derivado.
+            borrowed_place(u->operand.get(), bc, out);
+            return;
+        }
+        if (u->op == ast::UnOp::Deref) {
+            /* Lo apuntado.  Si el puntero es un prestamo, su dueno lo sabemos y
+             * el lugar es ese; si no, queda el paso puesto, que sigue valiendo
+             * como identidad y ademas dice que pieza falta. */
+            if (u->operand != nullptr &&
+                u->operand->kind == ast::NodeKind::IdentExpr) {
+                const auto *id =
+                    static_cast<const ast::IdentExpr *>(u->operand.get());
+                borrow::Place owner = bc.owner_place_of(id->name);
+                if (owner.valid()) {
+                    out = std::move(owner);
+                    return;
+                }
+            }
+            borrowed_place(u->operand.get(), bc, out);
+            if (!out.valid()) return;
+            out.path.push_back(borrow::PlaceStep::of_deref());
+            return;
+        }
+        return; // cualquier otra unaria no nombra memoria
+    }
+    case ast::NodeKind::FieldAccessExpr: {
+        const auto *f = static_cast<const ast::FieldAccessExpr *>(a);
+        borrowed_place(f->base.get(), bc, out);
+        if (!out.valid()) return;
+        out.path.push_back(borrow::PlaceStep::of_field(f->field_name));
+        return;
+    }
+    case ast::NodeKind::IndexExpr: {
+        const auto *ix = static_cast<const ast::IndexExpr *>(a);
+        borrowed_place(ix->base.get(), bc, out);
+        if (!out.valid()) return;
+        /* Un indice constante SEPARA -- `arr[0]` y `arr[1]` son memoria
+         * distinta --; uno de ejecucion no, y eso se dice en vez de suponerlo
+         * en cualquiera de los dos sentidos. */
+        if (ix->index != nullptr &&
+            ix->index->kind == ast::NodeKind::IntLitExpr) {
+            const auto *lit =
+                static_cast<const ast::IntLitExpr *>(ix->index.get());
+            out.path.push_back(borrow::PlaceStep::of_const_index(
+                static_cast<int64_t>(lit->value)));
+        } else {
+            out.path.push_back(borrow::PlaceStep::of_unknown_index());
+        }
+        return;
+    }
+    default:
+        return;
+    }
+}
+
 static std::string borrowed_root_name(const ast::Expr *a) {
     if (a == nullptr) return std::string();
     if (a->kind == ast::NodeKind::IdentExpr)
@@ -2838,8 +2923,9 @@ void TypeChecker::check_call_arg_borrows_(const ast::CallExpr *e,
                                   ptypes[i].kind == PrimitiveKind::ARRAY);
         if (!por_ref && !apunta) continue;
 
-        const std::string owner = borrowed_root_name(e->args[i].get());
-        if (owner.empty()) continue;
+        borrow::Place owner;
+        borrowed_place(e->args[i].get(), borrow_checker_, owner);
+        if (!owner.valid()) continue;
 
         /* `in` presta COMPARTIDO y `out`/`inout` EXCLUSIVO, que es exactamente
          * la distincion de `borrow<T>` y `borrow_mut<T>`.  Por eso se pregunta

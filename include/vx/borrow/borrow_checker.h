@@ -54,6 +54,7 @@
 #include <vector>
 
 #include "vx/ast.h"
+#include "vx/borrow/place.h" // EL LUGAR prestado, que sustituye al nombre
 #include "vx/diagnostic.h"
 #include "vx/token.h"
 #include "vx/types.h"
@@ -97,14 +98,21 @@ enum class OwnerKind : uint8_t {
 
 /**
  * @struct BorrowRecord
- * @brief Estado de borrows activos para un local.
+ * @brief Un prestamo vivo sobre UN LUGAR.
  *
- * Almacena la informacion necesaria para emitir mensajes de error
- * expresivos: que tipo de borrow esta activo, en cual SourceLoc se
- * tomo, y cuantos shared coexisten (para shared con N>1, citamos el
- * mas reciente).
+ * Antes habia uno por NOMBRE de variable, y ahi estaba el fallo: `p.a` y `p.b`
+ * compartian registro -- se rechazaban entre si sin tocarse -- mientras que dos
+ * nombres de la misma region tenian registros distintos y no chocaban.  Los dos
+ * errores, opuestos, salian de la misma causa.
+ *
+ * Ahora el registro es del LUGAR (@ref borrow::Place), y de una raiz puede
+ * haber varios vivos a la vez.  Guarda ademas lo que hace falta para un mensaje
+ * expresivo: que clase de prestamo es, donde se tomo, y cuantos compartidos
+ * coexisten sobre ese mismo lugar.
  */
 struct BorrowRecord {
+    /// El lugar prestado.  Con camino vacio es la variable entera.
+    borrow::Place place;
     BorrowKind kind = BorrowKind::None;
     /// Numero de borrows shared activos (>=1 cuando kind==Shared, 0 sino).
     uint32_t shared_count = 0;
@@ -115,8 +123,6 @@ struct BorrowRecord {
     /// Si Mutable: nombre de la variable que captura el borrow_mut
     /// (para citar en errores).  Si Shared: nombre del primer borrow.
     std::string borrower_name;
-    /// Categoria del owner.  Por defecto Local.
-    OwnerKind owner_kind = OwnerKind::Local;
     /// F3 ext - Pila de estados suspendidos por cadenas de reborrows.
     /// Cada vez que un nuevo borrow se "reborrowea" desde otro borrow
     /// del mismo owner, el estado activo se push aqui y el owner queda
@@ -135,6 +141,29 @@ struct BorrowRecord {
         std::string borrower_name;
     };
     std::vector<SuspendedState> suspend_stack;
+};
+
+/**
+ * @struct OwnerState
+ * @brief Lo que se sabe de una RAIZ: su categoria y lo que hay prestado de ella.
+ *
+ * La raiz es el indice, no la unidad: de `p` pueden estar vivos a la vez un
+ * prestamo de `p.a` y otro de `p.b`, que no se estorban.  Por eso la categoria
+ * -- si es local, parametro, global o campo -- vive aqui, que es de quien se
+ * predica, y el estado del prestamo vive en cada @ref BorrowRecord.
+ *
+ * @par Y por eso el coste no crece con el programa
+ * Buscar es O(1) por la raiz, y lo que se recorre despues son solo los
+ * prestamos VIVOS de ESA raiz -- se borran al soltarlos --, que son los que el
+ * programa tenga a la vez sobre una variable: un punyado.  Nunca un barrido de
+ * todos los duenos de la funcion, que es lo que habria costado guardar los
+ * lugares en una lista plana.
+ */
+struct OwnerState {
+    /// Categoria de la raiz.  Decide si un prestamo puede escapar por `return`.
+    OwnerKind owner_kind = OwnerKind::Local;
+    /// Los prestamos VIVOS sobre esta raiz, uno por lugar.
+    std::vector<BorrowRecord> live;
 };
 
 /**
@@ -169,9 +198,27 @@ class BorrowChecker {
     void declare_owner(const std::string &owner_name,
                        OwnerKind kind = OwnerKind::Local);
 
-    /// Procesa la creacion de un borrow.  Valida R1/R2 y actualiza
-    /// el estado.  @p is_mut indica si es @c borrow_mut<T>.
-    /// @return true si el borrow es valido; false si se reporto error.
+    /**
+     * @brief Procesa la creacion de un prestamo sobre @p place.
+     *
+     * Valida R1/R2 contra todo lo que ya este prestado de esa raiz y PUEDA
+     * pisarse con @p place -- que no es lo mismo que llamarse igual: `p.a` y
+     * `p.b` conviven, `p` y `p.a` no --, y actualiza el estado.
+     *
+     * @param place        La memoria que se presta.
+     * @param borrower_name Como se llama quien se la queda, para citarlo.
+     * @param loc_borrow   Donde se toma.
+     * @param is_mut       Si es exclusivo (@c borrow_mut<T>).
+     * @return @c true si el prestamo es valido; @c false si se reporto error.
+     */
+    bool on_lend(const borrow::Place &place, const std::string &borrower_name,
+                 SourceLoc loc_borrow, bool is_mut);
+
+    /// @brief La variable ENTERA, que es el lugar sin camino.
+    ///
+    /// Existe porque hay sitios donde lo prestado es de verdad la variable
+    /// entera -- `lend(x)` --, y obligarles a construir un lugar vacio solo
+    /// serviria para que cada uno lo construyera a su manera.
     bool on_lend(const std::string &owner_name,
                  const std::string &borrower_name, SourceLoc loc_borrow,
                  bool is_mut);
@@ -183,13 +230,22 @@ class BorrowChecker {
     /// Procesa un uso directo del owner (lectura o mutacion).
     /// @p is_mutation = false (lectura) -> solo prohibido si Mutable.
     /// @p is_mutation = true  (escritura) -> prohibido si Shared o Mutable.
+    ///
+    /// Mira todo lo prestado de esa raiz que pueda pisarse con el lugar usado,
+    /// no solo lo que se llame igual: leer `p` con `p.a` prestado en exclusiva
+    /// es leer memoria prestada, y escribir `p.b` con `p.a` prestado no lo es.
     /// @return true si el uso es valido.
+    bool on_owner_use(const borrow::Place &place, SourceLoc loc_use,
+                      bool is_mutation);
+    /// @brief La variable entera.  @see on_lend(const std::string&,...)
     bool on_owner_use(const std::string &owner_name, SourceLoc loc_use,
                       bool is_mutation);
 
     /// Procesa @c move(owner).  Prohibido si tiene cualquier borrow
-    /// activo (Shared o Mutable).
+    /// activo (Shared o Mutable) que pueda pisarse con lo que se mueve.
     /// @return true si el move es valido.
+    bool on_owner_move(const borrow::Place &place, SourceLoc loc_move);
+    /// @brief La variable entera.  @see on_lend(const std::string&,...)
     bool on_owner_move(const std::string &owner_name, SourceLoc loc_move);
 
     /// Procesa el escape de un borrow (return, asignacion a field,
@@ -211,6 +267,14 @@ class BorrowChecker {
     /// produce un nuevo borrow sobre el root owner de b.
     std::string root_owner_of(const std::string &borrower_name) const;
 
+    /// @brief El LUGAR del que salio @p borrower_name, no solo su raiz.
+    ///
+    /// Es lo que hace que un `*p` deje de ser un agujero: quien construye un
+    /// lugar sobre un prestamo pregunta aqui y sustituye por la memoria del
+    /// dueno, en vez de anyadir un paso sin resolver.  Devuelve un lugar sin
+    /// raiz -- @c Place::valid() falso -- si no es un prestamo registrado.
+    borrow::Place owner_place_of(const std::string &borrower_name) const;
+
     /// F1 - registra @p last_use_idx como el ultimo indice de stmt
     /// en el que @p borrower_name aparece referenciado.  El type
     /// checker computa esto via pre-pase y lo entrega antes de empezar
@@ -230,6 +294,9 @@ class BorrowChecker {
     /// @c on_lend internamente; expuesto para casos especiales.
     void register_borrow(const std::string &borrower_name,
                          const std::string &owner_name, bool is_mut);
+    /// @brief La misma, con el LUGAR completo del que sale el prestamo.
+    void register_borrow(const std::string &borrower_name,
+                         const borrow::Place &owner, bool is_mut);
 
     /// F3 ext - Suspend reborrow.  Si @p source_borrower_name es un
     /// borrow_mut activo, se push su estado al @c suspend_stack del
@@ -257,11 +324,33 @@ class BorrowChecker {
 
   private:
     Diagnostics &diags_;
-    std::unordered_map<std::string, BorrowRecord> owners_;
-    /// Mapa borrower_name -> owner_name + is_mut, para que
-    /// @c on_borrow_drop sepa que owner actualizar.
+    /// Por RAIZ, no por lugar: buscar es O(1) y lo que se recorre despues son
+    /// los prestamos vivos de esa raiz.  @see OwnerState
+    std::unordered_map<std::string, OwnerState> owners_;
+
+    /// @brief El prestamo vivo de @p place en @p st, si lo hay.
+    ///
+    /// EXACTAMENTE ese lugar, no uno que se le parezca: sirve para acumular
+    /// compartidos del mismo sitio, y sumar ahi dos que solo se SOLAPAN daria
+    /// un recuento que no corresponde a nada.
+    static BorrowRecord *find_same_place_(OwnerState &st,
+                                          const borrow::Place &place) noexcept;
+
+    /// @brief El primer prestamo vivo de @p st que puede pisarse con @p place.
+    ///
+    /// Devuelve tambien POR QUE, cuando el solape no se pudo descartar en vez
+    /// de demostrarse: es lo que separa "estos dos son la misma memoria" de
+    /// "no he podido separarlos", y el diagnostico dice cosas distintas.
+    static const BorrowRecord *
+    find_overlapping_(const OwnerState &st, const borrow::Place &place,
+                      borrow::PlaceUnknown *why) noexcept;
+
+    /// Mapa borrower_name -> lugar prestado + is_mut, para que
+    /// @c on_borrow_drop sepa que prestamo actualizar.
     struct BorrowMeta {
-        std::string owner;
+        /// El LUGAR del que salio, no solo su raiz: es lo que permite volver a
+        /// encontrar el registro exacto al soltarlo.
+        borrow::Place owner;
         bool is_mut;
         uint32_t last_use_idx = 0; // F1 - poblado por set_last_use
         bool already_dropped = false;
@@ -284,18 +373,32 @@ class BorrowChecker {
     /// nota cambie cambiaria en dos.
     void note_previous_borrow_(const BorrowRecord &rec);
 
+    /// @brief Dice POR QUE no se pudieron separar dos lugares, si es el caso.
+    ///
+    /// Va detras de los tres errores y solo aparece cuando el choque NO se
+    /// demostro: entonces el mensaje principal seria una acusacion mas dura de
+    /// lo que se sabe, y esta nota lo coloca en su sitio diciendo que pieza
+    /// falta -- el valor del indice, o la region del puntero -- y quien la
+    /// pone.  Sin ella, "estos dos se pisan" y "no he podido separarlos" se
+    /// leen igual, y solo el segundo se arregla escribiendo otra cosa.
+    void note_unproven_overlap_(SourceLoc loc, borrow::PlaceUnknown why);
+
     /// Helper: emite error de R1 (exclusividad mutable) con dos puntos
-    /// citados (toma original + toma conflictiva).
-    void error_aliasing(SourceLoc loc_conflict, const std::string &owner_name,
-                        const BorrowRecord &rec, bool trying_mut);
+    /// citados (toma original + toma conflictiva).  Cita el LUGAR, no la raiz:
+    /// con `p.a` prestado, decir que el problema es `p` manda a mirar donde no
+    /// es.
+    void error_aliasing(SourceLoc loc_conflict, const borrow::Place &place,
+                        const BorrowRecord &rec, bool trying_mut,
+                        borrow::PlaceUnknown why);
     /// Helper: emite error de R3 (use-while-borrowed).
-    void error_use_while_borrowed(SourceLoc loc_use,
-                                  const std::string &owner_name,
-                                  const BorrowRecord &rec, bool is_mutation);
+    void error_use_while_borrowed(SourceLoc loc_use, const borrow::Place &place,
+                                  const BorrowRecord &rec, bool is_mutation,
+                                  borrow::PlaceUnknown why);
     /// Helper: emite error de R3 (move-while-borrowed).
     void error_move_while_borrowed(SourceLoc loc_move,
-                                   const std::string &owner_name,
-                                   const BorrowRecord &rec);
+                                   const borrow::Place &place,
+                                   const BorrowRecord &rec,
+                                   borrow::PlaceUnknown why);
 };
 
 } // namespace vx
