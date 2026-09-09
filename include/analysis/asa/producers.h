@@ -575,12 +575,18 @@ void register_use_def_producer();
  *               produce sabe con que codigo esta hablando, y heredar un
  *               momento equivocado en silencio es la clase de fallo que este
  *               eje viene a impedir.
+ * @param analyses El almacen de ANALISIS entre compilaciones, o @c nullptr.
+ *                 Distinto de @p store, y la diferencia es la del plan: aquel
+ *                 guarda las CONCLUSIONES -- los hechos publicados -- y este el
+ *                 RAZONAMIENTO que las produce.  Sin el se recomputa todo, que
+ *                 es lo de siempre.  @see analysis::AnalysisStore
  * @return El resumen de los dominios que de verdad corrieron.
  */
 std::vector<ProductionSummary> produce(const ir::IrModule &mod,
                                        FactStore &store,
                                        const std::vector<const char *> &wanted,
-                                       const char *stage);
+                                       const char *stage,
+                                       AnalysisStore *analyses = nullptr);
 
 } // namespace asa
 } // namespace analysis

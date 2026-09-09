@@ -13,15 +13,34 @@
  */
 #include "analysis/facts/ir_facts.h"
 
+#include "analysis/manager/analysis_codec.h" // lo COMUN de guardar un analisis
 #include "ir/ssa_ir.h"
 
 namespace analysis {
 
 char IRFactsAnalysis::ID = 0;
 
+namespace {
+
+/// @brief Va @p target hacia ATRAS desde el bloque @p from?
+///
+/// Es la aproximacion de bucle que usa este recorrido: un salto a un bloque que
+/// ya se paso.  Funcion con nombre y no una lambda dentro del bucle -- se prueba
+/// sola, sale con su nombre en un perfil, y no captura nada cuya vida haya que
+/// razonar.
+bool is_back_edge(ir::IrBlockId target, uint32_t from) {
+    return target != ir::IR_NO_BLOCK && target <= from;
+}
+
+} // namespace
+
 IrFacts build_ir_facts(const ir::IrFunction &fn) {
     IrFacts f;
-    f.def_of.assign(fn.values.size(), nullptr);
+    /* La funcion que se describe: es lo que permite resolver `def` sin guardar
+     * punteros, y lo unico que hay que volver a poner si estos hechos vuelven
+     * de disco. */
+    f.owner = &fn;
+    f.def_idx.assign(fn.values.size(), -1);
     f.def_block.assign(fn.values.size(), -1);
     f.param_of.assign(fn.values.size(), -1);
     f.used.assign(fn.values.size(), 0);
@@ -33,10 +52,13 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
 
     for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
         const ir::IrBlock &b = fn.blocks[bi];
-        for (const ir::IrInstr &in : b.instrs) {
-            // def-use: QUE instruccion lo define, y en QUE bloque.
-            if (in.dst != ir::IR_NO_VALUE && in.dst < f.def_of.size()) {
-                f.def_of[in.dst] = &in;
+        for (size_t ii = 0; ii < b.instrs.size(); ++ii) {
+            const ir::IrInstr &in = b.instrs[ii];
+            /* def-use: en QUE bloque lo define y en que POSICIoN dentro de el.
+             * Los dos, porque juntos localizan la instruccion en O(1) sin
+             * guardar un puntero que nadie mantiene. */
+            if (in.dst != ir::IR_NO_VALUE && in.dst < f.def_idx.size()) {
+                f.def_idx[in.dst] = static_cast<int32_t>(ii);
                 f.def_block[in.dst] = static_cast<int32_t>(bi);
             }
             /* Y QUIEN lo lee.  Es la mitad que faltaba para poder decir si un
@@ -65,18 +87,16 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
             default: break;
             }
             // back-edges (bucles).
-            auto is_back = [&](ir::IrBlockId t) {
-                return t != ir::IR_NO_BLOCK && t <= bi;
-            };
             if (in.op == ir::IrOp::BR) {
-                if (is_back(in.target_block)) ++f.loop_count;
+                if (is_back_edge(in.target_block, bi)) ++f.loop_count;
             } else if (in.op == ir::IrOp::BR_COND) {
-                if (is_back(in.target_block) || is_back(in.false_block))
+                if (is_back_edge(in.target_block, bi) ||
+                    is_back_edge(in.false_block, bi))
                     ++f.loop_count;
             } else if (in.op == ir::IrOp::SWITCH_DENSE ||
                        in.op == ir::IrOp::MATCH_VARIANT) {
                 for (uint32_t t : in.jump_targets)
-                    if (is_back(t)) {
+                    if (is_back_edge(t, bi)) {
                         ++f.loop_count;
                         break;
                     }
@@ -84,6 +104,85 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
         }
     }
     return f;
+}
+
+const char *const kIrFactsAnalysisName = "analysis.ir_facts";
+
+std::vector<uint8_t> serialize_ir_facts(const IrFacts &f) {
+    util::ByteWriter w;
+    write_analysis_header(w, kIrFactsAnalysisName, kIrFactsFormat);
+    write_pod_vector(w, f.def_idx);
+    write_pod_vector(w, f.def_block);
+    write_pod_vector(w, f.param_of);
+    write_pod_vector(w, f.used);
+    w.u32(static_cast<uint32_t>(f.static_callees.size()));
+    for (const std::string &s : f.static_callees)
+        w.str(s);
+    w.u8(f.has_dynamic_call ? 1u : 0u);
+    w.u32(f.block_count);
+    w.u32(f.loop_count);
+    w.u8(f.recursive ? 1u : 0u);
+    return w.take();
+}
+
+bool deserialize_ir_facts(const uint8_t *data, size_t n,
+                          const ir::IrFunction &owner, IrFacts &out) {
+    if (data == nullptr || n == 0) return false;
+    util::ByteReader r(data, n);
+    if (!read_analysis_header(r, kIrFactsAnalysisName, kIrFactsFormat))
+        return false;
+
+    /* Se arma APARTE y solo se entrega al final.  Si los bytes se cortan a
+     * medias, quien pregunta se queda con lo que tenia y computa; dejarle una
+     * estructura a medio llenar seria servirle hechos que nadie afirmo. */
+    IrFacts f;
+    if (!read_pod_vector(r, f.def_idx)) return false;
+    if (!read_pod_vector(r, f.def_block)) return false;
+    if (!read_pod_vector(r, f.param_of)) return false;
+    if (!read_pod_vector(r, f.used)) return false;
+
+    const uint32_t n_callees = r.u32();
+    /* Un nombre ocupa como minimo su longitud (4 bytes), asi que mas de eso es
+     * imposible por muchos que diga el fichero. */
+    if (!r.ok() || !fits_in(r, n_callees, 4)) return false;
+    f.static_callees.reserve(n_callees);
+    for (uint32_t i = 0; i < n_callees && r.ok(); ++i)
+        f.static_callees.push_back(r.str());
+
+    f.has_dynamic_call = r.u8() != 0;
+    f.block_count = r.u32();
+    f.loop_count = r.u32();
+    f.recursive = r.u8() != 0;
+    if (!r.ok()) return false;
+
+    /* Y la COHERENCIA con la funcion que se dice que describen.  Sin esto, unos
+     * hechos de otra funcion con la misma clave -- que no deberia pasar, pero
+     * el modo de fallar decide cuanto cuesta equivocarse -- se aceptarian y
+     * contestarian sobre valores que no existen. */
+    if (f.def_idx.size() != owner.values.size()) return false;
+    if (f.block_count != owner.blocks.size()) return false;
+
+    f.owner = &owner;
+    out = std::move(f);
+    return true;
+}
+
+const ir::IrInstr *IrFacts::def(ir::IrValueId v) const {
+    /* Cada limite se comprueba, y no por prudencia: estos hechos pueden ser de
+     * un IR que ya cambio -- o venir de disco --, y ahi un indice pasado de
+     * rango tiene que dar "no lo se", no la instruccion que caiga en esa
+     * posicion.  Es la diferencia con el puntero de antes, que no fallaba: leia
+     * memoria liberada y contestaba. */
+    if (owner == nullptr || v >= def_idx.size() || v >= def_block.size())
+        return nullptr;
+    const int32_t b = def_block[v];
+    const int32_t i = def_idx[v];
+    if (b < 0 || i < 0) return nullptr;
+    if (static_cast<size_t>(b) >= owner->blocks.size()) return nullptr;
+    const std::vector<ir::IrInstr> &ins =
+        owner->blocks[static_cast<size_t>(b)].instrs;
+    if (static_cast<size_t>(i) >= ins.size()) return nullptr;
+    return &ins[static_cast<size_t>(i)];
 }
 
 } // namespace analysis

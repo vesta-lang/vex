@@ -31,6 +31,7 @@
 
 #include "util/fnv.h"
 #include "util/reloj.h"
+#include "analysis/manager/analysis_codec.h" // lo COMUN de guardar un analisis
 #include "util/alloc/small_vector.h"  // el estado casi siempre es diminuto
 #include "util/thread_owned.h"  // por hilo, sin `thread_local`
 #include "util/os/thread_slot.h"   // lo que cabe en un puntero, sin reservar
@@ -416,7 +417,7 @@ struct Contexto {
     Contexto(const ir::IrFunction &f, const IrFacts &fc,
              const RangeSummaries *s = nullptr)
         : fn(f), facts(fc), sum(s) {
-        const size_t n = fc.def_of.size();
+        const size_t n = fc.value_count();
         suelo.assign(n, ValueRange::top());
         for (ir::IrValueId v = 0; v < fn.values.size() && v < n; ++v) {
             suelo[v] = del_tipo(fn.values[v].type);
@@ -1963,7 +1964,7 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
          * quede sin presupuesto", que son cosas distintas -- la segunda no es
          * culpa del programa y se arregla subiendo el limite. */
         out.r = m.suelo;
-        out.r.resize(facts.def_of.size(), ValueRange::top());
+        out.r.resize(facts.value_count(), ValueRange::top());
         out.reason = asa::UnknownReason::BudgetExceeded;
         out.code = "ranges.fixpoint_budget";
         return out;
@@ -2368,5 +2369,177 @@ RangeQuery::~RangeQuery() = default;
 
 const ValueRange &RangeQuery::of(ir::IrValueId v) { return impl_->of(v, 0); }
 uint64_t RangeQuery::evaluated() const { return impl_->evaluated_count; }
+
+// ===========================================================================
+//  Guardarlos y recuperarlos entre compilaciones
+// ===========================================================================
+
+const char *const kRangeFactsAnalysisName = "analysis.ranges";
+
+namespace {
+
+/// Escribe un rango: los cuatro campos aplanados, sin relleno.
+void write_range(util::ByteWriter &w, const ValueRange &r) {
+    w.u8(static_cast<uint8_t>(r.kind));
+    w.u8(r.t.bits);
+    w.u8(r.t.sin_signo ? 1u : 0u);
+    w.u64(r.lo_c);
+    w.u64(r.hi_c);
+}
+
+/// Lee lo escrito por @ref write_range.
+ValueRange read_range(util::ByteReader &r) {
+    ValueRange v;
+    v.kind = static_cast<RangeKind>(r.u8());
+    const uint8_t bits = r.u8();
+    const bool unsigned_ = r.u8() != 0;
+    v.t = RangeType::de(bits, unsigned_);
+    v.lo_c = r.u64();
+    v.hi_c = r.u64();
+    return v;
+}
+
+/**
+ * @brief El literal canonico de un codigo leido de disco.
+ *
+ * `RangeFacts::code` es un `const char *` a un literal estable, y un puntero no
+ * viaja.  Hoy este dominio publica UN solo codigo, asi que la tabla es de una
+ * entrada; lo que importa es que sea una tabla y no un `if`, para que anadir el
+ * siguiente sea anadir una linea aqui.
+ *
+ * Un codigo que no este en la tabla devuelve el vacio en vez de inventar un
+ * puntero: perder un codigo cuesta un motivo menos preciso, y devolver uno que
+ * no es cuesta una explicacion FALSA.
+ */
+const char *canonical_range_code(const std::string &s) {
+    if (s == "ranges.fixpoint_budget") return "ranges.fixpoint_budget";
+    return "";
+}
+
+} // namespace
+
+std::vector<uint8_t> serialize_range_facts(const RangeFacts &f) {
+    util::ByteWriter w;
+    write_analysis_header(w, kRangeFactsAnalysisName, kRangeFactsFormat);
+
+    w.u32(static_cast<uint32_t>(f.r.size()));
+    for (size_t i = 0; i < f.r.size(); ++i)
+        write_range(w, f.r[i]);
+
+    /* El estado por bloque va casi siempre VACIO -- solo lo rellena
+     * `compute_point_ranges`, y esta via no lo pide --, pero se escribe igual:
+     * un formato que se salta un campo "porque normalmente esta vacio" deja de
+     * describir la estructura y el dia que no lo este da otra cosa. */
+    w.u32(static_cast<uint32_t>(f.block_entry.size()));
+    for (size_t b = 0; b < f.block_entry.size(); ++b) {
+        w.u8(f.block_entry[b].reachable ? 1u : 0u);
+        const RangeRefs &refs = f.block_entry[b].refinements;
+        w.u32(static_cast<uint32_t>(refs.size()));
+        for (size_t k = 0; k < refs.size(); ++k) {
+            w.u32(refs[k].id);
+            write_range(w, refs[k].range());
+        }
+    }
+
+    w.u8(f.convergio ? 1u : 0u);
+    w.u8(static_cast<uint8_t>(f.reason));
+    w.str(f.code != nullptr ? std::string(f.code) : std::string());
+    w.u8(f.bounds_inferred ? 1u : 0u);
+
+    /* La huella del codigo con el que se calculo.  Es lo que permite comprobar
+     * al cargar que estos rangos son de ESTA funcion, aparte de la clave del
+     * almacen -- dos comprobaciones independientes, que es lo que convierte un
+     * choque en un descarte. */
+    w.u64(f.deps.huella_ir);
+    w.u64(f.deps.huella_opciones);
+
+    w.u32(static_cast<uint32_t>(f.wraps.size()));
+    for (size_t i = 0; i < f.wraps.size(); ++i) {
+        const RangeFacts::Wrap &x = f.wraps[i];
+        w.u32(x.dst);
+        w.i64(x.exacto);
+        w.i64(x.lo);
+        w.i64(x.hi);
+        w.u32(x.line);
+        w.u8(static_cast<uint8_t>(x.t));
+    }
+    return w.take();
+}
+
+bool deserialize_range_facts(const uint8_t *data, size_t n, uint64_t ir_key,
+                             size_t n_values, RangeFacts &out) {
+    if (data == nullptr || n == 0) return false;
+    util::ByteReader r(data, n);
+    if (!read_analysis_header(r, kRangeFactsAnalysisName, kRangeFactsFormat))
+        return false;
+
+    /* Se arma APARTE y solo se entrega al final: unos bytes cortados a medias
+     * dejarian al que pregunta una estructura a medio llenar, o sea rangos que
+     * nadie ha calculado. */
+    RangeFacts f;
+
+    const uint32_t n_ranges = r.u32();
+    if (!r.ok()) return false;
+    /* Reservar por lo que QUEDE y no por lo que diga el fichero: un rango no
+     * baja de 19 bytes, asi que mas de eso es imposible -- y creerselo seria
+     * reservar memoria a lo bruto. */
+    if (static_cast<size_t>(n_ranges) * 19u > r.remaining()) return false;
+    f.r.resize(n_ranges);
+    for (uint32_t i = 0; i < n_ranges && r.ok(); ++i)
+        f.r[i] = read_range(r);
+    if (!r.ok()) return false;
+
+    const uint32_t n_blocks = r.u32();
+    if (!r.ok() || static_cast<size_t>(n_blocks) * 5u > r.remaining())
+        return false;
+    f.block_entry.resize(n_blocks);
+    for (uint32_t b = 0; b < n_blocks && r.ok(); ++b) {
+        f.block_entry[b].reachable = r.u8() != 0;
+        const uint32_t n_refs = r.u32();
+        if (!r.ok() || static_cast<size_t>(n_refs) * 23u > r.remaining())
+            return false;
+        for (uint32_t k = 0; k < n_refs && r.ok(); ++k) {
+            RangeEntry e;
+            e.id = r.u32();
+            e.set_range(read_range(r));
+            f.block_entry[b].refinements.push_back(e);
+        }
+    }
+    if (!r.ok()) return false;
+
+    f.convergio = r.u8() != 0;
+    f.reason = static_cast<asa::UnknownReason>(r.u8());
+    f.code = canonical_range_code(r.str());
+    f.bounds_inferred = r.u8() != 0;
+    f.deps.huella_ir = r.u64();
+    f.deps.huella_opciones = r.u64();
+
+    const uint32_t n_wraps = r.u32();
+    if (!r.ok() || static_cast<size_t>(n_wraps) * 33u > r.remaining())
+        return false;
+    f.wraps.resize(n_wraps);
+    for (uint32_t i = 0; i < n_wraps && r.ok(); ++i) {
+        RangeFacts::Wrap &x = f.wraps[i];
+        x.dst = r.u32();
+        x.exacto = r.i64();
+        x.lo = r.i64();
+        x.hi = r.i64();
+        x.line = r.u32();
+        x.t = static_cast<ir::IrType>(r.u8());
+    }
+    if (!r.ok()) return false;
+
+    /* Y las dos comprobaciones de COHERENCIA con la funcion que se esta
+     * mirando, independientes de la clave del almacen.  Sin ellas, un choque de
+     * claves -- que no deberia ocurrir, pero el modo de fallar decide lo que
+     * cuesta equivocarse -- serviria rangos de OTRA funcion, que es la peor
+     * forma de fallar que tiene este dominio: se usan para quitar
+     * comprobaciones. */
+    if (f.deps.huella_ir != ir_key) return false;
+    if (f.r.size() != n_values) return false;
+
+    out = std::move(f);
+    return true;
+}
 
 } // namespace analysis

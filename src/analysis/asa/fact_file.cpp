@@ -128,12 +128,7 @@ const char *diag_code(ReadReason m) {
 }
 
 uint64_t function_name_hash(const std::string &name) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (char c : name) {
-        h ^= static_cast<uint64_t>(static_cast<unsigned char>(c));
-        h *= 0x100000001b3ULL;
-    }
-    return h;
+    return util::fnv_bytes(util::kFnvOffset, name.data(), name.size());
 }
 
 CacheLevel cache_level() {

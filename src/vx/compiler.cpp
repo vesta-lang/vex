@@ -1411,7 +1411,7 @@ CompileResult compile_vx_source(const std::string &source,
                                  analysis::asa::kStagePreOpt),
                              asa_facts_key(module_id, opts,
                                            analysis::asa::kStagePreOpt),
-                             analysis::asa::kStagePreOpt);
+                             analysis::asa::kStagePreOpt, filename);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }
@@ -1462,7 +1462,7 @@ CompileResult compile_vx_source(const std::string &source,
                                  analysis::asa::kStagePostOpt),
                              asa_facts_key(module_id, opts,
                                            analysis::asa::kStagePostOpt),
-                             analysis::asa::kStagePostOpt);
+                             analysis::asa::kStagePostOpt, filename);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }

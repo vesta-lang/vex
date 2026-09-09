@@ -958,6 +958,40 @@ es = "la funcion '{2}' no dice para que objetivo se compila, asi que su convenci
 en = "an IR function reached the fact cache with no name, so it cannot be referenced per function: its code is charged to every function of the module, which loses granularity. Whoever builds it must give it a name"
 es = "una funcion del intermedio llego a la cache de hechos SIN NOMBRE, asi que no se puede referenciar por funcion: su codigo se le cobra a todas las del modulo y se pierde la granularidad. Quien la construye tiene que darle un nombre"
 
+# --- las TRAZAS de las caches del ASA (VXA074, VXA075) ---
+#
+# Que sean trazas de depuracion no las saca de la regla: se le ensenan a una
+# persona, asi que salen del catalogo y en su idioma.  Y hacen falta -- un cache
+# que no se puede mirar no se distingue de uno roto, porque los dos compilan
+# igual --.  Ya paso: este subsistema estuvo mal mucho tiempo sin que nada lo
+# dijera.
+#
+# {0} fichero  {1} momento  {2} el CoDIGO del motivo por el que no se leyo,
+#     vacio si se leyo bien -- asi no hace falta una palabra suelta que
+#     traducir, y el motivo sale con su codigo consultable.
+# {3} hechos  {4} dominios  {5} caducos  {6} saltados  {7} corruptos
+# {8} dominios a medias  {9} hechos tirados  {10} funciones reutilizadas
+
+[VXA074]
+en = "facts cache: {0} at stage {1} {2} | {3} facts, {4} domains, {5} stale, {6} skipped, {7} corrupt | per function: {8} domains partially loaded, {9} facts dropped, {10} functions reused"
+es = "cache de hechos: {0} en el momento {1} {2} | {3} hechos, {4} dominios, {5} caducos, {6} saltados, {7} corruptos | por funcion: {8} dominios a medias, {9} hechos tirados, {10} funciones reutilizadas"
+
+# {0} aciertos  {1} fallos  {2} guardados  {3} rechazados
+# {4} bytes leidos  {5} bytes escritos
+
+[VXA075]
+en = "analysis store: {0} hits, {1} misses, {2} stored, {3} rejected | {4} bytes read, {5} written"
+es = "almacen de analisis: {0} aciertos, {1} fallos, {2} guardados, {3} rechazados | {4} bytes leidos, {5} escritos"
+
+# La base EN MEMORIA, que es el nivel [1] de las tres caches.  Dice si dentro de
+# UNA compilacion se reutiliza: si las preguntas atendidas y los analisis
+# ejecutados son el mismo numero, la base no esta ahorrando nada.
+# {0} preguntas atendidas  {1} analisis ejecutados
+
+[VXA076]
+en = "fact base: {0} queries answered, {1} analyses actually run"
+es = "base de hechos: {0} preguntas atendidas, {1} analisis ejecutados"
+
 # ===========================================================================
 # HECHOS DEL ASA -- el texto de lo que se sabe
 # ===========================================================================

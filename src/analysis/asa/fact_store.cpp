@@ -13,6 +13,8 @@
 
 #include "analysis/asa/fact_store.h"
 
+#include "util/fnv.h" // la mezcla del proyecto, no otra escrita aqui
+
 #include <cstring>
 
 namespace analysis {
@@ -304,21 +306,17 @@ namespace {
 /// Resume los tres nombres en 64 bits.  Solo para dar con el cubo: la
 /// coincidencia se confirma comparando las cadenas, porque un choque aqui no
 /// seria trabajo de mas sino un hecho que nadie produce.
+/// Mezcla un nombre y detras un SEPARADOR: sin el, "ab"+"c" y "a"+"bc" darian
+/// lo mismo.  Con @c util::fnv_bytes, que es la mezcla del proyecto.
+uint64_t mix_name(uint64_t h, const char *s) {
+    const char *p = (s != nullptr) ? s : "";
+    return util::fnv_mix(util::fnv_bytes(h, p, std::strlen(p)), 0xFFull);
+}
+
 uint64_t triple_key(const char *domain, const char *stage,
                     const char *function) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    auto eat = [&h](const char *s) {
-        for (const char *p = s != nullptr ? s : ""; *p != '\0'; ++p) {
-            h ^= static_cast<uint64_t>(static_cast<unsigned char>(*p));
-            h *= 0x100000001b3ULL;
-        }
-        h ^= 0xFFULL; // separador: "ab"+"c" y "a"+"bc" no son lo mismo.
-        h *= 0x100000001b3ULL;
-    };
-    eat(domain);
-    eat(stage);
-    eat(function);
-    return h;
+    return mix_name(mix_name(mix_name(util::kFnvOffset, domain), stage),
+                    function);
 }
 
 /// Dos nombres iguales, tolerando que uno venga por puntero y otro por texto.

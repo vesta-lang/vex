@@ -116,6 +116,31 @@ struct TrustPin {
  * "@vesta/*" = "kpub1abc..."
  * @endcode
  */
+/**
+ * @brief Lo que el proyecto dice sobre SUS caches.
+ *
+ * Va en el manifiesto y no en una variable de entorno porque es una propiedad
+ * del PROYECTO, no de quien compila: una libreria que se recompila cada minuto
+ * y un binario que se toca una vez al mes no quieren lo mismo, y quien lo sabe
+ * es el paquete.  Una variable de entorno obligaria a que cada uno se acordara
+ * de ponerla, y ademas se la llevaria puesta al compilar OTRO paquete.
+ */
+struct CacheConfig {
+    /**
+     * @brief Corridas seguidas que aguanta un analisis guardado sin pedirse.
+     *
+     * Cero = el defecto (@c analysis::AnalysisStore::kDefaultUnusedRuns).
+     *
+     * Subirlo conserva mas trabajo hecho a costa de sitio; bajarlo libera antes
+     * a costa de recomputar.  Y los dos lados NO cuestan igual: perder trabajo
+     * hecho es justo lo que ese almacen viene a evitar, asi que en la duda se
+     * sube.
+     *
+     * `[cache] analysis_unused_runs = 30`
+     */
+    uint32_t analysis_unused_runs = 0;
+};
+
 struct Manifest {
     // [package]
     std::string name;
@@ -126,6 +151,9 @@ struct Manifest {
 
     // [capabilities]
     CapabilitiesDecl capabilities;
+
+    // [cache]
+    CacheConfig cache;
 
     // [dependencies] + [dev-dependencies]
     std::vector<DependencySpec> dependencies;

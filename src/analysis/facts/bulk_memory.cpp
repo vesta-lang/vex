@@ -53,18 +53,19 @@ int64_t access_bytes(const ir::IrInstr &ins) {
  * @param escala_out Bytes que avanza la direccion por vuelta.
  * @return true si la direccion es exactamente esa forma.
  */
-bool resolve_direccion(const ir::IrFunction &fn,
-                       const std::vector<const ir::IrInstr *> &def,
+bool resolve_direccion(const ir::IrFunction &fn, const IrFacts &facts,
                        ir::IrValueId dir, ir::IrValueId iv,
                        ir::IrValueId &base_out, int64_t &escala_out) {
-    if (dir >= def.size() || def[dir] == nullptr) return false;
-    const ir::IrInstr *d = def[dir];
+    /* Se pregunta por la PUERTA (`facts.def`) y no por la tabla: ahi dentro ya
+     * no hay punteros, sino el bloque y la posicion, y quien resuelve eso es
+     * ella.  Ademas comprueba los limites, asi que un valor de un IR que ya
+     * cambio da "no lo se" en vez de una instruccion cualquiera. */
+    const ir::IrInstr *d = facts.def(dir);
+    if (d == nullptr) return false;
     // Un bitcast no cambia la direccion: se atraviesa.
     while (d != nullptr && d->op == ir::IrOp::BITCAST &&
            d->operands.size() == 1) {
-        const ir::IrValueId v = d->operands[0];
-        if (v >= def.size()) return false;
-        d = def[v];
+        d = facts.def(d->operands[0]);
     }
     if (d == nullptr || d->op != ir::IrOp::ADD || d->operands.size() != 2)
         return false;
@@ -74,16 +75,17 @@ bool resolve_direccion(const ir::IrFunction &fn,
     auto es_indice = [&](ir::IrValueId v, int64_t &escala) -> bool {
         // Directo (posiblemente con bitcast en medio).
         ir::IrValueId cur = v;
-        while (cur < def.size() && def[cur] != nullptr &&
-               def[cur]->op == ir::IrOp::BITCAST &&
-               def[cur]->operands.size() == 1)
-            cur = def[cur]->operands[0];
+        for (const ir::IrInstr *bc = facts.def(cur);
+             bc != nullptr && bc->op == ir::IrOp::BITCAST &&
+             bc->operands.size() == 1;
+             bc = facts.def(cur))
+            cur = bc->operands[0];
         if (cur == iv) {
             escala = 1;
             return true;
         }
-        if (cur >= def.size() || def[cur] == nullptr) return false;
-        const ir::IrInstr *m = def[cur];
+        const ir::IrInstr *m = facts.def(cur);
+        if (m == nullptr) return false;
         // iv * k
         if (m->op == ir::IrOp::MUL && m->operands.size() == 2) {
             ir::IrValueId a = m->operands[0], b = m->operands[1];
@@ -304,7 +306,7 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn) {
         // continuo.  Si avanza mas, hay huecos; si menos, se pisan.
         ir::IrValueId base_d = ir::IR_NO_VALUE;
         int64_t esc_d = 0;
-        if (!resolve_direccion(fn, hechos.def_of, el_store->operands[1],
+        if (!resolve_direccion(fn, hechos, el_store->operands[1],
                                f.iv.phi, base_d, esc_d)) {
             rendirse("bulk.dst_address_not_resolved");
             continue;
@@ -380,7 +382,7 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn) {
         }
         ir::IrValueId base_s = ir::IR_NO_VALUE;
         int64_t esc_s = 0;
-        if (!resolve_direccion(fn, hechos.def_of, el_load->operands[0],
+        if (!resolve_direccion(fn, hechos, el_load->operands[0],
                                f.iv.phi, base_s, esc_s)) {
             rendirse("bulk.src_address_not_resolved");
             continue;

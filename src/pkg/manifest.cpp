@@ -141,6 +141,15 @@ ParseResult parse_toml(const std::string &buffer,
         }
     }
     parse_capabilities_from_toml(pkg.get("capabilities"), m);
+    /* [cache]: lo que este proyecto dice sobre sus caches.  Ausente = cero, que
+     * el consumidor lee como "el defecto" -- asi no hay que repetir aqui un
+     * numero que ya vive donde se usa. */
+    {
+        const toml::TomlValue &cache = pkg.get("cache");
+        if (cache.is_table())
+            m.cache.analysis_unused_runs =
+                static_cast<uint32_t>(cache.get_int("analysis_unused_runs", 0));
+    }
     parse_dependencies_from_toml(pkg.get("dependencies"), m, false);
     parse_dependencies_from_toml(pkg.get("dev-dependencies"), m, true);
     parse_trust_from_toml(pkg.get("trust"), m);
@@ -195,6 +204,13 @@ ParseResult parse_json(const std::string &buffer,
                         m.capabilities.declared.push_back(v.get<std::string>());
                 }
             }
+        }
+        if (j.contains("cache")) {
+            auto c = j["cache"];
+            if (c.contains("analysis_unused_runs") &&
+                c["analysis_unused_runs"].is_number_integer())
+                m.cache.analysis_unused_runs =
+                    c["analysis_unused_runs"].get<uint32_t>();
         }
         auto parse_deps = [&](const nlohmann::json &j_deps, bool is_dev) {
             if (!j_deps.is_object()) return;

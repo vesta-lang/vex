@@ -796,6 +796,50 @@ struct RangeFacts {
     }
 };
 
+// ===========================================================================
+//  Guardarlos y recuperarlos entre compilaciones
+// ===========================================================================
+//
+// Estas dos viven AQUI, junto al analisis, y no en el almacen: el almacen es
+// generico y no conoce a ninguno.  @see analysis/manager/analysis_store.h
+//
+// Por que ESTE analisis y no otro: es el que hay MEDIDO que domina el tiempo de
+// compilar, y ademas la instancia que sirve @c FactBase::ranges es puramente
+// intraprocedural -- pasa `nullptr` en resumenes y en cotas de induccion --,
+// asi que la clave por contenido de la funcion la describe entera.  Una que
+// consultara resumenes del modulo NO se podria keyar asi.
+
+/// Nombre estable con el que este analisis se identifica en el almacen.
+extern const char *const kRangeFactsAnalysisName;
+
+/**
+ * @brief Version del FORMATO de @ref serialize_range_facts.
+ *
+ * Sube cuando cambie lo que se escribe.  Propia y no global: cambiar este
+ * analisis no puede tirar lo guardado de los demas.
+ */
+constexpr uint32_t kRangeFactsFormat = 1;
+
+/// Empaqueta @p f en bytes.
+std::vector<uint8_t> serialize_range_facts(const RangeFacts &f);
+
+/**
+ * @brief Reconstruye en @p out lo empaquetado por @ref serialize_range_facts.
+ *
+ * @param data     Bytes leidos del almacen.
+ * @param n        Cuantos.
+ * @param ir_key   Huella del codigo de la funcion HOY.  Se compara con la que
+ *                 el analisis guardo dentro (@c DependenciasRango::huella_ir):
+ *                 es una comprobacion INDEPENDIENTE de la clave del almacen, y
+ *                 la que convierte un choque de claves en un descarte en vez de
+ *                 en rangos de otra funcion.
+ * @param n_values Cuantos valores tiene la funcion hoy.  Misma idea.
+ * @return @c false si no cuadra; entonces @p out queda intacto y quien pregunta
+ *         computa, que es lo de siempre.
+ */
+bool deserialize_range_facts(const uint8_t *data, size_t n, uint64_t ir_key,
+                             size_t n_values, RangeFacts &out);
+
 /**
  * @brief Calcula los rangos de @p fn, con sensibilidad al FLUJO.
  *

@@ -112,6 +112,14 @@ add_library(vx_lib STATIC
     # Hechos IR objetivos (def-use, call-sites, estructura) para la infra de
     # analisis: base compartida que consumen los analisis sin re-recorrer el IR.
     ${CMAKE_SOURCE_DIR}/src/analysis/facts/ir_facts.cpp
+    # El almacen que guarda el RAZONAMIENTO entre compilaciones, no solo las
+    # conclusiones: sin el, una recompilacion rehace todos los analisis y lo
+    # unico que se ahorra es el publicar.
+    ${CMAKE_SOURCE_DIR}/src/analysis/manager/analysis_store.cpp
+    # Y lo COMUN de guardar un analisis -- cabecera, limites, vectores planos --
+    # en UN sitio: cada analisis que lo repetia era una oportunidad de
+    # equivocarse en lo mismo.
+    ${CMAKE_SOURCE_DIR}/src/analysis/manager/analysis_codec.cpp
     # De cuanto es multiplo un valor: el hecho con el que se pliega una
     # comprobacion de alineacion y se comprueba lo que una instruccion EXIGE.
     ${CMAKE_SOURCE_DIR}/src/analysis/facts/alignment.cpp

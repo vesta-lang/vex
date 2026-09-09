@@ -45,8 +45,44 @@ struct IRFactsAnalysis {
 /// invalida los def-use/CFG).
 struct IrFacts {
     // --- def-use ---
-    std::vector<const ir::IrInstr *>
-        def_of; ///< value id -> instr que lo define.
+    /**
+     * @brief value id -> POSICIoN de la instruccion que lo define dentro de su
+     *        bloque, o -1 si no la define ninguna.
+     *
+     * Con @ref def_block -- que dice en QUE bloque -- localiza la instruccion en
+     * O(1).  Aqui habia un `std::vector<const ir::IrInstr *>`, y guardar
+     * PUNTEROS era un riesgo real, no teorico:
+     *
+     * - **Un puntero colgante no se nota.**  La validez de estos hechos no
+     *   estaba atada a ninguna version del IR, asi que servir unos viejos no era
+     *   imprecision: era leer memoria liberada.  Un indice fuera de rango da
+     *   `nullptr` -- falla SEGURO --, que es la diferencia entre "no lo se" y un
+     *   resultado inventado.
+     * - **Y con punteros dentro esto no se puede guardar en disco.**  Un
+     *   analisis que no se puede persistir se rehace entero en cada
+     *   compilacion, que es de donde sale que hoy se cacheen las CONCLUSIONES y
+     *   no el RAZONAMIENTO.
+     *
+     * Que el indice caduque al mutar el IR no es peor que antes: estos hechos
+     * ya se invalidan con cualquier mutacion (lo dice la nota de arriba y lo
+     * hace cumplir la version de la funcion).  Lo que cambia es COMO fallan.
+     */
+    std::vector<int32_t> def_idx;
+    /**
+     * @brief La funcion que estos hechos describen.  NO la posee.
+     *
+     * Hace falta para resolver @ref def sin que quien pregunta tenga que llevar
+     * la funcion a todas partes -- son once sitios --.  Al volver de disco se
+     * vuelve a poner: es lo unico que hay que rehidratar.
+     *
+     * @warning Sigue siendo UN puntero, y conviene no vender el arreglo por mas
+     * de lo que es.  Lo que desaparece son los N punteros a INSTRUCCIONES, que
+     * es el caso que mordia: insertar o borrar una instruccion realoja el
+     * vector del bloque y los deja colgando en una mutacion NORMAL.  Este otro
+     * solo cuelga si muere o se mueve la funcion entera, que es una pregunta de
+     * vida distinta -- y la misma que ya gobierna la cache de la base --.
+     */
+    const ir::IrFunction *owner = nullptr;
     /**
      * @brief value id -> BLOQUE donde se define, -1 si no lo define nadie.
      *
@@ -82,10 +118,22 @@ struct IrFacts {
     /// cuesta una pasada mas.
     std::vector<uint8_t> used;
 
-    /// Hay def para @p v?  (helper de conveniencia.)
-    const ir::IrInstr *def(ir::IrValueId v) const {
-        return v < def_of.size() ? def_of[v] : nullptr;
-    }
+    /// Cuantos valores describen estos hechos.
+    size_t value_count() const { return def_idx.size(); }
+
+    /**
+     * @brief La instruccion que define @p v, o @c nullptr si no la hay.
+     *
+     * O(1): el bloque sale de @ref def_block y la posicion de @ref def_idx.
+     * Comprueba los limites en vez de fiarse -- un indice de un IR que ya
+     * cambio tiene que dar "no lo se", no una instruccion cualquiera --.
+     *
+     * Fuera de linea porque necesita la definicion completa del intermedio, y
+     * esta cabecera lo declara ADELANTADO a proposito: meterla aqui obligaria a
+     * arrastrar la cabecera gorda del IR a todo el que solo quiera preguntar
+     * por los hechos de una funcion.
+     */
+    const ir::IrInstr *def(ir::IrValueId v) const;
     int32_t param_index(ir::IrValueId v) const {
         return v < param_of.size() ? param_of[v] : -1;
     }
@@ -104,13 +152,59 @@ struct IrFacts {
      * verdad viene de fuera -- ese SI se usa -- del hueco que quedo.
      */
     bool exists(ir::IrValueId v) const {
-        return def(v) != nullptr || param_index(v) >= 0 ||
+        /* Mira @ref def_idx y no @ref def: "algo lo define" es que haya indice,
+         * y asi esto se queda en linea y sin tocar el intermedio.  Se pregunta
+         * una vez por valor en los recorridos de memoria y de rangos. */
+        return (v < def_idx.size() && def_idx[v] >= 0) || param_index(v) >= 0 ||
                (v < used.size() && used[v] != 0);
     }
 };
 
 /// Construye los hechos de @p fn (un recorrido).
 IrFacts build_ir_facts(const ir::IrFunction &fn);
+
+// ===========================================================================
+//  Guardarlos y recuperarlos entre compilaciones
+// ===========================================================================
+//
+// Estas dos viven AQUI, junto al analisis, y no en el almacen: el almacen es
+// generico y no conoce a ningun analisis, y quien sabe que hay que escribir --
+// y sobre todo que hay que REHIDRATAR -- es el propio.
+//
+// @see analysis/manager/analysis_store.h
+
+/// Nombre estable con el que este analisis se identifica en el almacen.
+extern const char *const kIrFactsAnalysisName;
+
+/**
+ * @brief Version del FORMATO de @ref serialize_ir_facts.
+ *
+ * Sube cuando cambie lo que se escribe.  Es propia y no global a proposito:
+ * cambiar este analisis no puede tirar lo guardado de los demas.  Y entra en la
+ * clave, asi que lo escrito por una version anterior no se llega a leer -- que
+ * es lo unico que importa, porque interpretarlo como propio no daria error,
+ * daria hechos inventados.
+ */
+constexpr uint32_t kIrFactsFormat = 1;
+
+/// Empaqueta @p f en bytes.  No escribe @c owner: es un puntero y se rehidrata.
+std::vector<uint8_t> serialize_ir_facts(const IrFacts &f);
+
+/**
+ * @brief Reconstruye en @p out lo empaquetado por @ref serialize_ir_facts.
+ *
+ * @param data  Bytes leidos del almacen.
+ * @param n     Cuantos.
+ * @param owner La funcion que describen.  Es lo UNICO que hay que rehidratar,
+ *              y va aqui y no despues para que no se pueda olvidar: unos hechos
+ *              con @c owner nulo contestan `nullptr` a todo, que se lee como
+ *              "esta funcion no define nada" -- correcto de tipo y falso de
+ *              contenido.
+ * @return @c false si los bytes no cuadran; entonces @p out queda intacto y
+ *         quien pregunta computa, que es lo de siempre.
+ */
+bool deserialize_ir_facts(const uint8_t *data, size_t n,
+                          const ir::IrFunction &owner, IrFacts &out);
 
 } // namespace analysis
 

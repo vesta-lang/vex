@@ -542,11 +542,45 @@ bool wants_stage_(const CompileOptions &opts, const char *stage) {
     return false;
 }
 
+/**
+ * @brief Lo que el manifiesto del proyecto de @p source_path dice de la cache
+ *        de analisis, o 0 si no dice nada.
+ *
+ * Se recuerda por RUTA: el manifiesto no cambia a mitad de compilacion y
+ * parsearlo por modulo seria releerlo decenas de veces para la misma respuesta.
+ */
+uint32_t analysis_unused_runs_for_(const std::string &source_path) {
+    static std::unordered_map<std::string, uint32_t> memo;
+    auto it = memo.find(source_path);
+    if (it != memo.end()) return it->second;
+
+    uint32_t runs = 0;
+    std::string manifest_path;
+    (void)derive_package_id(source_path, &manifest_path);
+    if (!manifest_path.empty()) {
+        const pkg::ParseResult pr = pkg::parse_manifest_file(manifest_path);
+        /* Un manifiesto que no parsea NO es motivo para fallar aqui: quien lo
+         * valida es el gestor de paquetes, con su mensaje.  Esto solo queria un
+         * ajuste, y sin el se usa el defecto. */
+        if (pr.ok) runs = pr.manifest.cache.analysis_unused_runs;
+    }
+    memo.emplace(source_path, runs);
+    return runs;
+}
+
+std::string asa_analysis_path_for(const std::string &facts_path) {
+    if (facts_path.empty()) return facts_path;
+    /* Al lado del de hechos y con el mismo nombre: asi limpiar la cache de un
+     * modulo se lleva los dos, y quien mire el directorio ve de un vistazo que
+     * van juntos. */
+    return facts_path + ".analysis";
+}
+
 std::vector<analysis::asa::ProductionSummary>
 ensure_facts_impl_(const ir::IrModule &mod, analysis::asa::FactStore &store,
                    const std::vector<const char *> &wanted,
                    const std::string &path, uint64_t fingerprint,
-                   const char *stage) {
+                   const char *stage, const std::string &source_path) {
     /* Sin ruta no hay cache entre compilaciones: se produce y ya.  Pasa en los
      * caminos que no tienen un fichero al que atribuir el modulo. */
     if (path.empty()) return analysis::asa::produce(mod, store, wanted, stage);
@@ -597,22 +631,46 @@ ensure_facts_impl_(const ir::IrModule &mod, analysis::asa::FactStore &store,
      * cifras -- son las que dicen si la granularidad por funcion ahorra algo o
      * es contabilidad. */
     static const bool log_cache = util::flag_on(util::FlagId::AsaFactsDebug);
-    if (log_cache)
-        std::fprintf(stderr,
-                     "[hechos:disco] %s momento=%s -> %s | %u hechos, "
-                     "%u dominios, %u caducos, %u saltados, %u corruptos | "
-                     "granular: %u dominios a medias, %u hechos tirados, "
-                     "%u funciones reutilizadas\n",
-                     path.c_str(), stage != nullptr ? stage : "",
-                     read.ok ? "leido" : analysis::asa::diag_code(read.reason),
-                     read.facts, read.domains, read.stale, read.skipped,
-                     read.corrupt, read.partial_domains, read.stale_facts,
-                     read.reused_functions);
+    if (log_cache) {
+        /* Por el CATALOGO: que sea una traza de depuracion no la saca de la
+         * regla, porque la lee una persona.  Aqui solo van los DATOS. */
+        const std::string msg = vx::diag::format(
+            "VXA074", vx::diag::current_language(),
+            {path, stage != nullptr ? stage : "",
+             /* El CoDIGO del motivo, que es consultable y no hay que
+              * traducirlo.  Vacio cuando se leyo bien: una palabra suelta como
+              * "ok" seria texto de usuario escrito aqui, que es justo lo que no
+              * se hace. */
+             std::string(analysis::asa::diag_code(read.reason)),
+             std::to_string(read.facts), std::to_string(read.domains),
+             std::to_string(read.stale), std::to_string(read.skipped),
+             std::to_string(read.corrupt), std::to_string(read.partial_domains),
+             std::to_string(read.stale_facts),
+             std::to_string(read.reused_functions)});
+        std::fprintf(stderr, "%s\n", msg.c_str());
+    }
+
+    /* El almacen de ANALISIS, que es la otra mitad: los hechos que se acaban de
+     * leer son las CONCLUSIONES, y esto guarda el RAZONAMIENTO con el que se
+     * sacan -- def-use, points-to, rangos --.  Sin el, lo que la cache de
+     * arriba no cubra se rehace entero.
+     *
+     * Misma vida que la produccion: se abre antes (UNA lectura) y se vuelca
+     * despues (UNA escritura).  La clave lleva la misma capa de configuracion
+     * que los hechos de este momento, para que dos niveles de optimizacion no
+     * se sirvan analisis el uno al otro. */
+    analysis::AnalysisStore analyses(compiler_fingerprint_(), fingerprint);
+    /* Y lo que el PROYECTO diga de sus caches: cuanto aguanta un analisis
+     * guardado sin que se lo pidan.  Cero deja el defecto. */
+    analyses.set_unused_runs(analysis_unused_runs_for_(source_path));
+    analyses.open(asa_analysis_path_for(path));
 
     /* Y lo que falte.  `producir` se salta los dominios que la lectura ya
      * marco, asi que esto es exactamente el trabajo que la cache no cubrio. */
     const std::vector<analysis::asa::ProductionSummary> summaries =
-        analysis::asa::produce(mod, store, wanted, stage);
+        analysis::asa::produce(mod, store, wanted, stage, &analyses);
+    analyses.flush();
+    analyses.dump_if_asked();
     // Todo vino de la cache: nada que guardar, y nada que contar tampoco.
     if (summaries.empty()) return summaries;
 
@@ -1279,8 +1337,10 @@ std::string vxfacts_path_for(const std::string &source_path,
 std::vector<analysis::asa::ProductionSummary>
 ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
              const std::vector<const char *> &wanted, const std::string &path,
-             uint64_t fingerprint, const char *stage) {
-    return ensure_facts_impl_(mod, store, wanted, path, fingerprint, stage);
+             uint64_t fingerprint, const char *stage,
+             const std::string &source_path) {
+    return ensure_facts_impl_(mod, store, wanted, path, fingerprint, stage,
+                              source_path);
 }
 
 uint64_t asa_module_id(const std::string &source_path) {
@@ -4511,7 +4571,7 @@ CompileResult compile_vx_project(
                     : std::string(),
                 asa_facts_key(asa_module_id(root_path), opts,
                               analysis::asa::kStagePreOpt),
-                analysis::asa::kStagePreOpt);
+                analysis::asa::kStagePreOpt, root_path);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }
@@ -4676,7 +4736,7 @@ CompileResult compile_vx_project(
                 : std::string(),
             asa_facts_key(asa_module_id(root_path), opts,
                           analysis::asa::kStagePostOpt),
-            analysis::asa::kStagePostOpt);
+            analysis::asa::kStagePostOpt, root_path);
         res.asa_summaries.insert(res.asa_summaries.end(), s.begin(), s.end());
         /* Y sale con el resultado, para que quien compilo pueda consultarlo sin
          * volver a producirlo.  Se MUEVE, y el informe de abajo lee ya de ahi.

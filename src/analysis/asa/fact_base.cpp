@@ -14,6 +14,9 @@
 #include "util/env_flags.h"
 #include "analysis/asa/fact_base.h"
 
+#include "util/fnv.h" // la mezcla del proyecto, no otra escrita aqui
+#include "vx/diag/diag_catalog.h" // el texto de las trazas, en todos los idiomas
+
 #include "analysis/asa/fact_store.h"
 #include "analysis/asa/producers.h" // ModuleWalk: el recorrido, una sola vez
 #include "ir/ssa_ir.h"
@@ -177,9 +180,13 @@ FactBase::~FactBase() {
     static const bool log_it = util::flag_on(util::FlagId::AsaFactsDebug);
     if (!log_it || queries_ == 0) return;
     dump_facts(dump(), stderr);
-    std::fprintf(stderr,
-                 "[hechos] %zu preguntas atendidas, %zu analisis ejecutados\n",
-                 queries_, computations_);
+    /* Por el CATALOGO, como el resto: esto lo lee una persona, y una traza
+     * escrita a mano solo esta en un idioma. */
+    const std::string msg =
+        vx::diag::format("VXA076", vx::diag::current_language(),
+                         {std::to_string(queries_),
+                          std::to_string(computations_)});
+    std::fprintf(stderr, "%s\n", msg.c_str());
 }
 
 const std::string *FactBase::key_of(const ir::IrFunction &fn,
@@ -206,11 +213,9 @@ uint64_t FactBase::module_version(const ir::IrModule &mod) noexcept {
     /* Plegado, no suma: dos funciones que se intercambian versiones -- una sube
      * y otra baja -- darian la misma suma y el resultado se serviria rancio.
      * Con la posicion dentro de la mezcla, no. */
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (const ir::IrFunction &fn : mod.functions) {
-        h ^= fn.version;
-        h *= 0x100000001b3ULL;
-    }
+    uint64_t h = util::kFnvOffset;
+    for (const ir::IrFunction &fn : mod.functions)
+        h = util::fnv_mix(h, fn.version);
     return h;
 }
 
@@ -255,7 +260,88 @@ const IrFacts &FactBase::structure(const ir::IrFunction &fn,
      * el gestor recalcula si no coincide -- lo que sustituye a "acordarse de
      * invalidar", que es una obligacion que no se puede comprobar. */
     return manager_.get_or_compute_v<IRFactsAnalysis, IrFacts>(
-        key, fn.version, [&fn]() { return build_ir_facts(fn); });
+        key, fn.version,
+        [this, &fn, stage]() { return structure_from_store_(fn, stage); });
+}
+
+std::shared_ptr<const RangeFacts>
+FactBase::ranges_from_store_(const ir::IrFunction &fn, const char *stage) {
+    /* Sin almacen, lo de siempre.  Y el marcador de quien pregunta se pone
+     * igual en los dos caminos: es instrumentacion del motor de rangos y no
+     * tiene nada que ver con si hubo cache. */
+    const RangeRequester asker(RangeAsker::FactBase);
+    const uint64_t ir_key = function_code_key(fn);
+
+    if (analysis_store_ != nullptr) {
+        const uint64_t k = analysis_store_->key_of(
+            kRangeFactsAnalysisName, kRangeFactsFormat, ir_key,
+            stage_or_default(stage));
+        std::vector<uint8_t> bytes;
+        if (analysis_store_->load(k, bytes)) {
+            /* Se arma un `RangeFacts` y se entrega por puntero, que es como lo
+             * guarda el gestor: copiarlo seria duplicar el estado por bloque
+             * que lleva dentro. */
+            auto restored = std::make_shared<RangeFacts>();
+            if (deserialize_range_facts(bytes.data(), bytes.size(), ir_key,
+                                        fn.values.size(), *restored))
+                return restored;
+            /* Estaba y no se pudo interpretar.  Se DICE -- "no habia" y "habia
+             * y estaba roto" se arreglan distinto -- y se computa. */
+            analysis_store_->note_rejected();
+        }
+    }
+
+    /* Con las cotas de induccion, que las saca el PROPIO motor de rangos.  Es
+     * conocimiento que los rangos no pueden deducir solos -- la guarda de un
+     * bucle desenrollado compara `i + 7`, y despejar la `i` con aritmetica que
+     * envuelve es incorrecto --, y sin ellas la variable del bucle vale TODO SU
+     * TIPO.
+     *
+     * Antes se pasaban desde aqui, y eso las dejaba en su version pobre:
+     * `compute_loop_iv_bounds` solo despeja limites CONSTANTES ESCRITOS, y en un
+     * programa real eso dejaba sin cota al 89 % de los bucles contados.  El
+     * motor las saca ESCALONADAS -- rangos sin cotas, cotas con esos rangos,
+     * rangos con las cotas --, que recupera los limites que no son un literal
+     * sin cerrar el circulo.  Pasarlas desde aqui SALTABA ese escalon. */
+    std::shared_ptr<const RangeFacts> computed =
+        compute_ranges_ptr(fn, structure(fn, stage), RangeOptions{}, nullptr,
+                           nullptr);
+    if (analysis_store_ != nullptr && computed != nullptr) {
+        const uint64_t k = analysis_store_->key_of(
+            kRangeFactsAnalysisName, kRangeFactsFormat, ir_key,
+            stage_or_default(stage));
+        analysis_store_->store(k, serialize_range_facts(*computed));
+    }
+    return computed;
+}
+
+IrFacts FactBase::structure_from_store_(const ir::IrFunction &fn,
+                                        const char *stage) {
+    /* Sin almacen, lo de siempre: se computa.  No tener cache nunca puede ser
+     * un error, asi que este camino no avisa de nada. */
+    if (analysis_store_ == nullptr) return build_ir_facts(fn);
+
+    /* La clave sale del CONTENIDO de la funcion, no de su nombre ni de su
+     * posicion: dos compilaciones de una funcion que no cambio dan la misma,
+     * aunque el resto del modulo si haya cambiado.  Y como es del contenido,
+     * dos funciones con el mismo intermedio comparten el analisis -- que es
+     * correcto, porque el def-use de un codigo identico es identico. */
+    const uint64_t k = analysis_store_->key_of(
+        kIrFactsAnalysisName, kIrFactsFormat, function_code_key(fn),
+        stage_or_default(stage));
+
+    std::vector<uint8_t> bytes;
+    if (analysis_store_->load(k, bytes)) {
+        IrFacts f;
+        if (deserialize_ir_facts(bytes.data(), bytes.size(), fn, f)) return f;
+        /* Estaba pero no se pudo interpretar.  Se DICE -- es lo que separa "no
+         * habia" de "habia y estaba roto", que se arreglan de formas distintas
+         * -- y se computa, que sigue siendo correcto. */
+        analysis_store_->note_rejected();
+    }
+    IrFacts f = build_ir_facts(fn);
+    analysis_store_->store(k, serialize_ir_facts(f));
+    return f;
 }
 
 const DemandedBits &FactBase::demanded(const ir::IrFunction &fn,
@@ -303,7 +389,7 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn,
         *manager_
              .get_or_compute_v<RangeAnalysis,
                                std::shared_ptr<const RangeFacts>>(
-                 key, fn.version, [this, &fn]() {
+                 key, fn.version, [this, &fn, stage]() {
                      /* Con las cotas de induccion, que las saca el PROPIO
                       * motor de rangos.  Es conocimiento que los rangos no
                       * pueden deducir solos -- la guarda de un bucle
@@ -319,10 +405,7 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn,
                       * con esos rangos, rangos con las cotas --, que recupera
                       * los limites que no son un literal sin cerrar el
                       * circulo.  Pasarlas desde aqui SALTABA ese escalon. */
-                     const RangeRequester mark(RangeAsker::FactBase);
-                     return compute_ranges_ptr(fn, structure(fn),
-                                               RangeOptions{}, nullptr,
-                                               nullptr);
+                     return ranges_from_store_(fn, stage);
                  });
     if (fresh) {
         /* La certeza sale del propio analisis, no de quien pregunta: llegar a
@@ -352,7 +435,30 @@ const PointsTo &FactBase::memory(const ir::IrFunction &fn,
      * hechos de estructura, que guardan punteros a instrucciones. */
     return manager_.get_or_compute_v<MemoryAnalysis, PointsTo>(
         key, fn.version,
-        [this, &fn, stage]() { return compute_points_to(fn, structure(fn, stage)); });
+        [this, &fn, stage]() { return memory_from_store_(fn, stage); });
+}
+
+PointsTo FactBase::memory_from_store_(const ir::IrFunction &fn,
+                                      const char *stage) {
+    if (analysis_store_ == nullptr)
+        return compute_points_to(fn, structure(fn, stage));
+
+    const uint64_t k = analysis_store_->key_of(
+        kPointsToAnalysisName, kPointsToFormat, function_code_key(fn),
+        stage_or_default(stage));
+    std::vector<uint8_t> bytes;
+    if (analysis_store_->load(k, bytes)) {
+        PointsTo restored;
+        if (deserialize_points_to(bytes.data(), bytes.size(),
+                                  fn.values.size(), restored))
+            return restored;
+        /* Estaba y no se pudo interpretar.  Se DICE -- "no habia" y "habia y
+         * estaba roto" se arreglan distinto -- y se computa. */
+        analysis_store_->note_rejected();
+    }
+    PointsTo computed = compute_points_to(fn, structure(fn, stage));
+    analysis_store_->store(k, serialize_points_to(computed));
+    return computed;
 }
 
 const LoopFacts &FactBase::loops(const ir::IrFunction &fn,

@@ -755,6 +755,54 @@ target_compile_options(vesta_vm_flags INTERFACE
 )
 
 # ---------------------------------------------------------------------------
+# Clang, como SEGUNDO compilador.  Todo lo de aqui es ADITIVO: la ruta de GCC
+# sale byte a byte igual que antes.
+#
+# No es para poder elegir uno.  Es que cada compilador DICE cosas que el otro
+# se calla, y un arbol que solo pasa por uno acumula en silencio lo que ese no
+# mira.  La primera pasada de clang por este arbol saco una comparacion de
+# punteros escrita como si comparara cadenas, que llevaba tiempo apagando un
+# pase entero del optimizador sin que nadie se enterara.
+#
+# Las DOS ABI de Windows estan soportadas y las dos importan:
+#   - `x86_64-w64-windows-gnu`  reusa el sysroot de TDM y sus dependencias.
+#   - `x86_64-pc-windows-msvc`  usa la STL y el CRT de MSVC.
+# La segunda es la que muerde: ahi clang NO define `__GNUC__`, asi que cualquier
+# `#if defined(__GNUC__)` se va por la rama de "compilador desconocido".
+# ---------------------------------------------------------------------------
+if (CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|AppleClang)$")
+    # `-pedantic-errors` convierte en ERROR las extensiones GNU que este arbol
+    # usa a proposito y que GCC se tolera a si mismo.  Se silencian UNA A UNA y
+    # no se quita `-pedantic-errors`: asi una extension NUEVA sigue siendo un
+    # error, que es justo para lo que esta la bandera.
+    target_compile_options(vesta_vm_flags INTERFACE
+            -Wno-gnu-anonymous-struct              # union anonima con struct dentro
+            -Wno-nested-anon-types                 # idem, tipo anidado
+            -Wno-gnu-zero-variadic-macro-arguments # `, ## __VA_ARGS__`
+            -Wno-format-pedantic                   # un enum en un `%d`
+            -Wno-invalid-offsetof                  # offsetof sobre no-standard-layout
+    )
+
+    # Con el ABI de MSVC mandan las cabeceras del Windows SDK, que traen dos
+    # trampas que las de MinGW no tienen:
+    #
+    #   NOMINMAX             `min`/`max` estan definidos como MACROS y se comen
+    #                        `std::numeric_limits<T>::max()`, que queda como una
+    #                        invocacion de macro sin argumentos.
+    #   WIN32_LEAN_AND_MEAN  sin el, `windows.h` arrastra `winsock.h` y choca
+    #                        con `winsock2.h`: `sockaddr` redefinido.
+    #
+    # CMake pone `MSVC` a cierto tambien cuando el compilador es clang con ese
+    # ABI, que es exactamente la condicion que hace falta aqui.
+    if (MSVC)
+        target_compile_options(vesta_vm_flags INTERFACE
+                -DNOMINMAX
+                -DWIN32_LEAN_AND_MEAN
+        )
+    endif ()
+endif ()
+
+# ---------------------------------------------------------------------------
 # El codigo de la maquina, compilado UNA vez.
 #
 # Antes `vm` se declaraba con todas las fuentes dentro y `vmcore` volvia a
@@ -1262,6 +1310,21 @@ if (WIN32)
     target_link_libraries(test_fact_base_reuse PRIVATE vesta_openssl ws2_32 synchronization)
 else ()
     target_link_libraries(test_fact_base_reuse PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# El almacen que guarda el RAZONAMIENTO entre compilaciones.  Lleva BANCO: no
+# basta con que devuelva lo mismo, tiene que salir mas barato que recomputarlo
+# -- una cache que ralentiza es la unica forma en que esto puede hacer dano --.
+add_executable(test_analysis_store tests/analysis/test_analysis_store.cpp)
+target_include_directories(test_analysis_store PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_analysis_store PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_analysis_store PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_analysis_store PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_analysis_store PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
 # El LUGAR de un prestamo: cuando dos se pisan y cuando no.  Los dos lados en

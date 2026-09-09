@@ -293,7 +293,8 @@ uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;
 std::vector<analysis::asa::ProductionSummary>
 ensure_facts(const ir::IrModule &mod, analysis::asa::FactStore &store,
              const std::vector<const char *> &wanted, const std::string &path,
-             uint64_t fingerprint, const char *stage);
+             uint64_t fingerprint, const char *stage,
+             const std::string &source_path = std::string());
 
 /// Path del fichero de hechos de @p source_path (`.vxfacts` en la cache).
 std::string vxfacts_path_for(const std::string &source_path,
@@ -381,6 +382,21 @@ uint64_t asa_module_id(const std::string &source_path);
  */
 std::string asa_facts_path_for_stage(const std::string &base_facts_path,
                                      const char *stage);
+
+/**
+ * @brief El paquete de ANALISIS que acompana a un fichero de hechos.
+ *
+ * Fichero aparte y no una seccion dentro del de hechos, porque son dos cosas
+ * con vidas distintas: los hechos son las CONCLUSIONES -- publicas, portables,
+ * con su formato versionado y su suma por registro -- y esto es el RAZONAMIENTO
+ * que las produce, una cache LOCAL cuya unica promesa es que releerla salga mas
+ * barato que rehacer el trabajo.  Mezclarlos ataria el formato publico a un
+ * detalle interno de cada analisis.
+ *
+ * @param facts_path Lo que devuelve @ref asa_facts_path_for_stage.
+ * @return La ruta del paquete, o vacio si @p facts_path lo esta.
+ */
+std::string asa_analysis_path_for(const std::string &facts_path);
 
 } // namespace vx
 

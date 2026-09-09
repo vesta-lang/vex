@@ -230,6 +230,40 @@ struct PointsTo {
 PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
                            const RangeFacts *rangos = nullptr);
 
+// ===========================================================================
+//  Guardarla y recuperarla entre compilaciones
+// ===========================================================================
+//
+// Aqui, junto al analisis, porque quien sabe QUE campos hay que escribir es el
+// propio.  Lo COMUN -- cabecera, limites, vectores planos, tabla de codigos --
+// esta en `analysis/manager/analysis_store.h` y no se repite.
+//
+// Se puede keyar por el contenido de la funcion porque `compute_points_to` es
+// intraprocedural: mira la funcion y sus def-use, y nada del resto del modulo.
+
+/// Nombre estable con el que este analisis se identifica en el almacen.
+extern const char *const kPointsToAnalysisName;
+
+/// Version del FORMATO.  Propia: cambiarla no tira lo guardado de los demas.
+constexpr uint32_t kPointsToFormat = 1;
+
+/// Empaqueta @p pt en bytes.
+std::vector<uint8_t> serialize_points_to(const PointsTo &pt);
+
+/**
+ * @brief Reconstruye en @p out lo empaquetado por @ref serialize_points_to.
+ *
+ * @param data     Bytes leidos del almacen.
+ * @param n        Cuantos.
+ * @param n_values Cuantos valores tiene la funcion HOY.  Comprobacion de
+ *                 coherencia INDEPENDIENTE de la clave del almacen: es la que
+ *                 convierte un choque de claves en un descarte en vez de en una
+ *                 tabla que habla de otra funcion.
+ * @return @c false si no cuadra; @p out queda intacto y quien pregunta computa.
+ */
+bool deserialize_points_to(const uint8_t *data, size_t n, size_t n_values,
+                           PointsTo &out);
+
 /// Marcador de analisis para el AnalysisManager (cachea la tabla points-to por
 /// funcion).  Depende de IRFactsAnalysis.  El resultado (PointsTo) se invalida
 /// cuando la funcion muta (la resolucion raiz+offset cambia con el IR).

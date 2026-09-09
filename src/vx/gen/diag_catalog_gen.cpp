@@ -290,6 +290,9 @@ const CatEntry kEntries[] = {
     {"VXA071", {"the body of an inline asm block in '{0}' was never generated: {1}", "el cuerpo de un bloque de ensamblador en '{0}' no se llego a generar: {1}"}},
     {"VXA072", {"it uses the operand '{0}', of {1} bits, which does not travel whole between micro-operations (they carry 64)", "usa el operando '{0}', de {1} bits, que no viaja entero entre micro-operaciones (llevan 64)"}},
     {"VXA073", {"an IR function reached the fact cache with no name, so it cannot be referenced per function: its code is charged to every function of the module, which loses granularity. Whoever builds it must give it a name", "una funcion del intermedio llego a la cache de hechos SIN NOMBRE, asi que no se puede referenciar por funcion: su codigo se le cobra a todas las del modulo y se pierde la granularidad. Quien la construye tiene que darle un nombre"}},
+    {"VXA074", {"facts cache: {0} at stage {1} {2} | {3} facts, {4} domains, {5} stale, {6} skipped, {7} corrupt | per function: {8} domains partially loaded, {9} facts dropped, {10} functions reused", "cache de hechos: {0} en el momento {1} {2} | {3} hechos, {4} dominios, {5} caducos, {6} saltados, {7} corruptos | por funcion: {8} dominios a medias, {9} hechos tirados, {10} funciones reutilizadas"}},
+    {"VXA075", {"analysis store: {0} hits, {1} misses, {2} stored, {3} rejected | {4} bytes read, {5} written", "almacen de analisis: {0} aciertos, {1} fallos, {2} guardados, {3} rechazados | {4} bytes leidos, {5} escritos"}},
+    {"VXA076", {"fact base: {0} queries answered, {1} analyses actually run", "base de hechos: {0} preguntas atendidas, {1} analisis ejecutados"}},
     {"VXE930", {"@Hook(<point>) needs the instrumentation point.  Available: {0}", "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"}},
     {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
     {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
@@ -553,7 +556,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 532;
+const int kEntryCount = 535;
 
 } // namespace
 

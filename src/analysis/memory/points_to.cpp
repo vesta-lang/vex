@@ -14,6 +14,7 @@
  *        afirma un offset no probado).
  */
 #include "analysis/memory/points_to.h"
+#include "analysis/manager/analysis_codec.h" // lo COMUN de guardar un analisis
 #include "analysis/memory/memory_access.h" // tamano de un tipo (UNICA verdad)
 #include "analysis/facts/loop_facts.h"
 #include "analysis/facts/loop_iv.h"
@@ -98,7 +99,7 @@ struct Resolver {
     Resolver(const ir::IrFunction &f, const IrFacts &fc, const RangeFacts *rg,
              std::vector<PointsToEntry> &dst)
         : fn(f), facts(fc), rangos(rg), memo(dst) {
-        const size_t n = facts.def_of.size();
+        const size_t n = facts.value_count();
         memo.assign(n, PointsToEntry{});
         state.assign(n, 0);
     }
@@ -837,7 +838,7 @@ static RegionExtent extension_de(const ir::IrInstr &d, const IrFacts &facts) {
 PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
                            const RangeFacts *rangos) {
     PointsTo out;
-    const size_t n = facts.def_of.size();
+    const size_t n = facts.value_count();
     // El resolvedor memoiza DENTRO de `out.loc`: la deja del tamano que toca y
     // va escribiendo ahi.  Antes se llenaba un array aparte y se copiaba
     // entrada a entrada, o sea el doble de memoria y el doble de trabajo para
@@ -909,6 +910,115 @@ ir::IrValueId single_value_of_slot(const ir::IrFunction &fn,
     ir::IrOperands uno;
     uno.push_back(slot);
     return single_values_of_slots(fn, uno)[0];
+}
+
+// ===========================================================================
+//  Guardarla y recuperarla entre compilaciones
+// ===========================================================================
+
+const char *const kPointsToAnalysisName = "analysis.points_to";
+
+namespace {
+
+/// Escribe una entrada.  El CoDIGO no va aqui: va por indice a la tabla, que se
+/// emite una vez -- si no, "memory.comes_from_outside" se escribiria miles de
+/// veces --.
+void write_entry(util::ByteWriter &w, const PointsToEntry &e,
+                 uint32_t code_index) {
+    w.u8(static_cast<uint8_t>(e.kind));
+    w.u32(e.root);
+    w.i64(e.off);
+    w.u8(e.off_exact ? 1u : 0u);
+    w.u32(e.off_sym);
+    w.i64(e.off_lo);
+    w.i64(e.off_hi);
+    w.u8(e.off_rango ? 1u : 0u);
+    w.u8(static_cast<uint8_t>(e.reason));
+    w.u32(code_index);
+    w.u8(e.has_reason_op ? 1u : 0u);
+    w.u32(static_cast<uint32_t>(e.reason_op));
+}
+
+/// Lee lo escrito por @ref write_entry.  El codigo se resuelve con @p codes.
+PointsToEntry read_entry(util::ByteReader &r,
+                         const std::vector<const char *> &codes) {
+    PointsToEntry e;
+    e.kind = static_cast<effects::AbstractLoc::Kind>(r.u8());
+    e.root = r.u32();
+    e.off = r.i64();
+    e.off_exact = r.u8() != 0;
+    e.off_sym = r.u32();
+    e.off_lo = r.i64();
+    e.off_hi = r.i64();
+    e.off_rango = r.u8() != 0;
+    e.reason = static_cast<asa::UnknownReason>(r.u8());
+    const uint32_t code_index = r.u32();
+    /* Un indice fuera de la tabla deja el codigo VACIO, que se lee como "no
+     * consta".  Inventar un codigo seria dar una explicacion falsa, que es peor
+     * que no dar ninguna. */
+    e.reason_code = code_index < codes.size() ? codes[code_index] : "";
+    e.has_reason_op = r.u8() != 0;
+    e.reason_op = static_cast<ir::IrOp>(r.u32());
+    return e;
+}
+
+/// Bytes MINIMOS de una entrada, para descartar una cuenta imposible sin
+/// creerse lo que diga el fichero.
+constexpr size_t kEntryMinBytes = 1 + 4 + 8 + 1 + 4 + 8 + 8 + 1 + 1 + 4 + 1 + 4;
+
+} // namespace
+
+std::vector<uint8_t> serialize_points_to(const PointsTo &pt) {
+    /* Los codigos se recogen mientras se escriben las entradas y la tabla sale
+     * DETRAS: no se sabe cuales hay hasta haberlas recorrido todas. */
+    CodeTable codes;
+    util::ByteWriter body;
+    body.u32(static_cast<uint32_t>(pt.loc.size()));
+    for (size_t i = 0; i < pt.loc.size(); ++i)
+        write_entry(body, pt.loc[i], codes.index_of(pt.loc[i].reason_code));
+
+    util::ByteWriter w;
+    write_analysis_header(w, kPointsToAnalysisName, kPointsToFormat);
+    codes.write(w);
+    const std::vector<uint8_t> body_bytes = body.take();
+    if (!body_bytes.empty()) w.raw(body_bytes.data(), body_bytes.size());
+
+    /* La extension de cada raiz: datos planos, en bloque. */
+    write_pod_vector(w, pt.extent);
+    return w.take();
+}
+
+bool deserialize_points_to(const uint8_t *data, size_t n, size_t n_values,
+                           PointsTo &out) {
+    if (data == nullptr || n == 0) return false;
+    util::ByteReader r(data, n);
+    if (!read_analysis_header(r, kPointsToAnalysisName, kPointsToFormat))
+        return false;
+
+    std::vector<const char *> codes;
+    if (!CodeTable::read(r, codes)) return false;
+
+    /* Se arma APARTE y solo se entrega al final: unos bytes cortados dejarian
+     * al que pregunta una tabla a medio llenar, o sea respuestas sobre memoria
+     * que nadie ha resuelto. */
+    PointsTo pt;
+    const uint32_t n_loc = r.u32();
+    if (!r.ok() || !fits_in(r, n_loc, kEntryMinBytes)) return false;
+    pt.loc.resize(n_loc);
+    for (uint32_t i = 0; i < n_loc && r.ok(); ++i)
+        pt.loc[i] = read_entry(r, codes);
+    if (!r.ok()) return false;
+
+    if (!read_pod_vector(r, pt.extent)) return false;
+
+    /* Coherencia con la funcion que se esta mirando, aparte de la clave del
+     * almacen: servir una tabla points-to de OTRA funcion es la peor forma de
+     * fallar de este dominio -- de ella depende que dos accesos se den por
+     * disjuntos, y con eso se reordena memoria --. */
+    if (pt.loc.size() != n_values) return false;
+
+    out = std::move(pt);
+    return true;
 }
 
 } // namespace analysis

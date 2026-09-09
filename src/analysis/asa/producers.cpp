@@ -15,6 +15,7 @@
  */
 
 #include "util/env_flags.h"
+#include "util/fnv.h" // la mezcla del proyecto, no otra escrita aqui
 #include "analysis/asa/producers.h"
 
 #include "ir/ssa_ir.h"
@@ -210,20 +211,16 @@ void warn_unnamed_function() {
 /// invalidado la cache de rangos, que hoy es correcta, por un cambio que a los
 /// rangos no les afecta.
 uint64_t param_contracts_key(const ir::IrFunction &fn) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    auto mix = [&h](uint64_t v) {
-        h ^= v;
-        h *= 0x100000001b3ULL;
-    };
+    uint64_t h = util::kFnvOffset;
     for (const ir::IrParamContract &pc : fn.param_contracts) {
         for (const ir::IrParamLevel &lv : pc.levels) {
-            mix(lv.holds);
-            mix(lv.denied);
-            mix(lv.proven);
-            mix(lv.declared);
-            mix(static_cast<uint64_t>(lv.extent_bytes));
-            mix(lv.extent_from_param);
-            mix(lv.align_bytes);
+            h = util::fnv_mix(h, lv.holds);
+            h = util::fnv_mix(h, lv.denied);
+            h = util::fnv_mix(h, lv.proven);
+            h = util::fnv_mix(h, lv.declared);
+            h = util::fnv_mix(h, static_cast<uint64_t>(lv.extent_bytes));
+            h = util::fnv_mix(h, lv.extent_from_param);
+            h = util::fnv_mix(h, lv.align_bytes);
         }
     }
     return h;
@@ -258,21 +255,18 @@ struct AllInputs {
 AllInputs compute_all_inputs(const ir::IrModule &mod) {
     AllInputs all;
     ModuleInputs &in = all.module;
-    auto mix = [](uint64_t h, uint64_t v) {
-        h ^= v;
-        return h * 0x100000001b3ULL;
-    };
-    in.function_code = 0xcbf29ce484222325ULL;
-    in.param_contracts = 0xcbf29ce484222325ULL;
-    in.unnamed_code = 0xcbf29ce484222325ULL;
+    in.function_code = util::kFnvOffset;
+    in.param_contracts = util::kFnvOffset;
+    in.unnamed_code = util::kFnvOffset;
     all.by_function.reserve(mod.functions.size());
     for (const ir::IrFunction &fn : mod.functions) {
         /* Cada funcion aporta las suyas, y se pliegan.  Las de una funcion
          * suelta salen de @ref compute_function_inputs, que es lo que usa la
          * validacion por funcion. */
         const FunctionInputs f = compute_function_inputs(fn);
-        in.function_code = mix(in.function_code, f.function_code);
-        in.param_contracts = mix(in.param_contracts, f.param_contracts);
+        in.function_code = util::fnv_mix(in.function_code, f.function_code);
+        in.param_contracts =
+            util::fnv_mix(in.param_contracts, f.param_contracts);
         if (!fn.name.empty()) {
             all.by_function.emplace_back(function_name_hash(fn.name), f);
         } else {
@@ -285,26 +279,22 @@ AllInputs compute_all_inputs(const ir::IrModule &mod) {
              * volviendo gruesa sola sin que nadie supiera por que.  Hoy no
              * deberia sonar -- todos los sitios que construyen una funcion le
              * ponen nombre --, asi que si suena es que hay una via nueva. */
-            in.unnamed_code = mix(in.unnamed_code, f.function_code);
-            in.unnamed_code = mix(in.unnamed_code, f.param_contracts);
+            in.unnamed_code = util::fnv_mix(in.unnamed_code, f.function_code);
+            in.unnamed_code =
+                util::fnv_mix(in.unnamed_code, f.param_contracts);
             warn_unnamed_function();
         }
     }
-    in.static_data = 0xcbf29ce484222325ULL;
+    in.static_data = util::kFnvOffset;
     for (size_t i = 0; i < mod.static_data.size(); ++i) {
-        const auto &m = mod.static_data.meta_at(i);
-        for (char c : m.section_name)
-            in.static_data = mix(in.static_data,
-                                 static_cast<uint64_t>(
-                                     static_cast<unsigned char>(c)));
+        const std::string &name = mod.static_data.meta_at(i).section_name;
+        in.static_data =
+            util::fnv_bytes(in.static_data, name.data(), name.size());
     }
-    in.globals = 0xcbf29ce484222325ULL;
+    in.globals = util::kFnvOffset;
     for (const auto &g : mod.globals) {
-        for (char c : g.first)
-            in.globals =
-                mix(in.globals,
-                    static_cast<uint64_t>(static_cast<unsigned char>(c)));
-        in.globals = mix(in.globals, g.second);
+        in.globals = util::fnv_bytes(in.globals, g.first.data(), g.first.size());
+        in.globals = util::fnv_mix(in.globals, g.second);
     }
     return all;
 }
@@ -334,12 +324,8 @@ uint64_t fold_declared_inputs_for_function(DomainInput set,
                                            const ModuleInputs &mod_in,
                                            const FunctionInputs &fn_in) {
     uint64_t h = 0x9E3779B97F4A7C15ULL;
-    auto mix = [&h](uint64_t v) {
-        h ^= v;
-        h *= 0x100000001b3ULL;
-    };
     if (has_input(set, DomainInput::FunctionCode)) {
-        mix(fn_in.function_code);
+        h = util::fnv_mix(h, fn_in.function_code);
         /* Y el de las anonimas, que no puede ir en la clave de ninguna: ver
          * @c ModuleInputs::unnamed_code.  Quien mira codigo lo mira TODO.
          *
@@ -349,24 +335,27 @@ uint64_t fold_declared_inputs_for_function(DomainInput set,
          * analisis que seguian siendo validos -- la vida corta de la posicion
          * gobernando la larga de la afirmacion --, que es justo lo que
          * `hash_de_tokens` evita ignorando comentarios y espaciado. */
-        mix(mod_in.unnamed_code);
+        h = util::fnv_mix(h, mod_in.unnamed_code);
     }
-    if (has_input(set, DomainInput::ParamContracts)) mix(fn_in.param_contracts);
-    if (has_input(set, DomainInput::StaticData)) mix(mod_in.static_data);
-    if (has_input(set, DomainInput::Globals)) mix(mod_in.globals);
+    if (has_input(set, DomainInput::ParamContracts))
+        h = util::fnv_mix(h, fn_in.param_contracts);
+    if (has_input(set, DomainInput::StaticData))
+        h = util::fnv_mix(h, mod_in.static_data);
+    if (has_input(set, DomainInput::Globals))
+        h = util::fnv_mix(h, mod_in.globals);
     return h;
 }
 
 uint64_t fold_declared_inputs(DomainInput set, const ModuleInputs &in) {
     uint64_t h = 0x9E3779B97F4A7C15ULL; // semilla != 0: declarar None es un dato
-    auto mix = [&h](uint64_t v) {
-        h ^= v;
-        h *= 0x100000001b3ULL;
-    };
-    if (has_input(set, DomainInput::FunctionCode)) mix(in.function_code);
-    if (has_input(set, DomainInput::ParamContracts)) mix(in.param_contracts);
-    if (has_input(set, DomainInput::StaticData)) mix(in.static_data);
-    if (has_input(set, DomainInput::Globals)) mix(in.globals);
+    if (has_input(set, DomainInput::FunctionCode))
+        h = util::fnv_mix(h, in.function_code);
+    if (has_input(set, DomainInput::ParamContracts))
+        h = util::fnv_mix(h, in.param_contracts);
+    if (has_input(set, DomainInput::StaticData))
+        h = util::fnv_mix(h, in.static_data);
+    if (has_input(set, DomainInput::Globals))
+        h = util::fnv_mix(h, in.globals);
     return h;
 }
 
@@ -1494,7 +1483,8 @@ std::vector<const char *> registered_producers() {
 std::vector<ProductionSummary> produce(const ir::IrModule &mod,
                                        FactStore &store,
                                        const std::vector<const char *> &wanted,
-                                       const char *stage) {
+                                       const char *stage,
+                                       AnalysisStore *analyses) {
     /* Antes de producir nada: los nombres de los productores tienen que ser
      * canonicos para que un hecho leido de disco se reconozca como suyo. */
     register_asa_canonical_names();
@@ -1506,6 +1496,10 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
      * para los hechos de antes de optimizar se serviria tal cual para los de
      * despues, que hablan de otro codigo. */
     FactBase base(stage);
+    /* Y el almacen ENTRE compilaciones, si lo hay: es lo que hace que el
+     * RAZONAMIENTO tampoco se rehaga.  Sin el la base computa todo, que es el
+     * comportamiento de siempre. */
+    base.set_analysis_store(analyses);
     std::unordered_map<std::string, FactId> structure_of;
 
     /* Reservar de golpe: un modulo grande produce cientos de miles de hechos y

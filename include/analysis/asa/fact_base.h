@@ -164,6 +164,7 @@
 #include "analysis/facts/demanded_bits.h"
 #include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
+#include "analysis/manager/analysis_store.h" // el nivel [1] a DISCO, entre compilaciones
 #include "analysis/effects/effect_analysis.h" // el motor de efectos, compartido
 #include "analysis/effects/param_aliasing.h"  // que le llega a cada parametro
 #include "analysis/escape/escape.h"          // que sobrevive a la funcion
@@ -378,6 +379,17 @@ class FactBase {
     ~FactBase();
     FactBase(const FactBase &) = delete;
     FactBase &operator=(const FactBase &) = delete;
+
+    /**
+     * @brief Conecta el almacen ENTRE compilaciones (el nivel [1] a disco).
+     *
+     * Sin el -- que es el defecto -- todo se computa, que es el comportamiento
+     * de siempre: no tener cache nunca puede ser un error.  Quien compila abre
+     * el almacen una vez y lo presta; la base no lo posee.
+     *
+     * @param s El almacen, o @c nullptr para no usar ninguno.
+     */
+    void set_analysis_store(AnalysisStore *s) noexcept { analysis_store_ = s; }
 
     /**
      * @brief Hechos estructurales de @p fn: def-use, sitios de llamada, bucles.
@@ -664,6 +676,23 @@ class FactBase {
     const char *default_stage_ = kStagePreOpt;
     size_t queries_ = 0;
     size_t computations_ = 0;
+    /// El almacen ENTRE compilaciones, o nulo.  @see set_analysis_store
+    AnalysisStore *analysis_store_ = nullptr;
+
+    /// Los hechos estructurales de @p fn: del almacen si estan, computados y
+    /// depositados si no.  Aparte de @ref structure para que la puerta siga
+    /// siendo una sola linea y el trato con el disco no se mezcle con el de la
+    /// cache en memoria -- son dos niveles distintos.
+    IrFacts structure_from_store_(const ir::IrFunction &fn, const char *stage);
+
+    /// Idem para los rangos.  Devuelve el puntero que el gestor guarda: este
+    /// analisis lleva dentro el estado de cada bloque, asi que copiarlo seria
+    /// duplicar el analisis entero.
+    std::shared_ptr<const RangeFacts>
+    ranges_from_store_(const ir::IrFunction &fn, const char *stage);
+
+    /// Idem para el points-to.
+    PointsTo memory_from_store_(const ir::IrFunction &fn, const char *stage);
 };
 
 /**
