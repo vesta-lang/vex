@@ -47,8 +47,15 @@
 #include <string>
 #include <vector>
 
-#if defined(__GNUC__) || defined(__clang__)
+/* La pregunta correcta NO es que COMPILADOR es, sino que ABI de C++ hay debajo.
+ * `<cxxabi.h>` es la de Itanium, la que traen libstdc++ y libc++; con la STL de
+ * MSVC no existe -- alli los nombres se manglan de otra forma y se desharian
+ * con `UnDecorateSymbolName` de dbghelp.  Preguntando por el compilador, clang
+ * con el ABI de MSVC entraba aqui (define `__clang__`) y no encontraba la
+ * cabecera. */
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
 #include <cxxabi.h>
+#define VESTA_HAS_ITANIUM_DEMANGLE 1
 #endif
 
 /* Solo para saber el ancho de la consola, y solo si la salida ES una consola.
@@ -75,7 +82,7 @@ namespace {
  * unico dato que habia.
  */
 std::string demangle(const char *mangled) {
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(VESTA_HAS_ITANIUM_DEMANGLE)
     int status = 0;
     /* Reserva con `malloc` por contrato de la ABI y se suelta con `free`.  Es
      * el unico sitio de todo esto donde se reserva, y corre al final, una vez

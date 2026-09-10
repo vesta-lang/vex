@@ -91,7 +91,11 @@ static constexpr uint8_t VAR_TYPE_PTR = 3u;    ///< puntero raw
 //  DebugSectionHeader - encabezado de la seccion de depuracion (24 bytes)
 // -------------------------------------------------------------------------
 
-#if defined(__GNUC__)
+/* Clang con el ABI de MSVC no define `__GNUC__`, y sin esta rama `DEBUG_PACKED`
+ * se quedaba VACIO: las structs de abajo dejaban de ir empaquetadas y el layout
+ * binario de la seccion de depuracion cambiaba sin un solo aviso.  El atributo
+ * lo acepta clang con cualquier ABI. */
+#if defined(__clang__) || defined(__GNUC__)
 #define DEBUG_PACKED __attribute__((packed))
 #else
 #define DEBUG_PACKED

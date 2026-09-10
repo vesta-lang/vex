@@ -36,7 +36,14 @@
 
 #include <cstdint>
 #include <cstddef>
-#include <pthread.h>
+/* Nuestro cerrojo, no `pthread_mutex_t`.  El CRT de MSVC no trae `<pthread.h>`
+ * -- era lo unico que ataba esta cabecera a MinGW --, pero la razon de fondo no
+ * es esa: en Windows los pthreads son winpthreads, la emulacion que este mismo
+ * proyecto evita a proposito en el resto de los sitios (ver la cabecera de
+ * `util/shared_mutex.h`, donde esta medido que se rompe con hilos que nacen y
+ * mueren).  `util::SharedMutex` es un `SRWLOCK` del sistema: del tamano de un
+ * puntero, sin reservar nada y sin destruir nada. */
+#include "util/shared_mutex.h"
 
 /**
  * @brief Codigos de error del generador de shellcode JIT.
@@ -171,7 +178,7 @@ typedef struct PendingCall_t {
                               ///< finished==true).
     bool finished; ///< true una vez que la funcion termino de ejecutarse.
 
-    pthread_mutex_t lock; ///< Mutex que protege el acceso a finished y result.
+    util::SharedMutex lock; ///< Cerrojo que protege el acceso a finished y result.
 } PendingCall_t;
 
 #endif // JIT_CALL_H

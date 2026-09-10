@@ -18,6 +18,7 @@
  */
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "util/toolchain_compat.h" // ssize_t: no lo trae el CRT de MSVC
 #include <algorithm>
 #include <functional>
 #include <map>

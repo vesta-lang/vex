@@ -63,10 +63,20 @@
  * debemos usar "pack" para evitar el padding adicional de los compiladores
  * y que sea una estructura segura para serializar.
  */
-#if defined(_MSC_VER)
-#pragma pack(push, 1)
-#elif defined(__GNUC__)
+/* Clang acepta `__attribute__((packed))` con CUALQUIER ABI, tambien con el de
+ * MSVC, asi que va PRIMERO.  Importa que sea el atributo y no el `pragma pack`:
+ * el atributo empaqueta POR ESTRUCTURA y el pragma por REGION, y en este
+ * fichero conviven 11 structs que deben ir empaquetadas con 20 que NO -- un
+ * pragma abierto arriba las empaquetaria todas, y ademas se filtraria a cada
+ * cabecera incluida despues.
+ *
+ * La rama de `_MSC_VER` se deja para `cl.exe`, que no tiene atributo por
+ * estructura.  No esta verificada: aqui se compila con GCC y con Clang. */
+#if defined(__clang__) || defined(__GNUC__)
 #define PACKED __attribute__((packed))
+#elif defined(_MSC_VER)
+#pragma pack(push, 1)
+#define PACKED
 #else
 #define PACKED
 #endif

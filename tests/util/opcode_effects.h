@@ -430,15 +430,35 @@ inline const std::map<uint64_t, uint32_t> &contract_frontier() {
  * `-Wpedantic` es un error.  Se pide por puntero y no por nombre por lo mismo
  * que la frontera de fallos: renombrar el metodo tiene que ser un error de
  * compilacion, y un nombre mal escrito seria un filtro que no filtra nada. */
+#if defined(__clang__)
+    /* Clang no AVISA de este `reinterpret_cast`, lo PROHIBE: convertir un
+     * puntero-a-metodo en `void *` es un programa mal formado, asi que no hay
+     * pragma que lo silencie -- `-Wpmf-conversions` ni siquiera existe ahi.
+     *
+     * Se copian los BYTES del puntero a metodo, que si es codigo valido.  Para
+     * un metodo NO virtual la primera palabra del puntero ES la direccion de la
+     * funcion, tanto con la ABI de Itanium como con la de MSVC, de modo que el
+     * valor sale IGUAL que por la extension de GCC.  Que salga igual es el
+     * punto: esto se compara contra las direcciones que se sacan de
+     * desensamblar los manejadores, y un valor distinto no daria un error --
+     * daria una frontera que no casa con nada, o sea efectos perdidos en
+     * silencio. */
+    const auto pmf = &gc::GcHeap::deref;
+    static_assert(sizeof(pmf) >= sizeof(uint64_t),
+                  "el puntero a metodo no llega a una palabra");
+    uint64_t deref_addr = 0;
+    __builtin_memcpy(&deref_addr, &pmf, sizeof(deref_addr));
+#else
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 #pragma GCC diagnostic ignored "-Wpmf-conversions"
-    static const std::map<uint64_t, uint32_t> f = {
-        {reinterpret_cast<uint64_t>(
-             reinterpret_cast<const void *>(&gc::GcHeap::deref)),
-         1u << kCampoMemoria},
-    };
+    const uint64_t deref_addr = reinterpret_cast<uint64_t>(
+        reinterpret_cast<const void *>(&gc::GcHeap::deref));
 #pragma GCC diagnostic pop
+#endif
+    static const std::map<uint64_t, uint32_t> f = {
+        {deref_addr, 1u << kCampoMemoria},
+    };
     return f;
 }
 

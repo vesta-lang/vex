@@ -370,7 +370,10 @@ inline bool decode_effects_impl(const DecodedInstr &d, InstrEffects &out,
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#if defined(__GNUC__)
+/* Clang con el ABI de MSVC no define `__GNUC__`, pero el salto calculado SI lo
+ * soporta: es una extension del lenguaje, no del ABI.  Sin nombrarlo aqui, este
+ * fichero caia en el `#error` de abajo -- que ya pedia "GCC/Clang". */
+#if defined(__GNUC__) || defined(__clang__)
     /* Tabla de destinos.  Se rellena una vez; el resto de las ejecuciones es una
      * rama predicha y un salto.  La escritura concurrente es benigna: dos hilos
      * escribirian los MISMOS valores. */

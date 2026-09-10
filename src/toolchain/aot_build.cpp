@@ -37,6 +37,7 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <sstream> // STL de MSVC: no transitivo
 #include <string>
 #include <unordered_map>
 #include <unordered_set>

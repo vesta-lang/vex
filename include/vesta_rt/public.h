@@ -295,7 +295,9 @@ __declspec(noreturn)
 #endif
 void vrt_resume_jit(uint64_t catch_addr, uint64_t native_rsp,
                     uint64_t native_rbp, uint64_t proc)
-#if defined(__GNUC__)
+/* Clang aparte: con el ABI de MSVC no define `__GNUC__` y el `noreturn` se
+ * perdia -- ni el optimizador ni los avisos de "falta un return" se enteraban. */
+#if defined(__GNUC__) || defined(__clang__)
     __attribute__((noreturn))
 #endif
     ;

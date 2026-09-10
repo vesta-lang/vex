@@ -431,7 +431,11 @@ class LazyHybridTLB {
      * @note El puntero devuelto puede quedar invalidado si se llama a
      * translate() sobre la misma pagina (la reasignacion puede reubicar el
      * nodo). */
-#if defined(__GNUC__)
+/* Clang tambien lo entiende, con cualquier ABI, y hay que nombrarlo: con el de
+ * MSVC no define `__GNUC__`, asi que sin esto se caia al `#else` y el camino
+ * CALIENTE de la traduccion de direcciones perdia el inline forzado -- mas
+ * lento, y sin que nada lo dijera. */
+#if defined(__GNUC__) || defined(__clang__)
     [[nodiscard]] __attribute__((always_inline)) inline TLBEntryData *
     get_entry(uint64_t ptr_) const {
 #else

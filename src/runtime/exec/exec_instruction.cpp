@@ -418,6 +418,42 @@ void exec_instr_pop(ProcessVM *vm, const DecodedInstr &instr) {
  * soporta, defina @c VESTA_DISABLE_SEH para fallback a solo C++
  * exception catching (no captura segfault crudo).
  */
+#if defined(_WIN32) && defined(_MSC_VER) && !defined(VESTA_DISABLE_SEH)
+/**
+ * @brief Invoca la funcion nativa capturando lo que lance el C++.
+ *
+ * Existe por una razon de sintaxis, no de diseno: `__try` y el `try` de C++ no
+ * pueden convivir en la MISMA funcion, asi que la mitad de C++ se saca aqui y
+ * el `__try` del llamante envuelve la LLAMADA a este ayudante.
+ *
+ * Esta rama nunca se habia compilado -- el arbol se construye con MinGW, donde
+ * no hay SEH --, de modo que el error llevaba dentro desde que se escribio.
+ *
+ * @param fn    Puntero a la funcion nativa a invocar.
+ * @param argc  Cuantos argumentos lleva (R01..R12).
+ * @param vm    Proceso que hace la llamada; recibe el FatalError si lo hay.
+ * @param out   Valor devuelto por la funcion nativa, solo si retorna true.
+ * @return true si la llamada termino; false si ya se lanzo un FatalError y el
+ *         llamante debe volver sin tocar R00.
+ */
+static bool calln_invoke_guarded_cpp(void *fn, uint64_t argc, ProcessVM *vm,
+                                     uint64_t &out) {
+    try {
+        out = invoke_native_unchecked(fn, argc, vm);
+        return true;
+    } catch (const std::exception &e) {
+        runtime::throw_fatalf(vm, runtime::FATAL_NATIVE_EXCEPTION,
+                              "CALLN: plugin lanzo std::exception: %s",
+                              e.what());
+        return false;
+    } catch (...) {
+        runtime::throw_fatal(vm, runtime::FATAL_NATIVE_EXCEPTION,
+                             "CALLN: plugin lanzo excepcion C++ desconocida");
+        return false;
+    }
+}
+#endif
+
 void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr) {
     //  M.sandbox: comprobar la capability FFI_CALL del modulo
     // propietario del PC actual.  En modo default (sin --vx-caps) el
@@ -439,20 +475,10 @@ void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr) {
 
 #if defined(_WIN32) && defined(_MSC_VER) && !defined(VESTA_DISABLE_SEH)
     // MSVC: SEH nativo via __try/__except.
+    // El `try` de C++ vive en `calln_invoke_guarded_cpp`: aqui no puede estar,
+    // MSVC no admite las dos formas en la misma funcion.
     __try {
-        try {
-            r = invoke_native_unchecked(fn, argc, vm);
-        } catch (const std::exception &e) {
-            runtime::throw_fatalf(vm, runtime::FATAL_NATIVE_EXCEPTION,
-                                  "CALLN: plugin lanzo std::exception: %s",
-                                  e.what());
-            return;
-        } catch (...) {
-            runtime::throw_fatal(
-                vm, runtime::FATAL_NATIVE_EXCEPTION,
-                "CALLN: plugin lanzo excepcion C++ desconocida");
-            return;
-        }
+        if (!calln_invoke_guarded_cpp(fn, argc, vm, r)) return;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         runtime::throw_fatalf(vm, runtime::FATAL_NATIVE_CRASH,
                               "CALLN: plugin nativo crasheo (SEH code=0x%lX)",

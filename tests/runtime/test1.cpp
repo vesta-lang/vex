@@ -12,7 +12,6 @@
 
 #include "runtime/manager_runtime.h"
 #include <iostream>
-#include <pthread.h>
 #include <cstdio> // printf
 
 #include "runtime/runtime.h"

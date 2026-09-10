@@ -46,10 +46,16 @@
  * `PROCESSINFOCLASS` en vez de `ULONG`; volver a declararla choca.  La otra no
  * esta ahi, asi que es la unica que hay que traer. */
 extern "C" {
+/* Lo mismo que le pasa a `NtQueryInformationProcess` justo arriba, pero solo
+ * con el Windows SDK: ahi `NtSetInformationThread` YA esta declarada, y con
+ * `THREADINFOCLASS` en vez de `ULONG`, asi que volver a declararla choca.  El
+ * `winternl.h` de MinGW no la trae y hay que seguir poniendola. */
+#if !defined(_MSC_VER)
 NTSTATUS NTAPI NtSetInformationThread(HANDLE ThreadHandle,
                                       ULONG ThreadInformationClass,
                                       PVOID ThreadInformation,
                                       ULONG ThreadInformationLength);
+#endif
 /* Crear el hilo tambien por la capa NT.  `std::thread` en MinGW pasa por
  * winpthreads, que es otra capa encima de Win32 encima de esto; y `CreateThread`
  * es Win32 encima de esto.  Aqui no se gana tiempo -- el hilo se crea UNA vez --
@@ -80,7 +86,15 @@ namespace {
 /// `ProcessAffinityMask` y `ThreadAffinityMask`, por su numero: las cabeceras
 /// publicas no declaran los enumerados de la capa NT.
 constexpr ULONG kProcessAffinityMask = 21;
+/* El tipo lo manda QUIEN declara la funcion.  Con el Windows SDK el segundo
+ * parametro es `THREADINFOCLASS`, que es un enum y al que un `ULONG` NO
+ * convierte solo; con MinGW la declaramos nosotros tomando `ULONG`.  Se ajusta
+ * la constante y no el sitio de llamada, que asi se queda igual en los dos. */
+#if defined(_MSC_VER)
+constexpr THREADINFOCLASS kThreadAffinityMask = static_cast<THREADINFOCLASS>(4);
+#else
 constexpr ULONG kThreadAffinityMask = 4;
+#endif
 
 /// Lo que devuelve `NtQueryInformationProcess` para la clase de afinidad.
 struct ProcessBasicAffinity {

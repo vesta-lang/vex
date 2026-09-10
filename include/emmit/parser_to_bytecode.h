@@ -99,7 +99,34 @@ static const std::unordered_set<std::string> PseudoInstructions = {
  * @endcode
  * Si opcode1 == 0x00 la instruccion es extendida (2 bytes de opcode).
  */
-static const std::unordered_map<std::string, std::vector<InstrInfo>>
+/* UNA definicion, no una por fichero que incluya esta cabecera.
+ *
+ * Esto era `static`, que a nivel de espacio de nombres significa enlace
+ * INTERNO: cada unidad de traduccion se llevaba su propia copia de la tabla
+ * entera.  Medido sobre el binario de Profile: 23 objetos con ~58 KB de
+ * constructores globales cada uno -- 1,27 MB --, de los que 848 KB sobrevivian
+ * al enlace, el 4,1% de todo el codigo del ejecutable.
+ *
+ * Y no es solo tamano: son 323 mnemonicos con su `std::string` y su
+ * `std::vector`, construidos por INICIALIZACION DINAMICA, o sea ANTES de
+ * `main`, una vez por copia.
+ *
+ * Con `extern` la declaracion vive aqui y la definicion en UN sitio
+ * (`parser_to_bytecode.cpp`, que define la macro de abajo antes de incluir).
+ * El cuerpo NO se ha tocado ni se ha movido: sigue donde estaba, palabra por
+ * palabra, para que este cambio no pueda alterar que opcode emite un
+ * mnemonico -- que es un fallo que no daria error, daria otro programa.
+ *
+ * PENDIENTE: pasarla a `inline constexpr` indexada por `Mnemonic`.  La busqueda
+ * nombre->enum ya existe (`mnemonic_from_text`, binaria y perezosa), asi que
+ * seria O(1) por indice y sin ninguna inicializacion dinamica.  Es la regla del
+ * proyecto -- tablas de despacho como arrays planos indexados por enum -- y
+ * ademas cerraria la duplicacion que `instr_list.h` existe para cerrar.
+ */
+extern const std::unordered_map<std::string, std::vector<InstrInfo>> InstrTable;
+
+#ifdef VESTA_DEFINE_INSTR_TABLE
+const std::unordered_map<std::string, std::vector<InstrInfo>>
     InstrTable = {
         /* --- Informacion de VM --- */
         {"vminfo",
@@ -1515,6 +1542,7 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          {{0x00, 0x71, InstrSizeMode::FIXED_4, AddressingMode::INMED,
            emit_instr_fastmask}}},
 };
+#endif // VESTA_DEFINE_INSTR_TABLE
 
 /**
  * @class Assembler

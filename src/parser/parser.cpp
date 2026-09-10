@@ -24,6 +24,7 @@
 
 #include <climits>
 #include <iomanip>
+#include <sstream> // STL de MSVC: no transitivo
 
 #include "Levenshtein.hpp"
 

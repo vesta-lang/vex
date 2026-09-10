@@ -20,6 +20,10 @@
  * @c eval_expr(), @c eval_operand(), @c apply_annotation() y @c
  * apply_directive().
  */
+/* ESTA es la unidad que define `InstrTable`.  La cabecera solo la declara
+ * `extern`; sin esta macro, ningun fichero se lleva una copia.  Tiene que ir
+ * ANTES del include, que es donde vive el cuerpo de la tabla. */
+#define VESTA_DEFINE_INSTR_TABLE
 #include "emmit/parser_to_bytecode.h"
 #include "emmit/mnemonic.h" // consulta por indice, no por hash de cadena
 #include <algorithm>        // UCRT64: no transitivo

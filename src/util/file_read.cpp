@@ -36,6 +36,17 @@ namespace util {
  * puntero que comprobar, y si un simbolo faltase el fallo saldria al cargar el
  * proceso y no a mitad de una compilacion. */
 extern "C" {
+/* El caso CONTRARIO al de `ooo.cpp`: aqui el `winternl.h` de MinGW SI declara
+ * `NtQueryInformationFile` y el del Windows SDK NO -- alli vive en `ntifs.h`,
+ * que es del kit de drivers y no se instala con el SDK.  Asi que con MSVC hay
+ * que traerla, y con MinGW no, porque chocaria. */
+#if defined(_MSC_VER)
+NTSTATUS NTAPI NtQueryInformationFile(HANDLE FileHandle,
+                                      PIO_STATUS_BLOCK IoStatusBlock,
+                                      PVOID FileInformation, ULONG Length,
+                                      FILE_INFORMATION_CLASS
+                                          FileInformationClass);
+#endif
 NTSTATUS NTAPI NtOpenFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
                           POBJECT_ATTRIBUTES ObjectAttributes,
                           PIO_STATUS_BLOCK IoStatusBlock, ULONG ShareAccess,

@@ -19,6 +19,7 @@
 #include "vx/module/module_resolver.h"
 #include "vx/diagnostic.h"
 #include "vx/ast.h"
+#include "util/toolchain_compat.h" // getpid: en MSVC se llama _getpid
 
 #include <cstdio>
 #include <cstdlib>

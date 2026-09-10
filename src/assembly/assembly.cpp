@@ -26,6 +26,7 @@
  */
 #include "assembly/assembly.h"
 #include <algorithm> // UCRT64: no transitivo
+#include <sstream>  // STL de MSVC: no transitivo
 #include <capstone/capstone.h>
 #include <keystone/keystone.h>
 #include "vx/diag/diag_catalog.h" // los mensajes del ensamblador salen del catalogo
