@@ -135,11 +135,13 @@ doc/sprint_lsp_machine_view.md
 # `out.ir` acabo COMMITEADO, y ahi lleva desde el sprint de @Virtual.
 /out.*
 
-# Guiones y volcados de usar y tirar en la raiz.  Mismo motivo, y ya paso tres
-# veces: se colaron `tmp_measure.py` (un banco de medir escrito a mano) y un
-# `method` de CERO bytes, que es lo que deja un redirect abandonado.
+# Guiones y volcados de usar y tirar en la raiz.  Mismo motivo, y ya paso
+# cuatro veces: se colaron `tmp_measure.py` (un banco de medir escrito a mano),
+# un `method` de CERO bytes -- lo que deja un redirect abandonado -- y un
+# `flat.bin` de veinte, salida de un `--emit bin` de prueba.
 /tmp_*
 /method
+/*.bin
 
 # Directorios temporales de tests AOT (se crean y borran en runtime)
 _tls_test/
