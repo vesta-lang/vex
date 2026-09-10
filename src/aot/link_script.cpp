@@ -30,6 +30,7 @@
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "util/assembler_multiprocess.h"
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "vx/compiler.h"
 #include "vx/diag/diag_format.h" // render_diagnostics: el guion dice POR QUE no compila
 
@@ -37,6 +38,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -184,11 +186,15 @@ bool compile_to_velb(const std::string &src, std::vector<uint8_t> &out,
     // Ensamblar el .vel a .velb via run_worker (opera sobre ficheros).
     std::string prefix;
     {
+        /* En NUESTRA cache, no en el temporal del sistema.  Ahi nadie los
+         * limpiaba con el resto y quedaban repartidos por dos sitios segun el
+         * sistema operativo; ademas, un temporal del SO puede estar en OTRO
+         * volumen, que es donde las escrituras dejan de ser atomicas. */
+        const std::string dir = util::cache_dir(util::CacheKind::Temp);
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
         std::ostringstream ss;
-        ss << (std::getenv("TEMP")
-                   ? std::getenv("TEMP")
-                   : (std::getenv("TMP") ? std::getenv("TMP") : "/tmp"))
-           << "/vxlink_" << (void *)&src;
+        ss << dir << "/vxlink_" << (void *)&src;
         prefix = ss.str();
     }
     const std::string vel_path = prefix + ".vel";

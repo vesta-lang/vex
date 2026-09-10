@@ -25,6 +25,7 @@
  *   - Sin checks de colision de nombres cross-module todavia (M5).
  */
 
+#include "util/cache_paths.h"  // el reparto de la cache por tipo y alcance
 #include "util/crash_report.h" // dejar dicho QUE modulo se esta compilando
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/file_read.h"
@@ -317,26 +318,23 @@ bool cas_unpack_module_(const std::vector<uint8_t> &blob,
     return true;
 }
 
-/// Calcula el path del .vxi cacheado para un .vx.  Convencion:
-/// `path/to/lib.vx` -> `path/to/lib.vxi`.  Mantener el cache junto al
-/// source es la ruta mas predecible (vs un .cache/ global): facilita
-/// distribucion (publicar la libreria = copiar .vx + .vxi + .ir
-/// juntos) y limpieza (borrar la carpeta del modulo lo limpia todo).
-///  M.L16: cache global opt-in via @c VX_CACHE_DIR .  Si la env
-/// var esta definida, los caches (@c .vxi / @c .vxir / @c .vel ) se
-/// redirigen a @c "$VX_CACHE_DIR/<hash_64>_<basename><ext>" donde
-/// @c hash_64 es FNV-1a 64 del path canonico completo.  Esto permite
-/// que multiples proyectos compartan el mismo cache de libs comunes
-/// (e.g. stdlib en read-only).  Sin la env var, comportamiento default:
-/// cache junto al source (estable + facilita distribucion bundle).
-static const std::string &global_cache_dir_() {
-    /* Una vez por proceso, y por referencia.  Antes se consultaba el entorno y
-     * se construia una cadena en CADA llamada, y hay cuatro rutas por modulo
-     * -- que ademas la pedian dos veces cada una --: en un proyecto grande eso
-     * son miles de consultas al entorno para obtener siempre lo mismo.  El
-     * entorno no cambia a mitad de una compilacion. */
-    return util::flag_text(util::FlagId::CacheDir);
-}
+/* Donde caen los artefactos de un modulo.
+ *
+ * En la cache, SIEMPRE, y en el cajon de su tipo -- lo reparte
+ * `util/cache_paths.h` --.  Antes caian junto al fuente (`lib.vx` ->
+ * `lib.vxi`) salvo que se pusiera `VX_CACHE_DIR`, y eso costaba de tres
+ * maneras: ensuciaba el arbol de fuentes con ficheros que salian en
+ * `git status` sin que nadie supiera si hacian falta; obligaba a limpiar por
+ * lista de extensiones -- borrar `.cache` dejaba vivos los `.vxi`, y quien
+ * media en frio media en caliente sin enterarse --; y hacia que el mismo
+ * proyecto tuviera dos disposiciones distintas segun una variable de entorno,
+ * o sea dos caminos que probar.
+ *
+ * Lo que motivaba tenerlos al lado -- publicar una libreria copiando el `.vx`
+ * con su `.vxi` -- no se pierde: son artefactos PORTABLES y siguen juntos, en
+ * `.cache/ir`.  Copiar ese cajon es exactamente lo mismo, y ademas se puede
+ * hacer de golpe.  @see util::CacheScope
+ */
 
 /**
  * @brief Huella del compilador que esta generando los artefactos.
@@ -382,20 +380,45 @@ static uint64_t compiler_fingerprint_() {
     return fp;
 }
 
-static std::string global_cache_path_(const std::string &source_path,
-                                      const std::string &ext) {
+/**
+ * @brief El nombre de fichero de un artefacto de @p source_path .
+ *
+ * Lleva la huella de la ruta CANONICA delante para que dos modulos con el
+ * mismo nombre de fichero -- que en un proyecto con varias carpetas es lo
+ * normal -- no se pisen ahora que todos comparten cajon; y el nombre del
+ * modulo detras, para que mirando el directorio se pueda saber de que es cada
+ * uno sin descifrar nada.
+ *
+ * @param source_path Ruta canonica del modulo.
+ * @param tail        Lo que va detras del nombre: objetivo y extension.
+ * @return Nombre de hoja, sin directorio.
+ */
+static std::string cache_file_name_(const std::string &source_path,
+                                    const std::string &tail) {
     namespace fs = std::filesystem;
-    const std::string dir = global_cache_dir_();
-    if (dir.empty()) return std::string(); // no global cache
-    // hash 64 del path canonico para que multiples sources con mismo
-    // basename no colisionen.
     const uint64_t h = util::fnv_bytes(util::kFnvOffset, source_path.data(),
                                        source_path.size());
-    std::string base = fs::path(source_path).stem().string();
     char hex[17];
     std::snprintf(hex, sizeof(hex), "%016llx",
                   static_cast<unsigned long long>(h));
-    return (fs::path(dir) / (std::string(hex) + "_" + base + ext)).string();
+    return std::string(hex) + "_" + fs::path(source_path).stem().string() +
+           tail;
+}
+
+/**
+ * @brief Donde va un artefacto de @p source_path del tipo @p kind .
+ *
+ * @param source_path Ruta canonica del modulo.
+ * @param kind        Que tipo de artefacto es; decide el cajon.
+ * @param tail        Objetivo y extension (p.ej. @c ".pre.vxfacts" ).
+ * @return Ruta completa dentro de la cache.
+ */
+static std::string cache_path_(const std::string &source_path,
+                               util::CacheKind kind, const std::string &tail) {
+    namespace fs = std::filesystem;
+    return (fs::path(util::cache_dir(kind)) /
+            cache_file_name_(source_path, tail))
+        .string();
 }
 
 /**
@@ -414,16 +437,6 @@ struct RutasCache {
     std::string hechos; ///< lo que el ASA supo de el al bajarlo.
 };
 
-/// Prefijo comun de las rutas de @p source_path, sin extension.
-static std::string prefijo_cache_(const std::string &source_path,
-                                  const std::string &tgt_suffix) {
-    if (!global_cache_dir_().empty())
-        return global_cache_path_(source_path, tgt_suffix);
-    const size_t dot = source_path.find_last_of('.');
-    return (dot == std::string::npos ? source_path
-                                     : source_path.substr(0, dot)) +
-           tgt_suffix;
-}
 
 /**
  * @brief Las rutas de @p source_path, calculadas la primera vez y reusadas.
@@ -445,13 +458,18 @@ static const RutasCache &rutas_cache_(const std::string &source_path,
     std::lock_guard<std::mutex> lk(mtx);
     auto it = tabla.find(clave);
     if (it != tabla.end()) return it->second;
-    const std::string base = prefijo_cache_(source_path, tgt_suffix);
     RutasCache r;
-    r.vxi = base + ".vxi";
-    r.vxir = base + ".vxir";
-    r.hechos = base + ".vxfacts";
+    /* La interfaz y el intermedio comparten cajon a proposito: son la misma
+     * compilacion vista por sus dos caras, nacen y mueren juntos, y la
+     * extension ya los distingue. */
+    r.vxi = cache_path_(source_path, util::CacheKind::ModuleIr,
+                        tgt_suffix + ".vxi");
+    r.vxir = cache_path_(source_path, util::CacheKind::ModuleIr,
+                         tgt_suffix + ".vxir");
+    r.hechos = cache_path_(source_path, util::CacheKind::Facts,
+                           tgt_suffix + ".vxfacts");
     /* El .vel no se separa por objetivo: es el mismo modulo suelto. */
-    r.vel = prefijo_cache_(source_path, std::string()) + ".vel";
+    r.vel = cache_path_(source_path, util::CacheKind::Vel, ".vel");
     return tabla.emplace(std::move(clave), std::move(r)).first->second;
 }
 
@@ -570,10 +588,15 @@ uint32_t analysis_unused_runs_for_(const std::string &source_path) {
 
 std::string asa_analysis_path_for(const std::string &facts_path) {
     if (facts_path.empty()) return facts_path;
-    /* Al lado del de hechos y con el mismo nombre: asi limpiar la cache de un
-     * modulo se lleva los dos, y quien mire el directorio ve de un vistazo que
-     * van juntos. */
-    return facts_path + ".analysis";
+    /* Mismo NOMBRE que el de hechos, otro cajon.  El nombre comun es lo que
+     * ata los dos -- quien mire los dos directorios ve de un vistazo cual va
+     * con cual --, y el cajon aparte es lo que permite tirar los analisis sin
+     * tocar los hechos: son cosas distintas, uno es lo que se supo y el otro
+     * lo que costo averiguarlo. */
+    namespace fs = std::filesystem;
+    return (fs::path(util::cache_dir(util::CacheKind::Analysis)) /
+            (fs::path(facts_path).filename().string() + ".analysis"))
+        .string();
 }
 
 std::vector<analysis::asa::ProductionSummary>
@@ -1916,9 +1939,12 @@ CompileResult compile_vx_project(
             }
             if (cr_ct.ok && !cr_ct.vel_text.empty()) {
                 std::error_code cec;
+                /* En la cache, junto al resto de lo que sale de ejecutar al
+                 * compilar.  No en el temporal del sistema: esto se REUSA
+                 * entre compilaciones -- el nombre sale del hash del texto --,
+                 * asi que es cache, y lo que es cache vive donde se limpia. */
                 const std::string dir =
-                    (std::filesystem::temp_directory_path(cec) / "vx_ct")
-                        .string();
+                    util::cache_dir(util::CacheKind::Comptime) + "/build";
                 std::filesystem::create_directories(dir, cec);
                 const std::string pref =
                     dir + "/ct_" +

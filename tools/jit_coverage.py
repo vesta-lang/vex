@@ -44,7 +44,9 @@ def main():
     args = ap.parse_args()
     vm = find_vm(args.vm_path, root)
     if not vm: print("[error] no vm.exe"); return 1
-    tmp = root/"tmp"/"diff_harness"; tmp.mkdir(parents=True, exist_ok=True)
+    # El mismo cajon de transitorios que usa `diff_harness.py`, dentro de la
+    # cache.  @see include/util/cache_paths.h
+    tmp = root/".cache"/"tmp"/"diff_harness"; tmp.mkdir(parents=True, exist_ok=True)
     corpus = discover(root, not args.no_benchmarks)
     if args.filter: corpus = [(n,p) for (n,p) in corpus if args.filter in n]
     print(f"[info] vm: {vm}\n[info] corpus: {len(corpus)} programas\n")

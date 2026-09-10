@@ -13,6 +13,8 @@
 #include "pkg/sha256.h"
 #include "pkg/auditor.h"
 
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
+
 #include "vx/module/vxi_format.h"
 #include <cstdio>
 #include <cstdlib>
@@ -120,9 +122,11 @@ static int cmd_init(const std::vector<std::string> &args) {
     // Tambien crear .gitignore con vx_modules + caches.
     std::string gi = ".gitignore";
     if (!paths::exists(gi)) {
+        /* Un solo directorio de cache: todo lo que el compilador y el gestor
+         * generan vive dentro de `.cache`, repartido por tipo. */
         std::string body = "# Vesta package manager\n"
                            "vx_modules/\n"
-                           ".vx_cache/\n"
+                           ".cache/\n"
                            "*.velb\n"
                            "*.vel\n";
         write_file(gi, body);
@@ -164,7 +168,8 @@ static int cmd_install(const std::vector<std::string> &args) {
     }
 
     ui::step("resolviendo dependencias");
-    std::string work = paths::join(paths::project_root(""), ".vx_cache/work");
+    std::string work = util::cache_dir_under(paths::project_root(""),
+                                             util::CacheKind::Work);
     paths::ensure_dir(work);
 
     auto pins = signing::load_trust_pins();

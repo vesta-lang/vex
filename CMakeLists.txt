@@ -1809,6 +1809,10 @@ add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/util/serialize.cpp
                                 src/util/file_read.cpp
                                 src/util/env_flags.cpp
+                                # La escritura atomica deja sus temporales en
+                                # el cajon `tmp` de la cache, y quien dice
+                                # donde esta ese cajon es esto.
+                                src/util/cache_paths.cpp
                                 # `env_flags` guarda su buffer relido en una
                                 # ranura por hilo (nada de `thread_local`).
                                 ${VESTA_ALLOC_THREAD_SLOT_SRC}
@@ -2247,6 +2251,9 @@ add_executable(test_asa_fact_file_lnx tests/analysis/test_asa_fact_file_lnx.cpp
                                       src/analysis/asa/fact_file.cpp
                                       src/analysis/asa/fact_store.cpp
                                       src/util/env_flags.cpp
+                                      # Idem: el reparto de la cache, que la
+                                      # escritura atomica consulta.
+                                      src/util/cache_paths.cpp
                                       # `env_flags` guarda su buffer relido en
                                       # una ranura por hilo.
                                       ${VESTA_ALLOC_THREAD_SLOT_SRC}
@@ -2600,6 +2607,20 @@ target_compile_options(vesta_rt PRIVATE
 add_executable(test_util_env_flags tests/util/test_env_flags.cpp)
 target_include_directories(test_util_env_flags PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_util_env_flags PRIVATE vmcore sqlite3 capstone keystone)
+
+# El reparto de la cache: una raiz, un cajon por tipo y un ALCANCE declarado en
+# cada uno.  Las tres formas de que la tabla se pudra son mudas -- dos tipos
+# compartiendo cajon, un nombre con ruta dentro que se sale de la raiz, y un
+# alcance equivocado que hace que alguien copie rutas absolutas a otra
+# maquina --, asi que se comprueban una por una.  Va suelto, sin `vmcore`: el
+# modulo no depende de nada del compilador y probarlo tampoco debe.
+add_executable(test_util_cache_paths tests/util/test_cache_paths.cpp
+                                     src/util/cache_paths.cpp
+                                     src/util/env_flags.cpp
+                                     # `env_flags` guarda su buffer relido en
+                                     # una ranura por hilo.
+                                     ${VESTA_ALLOC_THREAD_SLOT_SRC})
+target_include_directories(test_util_cache_paths PRIVATE ${VM_INCLUDES})
 
 # La cadena de funciones inlineadas.  Lo que contesta depende del binario donde
 # corre, asi que lo que se comprueba es la ESTRUCTURA de la respuesta y su

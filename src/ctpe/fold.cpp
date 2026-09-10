@@ -10,7 +10,8 @@
  * @brief Implementacion del pase de plegado CTPE (ver fold.h).
  */
 
-#include "util/fnv.h" // la semilla y el primo, en UN sitio
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
+#include "util/fnv.h"         // la semilla y el primo, en UN sitio
 #include "util/env_flags.h"
 #include "ctpe/fold.h"
 
@@ -44,7 +45,8 @@ uint64_t fnv1a(const uint8_t *p, size_t n) {
 std::string cache_path_for(uint64_t key) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)key);
-    return std::string(".cache/ctpe/") + buf + ".bin";
+    // El cajon lo decide `cache_paths.h`, que es quien sabe donde esta la raiz.
+    return util::cache_dir(util::CacheKind::Comptime) + "/" + buf + ".bin";
 }
 
 // Entradas cacheadas: nombre de fn -> (tipo de retorno, valor precomputado).
@@ -76,8 +78,8 @@ void load_cache(uint64_t key, CacheMap &out) {
 
 void save_cache(uint64_t key, const CacheMap &m) {
     std::error_code ec;
-    std::filesystem::create_directories(".cache/ctpe",
-                                        ec); // mkdir -p portable.
+    std::filesystem::create_directories(
+        util::cache_dir(util::CacheKind::Comptime), ec); // mkdir -p portable.
     std::ofstream f(cache_path_for(key), std::ios::binary | std::ios::trunc);
     if (!f) return;
     uint32_t count = static_cast<uint32_t>(m.size());

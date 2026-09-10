@@ -149,7 +149,9 @@ def main() -> int:
         return 1
     print(f"{C.CYN}[info]{C.R} vm: {vm}")
 
-    tmp = root / "tmp" / "diff_harness"
+    # En el cajon de transitorios de la cache, no en un `tmp/` colgando de la
+    # raiz del repositorio.  @see include/util/cache_paths.h
+    tmp = root / ".cache" / "tmp" / "diff_harness"
     tmp.mkdir(parents=True, exist_ok=True)
 
     corpus = discover(root, not args.no_benchmarks)

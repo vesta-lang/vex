@@ -168,8 +168,7 @@ def main():
                 sys.stderr.write("falta %s\n" % src)
                 return 2
             # Las caches se tiran para que lo que se mide se genere de verdad.
-            for d in (".cache", ".vx_cache"):
-                shutil.rmtree(os.path.join(root, d), ignore_errors=True)
+            shutil.rmtree(os.path.join(root, ".cache"), ignore_errors=True)
             base = os.path.join(work,
                                 os.path.splitext(name)[0] + "_" +
                                 etiqueta.replace(" ", "_"))
@@ -229,8 +228,7 @@ def main():
     for name in SOURCES:
         src = os.path.join(root, "examples_codes_vx", name)
         base = os.path.join(work, os.path.splitext(name)[0] + "_run")
-        for d in (".cache", ".vx_cache"):
-            shutil.rmtree(os.path.join(root, d), ignore_errors=True)
+        shutil.rmtree(os.path.join(root, ".cache"), ignore_errors=True)
         run([vm, "--vesta", src, "-o", base], timeout=300)
         velb = base + ".velb"
         if not os.path.exists(velb):

@@ -12,6 +12,7 @@
 
 #include "util/alloc_report.h"
 #include "util/crash_report.h" // contar una caida del proceso antes de morir
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "util/env_flags.h"
 #include <cstdlib>
 #include <iostream>
@@ -4004,9 +4005,10 @@ int main(int argc, char *argv[]) {
 
         /* ===  MC.12: cache persistente para @Macros ===
          *
-         * Cache dir: `./.cache/vx/` (cwd-relative).  Key = FNV-1a 64
-         * sobre (cache_format_version + vx_path + vx_source).  File =
-         * `.cache/vx/<hex_key>.velb`.
+         * Cache dir: el cajon `velb` de la raiz de cache, que decide
+         * `util/cache_paths.h` -- no una ruta propia escrita aqui --.  Key =
+         * FNV-1a 64 sobre (cache_format_version + vx_path + vx_source).
+         * File = `<raiz>/velb/<hex_key>.velb`.
          *
          * Flow:
          *   1. Compute key.
@@ -4021,7 +4023,7 @@ int main(int argc, char *argv[]) {
          * Cache invalidation: implicita.  Cualquier cambio en el byte
          * stream del fuente (incluso un comentario o whitespace) genera
          * un key distinto y por tanto miss.  Sin sweeper automatico --
-         * el usuario puede borrar `.cache/vx/` para limpiar manualmente.
+         * el usuario puede borrar `.cache/` para limpiar manualmente.
          */
         const uint8_t cache_format_version =
             2; /* Bump por MC.14 macro-scoped key */
@@ -4041,7 +4043,7 @@ int main(int argc, char *argv[]) {
          * prueba enveneno todas las compilaciones siguientes (e2e 919/4 ->
          * 903/12), y el sintoma -- macros que dejan de resolver -- no apunta al
          * cache por ningun lado.  Se reviritio codigo CORRECTO tres veces
-         * persiguiendolo, hasta que purgar `.cache/vx/` lo devolvio todo a su
+         * persiguiendolo, hasta que purgar la cache lo devolvio todo a su
          * sitio.
          *
          * Con la clase en la clave, un artefacto de otra clase sencillamente NO
@@ -4337,7 +4339,8 @@ int main(int argc, char *argv[]) {
         char cache_key_hex[17];
         std::snprintf(cache_key_hex, sizeof(cache_key_hex), "%016llx",
                       static_cast<unsigned long long>(cache_key));
-        const std::string cache_dir = ".cache/vx";
+        const std::string cache_dir =
+            util::cache_dir(util::CacheKind::Bytecode);
         const std::string cache_prefix = cache_dir + "/" + cache_key_hex;
         const std::string cache_path = cache_prefix + ".velb";
         const bool cache_hit = std::filesystem::exists(cache_path);
@@ -4784,7 +4787,7 @@ int main(int argc, char *argv[]) {
         }
 
         /* CACHE MISS + @Macros presentes: hacer two- y persistir
-         * el resultado a `.cache/vx/<key>.velb` para futuras corridas. */
+         * el resultado al cajon `velb` de la cache para futuras corridas. */
         if (!cache_hit && cr.has_lowerable_macros &&
             !user_already_set_prebuilt) {
             std::error_code ec;
@@ -4880,7 +4883,7 @@ int main(int argc, char *argv[]) {
             }
 
             /*  MC.14: cache sweeper TTL-based.  Antes de poblar el
-             * nuevo cache file, escanea @c .cache/vx/ y borra archivos
+             * nuevo cache file, escanea el cajon @c velb y borra archivos
              * cuyo mtime sea anterior a @c TTL dias (default 30, override
              * via env var @c VESTA_MC_CACHE_TTL_DAYS).  Solo corre en el
              * path de miss para evitar sobrecargar el path comun de hit.

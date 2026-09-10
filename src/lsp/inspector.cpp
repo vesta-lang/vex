@@ -45,6 +45,7 @@
 
 #include <filesystem>
 
+#include "util/cache_paths.h"       // el reparto de la cache por tipo/alcance
 #include "analysis/asa/dump.h"      // la vista del conocimiento
 #include "analysis/asa/producers.h" // produce()
 #include "analyze/asm_report.h"     // registrar_productor_asm()
@@ -2655,8 +2656,11 @@ nlohmann::json Inspector::asa(const std::string &uri) {
     /* La vista del subsistema escribe a un fichero abierto, no a una cadena, y
      * asi debe seguir: quien decide como se ensena el conocimiento es el, no
      * cada consumidor.  Se le da un temporal y se lee de vuelta. */
+    const std::filesystem::path dir_tmp(util::cache_dir(util::CacheKind::Temp));
+    std::error_code ec_dir;
+    std::filesystem::create_directories(dir_tmp, ec_dir);
     const std::filesystem::path ruta =
-        std::filesystem::temp_directory_path() /
+        dir_tmp /
         ("vesta_asa_" + std::to_string(fnv1a_hash(uri + text)) + ".txt");
     std::string volcado;
     {

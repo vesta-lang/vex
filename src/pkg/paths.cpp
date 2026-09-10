@@ -4,6 +4,8 @@
  */
 #include "pkg/paths.h"
 
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -86,22 +88,12 @@ std::string system_install_dir() {
 }
 
 std::string project_root(const std::string &start_dir) {
-    // Subimos buscando vx.toml o vx.json.
-    std::error_code ec;
-    fs::path p = start_dir.empty() ? fs::current_path(ec) : fs::path(start_dir);
-    if (ec) return std::string();
-    p = fs::absolute(p, ec);
-    if (ec) return std::string();
-    // Hasta 64 niveles defensivamente.
-    for (int i = 0; i < 64; ++i) {
-        if (fs::exists(p / "vx.toml", ec) || fs::exists(p / "vx.json", ec)) {
-            return p.string();
-        }
-        fs::path parent = p.parent_path();
-        if (parent.empty() || parent == p) break;
-        p = parent;
-    }
-    return std::string();
+    /* Subir buscando `vx.toml` o `vx.json` lo hace `util::project_root_from`.
+     * No esta ahi por reparto de capas: es que la CACHE tambien necesita saber
+     * cual es la raiz del proyecto -- es lo que hace que compilar desde una
+     * subcarpeta y desde la raiz usen la misma --, y dos copias de esta
+     * busqueda serian dos ideas distintas de donde empieza el proyecto. */
+    return util::project_root_from(start_dir);
 }
 
 std::string project_modules_dir(const std::string &start_dir) {
@@ -136,7 +128,11 @@ std::string cache_dir(Scope scope, const std::string &proj_root) {
     case Scope::Project: {
         std::string r = proj_root.empty() ? project_root("") : proj_root;
         if (r.empty()) return std::string();
-        return join(join(r, ".vx_cache"), "pkg");
+        /* Anclada en la raiz del PROYECTO, no en el directorio de trabajo:
+         * instalar desde una subcarpeta tiene que llenar la misma cache.  El
+         * nombre del cajon sale de `cache_paths.h`, que es donde vive el
+         * reparto entero. */
+        return util::cache_dir_under(r, util::CacheKind::Packages);
     }
     case Scope::User: {
         std::string vh = vx_home();

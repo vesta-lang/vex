@@ -170,8 +170,7 @@ mode con cols=80 lines=25
 reinstala:
 
 ```bash
-rm -rf .vx_cache vx_modules vx.lock vxed.velb
-rm -f src/modules/*.vxi src/modules/*.vxir src/modules/*.vel
+rm -rf .cache vx_modules vx.lock vxed.velb
 vm pkg install
 vm pkg run build
 ```

@@ -9,8 +9,9 @@
  * cacheado al output.
  */
 
-#include "util/fnv.h"       // la semilla y el primo, en UN sitio
-#include "util/env_flags.h" // los mandos que cambian lo emitido
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
+#include "util/fnv.h"         // la semilla y el primo, en UN sitio
+#include "util/env_flags.h"   // los mandos que cambian lo emitido
 #include "vx/project_cache.h"
 
 #include "analysis/asa/fact_file.h"
@@ -157,15 +158,14 @@ static uint32_t fnv1a32_str(const std::string &s) noexcept {
 }
 
 std::string default_project_cache_dir() {
-    namespace fs = std::filesystem;
-    // Preferencia: VX_HOME/cache/projects, fallback ./.vx_cache/projects.
-    if (const char *vh = std::getenv("VX_HOME")) {
-        if (vh && vh[0]) {
-            return (fs::path(vh) / "cache" / "projects").string();
-        }
-    }
-    // Fallback al cwd actual.
-    return (fs::current_path() / ".vx_cache" / "projects").string();
+    /* Su cajon dentro de la raiz de cache, como todo lo demas.  Antes tenia su
+     * propia preferencia -- `VX_HOME/cache/projects` y, si no, un
+     * `.vx_cache/projects` junto al directorio de trabajo --, o sea una tercera
+     * regla que ninguna herramienta de limpieza conocia.  Y es de las que menos
+     * se puede permitir estar suelta: sus entradas llevan las rutas ABSOLUTAS
+     * de los artefactos de este arbol, asi que sobrevivir a un borrado de la
+     * cache es apuntar a ficheros que ya no estan. */
+    return util::cache_dir(util::CacheKind::Projects);
 }
 
 std::string project_cache_path(const std::string &root_path,

@@ -1802,8 +1802,50 @@ def _env(**kw):
     return e
 
 
+# Disposicion de la cache -- la MISMA que declara include/util/cache_paths.h:
+# una raiz y un cajon por tipo de artefacto.  Los artefactos de un modulo ya no
+# caen junto a su fuente, asi que un test que quiera compilar en FRIO tiene que
+# vaciar el cajon, no borrar ficheros del directorio de trabajo.
+CACHE_ROOT_NAME = ".cache"
+CACHE_IR = "ir"             # .vxi + .vxir del modulo
+CACHE_FACTS = "facts"       # lo que el ASA supo de el
+CACHE_ANALYSIS = "analysis" # y los analisis ya calculados
+CACHE_VEL = "vel"           # su .vel suelto
+CACHE_PROJECTS = "projects" # la cache de proyecto
+
+
+def _cache_dir(kind, root=None):
+    """El cajon `kind` de la cache que usa vm corriendo con cwd `root`."""
+    return os.path.join(root or ROOT, CACHE_ROOT_NAME, kind)
+
+
+def _rm_cache(*kinds, **kw):
+    """Vacia esos cajones.  Es lo que fuerza una compilacion en FRIO."""
+    root = kw.get("root")
+    for kind in kinds:
+        shutil.rmtree(_cache_dir(kind, root), ignore_errors=True)
+
+
+def _rm_module_cache(root=None):
+    """Todo lo que el compilador guarda por modulo: interfaz, IR, ASA y .vel."""
+    _rm_cache(CACHE_IR, CACHE_FACTS, CACHE_ANALYSIS, CACHE_VEL, root=root)
+
+
+def _cache_artifact(name, kind=CACHE_IR, root=None):
+    """Ruta del artefacto llamado `name` (p.ej. 'lib.vxi'); '' si no esta.
+
+    En disco el nombre lleva delante la huella de la ruta del fuente, para que
+    dos modulos homonimos de carpetas distintas no se pisen ahora que comparten
+    cajon.  El sufijo con el nombre del modulo es lo que permite encontrarlo
+    desde aqui sin replicar la huella.
+    """
+    import glob as _glob
+    hits = _glob.glob(os.path.join(_cache_dir(kind, root), "*_" + name))
+    return hits[0] if hits else ""
+
+
 def _projects_cache():
-    return os.path.join(ROOT, ".vx_cache", "projects")
+    return _cache_dir(CACHE_PROJECTS)
 
 
 @case("qs_ir", line=1547)
@@ -2450,8 +2492,8 @@ def _(ctx):
     d = _bug_dir("m6_test")
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
-    _rm(*[os.path.join(d, f) for f in
-          ("lib.vxi", "lib.vxir", "prog.velb", "prog.vel")])
+    _rm_module_cache()
+    _rm(*[os.path.join(d, f) for f in ("prog.velb", "prog.vel")])
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")])
     if not os.path.exists(os.path.join(d, "prog.velb")):
@@ -2464,7 +2506,11 @@ def _(ctx):
         ctx.fail("M6 callvirt cross-module: R00 == %s, se esperaba 42" % got, log)
     ctx.ok("M6 callvirt cross-module (Counter.inc + Counter.add) -> R0 = 42")
     # `strings lib.vxi | grep internal_helper` -> buscar la subcadena cruda.
-    if b"internal_helper" in read_bytes(os.path.join(d, "lib.vxi")):
+    lib_vxi = _cache_artifact("lib.vxi")
+    if not lib_vxi:
+        ctx.fail("M6 privacy: no hay lib.vxi en la cache (%s)"
+                 % _cache_dir(CACHE_IR))
+    elif b"internal_helper" in read_bytes(lib_vxi):
         ctx.fail("M6 privacy: lib.vxi expone 'internal_helper' "
                  "(deberia estar filtrado)")
     ctx.ok("M6 privacy (private internal_helper filtrado del .vxi)")
@@ -2476,7 +2522,7 @@ def _(ctx):
     d = _bug_dir("gen_xmodule_test")
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
-    _rm_glob(d, "*.vxi", "*.vxir")
+    _rm_module_cache()
     _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"))
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")])
@@ -2489,7 +2535,7 @@ def _(ctx):
         ctx.fail("cross-module generics: R00 == %s, se esperaba 42" % got, log)
     ctx.ok("cross-module generics (struct/clase/fn/concepto/spec via .vxi) -> R0 = 42")
     # AOT multi-modulo.
-    _rm_glob(d, "*.vxi", "*.vxir")
+    _rm_module_cache()
     _rm(os.path.join(d, "gxmaot"), os.path.join(d, "gxmaot.velb"))
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "gxmaot"), "-m", "aot",
@@ -2539,7 +2585,7 @@ def _(ctx):
                   "public i32 b_value() { return c_value() + 1; }\n")
     write("main.vx", 'import "b" only b_value;\n'
                      "i32 main() { return b_value() + 31; }\n")
-    _rm_glob(d, "*.vxi", "*.vxir")
+    _rm_module_cache()
     _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"))
     env = _env(VX_NO_PROJECT_CACHE=1, VX_VERBOSE_CACHE=1)
     try:
@@ -2577,7 +2623,7 @@ def _(ctx):
     d = _bug_dir("m_l789_test")
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
-    _rm_glob(d, "*.vxi", "*.vxir")
+    _rm_module_cache()
     _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"))
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")])
@@ -2590,7 +2636,11 @@ def _(ctx):
         ctx.fail("L.7 const inline cross-module: R00 == %s, se esperaba 42" % got,
                  log)
     ctx.ok("L.7 const importada (MAX_USERS + MAGIC_OFFSET) -> R0 = 42")
-    if b"SECRET_OFFSET" in read_bytes(os.path.join(d, "lib.vxi")):
+    lib_vxi = _cache_artifact("lib.vxi")
+    if not lib_vxi:
+        ctx.fail("L.7 privacy: no hay lib.vxi en la cache (%s)"
+                 % _cache_dir(CACHE_IR))
+    elif b"SECRET_OFFSET" in read_bytes(lib_vxi):
         ctx.fail("L.7 privacy: SECRET_OFFSET leakea al .vxi")
     ctx.ok("L.7 privacy (private const SECRET_OFFSET filtrado)")
 
@@ -2601,7 +2651,8 @@ def _(ctx):
     d = _bug_dir("m5_atomic_test")
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
-    _rm_glob(d, "*.vxi", "*.vxir", "prog*.velb", "prog*.vel", "*.tmp.*")
+    _rm_module_cache()
+    _rm_glob(d, "prog*.velb", "prog*.vel", "*.tmp.*")
     procs = []
     for i in range(1, 9):
         procs.append(subprocess.Popen(
@@ -2642,8 +2693,8 @@ def _(ctx):
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
     _rm(_projects_cache())
-    _rm(*[os.path.join(d, f) for f in
-          ("lib.vxi", "lib.vxir", "prog.velb", "prog.vel")])
+    _rm_module_cache()
+    _rm(*[os.path.join(d, f) for f in ("prog.velb", "prog.vel")])
     env = _env(VX_VERBOSE_PROJECT_CACHE=1)
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")], env=env)
@@ -2673,15 +2724,17 @@ def _(ctx):
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
     _rm(_projects_cache())
-    _rm(*[os.path.join(d, f) for f in
-          ("lib.vxi", "lib.vxir", "lib.vel", "prog.velb", "prog.vel")])
+    _rm_module_cache()
+    _rm(*[os.path.join(d, f) for f in ("prog.velb", "prog.vel")])
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")],
                      env=_env(VX_NO_PROJECT_CACHE=1))
-    lib_vel = os.path.join(d, "lib.vel")
-    if not os.path.exists(lib_vel):
-        ctx.fail("M5.C: lib.vel del dep no fue generado", log)
-    ctx.ok("M5.C lib.vel standalone generado junto al .vxi")
+    lib_vel = _cache_artifact("lib.vel", CACHE_VEL)
+    if not lib_vel:
+        ctx.fail("M5.C: lib.vel del dep no fue generado en %s"
+                 % _cache_dir(CACHE_VEL), log)
+        return
+    ctx.ok("M5.C lib.vel standalone generado en el cajon de la cache")
     vel = read_text(lib_vel)
     if "Counter__inc:" not in vel:
         ctx.fail("M5.C: lib.vel no contiene Counter__inc")
@@ -2703,7 +2756,8 @@ def _(ctx):
     d = _bug_dir("m_l26_test")
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
-    _rm_glob(d, "*.vxi", "*.vxir", "*.vel")
+    _rm_module_cache()
+    _rm_glob(d, "*.vel")
     _rm(os.path.join(d, "prog.velb"))
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")])
@@ -2747,7 +2801,8 @@ def _(ctx):
 
     def clean():
         _rm(_projects_cache())
-        _rm_glob(d, "*.vxi", "*.vxir", "*.vel")
+        _rm_module_cache()
+        _rm_glob(d, "*.vel")
         _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"))
 
     def compile_with(env):
@@ -2815,7 +2870,8 @@ def _(ctx):
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
     _rm(_projects_cache())
-    _rm_glob(d, "*.vxi", "*.vxir", "*.vel")
+    _rm_module_cache()
+    _rm_glob(d, "*.vel")
     _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"))
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")])
@@ -2852,7 +2908,8 @@ def _(ctx):
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
     _rm(_projects_cache())
-    _rm_glob(d, "*.vxi", "*.vxir", "*.vel")
+    _rm_module_cache()
+    _rm_glob(d, "*.vel")
     ctx.compile_vx(os.path.join(d, "main.vx"), "cci")
     _, log = ctx.run_velb("cci", schedulers=1)
     got = get_r00(log)
@@ -2878,7 +2935,7 @@ def _(ctx):
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
     _rm(_projects_cache())
-    _rm_glob(os.path.join(d, "mypkg"), "*.vxi", "*.vxir", "*.vel")
+    _rm_module_cache()
     _rm_glob(d, "*.vel")
     ctx.compile_vx(os.path.join(d, "main.vx"), "pkgmulti")
     _, log = ctx.run_velb("pkgmulti", schedulers=1)
@@ -2896,7 +2953,8 @@ def _(ctx):
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
     _rm(_projects_cache())
-    _rm_glob(d, "*.vxi", "*.vxir", "*.vel")
+    _rm_module_cache()
+    _rm_glob(d, "*.vel")
     ctx.compile_vx(os.path.join(d, "main.vx"), "rep")
     _, log = ctx.run_velb("rep", schedulers=1)
     got = get_r00(log)
@@ -2969,22 +3027,25 @@ def _(ctx):
     gdir = ctx.path("vx_global_cache_test")
     _rm(gdir)
     os.makedirs(gdir, exist_ok=True)
-    for n in ("b", "c"):
-        _rm(os.path.join(d, n + ".vxi"), os.path.join(d, n + ".vxir"),
-            os.path.join(d, n + ".vel"))
+    _rm_module_cache()
     _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"))
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")],
                      env=_env(VX_CACHE_DIR=gdir, VX_NO_PROJECT_CACHE=1))
     if not os.path.exists(os.path.join(d, "prog.velb")):
         ctx.fail("L.16 compile no produjo .velb", log)
+    # Con la valvula puesta, la raiz es ESA y no la de por defecto: ni el arbol
+    # de fuentes ni la cache del proyecto se tocan.
     if (os.path.exists(os.path.join(d, "b.vxi")) or
             os.path.exists(os.path.join(d, "c.vxi"))):
         ctx.fail("L.16: caches locales creados con VX_CACHE_DIR activo")
+    if _cache_artifact("b.vxi"):
+        ctx.fail("L.16: se lleno la cache por defecto con VX_CACHE_DIR activo")
     import glob as _glob
-    if not _glob.glob(os.path.join(gdir, "*.vxi")):
-        ctx.fail("L.16: no se crearon .vxi en cache global")
-    ctx.ok("L.16 cache global via VX_CACHE_DIR")
+    if not _glob.glob(os.path.join(gdir, CACHE_IR, "*.vxi")):
+        ctx.fail("L.16: no se crearon .vxi en el cajon '%s' de la cache global"
+                 % CACHE_IR)
+    ctx.ok("L.16 cache global via VX_CACHE_DIR (raiz propia, repartida por tipo)")
 
 
 def _simple_bug_r0(ctx, dirname, tag, ok_msg, fail_msg, entry="main.vx"):
@@ -2993,7 +3054,8 @@ def _simple_bug_r0(ctx, dirname, tag, ok_msg, fail_msg, entry="main.vx"):
     if not os.path.exists(os.path.join(d, entry)):
         return
     _rm(_projects_cache())
-    _rm_glob(d, "*.vxi", "*.vxir", "*.vel")
+    _rm_module_cache()
+    _rm_glob(d, "*.vel")
     _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"))
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, entry),
                       "-o", os.path.join(d, "prog")])
@@ -3030,9 +3092,9 @@ def _(ctx):
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
     _rm(_projects_cache())
-    _rm_glob(d, "*.vxi", "*.vxir", "*.vel")
+    _rm_module_cache()
+    _rm_glob(d, "*.vel")
     _rm(os.path.join(d, "prog.velb"))
-    _rm_glob(os.path.join(d, "pkg_lib"), "*.vxi", "*.vxir", "*.vel")
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")])
     if not os.path.exists(os.path.join(d, "prog.velb")):
@@ -3053,7 +3115,8 @@ def _(ctx):
 
     def build(env):
         _rm(_projects_cache())
-        _rm_glob(d, "*.vxi", "*.vxir", "*.vel")
+        _rm_module_cache()
+        _rm_glob(d, "*.vel")
         _rm(os.path.join(d, "prog.velb"))
         return ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                         "-o", os.path.join(d, "prog")], env=env)
@@ -4395,14 +4458,13 @@ def _(ctx):
     d = _bug_dir("naked_xmodule_test")
     if not os.path.exists(os.path.join(d, "main.vx")):
         return
-    _rm_glob(d, "*.vxi", "*.vxir")
+    _rm_module_cache()
     _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"))
     _, log = ctx.run([VM_EXE, "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "prog")])
     if not os.path.exists(os.path.join(d, "prog.velb")):
         ctx.fail("LIM-A cross-module compilacion no produjo .velb", log)
-    if (not os.path.exists(os.path.join(d, "naked_mod.vxi")) and
-            not os.path.exists(os.path.join(d, "src", "modules", "naked_mod.vxi"))):
+    if not _cache_artifact("naked_mod.vxi"):
         ctx.ok("LIM-A cross-module .vxi (bit @Naked serializado en el formato)")
     else:
         ctx.ok("LIM-A cross-module .vxi presente")
@@ -4414,7 +4476,7 @@ def _(ctx):
         if got != 42:
             ctx.fail("LIM-A (-m %s): R00 == %s, se esperaba 42" % (m, got), log)
         ctx.ok("LIM-A cross-module @Naked (-m %s) -> R0 = 42" % m)
-    _rm_glob(d, "*.vxi", "*.vxir")
+    _rm_module_cache()
     _rm(os.path.join(d, "nkxaot"), os.path.join(d, "nkxaot.velb"))
     _, log = ctx.run([VM_EXE, "-m", "aot", "--vesta", os.path.join(d, "main.vx"),
                       "-o", os.path.join(d, "nkxaot"),
@@ -4431,7 +4493,7 @@ def _(ctx):
             ctx.fail("LIM-A (-m aot): exit == %d, se esperaba 42" % rc, log)
         ctx.ok("LIM-A cross-module @Naked (-m aot) -> exit = 42")
     finally:
-        _rm_glob(d, "*.vxi", "*.vxir")
+        _rm_module_cache()
         _rm(os.path.join(d, "prog.velb"), os.path.join(d, "prog.vel"),
             os.path.join(d, "nkxaot"), os.path.join(d, "nkxaot.velb"),
             os.path.join(d, "nkxaot.exe"))

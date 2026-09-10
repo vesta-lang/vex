@@ -55,6 +55,7 @@
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "util/assembler_multiprocess.h"
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "vx/compiler.h"
 #include "vx/diagnostic.h"
 #include "vx/incremental.h"    // CAS + claves Merkle + BuildConfig
@@ -77,7 +78,12 @@
 // conserva un puntero a codigo muerto y el cierre del proceso (o la siguiente
 // excepcion) salta a esa direccion -> segfault.  Este destructor del modulo
 // corre en DLL_PROCESS_DETACH (tanto al descargar en caliente como al salir).
-#if defined(__GNUC__)
+/* Clang hay que nombrarlo aparte: con el ABI de MSVC no define `__GNUC__` y
+ * este destructor desaparecia ENTERO -- no hay `#else` --, con lo que nadie
+ * desinstalaba el manejador y quedaba justo el puntero colgando que el
+ * comentario de arriba dice evitar.  Un fallo que no da error al compilar: da
+ * un segfault al descargar la biblioteca. */
+#if defined(__GNUC__) || defined(__clang__)
 __attribute__((destructor)) static void vesta_dll_on_unload(void) {
     runtime::uninstall_host_av_handler();
 }
@@ -122,17 +128,16 @@ std::string format_diags(const vx::Diagnostics &diags) {
     return os.str();
 }
 
-/// Genera un prefijo de fichero temporal unico dentro del directorio temporal
-/// del sistema (p.ej. "C:/Temp/vesta_capi_ab12cd34").  Sin extension.
+/// Genera un prefijo de fichero temporal unico dentro del cajon de temporales
+/// de la cache (p.ej. ".cache/tmp/vesta_capi_ab12cd34").  Sin extension.
 std::string make_temp_prefix() {
-    // Directorio temporal del SO (TMP/TEMP en Windows, /tmp en POSIX).
-    fs::path base;
-    try {
-        base = fs::temp_directory_path();
-    } catch (...) {
-        // Fallback al directorio actual si el SO no expone uno.
-        base = fs::current_path();
-    }
+    /* En NUESTRA cache, no en el temporal del sistema.  Quien empotra el
+     * compilador limpia borrando `.cache`, y con el temporal del SO se le
+     * quedaban ficheros fuera de su alcance -- ademas de posiblemente en otro
+     * volumen, que es donde el renombrado deja de ser atomico. */
+    fs::path base = fs::path(util::cache_dir(util::CacheKind::Temp));
+    std::error_code ec_dir;
+    fs::create_directories(base, ec_dir);
     // Sufijo aleatorio para evitar colisiones entre llamadas concurrentes
     // del mismo proceso o procesos distintos.
     std::random_device rd;

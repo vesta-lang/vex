@@ -142,7 +142,12 @@ def main():
         print("ningun ejemplo casa con el filtro", file=sys.stderr)
         return 2
 
-    tmp_dir = os.path.join(RAIZ, ".runtime_cycles_tmp")
+    # Dentro de la cache, en su cajon de transitorios: lo que este banco genera
+    # no describe el programa y se puede borrar en cualquier momento.  Antes se
+    # quedaba en `.runtime_cycles_tmp/` colgando de la raiz del repositorio,
+    # que es exactamente el tipo de suciedad que el reparto de `.cache` viene a
+    # quitar (ver include/util/cache_paths.h).
+    tmp_dir = os.path.join(RAIZ, ".cache", "tmp", "runtime_cycles")
     os.makedirs(tmp_dir, exist_ok=True)
 
     filas = []

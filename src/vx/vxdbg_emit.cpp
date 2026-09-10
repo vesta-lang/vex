@@ -26,6 +26,7 @@
  * dato.
  */
 
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "util/env_flags.h"
 #include "vx/vxdbg_emit.h"
 
@@ -592,14 +593,10 @@ bool publish_vxdbg_artifact(const std::string &artifact_path,
 }
 
 std::string default_vxdbg_dir() {
-    // La misma valvula que el resto de caches del compilador: si el proyecto
-    // los redirige a un sitio comun, este va con ellos y no se queda suelto en
-    // la carpeta de trabajo.
-    {
-        const std::string &v = util::flag_text(util::FlagId::CacheDir);
-        if (!v.empty()) return v + "/vxdbg";
-    }
-    return ".cache/vxdbg";
+    /* El cajon del grafo de depuracion.  Donde cae lo decide `cache_paths.h`,
+     * que es quien conoce la raiz -- la valvula del entorno, la del proyecto o
+     * el directorio de trabajo -- y el reparto por tipo. */
+    return util::cache_dir(util::CacheKind::DebugInfo);
 }
 
 bool emit_vxdbg_source(

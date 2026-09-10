@@ -4,6 +4,7 @@
  */
 
 #include "util/crash_report.h" // contar la caida entera antes de saltar
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "util/env_flags.h"
 #include "runtime/exception_runtime.h"
 
@@ -63,16 +64,13 @@ namespace runtime {
 /**
  * @brief Carpeta del grafo de conocimiento del programa.
  *
- * La misma que usa el compilador al emitirlo.  Se repite aqui en vez de
- * incluir el frontend: el runtime no depende de el, y el dia que dejaran de
- * coincidir lo unico que pasaria es que la traza sale mas escueta.
+ * La misma que usa el compilador al emitirlo, y ahora por construccion: la
+ * decide `util/cache_paths.h`, que no es del frontend -- el runtime no puede
+ * depender de el -- sino del reparto de la cache.  Antes la regla estaba
+ * copiada aqui, y el dia que dejaran de coincidir la traza salia muda.
  */
 static std::string vxdbg_cache_dir() {
-    {
-        const std::string &v = util::flag_text(util::FlagId::CacheDir);
-        if (!v.empty()) return v + "/vxdbg";
-    }
-    return ".cache/vxdbg";
+    return util::cache_dir(util::CacheKind::DebugInfo);
 }
 
 // ---------------------------------------------------------------------

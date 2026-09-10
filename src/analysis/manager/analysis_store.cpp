@@ -30,7 +30,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
+#include <system_error>
 
 namespace analysis {
 
@@ -180,6 +182,13 @@ void AnalysisStore::flush() {
      * escritura lo caza `kMagicEnd` y se descarta entero.  El precio de ese
      * caso es una compilacion en frio, no un resultado equivocado -- que es la
      * unica razon por la que valdria la pena pagar el temporal --. */
+    /* El cajon, antes de escribir.  Nuestra escritura NO crea directorios --
+     * es una llamada al nucleo, no un ayudante -- y este almacen es el unico
+     * que no pasa por la escritura atomica, que si los crea.  Sin esto el
+     * primer guardado fallaba en SILENCIO y la cache no arrancaba nunca. */
+    std::error_code ec;
+    std::filesystem::create_directories(
+        std::filesystem::path(path_).parent_path(), ec);
     if (util::write_whole_file(path_, bytes)) stats_.bytes_written = bytes.size();
 }
 

@@ -108,7 +108,23 @@ install(DIRECTORY
         "${CMAKE_SOURCE_DIR}/stdlib/port"
         "${CMAKE_SOURCE_DIR}/stdlib/vsh"
         DESTINATION "${VESTA_INSTALL_PRIVDIR}/stdlib" COMPONENT stdlib
-        PATTERN ".gitignore" EXCLUDE)
+        PATTERN ".gitignore" EXCLUDE
+        # La CACHE no se empaqueta.  Esta regla copia el arbol ENTERO -- no
+        # tiene FILES_MATCHING como la de los ejemplos --, asi que cualquier
+        # artefacto que hubiera junto a los fuentes se iba dentro del
+        # instalador: en el ultimo empaquetado, 268 `.vxi`/`.vxir` de la
+        # stdlib.  Se regeneran solos en la maquina del usuario y ademas
+        # dependen de SU compilador, asi que enviarlos no solo sobra: manda
+        # artefactos de otra version que hay que invalidar al llegar.
+        #
+        # `stdlib/vx` tiene su propio `vx.toml`, o sea que es un proyecto y la
+        # cache se ancla AHI.  Por eso el directorio se excluye por nombre, no
+        # solo por extension.
+        PATTERN ".cache" EXCLUDE
+        PATTERN ".vx_cache" EXCLUDE # arboles de antes del cambio de reparto
+        PATTERN "*.vxi" EXCLUDE
+        PATTERN "*.vxir" EXCLUDE
+        PATTERN "*.vxfacts" EXCLUDE)
 
 # === lsp (opcional): servidor de lenguaje para editores ====================
 if (TARGET vesta_lsp)
@@ -124,12 +140,20 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vx/"
         FILES_MATCHING
             PATTERN "*.vx"
             PATTERN "*.md"
-            PATTERN "*.toml")
+            PATTERN "*.toml"
+        # Los directorios de cache, fuera.  `FILES_MATCHING` ya filtra los
+        # FICHEROS, pero CMake recorre el arbol y crea los directorios igual:
+        # el instalador acababa con 38 `.cache`/`.vx_cache` VACIOS calcados de
+        # la estructura de los ejemplos.
+        PATTERN ".cache" EXCLUDE
+        PATTERN ".vx_cache" EXCLUDE)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vsh/"
         DESTINATION "${VESTA_INSTALL_DATADIR}/examples/vsh" COMPONENT examples
         FILES_MATCHING
             PATTERN "*.vsh"
-            PATTERN "*.md")
+            PATTERN "*.md"
+        PATTERN ".cache" EXCLUDE
+        PATTERN ".vx_cache" EXCLUDE)
 
 # === tools (opcional): herramientas del lenguaje ===========================
 # Scripts (cobertura AOT/JIT, benchmarks, cliente de depuracion VSH).  Se

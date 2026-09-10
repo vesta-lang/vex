@@ -1127,7 +1127,7 @@ void ModuleGraph::build_namespace_index_() {
         ::fs::recorrer_arbol(root, [&](const std::string &ruta, bool es_dir) {
             ++n_entradas;
             /* No bajar a directorios ocultos.  Ahi es donde viven las caches
-             * de la propia construccion (`.cache`, `.vx_cache`), que jamas
+             * de la propia construccion (`.cache`), que jamas
              * contienen fuentes y en cambio tienen miles de ficheros
              * repartidos en subdirectorios: en un proyecto de 21 modulos, el
              * recorrido veia 1620 entradas para encontrar 21 `.vx`.  Es la
@@ -1137,10 +1137,12 @@ void ModuleGraph::build_namespace_index_() {
             const char *nombre =
                 ruta.c_str() + (barra == std::string::npos ? 0 : barra + 1);
             if (es_dir) return !(nombre[0] == '.' && nombre[1] != '\0');
-            /* Junto a los fuentes conviven los .vxi/.vxir/.vel generados: en la
-             * stdlib son ~1500 entradas para 56 fuentes.  Que sea un fichero
-             * regular ya lo dijo el listado, asi que aqui solo queda mirar el
-             * nombre. */
+            /* Solo los `.vx`.  Los artefactos generados ya no conviven con los
+             * fuentes -- viven en `.cache`, que el filtro de arriba ni pisa --,
+             * pero un arbol que venga de antes del cambio todavia puede tener
+             * `.vxi`/`.vxir`/`.vel` sueltos, y en la stdlib eso eran ~1500
+             * entradas para 56 fuentes.  Que sea un fichero regular ya lo dijo
+             * el listado, asi que aqui solo queda mirar el nombre. */
             const size_t n = ruta.size();
             // `> 3` y no `>= 3`: un fichero llamado solo `.vx` no tiene nombre,
             // es una extension suelta, y tampoco lo cogia el criterio anterior.

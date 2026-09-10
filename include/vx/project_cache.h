@@ -101,13 +101,15 @@ struct ProjectCacheDep {
 ///
 /// @brief Computa el path donde se cachearia el .velb del proyecto.
 /// @param root_path  Path canonico del root.
-/// @param cache_dir  Directorio del cache global (puede ser una funcion
-///                   centralizada en @c $VX_HOME o @c ./.vx_cache ).
+/// @param cache_dir  Directorio del cache (normalmente el cajon `projects` de
+///                   la raiz; @see default_project_cache_dir ).
 std::string project_cache_path(const std::string &root_path,
                                const std::string &cache_dir);
 
 /// @brief Computa el directorio default del cache de proyectos.
-/// Por defecto: @c $VX_HOME/cache/projects o @c ./.vx_cache/projects .
+/// Es el cajon @c projects de la raiz de cache, que decide
+/// @c util/cache_paths.h .  Su alcance es LOCAL: las entradas llevan rutas
+/// absolutas de esta maquina.  @see util::CacheScope
 std::string default_project_cache_dir();
 
 /// @brief Lee un cache file y devuelve sus contenidos parseados.

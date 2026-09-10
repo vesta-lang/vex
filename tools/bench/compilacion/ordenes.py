@@ -179,12 +179,10 @@ def enfriar(lang: str, dir_trabajo: Path, dir_cache: Path) -> None:
         shutil.rmtree(dir_trabajo / "rustc-inc", ignore_errors=True)
         shutil.rmtree(dir_trabajo / "rustc-inc-chk", ignore_errors=True)
     if lang in ("vesta", "vesta_aot"):
+        # Un solo directorio: TODO lo que el compilador cachea vive dentro de
+        # `.cache`, repartido por tipo.  Antes habia que barrer ademas los
+        # `.vxi`/`.vxir` sueltos del arbol, y olvidarse de eso no daba un
+        # error: daba una medida "en frio" que en realidad estaba caliente.
         shutil.rmtree(dir_trabajo / ".cache", ignore_errors=True)
-        shutil.rmtree(dir_trabajo / ".vx_cache", ignore_errors=True)
-        for p in list(dir_trabajo.glob("*.vxi")) + list(dir_trabajo.glob("*.vxir")):
-            try:
-                p.unlink()
-            except OSError:
-                pass
 
 

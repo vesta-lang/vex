@@ -16,6 +16,7 @@
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir.h"
 #include "util/assembler_multiprocess.h"
+#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "util/file_read.h"
 #include "vx/comptime/comptime_vm.h"
 
@@ -27,9 +28,18 @@ namespace vx {
 
 namespace {
 
-/// Donde van los intermedios de este servicio.  Junto al resto de lo generado,
-/// no mezclado con el fuente.
-constexpr const char *kIntermediateDir = ".cache/ctpe/tmp";
+/**
+ * @brief Donde van los intermedios de este servicio.
+ *
+ * Junto al resto de lo generado, no mezclado con el fuente.  Cuelga del cajon
+ * de lo que se ejecuta al compilar porque es de eso: trabajo a medias que
+ * acompana a lo que ese cajon guarda.
+ *
+ * @return Ruta del directorio.
+ */
+std::string intermediate_dir() {
+    return util::cache_dir(util::CacheKind::Comptime) + "/tmp";
+}
 
 } // namespace
 
@@ -60,13 +70,13 @@ CompiledIr compile_ir_to_bytecode(const ir::IrModule &mod,
     }
 
     std::error_code ec;
-    std::filesystem::create_directories(kIntermediateDir, ec);
+    const std::string dir = intermediate_dir();
+    std::filesystem::create_directories(dir, ec);
     /* El nombre sale del CONTENIDO, no de un contador: dos compilaciones del
      * mismo texto usan el mismo intermedio, y dos distintas no se pisan aunque
      * corran a la vez. */
-    const std::string base =
-        std::string(kIntermediateDir) + "/" + diag_name + "_" +
-        std::to_string(std::hash<std::string>{}(e.vel_text));
+    const std::string base = dir + "/" + diag_name + "_" +
+                             std::to_string(std::hash<std::string>{}(e.vel_text));
 
     // 2) Texto -> `.velb`.  Desde la fuente EN MEMORIA: el texto lo acaba de
     //    producir la linea de arriba, asi que escribirlo para que la siguiente

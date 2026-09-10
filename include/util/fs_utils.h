@@ -28,6 +28,7 @@
 #ifndef FS_UTILS_H
 #define FS_UTILS_H
 
+#include "util/cache_paths.h"
 #include "util/env_flags.h"
 #include <algorithm>
 #include <mutex>
@@ -51,6 +52,17 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+/* `winsock2.h` ANTES que `windows.h`, que es el orden que las dos cabeceras
+ * exigen -- MinGW ya lo pedia a gritos ("Please include winsock2.h before
+ * windows.h") y nadie le hacia caso.
+ *
+ * Aqui ademas es obligatorio por lo que viene justo debajo: los `#undef` de
+ * abajo se cargan `IN` y `OUT`, y el Windows SDK de verdad los usa como
+ * anotaciones en las firmas de `winsock2.h`.  Si esa cabecera se parsea DESPUES
+ * del undef, se encuentra `IN LPWSABUF lpCallerId` sin `IN` definido y no
+ * compila.  Incluyendola aqui, cuando se llega al undef ya esta leida. */
+#include <winsock2.h>
+#include <ws2tcpip.h> // arrastra ws2ipdef.h, que usa `CONST` igual que winsock2 usa `IN`
 #include <windows.h>
 // Evitar que las macros de windows.h (VOID, IN, OUT, interface, ...) contaminen
 // los TUs que incluyen este header (c_backend.cpp / compiler_project.cpp usan
@@ -633,12 +645,8 @@ static std::string get_executable_name() {
  * Se resuelve UNA vez: no cambia durante la vida del proceso.
  */
 static const std::string &temp_write_dir() {
-    static const std::string dir = [] {
-        const std::string &v = util::flag_text(util::FlagId::CacheDir);
-        if (!v.empty()) return v + "/tmp";
-        return std::string(".cache/tmp");
-    }();
-    return dir;
+    // El cajon de temporales de la cache, que decide `util/cache_paths.h`.
+    return util::cache_dir(util::CacheKind::Temp);
 }
 
 /**

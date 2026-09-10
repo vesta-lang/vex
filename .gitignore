@@ -79,14 +79,20 @@ deepseck*
 # Cubre runners e2e, benches y cualquier script auxiliar de shell.
 *.sh
 
+# La cache ENTERA del compilador y del gestor de paquetes: interfaces,
+# intermedio, lo que el ASA supo, los analisis, lo ejecutado al compilar, el
+# grafo de depuracion y los temporales.  Un solo directorio, repartido por tipo
+# -- lo declara include/util/cache_paths.h --.
+.cache/
+
 # temporales
 *.vexi
 *.vexir
+# Los tres de abajo ya no se generan sueltos: viven en `.cache`.  Se dejan
+# ignorados para que un arbol que venga de antes del cambio no los saque en
+# `git status` como si fueran nuevos.
 *.vxi
 *.vxir
-# Lo que el ASA supo del modulo, guardado para la siguiente compilacion.  Es
-# cache como los dos de arriba: se regenera y no describe el programa, lo
-# describe el fuente.
 *.vxfacts
 
 doc/exhaustive_tests*
@@ -123,8 +129,17 @@ tests/bugs/*
 diff_baseline.json
 doc/sprint_lsp_machine_view.md
 
-# Artefacto suelto del compilador en la raiz
-/out.vel
+# Artefactos sueltos del compilador en la raiz.  Compilar con `-o out` deja
+# `out.velb`, `out.vel`, `out.ir`...  Se ignoran TODOS de golpe y no de uno en
+# uno: la lista por extension es justo lo que fallo -- estaba `/out.vel` y
+# `out.ir` acabo COMMITEADO, y ahi lleva desde el sprint de @Virtual.
+/out.*
+
+# Guiones y volcados de usar y tirar en la raiz.  Mismo motivo, y ya paso tres
+# veces: se colaron `tmp_measure.py` (un banco de medir escrito a mano) y un
+# `method` de CERO bytes, que es lo que deja un redirect abandonado.
+/tmp_*
+/method
 
 # Directorios temporales de tests AOT (se crean y borran en runtime)
 _tls_test/
@@ -446,3 +461,4 @@ doc/C29.md
 effects_decode_baseline.txt
 coste_opcodes.json
 doc/PLAN_RESERVAS.md
+C_Nt_llamadas_y_gui.txt
