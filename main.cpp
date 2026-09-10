@@ -2477,7 +2477,10 @@ int main(int argc, char *argv[]) {
         copts.module_name = "main";
         copts.opt_level = 2;
         copts.ir_only = true;
-        copts.report_bounds = false;
+        /* Aqui se MIRA, no se construye: las violaciones se ensenan con su
+         * prueba y el volcado termina.  Abortar dejaria sin ver lo que se vino
+         * a ver. */
+        copts.violations_are_errors = false;
         /* Tambien el modulo de ANTES de optimizar.  Es la mitad que faltaba:
          * lo que el programa DICE y lo que va a EJECUTARSE no son lo mismo, y
          * entre los dos esta el optimizador.  Un `for` de 64 vueltas que el
@@ -2660,9 +2663,10 @@ int main(int argc, char *argv[]) {
          * simbolos en vez de opcodes).  Sin esto el informe describia la bajada
          * de la VM con la etiqueta de AOT encima. */
         copts.native_poo = (analyze_backend == analysis::effects::Backend::Aot);
-        /* Los limites los ENSEÑA el informe, con su prueba; convertirlos en
-         * error aqui dejaria sin analisis al programa que mas lo necesita. */
-        copts.report_bounds = false;
+        /* Las violaciones demostradas se ENSENAN con su prueba; convertirlas en
+         * error aqui dejaria sin analisis al programa que mas lo necesita.  Se
+         * comprueban igual: lo unico que baja es el peso del veredicto. */
+        copts.violations_are_errors = false;
         // Si el fuente tiene `import`, hay que ir por el compilador
         // multi-modulo, igual que hacen las demas rutas.  ANTES esta llamaba
         // siempre a `compile_vx_source` (un solo fichero), asi que analizar un

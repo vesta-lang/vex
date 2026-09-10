@@ -1433,8 +1433,15 @@ CompileResult compile_vx_source(const std::string &source,
          * el otro. */
         {
             analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
+            /* Con el MISMO peso que en el camino de proyecto.  Aqui iba sin
+             * mirar la opcion, y era una respuesta distinta para el mismo
+             * programa: analizado como fichero suelto acusaba y abortaba,
+             * analizado como proyecto callaba. */
             vx_report_borrow_across_calls(irmod_for_section, res.diagnostics,
-                                          filename, pre_opt_base);
+                                          filename, pre_opt_base,
+                                          opts.violations_are_errors
+                                              ? DiagLevel::ERR
+                                              : DiagLevel::WARN);
         }
 
         /* Y el almacen, si alguien pidio el momento de EN MEDIO: lo que un
@@ -1492,9 +1499,10 @@ CompileResult compile_vx_source(const std::string &source,
          * queda aqui para el siguiente que lo necesite en el mismo momento, en
          * vez de que cada uno se lo calcule entero. */
         analysis::asa::FactBase fact_base(analysis::asa::kStagePostOpt);
-        if (opts.report_bounds)
-            vx_report_bounds(irmod_for_section, res.diagnostics, filename,
-                             fact_base);
+        vx_report_bounds(irmod_for_section, res.diagnostics, filename,
+                         fact_base,
+                         opts.violations_are_errors ? DiagLevel::ERR
+                                                    : DiagLevel::WARN);
         /* La exclusividad de los prestamos NO se comprueba aqui: se hizo antes
          * de optimizar, que es donde todavia existen las llamadas que la
          * demuestran.  Ver el comentario de alli. */

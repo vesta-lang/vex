@@ -5438,6 +5438,109 @@ for _t, _s, _p, _m, _f in DIR_EXCL_LLAMADA_CASES:
     _register(_t, _dir_neg_case(_t, _s, _p, _m, _f), False, None)
 
 
+# El PESO del veredicto, que es lo unico que separa construir de analizar.
+#
+# Una violacion demostrada es la misma en los dos casos y se dice igual; lo
+# unico que cambia es si aborta.  Las dos formas de romperlo son opuestas y las
+# dos ya pasaron:
+#
+#   de menos  `--analyze` se saltaba la comprobacion ENTERA en vez de bajarle el
+#             peso, asi que no ensenaba nada -- un fallo MUDO en la herramienta
+#             que existe justo para ensenarlo.
+#   de mas    el camino de fichero suelto no miraba la opcion, asi que analizar
+#             abortaba: el mismo programa acusaba analizado como fichero y
+#             callaba analizado como proyecto.
+@case("violacion_peso_del_veredicto", serial=True)
+def _(ctx):
+    """La misma violacion: error al construir, aviso al analizar, en los DOS caminos."""
+    fuera_de_region = """i32 main() {
+    i64* a = (i64*)malloc(8);
+    a[7] = 1;
+    free(a);
+    return 0;
+}
+"""
+    exclusividad = """void mueve(out i64* d, in i64* s) {
+    d[0] = s[0];
+}
+i32 main() {
+    i64* a = (i64*)malloc(64);
+    i64* b = a;
+    mueve(a, b);
+    free(a);
+    return 0;
+}
+"""
+    for nombre, fuente, codigo in (("bounds", fuera_de_region, "VX3001"),
+                                   ("excl", exclusividad, "VX2053")):
+        vx = _write_vx(ctx, "peso_" + nombre + ".vx", fuente)
+
+        # Construir: ERROR, y no sale binario.
+        rc, log = ctx.run([VM_EXE, "--vesta", vx, "-o", ctx.path("peso_" + nombre)])
+        if rc == 0 or codigo not in log:
+            ctx.fail("%s: construir debio fallar con %s" % (nombre, codigo), log)
+            return
+        if "error" not in log:
+            ctx.fail("%s: al construir el veredicto debe pesar como error"
+                     % nombre, log)
+            return
+        ctx.ok("%s: construir -> error %s" % (nombre, codigo))
+
+        # Analizar: se ENSENA, y el informe sigue.  Que no aborte es la mitad
+        # que importa: si abortara, el programa que mas falta le hace al
+        # analisis seria justo el que se queda sin el.
+        _, log = ctx.run([VM_EXE, "--analyze", vx])
+        if codigo not in log:
+            ctx.fail("%s: --analyze debe ENSENAR %s, no tragarselo"
+                     % (nombre, codigo), log)
+            return
+        if "warning" not in log:
+            ctx.fail("%s: al analizar el veredicto debe pesar como aviso"
+                     % nombre, log)
+            return
+        if len(log.splitlines()) < 50:
+            ctx.fail("%s: --analyze aborto en vez de seguir con el informe"
+                     % nombre, log)
+            return
+        ctx.ok("%s: --analyze -> aviso %s + informe completo" % (nombre, codigo))
+
+    # Y el MISMO cuerpo por el camino de PROYECTO.  Va aqui y no en un test
+    # aparte porque lo que se fija es que las dos respuestas coincidan: por
+    # separado, cada camino se puede "arreglar" hasta que su mitad pase.
+    _write_vx(ctx, "pesolib.vx", """namespace pesolib;
+
+public i64 uno() {
+    return 1;
+}
+""")
+    proj = _write_vx(ctx, "peso_proyecto.vx", """import pesolib;
+
+void mueve(out i64* d, in i64* s) {
+    d[0] = s[0];
+}
+
+i32 main() {
+    i64* a = (i64*)malloc(64);
+    i64* b = a;
+    mueve(a, b);
+    free(a);
+    return (i32)pesolib.uno() - 1;
+}
+""")
+    rc, log = ctx.run([VM_EXE, "--vesta", proj, "-o", ctx.path("peso_proyecto")])
+    if rc == 0 or "VX2053" not in log:
+        ctx.fail("proyecto: construir debio fallar con VX2053", log)
+        return
+    ctx.ok("proyecto: construir -> error VX2053, igual que el fichero suelto")
+    _, log = ctx.run([VM_EXE, "--analyze", proj])
+    if "VX2053" not in log:
+        ctx.fail("proyecto: --analyze callo lo que el fichero suelto SI dice "
+                 "-- el mismo programa no puede dar dos respuestas segun el "
+                 "camino", log)
+        return
+    ctx.ok("proyecto: --analyze -> aviso VX2053, igual que el fichero suelto")
+
+
 @case("borrow_campos_disjuntos")
 def _(ctx):
     """Dos campos DISTINTOS del mismo struct se pueden prestar a la vez.

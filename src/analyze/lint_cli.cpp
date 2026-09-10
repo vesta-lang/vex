@@ -104,7 +104,10 @@ int run(int argc, char **argv) {
     copts.module_name = "main";
     copts.opt_level = 2;
     copts.ir_only = true;
-    copts.report_bounds = false;
+    /* El linter SENALA, no construye: una violacion demostrada es exactamente
+     * lo que viene a decir, asi que se ensena con su prueba en vez de abortar
+     * la pasada y dejar sin revisar todo lo que venia detras. */
+    copts.violations_are_errors = false;
     /* Y se le pide al COMPILADOR que deje hechos los dominios que las familias
      * encendidas van a consultar.
      *

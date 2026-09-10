@@ -305,14 +305,25 @@ struct CompileOptions {
     bool sin_asignador_vesta = false;
 
     /**
-     * @brief Convertir en ERROR los accesos demostrablemente fuera de region.
+     * @brief Convertir en ERROR una violacion DEMOSTRADA, o solo ensenarla.
      *
-     * Al CONSTRUIR, si.  Al ANALIZAR, no: `--analyze` los enseña en su propia
-     * seccion con la prueba delante, y abortar ahi dejaria sin analisis justo
-     * al programa que mas falta le hace.  Mismo comprobador en los dos casos;
-     * lo que cambia es que se hace con el veredicto.
+     * Cubre las dos que hay: un acceso fuera de region y una promesa de
+     * exclusividad que el programa incumple.  Al CONSTRUIR son errores.  Al
+     * ANALIZAR no, porque abortar dejaria sin analisis justo al programa que
+     * mas falta le hace -- pero SE SIGUEN ENSENANDO, con su prueba delante.
+     * Mismo comprobador en los dos casos; lo unico que cambia es el peso del
+     * veredicto.
+     *
+     * Se llamaba `report_bounds` y no decia ninguna de las dos cosas: ni que
+     * gobierna tambien la exclusividad -- que se le anadio despues -- ni que lo
+     * que decide es el PESO y no si se comprueba.  Y detras del nombre viejo se
+     * escondian dos fallos: el camino de fichero suelto no la miraba para la
+     * exclusividad -- el mismo programa acusaba analizado como fichero y callaba
+     * analizado como proyecto -- y, donde si la miraba, se saltaba la
+     * comprobacion ENTERA en vez de bajarle el peso, asi que `--analyze` no
+     * ensenaba nada: la cabecera prometia una seccion propia que no existe.
      */
-    bool report_bounds = true;
+    bool violations_are_errors = true;
 
     /// C3 (AOT): habilita el mecanismo de excepciones NATIVO (setjmp/longjmp,
     /// sin runtime/GC/libc).  CONFIGURABLE: el usuario puede DESACTIVARLO
@@ -935,9 +946,14 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
  *              funcion cambia al optimizarla, asi que el resumen que miro el
  *              optimizador al empezar no vale aqui.  No son el mismo hecho
  *              repetido; son dos, y cada uno solo es cierto en el suyo.
+ * @param level Peso del veredicto: @c ERR al construir, @c WARN al analizar.
+ *              La comprobacion es la MISMA en los dos casos y el mensaje
+ *              tambien; lo unico que cambia es si aborta.  @see
+ *              CompileOptions::violations_are_errors
  */
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
-                      const std::string &file, analysis::asa::FactBase &base);
+                      const std::string &file, analysis::asa::FactBase &base,
+                      DiagLevel level);
 
 /**
  * @brief Avisa de las promesas de exclusividad que el programa incumple.
@@ -955,10 +971,13 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
  * @param diags Donde se dejan los errores.
  * @param file  Fichero que citar.
  * @param base  La base de hechos.
+ * @param level Peso del veredicto: @c ERR al construir, @c WARN al analizar.
+ *              @see CompileOptions::violations_are_errors
  */
 void vx_report_borrow_across_calls(const ir::IrModule &mod, Diagnostics &diags,
                                    const std::string &file,
-                                   analysis::asa::FactBase &base);
+                                   analysis::asa::FactBase &base,
+                                   DiagLevel level);
 
 } // namespace vx
 

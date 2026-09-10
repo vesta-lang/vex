@@ -4676,10 +4676,16 @@ CompileResult compile_vx_project(
      *
      * La misma comprobacion no puede dar dos respuestas segun se compile un
      * fichero o un proyecto. */
-    if (opts.report_bounds) {
+    /* Se comprueba SIEMPRE.  Lo que decide la opcion es el peso del veredicto,
+     * no si se mira: saltarse la comprobacion entera dejaba a `--analyze` sin
+     * nada que ensenar, que es lo contrario de para lo que existe. */
+    {
         analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
         vx_report_borrow_across_calls(merged, res.diagnostics, root_path,
-                                      pre_opt_base);
+                                      pre_opt_base,
+                                      opts.violations_are_errors
+                                          ? DiagLevel::ERR
+                                          : DiagLevel::WARN);
     }
 
     {
@@ -4700,8 +4706,9 @@ CompileResult compile_vx_project(
     /* La base de hechos de ESTA compilacion, una sola: ver la nota del camino
      * de fichero suelto.  Los dos entran por el mismo sitio a proposito. */
     analysis::asa::FactBase fact_base(analysis::asa::kStagePostOpt);
-    if (opts.report_bounds)
-        vx_report_bounds(merged, res.diagnostics, root_path, fact_base);
+    vx_report_bounds(merged, res.diagnostics, root_path, fact_base,
+                     opts.violations_are_errors ? DiagLevel::ERR
+                                                : DiagLevel::WARN);
     /* La exclusividad de los prestamos NO se comprueba aqui: se hizo ANTES de
      * optimizar, que es donde todavia existen las llamadas que la demuestran.
      * Ver el comentario de alli. */
@@ -5898,7 +5905,8 @@ void vx_report_asm_preconditions(const ir::IrModule &mod, Diagnostics &diags,
 
 void vx_report_borrow_across_calls(const ir::IrModule &mod, Diagnostics &diags,
                                    const std::string &file,
-                                   analysis::asa::FactBase &base) {
+                                   analysis::asa::FactBase &base,
+                                   DiagLevel level) {
     for (const borrow::ExclusiveViolation &v :
          borrow::check_exclusive_across_calls(mod, base)) {
         SourceLoc loc;
@@ -5907,7 +5915,7 @@ void vx_report_borrow_across_calls(const ir::IrModule &mod, Diagnostics &diags,
          * lo que los junta esta en quien la llama. */
         loc.line = v.line;
         loc.set_file(file);
-        diags.diag(loc, DiagLevel::ERR, "VX2053",
+        diags.diag(loc, level, "VX2053",
                    {std::to_string(v.promised), v.function,
                     std::to_string(v.other)});
         /* La PRUEBA, en datos: sin la llamada delante esto seria una acusacion
@@ -5927,7 +5935,8 @@ void vx_report_borrow_across_calls(const ir::IrModule &mod, Diagnostics &diags,
 }
 
 void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
-                      const std::string &file, analysis::asa::FactBase &base) {
+                      const std::string &file, analysis::asa::FactBase &base,
+                      DiagLevel level) {
     // Medicion del dominio de FORMA, apagada salvo que se pida explicitamente.
     // Todavia no la consume nadie: primero hay que saber si distingue algo.
     analysis::asa::volcar_formas(mod, "post-opt");
@@ -5941,7 +5950,7 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
         SourceLoc loc;
         loc.line = v.line;
         loc.set_file(file);
-        diags.diag(loc, DiagLevel::ERR, "VX3001",
+        diags.diag(loc, level, "VX3001",
                    {vx::diag::format(v.write ? "VX3002" : "VX3003", {}),
                     std::to_string(v.width), v.region, std::to_string(v.limite),
                     std::to_string(v.off), std::to_string(v.off + v.width)});
